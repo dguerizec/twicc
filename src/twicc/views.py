@@ -1517,6 +1517,58 @@ async def session_workflows(request, project_id, session_id):
     return JsonResponse(data, safe=False)
 
 
+def _derive_workflow_links(session_id):
+    """``[{tool_use_id, run_id}]`` for every ``Workflow`` tool_result of a session.
+
+    Derived (not stored) from the launching tool_result's ``toolUseResult.runId``
+    + the tool_result block's ``tool_use_id``. Reads from our persisted
+    SessionItem rows, so it survives the JSONL being sublimated. Cheap: only
+    items mentioning ``runId`` are scanned, then validated.
+    """
+    links = []
+    seen = set()
+    items = SessionItem.objects.filter(
+        session_id=session_id, content__contains='"runId"'
+    ).only("content")
+    for it in items.iterator(chunk_size=50):
+        try:
+            parsed = orjson.loads(it.content)
+        except orjson.JSONDecodeError:
+            continue
+        tool_use_result = parsed.get("toolUseResult")
+        if not isinstance(tool_use_result, dict):
+            continue
+        run_id = tool_use_result.get("runId")
+        if not run_id:
+            continue
+        message = parsed.get("message") or {}
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        tool_use_id = next(
+            (b.get("tool_use_id") for b in content
+             if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        if tool_use_id and tool_use_id not in seen:
+            seen.add(tool_use_id)
+            links.append({"tool_use_id": tool_use_id, "run_id": run_id})
+    return links
+
+
+async def workflow_links(request, project_id, session_id):
+    """GET /api/projects/<id>/sessions/<session_id>/workflow-links/
+
+    Lightweight ``[{tool_use_id, run_id}]`` list for the conversation: which
+    ``Workflow`` tool_uses have a known run, so the chat can show "View
+    Workflow" without loading the full envelopes. Mirrors ``/subagents/`` for
+    agent links; the live counterpart is the ``workflow_link_created`` WS event.
+    """
+    await _resolve_session_or_404(session_id, project_id, None)
+    links = await sync_to_async(_derive_workflow_links)(session_id)
+    return JsonResponse(links, safe=False)
+
+
 async def directory_tree(request, project_id, session_id=None):
     """GET directory tree listing.
 

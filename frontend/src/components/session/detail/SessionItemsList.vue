@@ -646,6 +646,12 @@ watch([() => props.sessionId, session], async ([newSessionId, newSession]) => {
         // and creates synthetic process states for agents still running.
         if (!props.parentSessionId) {
             store.fetchSubagentsState(props.projectId, newSessionId)
+            // Workflow tool-links (View Workflow buttons). Only sessions that
+            // actually ran a local workflow carry them, so gate on has_workflows
+            // to skip the derive scan everywhere else.
+            if (store.getSession(newSessionId)?.has_workflows) {
+                store.fetchWorkflowLinks(props.projectId, newSessionId)
+            }
         }
     }
 

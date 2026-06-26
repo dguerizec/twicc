@@ -485,6 +485,8 @@ export const useDataStore = defineStore('data', {
             // { sessionId: { toolId: agentId } }
             // Only caches found agents (not-found triggers polling, not caching)
             agentLinks: {},
+            // sessionId -> { tool_use_id: run_id } for the in-chat "View Workflow" button.
+            workflowLinks: {},
 
             // Tool states - maps tool_use_id to { resultCount, completedAt, error, extra, toolResultLineNums }
             // { sessionId: { toolUseId: { resultCount, completedAt, error, extra, toolResultLineNums } } }
@@ -1082,6 +1084,13 @@ export const useDataStore = defineStore('data', {
         // Returns: { agentId, isBackground } or undefined (not in cache)
         getAgentLink: (state) => (sessionId, toolId) => {
             const sessionLinks = state.localState.agentLinks[sessionId]
+            if (!sessionLinks) return undefined
+            return sessionLinks[toolId]
+        },
+
+        /** run_id for a Workflow tool_use, or undefined until its link is known. */
+        getWorkflowLink: (state) => (sessionId, toolId) => {
+            const sessionLinks = state.localState.workflowLinks[sessionId]
             if (!sessionLinks) return undefined
             return sessionLinks[toolId]
         },
@@ -2362,6 +2371,7 @@ export const useDataStore = defineStore('data', {
             delete this.localState.visualItemCache[sessionId]
             delete this.localState.optimisticMessages[sessionId]
             delete this.localState.agentLinks[sessionId]
+            delete this.localState.workflowLinks[sessionId]
             delete this.localState.toolStates[sessionId]
             delete this.localState.liveItems[sessionId]
             delete this.localState.openDetails[sessionId]
@@ -3707,6 +3717,18 @@ export const useDataStore = defineStore('data', {
             delete this.localState.agentLinks[sessionId]
         },
 
+        setWorkflowLink(sessionId, toolId, runId) {
+            if (!runId) return
+            if (!this.localState.workflowLinks[sessionId]) {
+                this.localState.workflowLinks[sessionId] = {}
+            }
+            this.localState.workflowLinks[sessionId][toolId] = runId
+        },
+
+        clearWorkflowLinks(sessionId) {
+            delete this.localState.workflowLinks[sessionId]
+        },
+
         /**
          * Set tool state for a tool_use_id in a session.
          * @param {string} sessionId - The session ID
@@ -3885,6 +3907,23 @@ export const useDataStore = defineStore('data', {
          * @param {string} projectId - The project ID
          * @param {string} sessionId - The parent session ID
          */
+        async fetchWorkflowLinks(projectId, sessionId) {
+            // Couples {tool_use_id, run_id} for Workflow tool_uses, so the chat
+            // can show "View Workflow". Best-effort: a failure just defers the
+            // button to the next load / the workflow_link_created WS event.
+            try {
+                const url = `/api/projects/${projectId}/sessions/${sessionId}/workflow-links/`
+                const response = await apiFetch(url)
+                if (!response.ok) return
+                const links = await response.json()
+                for (const link of links) {
+                    this.setWorkflowLink(sessionId, link.tool_use_id, link.run_id)
+                }
+            } catch {
+                // ignore
+            }
+        },
+
         async fetchSubagentsState(projectId, sessionId) {
             try {
                 const url = `/api/projects/${projectId}/sessions/${sessionId}/subagents/`

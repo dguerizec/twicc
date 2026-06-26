@@ -57,7 +57,7 @@ const routes = [
                     { path: 'orchestration', name: 'session-orchestration', component: { render: () => null } },
                     { path: 'plan', name: 'session-plan', component: { render: () => null } },
                     { path: 'tasks', name: 'session-tasks', component: { render: () => null } },
-                    { path: 'workflows', name: 'session-workflows', component: { render: () => null } },
+                    { path: 'workflows/:runId?', name: 'session-workflows', component: { render: () => null } },
                 ]
             }
         ]
@@ -89,7 +89,7 @@ const routes = [
                     { path: 'orchestration', name: 'projects-session-orchestration', component: { render: () => null } },
                     { path: 'plan', name: 'projects-session-plan', component: { render: () => null } },
                     { path: 'tasks', name: 'projects-session-tasks', component: { render: () => null } },
-                    { path: 'workflows', name: 'projects-session-workflows', component: { render: () => null } },
+                    { path: 'workflows/:runId?', name: 'projects-session-workflows', component: { render: () => null } },
                 ]
             }
         ]

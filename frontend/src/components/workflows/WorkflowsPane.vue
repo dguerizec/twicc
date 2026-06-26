@@ -1,25 +1,29 @@
 <script setup>
 // Minimal "JSON human view" of a session's workflow runs: fetch the persisted
-// Workflow rows (the verbatim wf_*.json envelopes) and render each as a
-// collapsible JSON tree. This validates the ingestion → endpoint → render path
-// end to end; the real workflow UI comes later.
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import JsonViewer from '../json/JsonViewer.vue'
+// Workflow rows (the verbatim wf_*.json envelopes) and render each with the
+// shared JsonHumanView. JsonHumanView has no collapse of its own, so each run
+// sits in a wa-details whose body is rendered lazily (v-if) — opening a run is
+// what mounts its (potentially large) tree. Validation view; the real workflow
+// UI comes later.
+import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import JsonHumanView from '../json/JsonHumanView.vue'
 
 const props = defineProps({
     sessionId: { type: String, required: true },
     projectId: { type: String, required: true },
+    // run_id to focus (open + scroll), from a "View Workflow" navigation.
+    focusRunId: { type: String, default: null },
     // True while the Workflows tab is the shown tab in its region.
     active: { type: Boolean, default: false },
 })
 
+const paneRef = ref(null)
 const workflows = ref([])
 const loading = ref(false)
 const error = ref(null)
 const hasLoaded = ref(false)
-// Controlled collapse state shared by every run's JsonViewer; each run gets a
-// distinct root path (its run_id) so paths never collide.
-const collapsedPaths = ref(new Set())
+// run_ids whose body is open (and thus mounted).
+const openRuns = ref(new Set())
 
 let controller = null
 
@@ -35,9 +39,10 @@ async function load() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const data = await response.json()
         workflows.value = data
-        // Open compact: collapse each run at its root, expand on demand.
-        collapsedPaths.value = new Set(data.map(w => w.run_id))
+        // Auto-open the first (newest) run; focus overrides if a run was targeted.
+        openRuns.value = new Set(data.length ? [data[0].run_id] : [])
         hasLoaded.value = true
+        if (props.focusRunId) focusRun(props.focusRunId)
     } catch (e) {
         if (e.name === 'AbortError') return
         error.value = e.message || 'Failed to load workflows'
@@ -46,22 +51,33 @@ async function load() {
     }
 }
 
-function toggleCollapse(path) {
-    if (collapsedPaths.value.has(path)) {
-        collapsedPaths.value.delete(path)
-    } else {
-        collapsedPaths.value.add(path)
-    }
+// Keep openRuns in sync with native wa-details toggles. Guard against custom
+// events bubbling up from any nested wa-* element (only react to our own).
+function onRunToggle(event, runId, open) {
+    if (event.target !== event.currentTarget) return
+    if (open) openRuns.value.add(runId)
+    else openRuns.value.delete(runId)
+}
+
+// Open the targeted run and scroll it into view (from a "View Workflow" click).
+function focusRun(runId) {
+    if (!runId) return
+    openRuns.value.add(runId)
+    nextTick(() => {
+        const el = paneRef.value?.querySelector(`section[data-run-id="${CSS.escape(runId)}"]`)
+        el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
 }
 
 onMounted(load)
 watch(() => props.active, (active) => { if (active) load() })
 watch(() => props.sessionId, () => { hasLoaded.value = false; load() })
+watch(() => props.focusRunId, (runId) => { if (runId && hasLoaded.value) focusRun(runId) })
 onBeforeUnmount(() => { if (controller) controller.abort() })
 </script>
 
 <template>
-    <div class="workflows-pane">
+    <div class="workflows-pane" ref="paneRef">
         <div v-if="error" class="workflows-state workflows-error">
             <wa-icon name="triangle-exclamation"></wa-icon>
             <span>{{ error }}</span>
@@ -69,21 +85,23 @@ onBeforeUnmount(() => { if (controller) controller.abort() })
         <div v-else-if="loading && !hasLoaded" class="workflows-state">Loading…</div>
         <div v-else-if="!workflows.length" class="workflows-state">No workflows for this session.</div>
         <div v-else class="workflows-list">
-            <section v-for="w in workflows" :key="w.run_id" class="workflow">
-                <header class="workflow-head">
-                    <code class="workflow-run">{{ w.run_id }}</code>
-                    <span v-if="w.raw?.workflowName" class="workflow-name">{{ w.raw.workflowName }}</span>
-                    <span v-if="w.raw?.status" class="workflow-status">{{ w.raw.status }}</span>
-                    <span v-if="w.raw?.agentCount != null" class="workflow-agents">{{ w.raw.agentCount }} agents</span>
-                </header>
-                <div class="workflow-json">
-                    <JsonViewer
-                        :data="w.raw"
-                        :path="w.run_id"
-                        :collapsed-paths="collapsedPaths"
-                        @toggle="toggleCollapse"
-                    />
-                </div>
+            <section v-for="w in workflows" :key="w.run_id" class="workflow" :data-run-id="w.run_id">
+                <wa-details
+                    class="workflow-details"
+                    :open="openRuns.has(w.run_id)"
+                    @wa-show="onRunToggle($event, w.run_id, true)"
+                    @wa-hide="onRunToggle($event, w.run_id, false)"
+                >
+                    <div slot="summary" class="workflow-head">
+                        <code class="workflow-run">{{ w.run_id }}</code>
+                        <span v-if="w.raw?.workflowName" class="workflow-name">{{ w.raw.workflowName }}</span>
+                        <span v-if="w.raw?.status" class="workflow-status">{{ w.raw.status }}</span>
+                        <span v-if="w.raw?.agentCount != null" class="workflow-agents">{{ w.raw.agentCount }} agents</span>
+                    </div>
+                    <div v-if="openRuns.has(w.run_id)" class="workflow-json">
+                        <JsonHumanView :value="w.raw" />
+                    </div>
+                </wa-details>
             </section>
         </div>
     </div>
@@ -114,14 +132,7 @@ onBeforeUnmount(() => { if (controller) controller.abort() })
 .workflows-list {
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-l, 1.5rem);
-}
-
-.workflow {
-    border: 1px solid var(--wa-color-surface-border, #2a313c);
-    border-radius: var(--wa-border-radius-m, 8px);
-    padding: var(--wa-space-s, 0.5rem) var(--wa-space-m, 1rem) var(--wa-space-m, 1rem);
-    overflow: auto;
+    gap: var(--wa-space-m, 1rem);
 }
 
 .workflow-head {
@@ -129,7 +140,6 @@ onBeforeUnmount(() => { if (controller) controller.abort() })
     align-items: baseline;
     gap: var(--wa-space-s, 0.5rem);
     flex-wrap: wrap;
-    margin-bottom: var(--wa-space-xs, 0.25rem);
     font-size: var(--wa-font-size-s, 0.875rem);
 }
 
@@ -149,8 +159,7 @@ onBeforeUnmount(() => { if (controller) controller.abort() })
 }
 
 .workflow-json {
-    font-family: var(--wa-font-family-code, monospace);
-    font-size: var(--wa-font-size-s, 0.8125rem);
+    margin-top: var(--wa-space-s, 0.5rem);
     overflow: auto;
 }
 </style>

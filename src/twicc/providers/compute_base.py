@@ -72,6 +72,18 @@ class AgentLinkUpdate(NamedTuple):
     started_at: datetime | None
 
 
+class WorkflowLinkUpdate(NamedTuple):
+    """Describes a new Workflow tool-link (tool_use_id ↔ run_id) to broadcast.
+
+    The in-chat counterpart of :class:`AgentLinkUpdate`: it lets a ``Workflow``
+    tool_use show a "View Workflow" button routing to its run. Captured from the
+    tool_result's ``toolUseResult.runId`` (Claude-Code-only).
+    """
+    session_id: str
+    tool_use_id: str
+    run_id: str
+
+
 class ToolResultUpdate(NamedTuple):
     """Describes a tool completion state change to broadcast to the frontend."""
     session_id: str
@@ -1886,6 +1898,37 @@ class BaseSessionCompute:
                 return None
         return None
 
+    def extract_workflow_info_from_tool_result(
+        self, parsed_json: dict
+    ) -> tuple[str, str] | None:
+        """Return ``(tool_use_id, run_id)`` if this tool_result launched a workflow.
+
+        Provider hook, mirroring :meth:`extract_agent_info_from_tool_result`.
+        Default: no provider but Claude Code has workflows, so this is a no-op.
+        """
+        return None
+
+    def create_workflow_link_from_tool_result(
+        self, session_id: str, item: SessionItem, parsed_json: dict
+    ) -> WorkflowLinkUpdate | None:
+        """Surface the in-chat workflow link from a tool_result, for live broadcast.
+
+        Unlike agents, nothing is persisted: the ``(tool_use_id, run_id)`` couple
+        lives in the tool_result item itself and is re-derived on demand by
+        ``views.workflow_links`` (stale-safe, since the SessionItem rows outlive
+        the JSONL). This only surfaces it as the line is synced so the watcher
+        can emit ``workflow_link_created``, mirroring ``agent_link_created``.
+        """
+        info = self.extract_workflow_info_from_tool_result(parsed_json)
+        if not info:
+            return None
+        tool_use_id, run_id = info
+        return WorkflowLinkUpdate(
+            session_id=session_id,
+            tool_use_id=tool_use_id,
+            run_id=run_id,
+        )
+
     def create_agent_link_from_subagent(
         self,
         parent_session_id: str,
@@ -2772,6 +2815,7 @@ class BaseSessionCompute:
         list[int],
         list[int],
         list[AgentLinkUpdate],
+        list[WorkflowLinkUpdate],
         list[ToolResultUpdate],
         list[AgentStoppedUpdate],
         bool,
@@ -2783,7 +2827,8 @@ class BaseSessionCompute:
         line, computes metadata, persists items, links, lifecycle
         timestamps, costs, and returns the broadcast payload tuple
         ``(new_line_nums, modified_line_nums, agent_link_updates,
-        tool_result_updates, agent_stopped_updates, found_compact_summary)``.
+        workflow_link_updates, tool_result_updates, agent_stopped_updates,
+        found_compact_summary)``.
 
         ``found_compact_summary`` is ``True`` when this batch ingested at
         least one ``COMPACT_SUMMARY`` line. It is the live, append-only
@@ -2803,7 +2848,7 @@ class BaseSessionCompute:
         ``apply_session_title``).
         """
         if not file_path.exists():
-            return [], [], [], [], [], False
+            return [], [], [], [], [], [], False
 
         stat = file_path.stat()
         file_mtime = stat.st_mtime
@@ -2812,7 +2857,7 @@ class BaseSessionCompute:
         # Check file size too: mtime has ~1s resolution, so two writes within the same second
         # share the same mtime. Without the size check, the second write would be silently skipped.
         if session.mtime == file_mtime and session.last_offset >= stat.st_size:
-            return [], [], [], [], [], False
+            return [], [], [], [], [], [], False
 
         # Read raw bytes, then decode leniently — see
         # read_session_items_from_file in sync_helpers.py for the full
@@ -2838,7 +2883,7 @@ class BaseSessionCompute:
             # Update mtime even if no new content (file may have been touched)
             session.mtime = file_mtime
             session.save(update_fields=["mtime"])
-            return [], [], [], [], [], False
+            return [], [], [], [], [], [], False
 
         lines = [line for line in new_content.split("\n") if line.strip()]
 
@@ -2847,7 +2892,7 @@ class BaseSessionCompute:
 
         if not lines:
             session.save(update_fields=["last_offset", "mtime"])
-            return [], [], [], [], [], False
+            return [], [], [], [], [], [], False
 
         # Create SessionItem objects for bulk insert
         items_to_create: list[tuple[SessionItem, dict]] = []
@@ -2879,6 +2924,7 @@ class BaseSessionCompute:
 
         # Updates to broadcast after processing
         agent_link_updates: list[AgentLinkUpdate] = []
+        workflow_link_updates: list[WorkflowLinkUpdate] = []
         tool_result_updates: list[ToolResultUpdate] = []
         agent_stopped_updates: list[AgentStoppedUpdate] = []
 
@@ -3114,6 +3160,8 @@ class BaseSessionCompute:
                         agent_stopped_updates.append(stopped)
                 if update := self.create_agent_link_from_tool_result(session.id, item, parsed):
                     agent_link_updates.append(update)
+                if wf_update := self.create_workflow_link_from_tool_result(session.id, item, parsed):
+                    workflow_link_updates.append(wf_update)
 
             # For parent sessions: check if this item contains agent-spawning tool_use(s)
             # and try to link them to existing subagents (race condition: subagent file
@@ -3294,6 +3342,7 @@ class BaseSessionCompute:
             sorted(new_line_nums),
             sorted(modified_line_nums - new_line_nums),
             agent_link_updates,
+            workflow_link_updates,
             tool_result_updates,
             agent_stopped_updates,
             found_compact_summary,

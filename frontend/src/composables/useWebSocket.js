@@ -1111,6 +1111,13 @@ export function useWebSocket() {
                 store.setSyntheticProcessState(agentSessionId, msg.parent_session_id, msg.project_id, startedAtUnix)
                 break
             }
+            case 'workflow_link_created': {
+                // A Workflow tool_use paired with its run → show "View Workflow".
+                if (msg.session_id && msg.tool_use_id && msg.run_id) {
+                    store.setWorkflowLink(msg.session_id, msg.tool_use_id, msg.run_id)
+                }
+                break
+            }
             case 'tool_state': {
                 // Update tool state for spinner/running display
                 store.setToolState(msg.session_id, msg.tool_use_id, msg.result_count, msg.completed_at, msg.error || null, msg.extra || null, Array.isArray(msg.tool_result_line_nums) ? msg.tool_result_line_nums : [])

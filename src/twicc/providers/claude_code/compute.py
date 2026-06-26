@@ -1538,6 +1538,33 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             return None
         return tool_use_id, agent_id
 
+    def extract_workflow_info_from_tool_result(
+        self, parsed_json: dict
+    ) -> tuple[str, str] | None:
+        # Mirror of extract_agent_info_from_tool_result, with runId instead of
+        # agentId: a Workflow tool_result carries the launching tool_use_id in
+        # its tool_result block and the run id in root-level
+        # toolUseResult.runId (only for local runs; remote ones have no runId).
+        content = get_message_content_list(parsed_json, "user")
+        if content is None:
+            return None
+        tool_result = next(
+            (item for item in content if isinstance(item, dict) and item.get('type') == 'tool_result'),
+            None,
+        )
+        if tool_result is None:
+            return None
+        tool_use_id = tool_result.get('tool_use_id')
+        if not tool_use_id:
+            return None
+        tool_use_result = parsed_json.get('toolUseResult')
+        if not isinstance(tool_use_result, dict):
+            return None
+        run_id = tool_use_result.get('runId')
+        if not run_id:
+            return None
+        return tool_use_id, run_id
+
     def extract_task_tool_uses(self, parsed_json: dict) -> list[tuple[str, bool]]:
         content = get_message_content_list(parsed_json, "assistant")
         if content is None:

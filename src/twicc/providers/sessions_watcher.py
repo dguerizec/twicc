@@ -607,7 +607,7 @@ class BaseSessionsWatcher:
             )
 
         old_title = session.title
-        new_line_nums, modified_line_nums, agent_link_updates, tool_result_updates, agent_stopped_updates, found_compact_summary = await sync_to_async(
+        new_line_nums, modified_line_nums, agent_link_updates, workflow_link_updates, tool_result_updates, agent_stopped_updates, found_compact_summary = await sync_to_async(
             compute.sync_session_items_from_file
         )(session, path)
         title_changed = session.title != old_title
@@ -737,6 +737,18 @@ class BaseSessionsWatcher:
                             "started_at": update.started_at.isoformat() if update.started_at else None,
                             "project_id": parsed.project_id,
                         })
+
+                # Broadcast workflow tool-link state changes (a Workflow tool_use
+                # paired with its run via toolUseResult.runId). Powers the in-chat
+                # "View Workflow" button, mirroring agent_link_created.
+                for update in workflow_link_updates:
+                    await broadcast_message(channel_layer, {
+                        "type": "workflow_link_created",
+                        "session_id": update.session_id,
+                        "tool_use_id": update.tool_use_id,
+                        "run_id": update.run_id,
+                        "project_id": parsed.project_id,
+                    })
 
                 # Broadcast tool result state changes
                 for update in tool_result_updates:

@@ -263,6 +263,11 @@ provide('insertTextAtCursor', insertTextAtCursor)
 const filterProjectId = ref(route.params.projectId)
 const sessionId = ref(route.params.sessionId)
 const subagentId = computed(() => route.params.subagentId)
+// Workflow run to focus in the Workflows tab (from .../workflows/<runId>).
+// Scoped to this instance's session — route.params is global under KeepAlive.
+const workflowFocusRunId = computed(() =>
+    route.params.sessionId === sessionId.value ? (route.params.runId || null) : null
+)
 
 // Detect "All Projects" mode from route name
 const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
@@ -2247,6 +2252,7 @@ onBeforeUnmount(() => {
                     <WorkflowsPane
                         :session-id="session.id"
                         :project-id="session.project_id"
+                        :focus-run-id="workflowFocusRunId"
                         :active="isActive && isToolTabShown('workflows')"
                     />
                 </div>

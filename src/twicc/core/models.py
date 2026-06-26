@@ -821,6 +821,12 @@ class Workflow(models.Model):
     folders, but the row (and the workflow subagents' own :class:`Session`
     rows) stay, so a finished run remains inspectable after its files vanish.
     Claude-Code-specific by meaning; other providers have no equivalent yet.
+
+    The in-chat "View Workflow" link (tool_use_id ↔ run_id) is NOT stored here:
+    it is derived on demand from the launching ``Workflow`` tool_result
+    (``toolUseResult.runId``) — see ``views.workflow_links`` — and pushed live
+    via the ``workflow_link_created`` WS event. So this table stays just the
+    run envelope.
     """
 
     session = models.ForeignKey(

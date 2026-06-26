@@ -844,6 +844,26 @@ function navigateToSubagent() {
     ))
 }
 
+// --- Workflow link (the in-chat "View Workflow" button) ---
+// run_id for this Workflow tool_use, reactive from the store cache (populated
+// by fetchWorkflowLinks on load + the workflow_link_created WS event).
+const isWorkflow = computed(() => props.name === 'Workflow')
+const workflowRunId = computed(() => dataStore.getWorkflowLink(props.sessionId, props.toolId))
+const viewWorkflowButtonId = computed(() => `view-workflow-${props.toolId}`)
+
+/** Open the Workflows tab focused on this run. */
+function navigateToWorkflow() {
+    if (!workflowRunId.value) return
+    router.push({
+        name: isAllProjectsMode.value ? 'projects-session-workflows' : 'session-workflows',
+        params: {
+            projectId: props.projectId,
+            sessionId: props.sessionId,
+            runId: workflowRunId.value,
+        }
+    })
+}
+
 /**
  * Stop the running agent via the SDK.
  */
@@ -857,7 +877,7 @@ function handleStopAgent() {
 </script>
 
 <template>
-    <wa-details ref="toolUseDetailsRef" :open="isOpen" :style="instantOpen ? { '--show-duration': '0ms', '--hide-duration': '0ms' } : null" class="item-details tool-use" :class="{'with-right-part' : (isTask && !parentSessionId) || isToolRunning || isToolError || fileChangeStats || canViewInFilesTab}" icon-placement="start" @wa-show.self="onToolUseOpen" @wa-hide.self="onToolUseClose">
+    <wa-details ref="toolUseDetailsRef" :open="isOpen" :style="instantOpen ? { '--show-duration': '0ms', '--hide-duration': '0ms' } : null" class="item-details tool-use" :class="{'with-right-part' : (isTask && !parentSessionId) || (isWorkflow && !parentSessionId && workflowRunId) || isToolRunning || isToolError || fileChangeStats || canViewInFilesTab}" icon-placement="start" @wa-show.self="onToolUseOpen" @wa-hide.self="onToolUseClose">
         <span slot="summary" class="items-details-summary">
             <span class="items-details-summary-left">
                 <strong v-if="isTask && displayName" class="items-details-summary-name">{{ displayName.name }}<span v-if="displayName.namespace" class="items-details-summary-quiet"> ({{ displayName.namespace }})</span></strong>
@@ -911,6 +931,20 @@ function handleStopAgent() {
                     </wa-button>
                     <AppTooltip v-if="isAgentRunning && agentLink?.isBackground && canStopAgent" :for="`stop-agent-${props.toolId}`">Stop this agent</AppTooltip>
                 </template>
+            </template>
+            <!-- View Workflow indicator for the Workflow tool_use (regular sessions only) -->
+            <template v-if="isWorkflow && !parentSessionId && workflowRunId">
+                <wa-button
+                    :id="viewWorkflowButtonId"
+                    size="small"
+                    variant="brand"
+                    appearance="outlined"
+                    @click.stop="navigateToWorkflow"
+                >
+                    <wa-icon slot="start" name="sitemap"></wa-icon>
+                    View Workflow
+                </wa-button>
+                <AppTooltip :for="viewWorkflowButtonId">Open this workflow run</AppTooltip>
             </template>
             <!-- Tool running spinner (Bash, WebFetch, MCP, etc.) -->
             <template v-if="isToolRunning">
