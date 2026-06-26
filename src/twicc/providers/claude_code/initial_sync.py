@@ -122,7 +122,7 @@ def _sync_session_subagents(
         return
 
     db_subagents = {
-        s.agent_id: s
+        s.id: s
         for s in Session.objects.filter(
             project=project,
             type=SessionType.SUBAGENT,
@@ -168,7 +168,6 @@ def _sync_session_subagents(
                 file_path=str(file_path.relative_to(ClaudeCodeHelpers.PROJECTS_DIR)),
                 type=SessionType.SUBAGENT,
                 parent_session_id=session.id,
-                agent_id=agent_id,
             )
             to_insert = read_session_items_from_file(subagent, file_path)
             if to_insert is None:

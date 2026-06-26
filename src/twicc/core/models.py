@@ -386,7 +386,6 @@ class Session(models.Model):
         blank=True,
         related_name='subagents',
     )
-    agent_id = models.CharField(max_length=255, null=True, blank=True)  # Short agent ID from filename (e.g., "a6c7d21")
 
     # Runtime environment fields (last known values from JSONL)
     cwd = models.CharField(max_length=500, null=True, blank=True)  # Current working directory

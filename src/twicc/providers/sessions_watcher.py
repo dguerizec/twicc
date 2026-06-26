@@ -409,7 +409,6 @@ class BaseSessionsWatcher:
                 file_path=parsed.file_path,
                 type=SessionType.SUBAGENT,
                 parent_session=parent_session,
-                agent_id=parsed.session_id,
                 compute_version=compute.compute_version,
             )
         kwargs: dict = dict(

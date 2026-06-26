@@ -307,7 +307,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         Args:
             session_id: The parent session that spawned this subagent
             subagent_id: The subagent identifier (same as the SDK's task_id;
-                stored on the subagent ``Session`` row's ``agent_id`` column)
+                this is the subagent ``Session`` row's primary key ``id``)
 
         Returns:
             True if the SDK stop call was issued, False if the subagent
@@ -318,7 +318,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         # Verify the subagent exists and belongs to the given session
         exists = await asyncio.to_thread(
             lambda: Session.objects.filter(
-                agent_id=subagent_id, parent_session_id=session_id
+                id=subagent_id, parent_session_id=session_id
             ).exists()
         )
         if not exists:

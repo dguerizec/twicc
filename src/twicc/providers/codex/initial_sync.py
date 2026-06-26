@@ -186,7 +186,6 @@ def _build_create_payload(
             file_path=str(relative_path),
             type=SessionType.SUBAGENT,
             parent_session_id=entry.parent_session_id,
-            agent_id=entry.session_id,
         )
     else:
         session = Session(
