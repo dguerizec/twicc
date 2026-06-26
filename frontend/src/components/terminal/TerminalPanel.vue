@@ -1188,7 +1188,13 @@ watch(
         .filter((t) => t.index > 0)
         .map((t) => {
             const key = ownKey(t.index)
-            return { index: t.index, exited: seenOwnKeys.has(key) && !poolStore.descriptors[key] }
+            // Read the reactive pool descriptor FIRST so this watcher always tracks
+            // it. `seenOwnKeys` is a plain (non-reactive) Set; leading the `&&` with
+            // it short-circuits when the key isn't seen, dropping descriptors[key]
+            // from the deps — then a later PTY-exit deletion never re-fires this
+            // watcher and the dead tab is never removed. (seenOwnKeys still gates a
+            // real exit vs a navigation teardown; operand order only affects tracking.)
+            return { index: t.index, exited: !poolStore.descriptors[key] && seenOwnKeys.has(key) }
         }),
     (list) => {
         if (!props.active) return
