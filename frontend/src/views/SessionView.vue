@@ -1416,11 +1416,12 @@ const LAYOUT_COMMAND_IDS = [
 // Read/unread gate for the current session, mirroring SessionListItem's
 // canToggleReadState + hasUnread — minus the "is this the active row" guard,
 // since here the session IS the one on screen. Returns `{ unread }` (the raw
-// unread flag), or null when toggling read state isn't allowed (draft, or a
-// process running outside user_turn).
+// unread flag), or null when toggling read state isn't allowed (draft, archived,
+// or a process running outside user_turn). Archived sessions never read as
+// unread, so both palette commands are dropped for them.
 function currentSessionReadState() {
     const s = store.getSession(sessionId.value)
-    if (!s || s.draft) return null
+    if (!s || s.draft || s.archived) return null
     const ps = store.getProcessState(sessionId.value)
     if (ps && ps.state !== PROCESS_STATE.USER_TURN) return null
     const unread = !!s.last_new_content_at

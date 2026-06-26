@@ -73,9 +73,9 @@ function isPinModeChecked(mode) {
         && pinnableSessions.value.every(s => (s.pinned || null) === mode)
 }
 
-/** Mirrors SessionListItem's canToggleReadState. */
+/** Mirrors SessionListItem's canToggleReadState (draft/archived/non-user_turn excluded). */
 function canToggleRead(session) {
-    if (session.draft) return false
+    if (session.draft || session.archived) return false
     const ps = store.getProcessState(session.id)
     if (ps && ps.state !== PROCESS_STATE.USER_TURN) return false
     return true

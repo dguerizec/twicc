@@ -16,6 +16,7 @@ import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
 import { sessionRouteLocation } from '../../../utils/sessionRoute'
 import { projectPathTitle } from '../../../utils/projectName'
+import { isSessionUnread } from '../../../utils/sessions'
 import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, SESSION_TIME_FORMAT } from '../../../constants'
 import { markSessionReadState, cancelSessionViewedThrottle } from '../../../composables/useWebSocket'
 import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
@@ -170,30 +171,29 @@ const effectiveShowProjectName = computed(() => {
 
 /**
  * Whether the session has unread content (new assistant messages since last view).
- * Only shown when:
- * - Not the currently viewed session (active prop = UI guard against race conditions)
- * - There IS new content (last_new_content_at is set)
- * - The user hasn't seen it (last_viewed_at is null or older than last_new_content_at)
- * - If a process is running: only in user_turn state (no point showing during assistant_turn)
- * - Not a draft session
+ *
+ * Delegates to the canonical `isSessionUnread` predicate so this per-row eye
+ * stays in lockstep with the unread badges/favicon and never drifts on the
+ * archived/hidden/subagent guards — an archived session surfaced via "Show
+ * archived" must not read as unread. The only extra rule here is the `active`
+ * guard: the row the user is currently viewing never shows the eye (UI guard
+ * against the race where last_new_content_at updates while the session is on
+ * screen).
  */
 const hasUnread = computed(() => {
     if (props.active) return false
-    const session = props.session
-    if (session.draft || !session.last_new_content_at) return false
-    if (session.last_viewed_at && session.last_new_content_at <= session.last_viewed_at) return false
-    // If process is running, only show unread when in user_turn
-    if (processState.value && processState.value.state !== PROCESS_STATE.USER_TURN) return false
-    return true
+    return isSessionUnread(props.session, processState.value)
 })
 
 /**
  * Whether the mark as read/unread menu items should be shown.
- * Hidden when: draft, or process running but not in user_turn.
- * Active session is allowed (mark-unread will deselect it).
+ * Hidden when: draft, archived, or process running but not in user_turn.
+ * Archived sessions never read as unread (see `hasUnread` / `isSessionUnread`),
+ * so toggling their read state is meaningless — both items are dropped from the
+ * Session Actions menu. Active session is allowed (mark-unread will deselect it).
  */
 const canToggleReadState = computed(() => {
-    if (props.session.draft) return false
+    if (props.session.draft || props.session.archived) return false
     if (processState.value && processState.value.state !== PROCESS_STATE.USER_TURN) return false
     return true
 })

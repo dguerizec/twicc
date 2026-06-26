@@ -274,8 +274,9 @@ function buildSessionNavItems({
         const isWorktree = !!project?.worktree_of
         const parentColor = isWorktree ? (data.projects[project.worktree_of]?.color ?? null) : null
         const processState = data.processStates[s.id] || null
-        const hasUnread = !!s.last_new_content_at
-            && (!s.last_viewed_at || s.last_new_content_at > s.last_viewed_at)
+        // Canonical predicate so the palette's unread dot matches the sidebar
+        // eye — same archived/hidden/subagent guards, same user_turn refinement.
+        const hasUnread = isSessionUnread(s, processState)
         return {
             id: s.id,
             label: s.title || s.id,
