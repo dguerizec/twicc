@@ -957,6 +957,14 @@ function scrollToLine(lineNum) {
     }
 }
 
+// "View in Files tab" button (diff mode / Git context): reveal the file at the
+// diff's target line — the user's cursor line in the diff, or the first changed
+// line when they never clicked into it (see DiffEditor.getViewTargetLine).
+function openDiffInFilesTab() {
+    const lineNum = diffEditorRef.value?.getViewTargetLine?.() ?? null
+    viewFileInFilesTab?.(props.filePath, { lineNum })
+}
+
 // Focus the pane's primary content for a tab activation: the CodeMirror editor when a file is shown
 // as source/diff (so the user can read / scroll / navigate it with the keyboard), otherwise the
 // preview — a scrollable or natively-interactive element inside it (so arrows / PageUp-Down / space
@@ -1088,7 +1096,7 @@ function goToNextDiff() {
                     variant="neutral"
                     appearance="outlined"
                     class="reduced-height"
-                    @click="viewFileInFilesTab(filePath)"
+                    @click="openDiffInFilesTab"
                 >
                     <wa-icon name="folder-open"></wa-icon>
                 </wa-button>

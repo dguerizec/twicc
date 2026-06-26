@@ -11,8 +11,8 @@
 <script setup>
 import { ref, nextTick, watch, inject, onMounted, onBeforeUnmount } from 'vue'
 import { EditorView, keymap, lineNumbers, panels } from '@codemirror/view'
-import { EditorSelection } from '@codemirror/state'
-import { MergeView, unifiedMergeView, goToNextChunk, goToPreviousChunk } from '@codemirror/merge'
+import { EditorSelection, Transaction } from '@codemirror/state'
+import { MergeView, unifiedMergeView, goToNextChunk, goToPreviousChunk, getChunks } from '@codemirror/merge'
 import { openSearchPanel, getSearchQuery, setSearchQuery, searchPanelOpen, SearchQuery } from '@codemirror/search'
 import { resolveLanguage, useCodeMirrorExtensions, useSettingsWatcher, toggleSearchPanel } from '../../composables/useCodeMirror'
 import { createCodeCommentsExtension, syncCommentsEffect } from '../../extensions/codeComments'
@@ -191,6 +191,33 @@ function getOriginalView() {
     return currentView.a
 }
 
+// ─── Cursor tracking (for "View in Files" line targeting) ────────────────────
+// Records the last line the *user* put the cursor on in the modified side.
+// CodeMirror always has a selection (a cursor sits at line 1 from creation), so
+// reading the selection alone can't tell "user clicked line 1" from "never
+// clicked". Tracking only user-driven moves lets getViewTargetLine() fall back
+// to the first changed line when the user never interacted with the diff.
+let _userCursorLine = null
+
+/** Map a modified-side doc line to its real file line (patch-only mode), else identity. */
+function toRealLine(docLine) {
+    if (docLine == null) return null
+    if (props.modifiedLineMap) return props.modifiedLineMap[docLine - 1] ?? null
+    return docLine
+}
+
+/** Update listener (added to the modified side only) recording user cursor moves. */
+function buildCursorTracker() {
+    return EditorView.updateListener.of((update) => {
+        if (!update.selectionSet) return
+        // Only count selection changes caused by user interaction (click,
+        // keyboard, typing) — CM tags those with a userEvent. The initial
+        // selection and our own programmatic dispatches (scrollToLine) carry none.
+        if (!update.transactions.some(tr => tr.annotation(Transaction.userEvent) != null)) return
+        _userCursorLine = toRealLine(update.state.doc.lineAt(update.state.selection.main.head).number)
+    })
+}
+
 // ─── Update listener & save keymap ───────────────────────────────────────────
 
 function buildUpdateListener() {
@@ -285,6 +312,7 @@ async function createSideBySideView() {
         ...(langExtension ? [langExtension] : []),
         saveKeymap,
         updateListener,
+        buildCursorTracker(),
         ...buildCommentExtension(),
         ...buildCollapseOrEllipsis(props.modifiedLineMap),
         ...props.extensions,
@@ -341,6 +369,7 @@ async function createUnifiedView() {
         unifiedExt,
         saveKeymap,
         updateListener,
+        buildCursorTracker(),
         ...buildCommentExtension(),
         ...buildCollapseOrEllipsis(props.modifiedLineMap),
         ...props.extensions,
@@ -412,6 +441,7 @@ function destroyCurrentView() {
         currentView = null
     }
     currentMode = null
+    _userCursorLine = null  // new file/commit ⇒ forget the previous cursor
 }
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -561,10 +591,26 @@ function scrollToLine(lineNum) {
     })
 }
 
+/**
+ * Line to target when opening this diff's file in the Files tab:
+ *  - the line the user last placed the cursor on (modified side), if any;
+ *  - else the first changed line (top of the first diff chunk);
+ *  - else null (no changes — caller opens at the top of the file).
+ */
+function getViewTargetLine() {
+    if (_userCursorLine != null) return _userCursorLine
+    const v = getModifiedView()
+    if (!v) return null
+    const chunks = getChunks(v.state)?.chunks
+    if (!chunks || !chunks.length) return null
+    return toRealLine(v.state.doc.lineAt(chunks[0].fromB).number)
+}
+
 defineExpose({
     goToNextChunk: goToNext,
     goToPreviousChunk: goToPrev,
     scrollToLine,
+    getViewTargetLine,
     isDirty,
     resetDirty() { isDirty.value = false },
     openSearch() { toggleSearchPanel(getModifiedView()) },
