@@ -874,10 +874,25 @@ function handlePaste() {
 }
 
 function handleDisconnect() {
-    // Send Ctrl+D (EOF) to the active terminal. The shell exits naturally,
-    // the backend sends pty_exited, and the tab is removed for secondary terminals.
-    // For the main terminal, the tab stays with the reconnect overlay.
+    // Send Ctrl+D (EOF) to the active terminal; the shell exits naturally and the
+    // backend sends pty_exited. Used for the Main, whose tab stays with a reconnect
+    // overlay. Secondaries are killed via handleKillOrDisconnect → killTerminal.
     activeApi.value?.disconnect?.()
+}
+
+/**
+ * Toolbar danger button. The Main is disconnected gracefully (Ctrl+D; its tab
+ * stays with a reconnect overlay). A secondary is killed outright via killTerminal
+ * — tmux kill-session + synchronous tab removal — which is reliable even when a
+ * foreground program would swallow the Ctrl+D, and notifies other devices. Only
+ * ever reached for own tabs (attached tabs use Detach).
+ */
+function handleKillOrDisconnect() {
+    if (isActiveMain.value) {
+        handleDisconnect()
+    } else {
+        killTerminal(activeIndex.value)
+    }
 }
 
 // --- Attach parent-scope terminals ------------------------------------------
@@ -1091,6 +1106,13 @@ watchEffect(() => {
     const wanted = new Set()
     for (const t of terminals.value) {
         const key = ownKey(t.index)
+        // A previously-published own terminal whose pool descriptor has vanished
+        // means its PTY exited (Ctrl+D, `exit`, kill, crash) — onExit dropped it.
+        // Re-materialising it via setSlot would resurrect the dead shell (and, in
+        // tmux, spawn a brand-new session). Skip it so the exit watcher below
+        // removes the tab. The Main keeps its descriptor in onExit (reconnect
+        // overlay), so it never matches this guard.
+        if (seenOwnKeys.has(key) && !poolStore.descriptors[key]) continue
         wanted.add(key)
         seenOwnKeys.add(key)
         poolStore.setSlot(key, {
@@ -1572,7 +1594,7 @@ defineExpose({ activeIndex })
                         appearance="filled"
                         size="small"
                         class="disconnect-button reduced-height"
-                        @click="handleDisconnect"
+                        @click="handleKillOrDisconnect"
                     >
                         <wa-icon name="ban" :label="isActiveMain ? 'Disconnect' : 'Kill terminal'"></wa-icon>
                     </wa-button>
