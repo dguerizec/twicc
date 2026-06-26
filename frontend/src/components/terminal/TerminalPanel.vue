@@ -302,6 +302,11 @@ const nextIndex = ref(1) // monotonically increasing counter
 // key (which never starts with "term-", so it's distinguishable from own tabs).
 const activeAttachedKey = ref(null)
 const pendingRouteTermIndex = ref(null)
+// A key the user just detached. Its route token still points at it for a tick
+// (the navigate back to an own tab is async), so the route-retry watcher below
+// would re-attach it immediately — undoing the detach. Suppress re-attach of this
+// key until the route actually leaves its token (or the user re-attaches it).
+const justDetachedKey = ref(null)
 const unavailableRouteTermIndex = ref(undefined)
 let nextNavigationReplace = false
 let syncingFromRoute = false
@@ -315,6 +320,10 @@ const fallbackTermIndex = computed(() => findFallbackTermIndex(
     typeof props.routeTermIndex === 'number' ? props.routeTermIndex : activeIndex.value
 ))
 const isActiveAttached = computed(() => activeAttachedKey.value !== null)
+// A forced (auto-attached / pinned-in-parent) tab displayed in a child: it's
+// driven entirely from its owner level, so the child exposes no lifecycle action
+// for it — neither Kill (it isn't ours) nor Detach (auto-attach is owner-controlled).
+const isActiveForcedAttached = computed(() => isActiveAttached.value && isForced(activeAttachedKey.value))
 // The pool key of the active tab (attached key, or the own tab's home key).
 const activeKey = computed(() => activeAttachedKey.value ?? ownKey(activeIndex.value))
 // Route value for the active tab: a plain index for own tabs, the attached pool
@@ -773,12 +782,19 @@ watch(
         const target = props.routeTermIndex
         if (typeof target === 'string'
             && props.active && props.routeOwner
+            && target !== justDetachedKey.value
             && activeAttachedKey.value !== target
             && !poolStore.attachmentsFor(props.contextKey).includes(target)) {
             applyRouteTermIndex(target)
         }
     },
 )
+
+// Once the route actually leaves a just-detached key's token, the re-attach
+// suppression is no longer needed — drop it so the key can be re-attached later.
+watch(() => props.routeTermIndex, (r) => {
+    if (justDetachedKey.value !== null && r !== justDetachedKey.value) justDetachedKey.value = null
+})
 
 // Focus the active terminal — its xterm, or the Start/Reconnect overlay button when no live terminal —
 // for an activation gesture. Routed through the shared focus-retry pump (like the tool tabs): a single
@@ -1003,6 +1019,8 @@ watch(
 
 /** Attach an ancestor terminal, or focus it if already attached. */
 function attachTerminal(item) {
+    // An explicit (re)attach overrides any pending detach-suppression for this key.
+    if (justDetachedKey.value === item.key) justDetachedKey.value = null
     poolStore.attach(props.contextKey, item.key, {
         contextKey: item.contextKey,
         index: item.index,
@@ -1021,6 +1039,9 @@ function detachTerminal(key) {
     const before = poolStore.attachmentsFor(props.contextKey)
     const idx = before.indexOf(key)
     poolStore.detach(props.contextKey, key)
+    // Block the route-retry watcher from re-attaching this key off the stale URL
+    // token before the navigate-away lands (cleared once the route leaves it).
+    justDetachedKey.value = key
     if (activeAttachedKey.value === key) {
         const remaining = poolStore.attachmentsFor(props.contextKey)
         activeAttachedKey.value = remaining[idx] ?? remaining[idx - 1] ?? null
@@ -1538,7 +1559,7 @@ defineExpose({ activeIndex })
                     <AppTooltip for="terminal-paste-button">Paste from clipboard</AppTooltip>
                 </template>
 
-                <wa-divider v-if="tb.isConnected" orientation="vertical"></wa-divider>
+                <wa-divider v-if="tb.isConnected && !isActiveForcedAttached" orientation="vertical"></wa-divider>
 
                 <!-- AutoAttach into children — owner toggle (tmux ancestor scopes only) -->
                 <template v-if="canBroadcast && !isActiveAttached">
@@ -1586,8 +1607,10 @@ defineExpose({ activeIndex })
                     <AppTooltip for="terminal-detach-button">Detach terminal</AppTooltip>
                 </template>
 
-                <!-- Disconnect / Kill button — own tabs -->
-                <template v-else-if="tb.isConnected">
+                <!-- Disconnect / Kill button — own tabs only. Never for an attached
+                     tab: a manual one shows Detach above; a forced (auto-attached)
+                     one is owner-controlled and exposes no lifecycle action here. -->
+                <template v-else-if="!isActiveAttached && tb.isConnected">
                     <wa-button
                         id="terminal-disconnect-button"
                         variant="danger"
