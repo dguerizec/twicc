@@ -56,36 +56,68 @@ function reconstructResponse(serialized) {
     })
 }
 
-// Penpal's connect() has no timeout by default. We arm the interceptor before
-// the handshake completes (below), so an absent host would otherwise leave every
-// queued request pending forever (a frozen page). Bound the wait: past this, the
-// queued requests fail with a clear broker error instead of hanging.
-const HANDSHAKE_TIMEOUT_MS = 10000
+// Penpal's connect() sends one SYN and only re-sends when it receives the other
+// side's SYN — there is NO periodic retry. So a single missed handshake (the host
+// not yet mounted/listening when the shim comes up — e.g. the host re-binds on the
+// iframe's `load`, which fires only after the shim) would hang until timeout and
+// then fail every request permanently, forcing a manual refresh. We instead retry
+// the WHOLE handshake on a short cadence until a host answers, within a generous
+// budget: the broker becomes usable as soon as the host is up, and a transient
+// miss self-heals on its own.
+const HANDSHAKE_ATTEMPT_TIMEOUT_MS = 2000 // per connect() attempt
+const HANDSHAKE_RETRY_DELAY_MS = 200 // gap between attempts
+const HANDSHAKE_MAX_WAIT_MS = 30000 // overall budget before a request gives up
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Connect to the host, retrying the handshake until it succeeds or the budget runs
+// out. Each attempt needs a FRESH messenger — penpal forbids reusing one, and a
+// timed-out attempt tears its own window listener down — so we build a new
+// WindowMessenger per try. Returns the host proxy, or throws once the budget is
+// exhausted.
+async function connectToHost() {
+    const deadline = Date.now() + HANDSHAKE_MAX_WAIT_MS
+    let lastError
+    do {
+        const messenger = new WindowMessenger({
+            remoteWindow: window.parent,
+            // The host validates the artifact; same-origin in practice.
+            allowedOrigins: ['*'],
+        })
+        try {
+            return await connect({ messenger, timeout: HANDSHAKE_ATTEMPT_TIMEOUT_MS }).promise
+        } catch (err) {
+            lastError = err
+            await delay(HANDSHAKE_RETRY_DELAY_MS)
+        }
+    } while (Date.now() < deadline)
+    throw lastError ?? new Error('host handshake timed out')
+}
 
 function main() {
-    const messenger = new WindowMessenger({
-        remoteWindow: window.parent,
-        // The host validates the artifact; same-origin in practice.
-        allowedOrigins: ['*'],
-    })
+    // A top-level document (opened directly, without a broker wrapper) has no host
+    // and never will — fail fast instead of retrying against ourselves.
+    const isTopLevel = window.parent === window
 
-    // Resolves with the host proxy once the handshake completes, rejects if no
-    // host ever answers. Requests intercepted before then await this promise —
-    // the interceptor holds them pending — and flush once it settles.
-    let resolveHost, rejectHost
-    const hostReady = new Promise((resolve, reject) => {
-        resolveHost = resolve
-        rejectHost = reject
-    })
-    hostReady.catch(() => {}) // no-op: avoid an unhandledrejection if no request ever fires
-
-    if (window.parent === window) {
-        // Top-level document (opened directly, without a broker wrapper) — no host
-        // will ever answer, so don't even wait out the timeout.
-        rejectHost(new Error('no host'))
-    } else {
-        connect({ messenger, timeout: HANDSHAKE_TIMEOUT_MS }).promise.then(resolveHost, rejectHost)
+    // One shared, lazily-started handshake. Requests intercepted before it settles
+    // await this same promise. On a whole-cycle give-up we clear it so a LATER
+    // request kicks off a fresh retry cycle, instead of staying wedged on one
+    // rejected promise forever (the old behaviour that forced a manual refresh).
+    let hostPromise = null
+    function getHost() {
+        if (isTopLevel) return Promise.reject(new Error('no host'))
+        if (!hostPromise) {
+            hostPromise = connectToHost()
+            hostPromise.catch(() => {
+                hostPromise = null
+            })
+        }
+        return hostPromise
     }
+
+    // Start connecting immediately so the host binds as early as possible; nothing
+    // awaits the result until a request needs it.
+    if (!isTopLevel) getHost()
 
     // Armed SYNCHRONOUSLY, before any artifact script runs (the shim is injected
     // as a blocking <script> first in <head>). A fetch/XHR fired during the
@@ -100,10 +132,11 @@ function main() {
     interceptor.on('request', async ({ request, controller }) => {
         let host
         try {
-            host = await hostReady
+            host = await getHost()
         } catch {
-            // No host, or the handshake timed out. Fail with a clear broker error
-            // — never fall through to the native fetch the CSP would block.
+            // No host within the retry budget. Fail with a clear broker error —
+            // never fall through to the native fetch the CSP would block. A later
+            // request starts a fresh retry cycle (getHost cleared the promise).
             controller.errorWith(new TypeError('broker: host unavailable'))
             return
         }
