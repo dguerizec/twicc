@@ -4000,6 +4000,20 @@ export const useDataStore = defineStore('data', {
          * @param {Array<{session_id: string, project_id: string, state: string, started_at?: number, state_changed_at?: number, memory?: number, session_title?: string, project_name?: string}>} processes
          */
         setActiveProcesses(processes) {
+            // Sessions showing synthetic/live UI before the rebuild. Neither
+            // clearing streaming blocks nor ending an assistant turn recomputes
+            // visual items on its own, so after a reconnect a session that was
+            // streaming (or mid-turn) when the socket dropped keeps its stale
+            // "thinking" block / working placeholder on screen until some
+            // unrelated event recomputes it (the "frozen until manual reload"
+            // reconnect bug). Collect them now; recompute after the rebuild.
+            const sessionsToRecompute = new Set(Object.keys(this.localState.streamingBlocks))
+            for (const [sid, st] of Object.entries(this.processStates)) {
+                if (st.state === PROCESS_STATE.ASSISTANT_TURN || st.state === PROCESS_STATE.STARTING) {
+                    sessionsToRecompute.add(sid)
+                }
+            }
+
             // Clear existing states and rebuild from server data
             this.processStates = {}
             // Clear stale streaming blocks and buffers from previous connection
@@ -4033,6 +4047,19 @@ export const useDataStore = defineStore('data', {
                     if (session?.archived && p.project_id) {
                         this.setSessionArchived(p.project_id, p.session_id, false)
                     }
+                }
+            }
+
+            // Recompute the sessions we touched now that streaming blocks are
+            // gone and process states match the server: drops orphaned synthetic
+            // streaming items and stale working/starting placeholders left over
+            // from a turn that ended (or got cut) while the socket was down.
+            // Only sessions with a cached visual list can be showing a stale
+            // synthetic item, so skip the rest (recomputeVisualItems would
+            // otherwise materialise an empty entry for never-rendered sessions).
+            for (const sid of sessionsToRecompute) {
+                if (this.localState.sessionVisualItems[sid]) {
+                    this.recomputeVisualItems(sid)
                 }
             }
         },

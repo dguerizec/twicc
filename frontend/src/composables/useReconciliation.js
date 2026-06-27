@@ -154,7 +154,16 @@ export function useReconciliation() {
         const currentProjectHasError = currentProjectId && store.didSessionsFailToLoad(currentProjectId)
         const currentSessionHasError = currentSessionId && store.didSessionItemsFailToLoad(currentSessionId)
 
-        if (changedProjectIds.size === 0 && !currentProjectHasError && !currentSessionHasError) {
+        // Defensive: always re-check the focused session on reconnect, even when
+        // no project mtime changed. A project's mtime can read stale at the
+        // instant we poll (watcher lag), and items written during the outage had
+        // their WS broadcast dropped — so relying solely on the mtime delta can
+        // silently miss the current session. Reloading its project's sessions is
+        // cheap and makes the visible conversation the one thing we never leave
+        // behind.
+        const hasCurrentSession = currentSessionId != null
+
+        if (changedProjectIds.size === 0 && !currentProjectHasError && !currentSessionHasError && !hasCurrentSession) {
             console.log('Nothing to update')
             return { hasErrors: false, failedProjectIds: [], failedSessions: [] }
         }
@@ -167,11 +176,10 @@ export function useReconciliation() {
         // Also retry if current project/session has a loading error
         // ═══════════════════════════════════════════════════════════════════════
         const currentProjectNeedsUpdate = currentProjectId && (
-            remainingProjectIds.has(currentProjectId) || currentProjectHasError || currentSessionHasError
+            remainingProjectIds.has(currentProjectId) || currentProjectHasError || currentSessionHasError || hasCurrentSession
         )
 
         if (currentProjectNeedsUpdate) {
-            const hasCurrentSession = currentSessionId != null
             const groupName = hasCurrentSession ? 'Current project/session' : 'Current project'
             console.group(groupName)
 
