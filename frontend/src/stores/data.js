@@ -1948,16 +1948,14 @@ export const useDataStore = defineStore('data', {
         async _fetchSessionsPage(projectId) {
             const state = this._ensureProjectLocalState(projectId)
 
-            // A main repository with git worktrees fetches sessions across itself
-            // and its worktrees (their sessions belong to the whole) via the
-            // multi-project endpoint — like a workspace, one level down.
-            const scopeIds = this.getProjectScopeIds(projectId)
-            const isParentWithWorktrees = projectId !== ALL_PROJECTS_ID
-                && !isWorkspaceProjectId(projectId) && scopeIds.length > 1
-
-            // Build URL based on project type
-            const isMultiProject = projectId === ALL_PROJECTS_ID
-                || isWorkspaceProjectId(projectId) || isParentWithWorktrees
+            // Build URL based on project type. A single real project always uses
+            // its own endpoint, which already returns the project's sessions AND
+            // its git worktrees' in one response (their sessions belong to the
+            // whole — like a workspace aggregates its members, one level down);
+            // the worktree scope is resolved server-side, so no scope routing or
+            // second call is needed here. The all-projects / workspace pseudo-ids
+            // use the multi-project endpoint with an explicit id list.
+            const isMultiProject = projectId === ALL_PROJECTS_ID || isWorkspaceProjectId(projectId)
             const baseUrl = isMultiProject
                 ? '/api/sessions/'
                 : `/api/projects/${projectId}/sessions/`
@@ -1978,9 +1976,6 @@ export const useDataStore = defineStore('data', {
                 if (visibleIds.length) {
                     params.set('project_ids', visibleIds.join(','))
                 }
-            } else if (isParentWithWorktrees) {
-                // Main repo + its worktrees.
-                params.set('project_ids', scopeIds.join(','))
             }
 
             const url = params.toString() ? `${baseUrl}?${params}` : baseUrl
@@ -2059,15 +2054,16 @@ export const useDataStore = defineStore('data', {
                     for (const realProjectId of wsStore.getVisibleProjectIds(wsId)) {
                         this._ensureProjectLocalState(realProjectId).sessionsFetched = true
                     }
-                } else {
-                    // Same cascade for a main repo fetched with its worktrees: mark
-                    // each worktree project fetched so live session_updated events
-                    // for them aren't dropped by the areProjectSessionsFetched guard.
-                    const scopeIds = this.getProjectScopeIds(projectId)
-                    if (scopeIds.length > 1) {
-                        for (const id of scopeIds) {
-                            this._ensureProjectLocalState(id).sessionsFetched = true
-                        }
+                } else if (Array.isArray(data.scope_project_ids)) {
+                    // Same cascade for a single real project: its endpoint returns
+                    // its own sessions plus its git worktrees', and reports the full
+                    // covered scope. Mark every covered project fetched — including
+                    // worktrees with no sessions yet — so their live session_updated
+                    // pushes aren't dropped by the areProjectSessionsFetched guard.
+                    // Sourced from the response (not getProjectScopeIds) so it is
+                    // reliable on cold load, before the projects list has populated.
+                    for (const id of data.scope_project_ids) {
+                        this._ensureProjectLocalState(id).sessionsFetched = true
                     }
                 }
 

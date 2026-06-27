@@ -810,7 +810,17 @@ async def user_messages(request, project_id, session_id):
 
 
 async def project_sessions(request, project_id):
-    """GET /api/projects/<id>/sessions/ - Sessions of a project (paginated).
+    """GET /api/projects/<id>/sessions/ - Sessions of a project AND its git
+    worktrees (paginated).
+
+    A git worktree's sessions belong to its main repository's whole (like a
+    workspace aggregates its members, one level down), so filtering on a project
+    always returns the project's own sessions PLUS those of every project whose
+    ``worktree_of`` points at it -- in a single response, no second call. The
+    full set of covered project ids is returned as ``scope_project_ids`` so the
+    client can mark them all fetched (and thus accept their live
+    ``session_updated`` pushes) without having to re-derive the worktree set
+    itself -- which it cannot do reliably before the projects list has loaded.
 
     Returns only regular sessions (not subagents).
     Subagents are accessed via their parent session.
@@ -821,8 +831,19 @@ async def project_sessions(request, project_id):
     if not await Project.objects.filter(id=project_id).aexists():
         raise Http404("Project not found")
 
+    # Scope = the project itself + every git worktree of it. Archived-blind, to
+    # match the client's worktree scope (`getProjectScopeIds`): the session-level
+    # archive filter hides archived sessions when "show archived" is off, so the
+    # worktree set never needs an archived-aware refetch.
+    worktree_ids = await sync_to_async(list)(
+        Project.objects.filter(worktree_of_id=project_id).values_list("id", flat=True)
+    )
+    scope_ids = [project_id, *worktree_ids]
+
     before_mtime = request.GET.get("before_mtime")
-    return JsonResponse(await _get_sessions_page(project_id, before_mtime))
+    result = await _get_sessions_page(None, before_mtime, project_id_list=scope_ids)
+    result["scope_project_ids"] = scope_ids
+    return JsonResponse(result)
 
 
 async def _resolve_session_or_404(session_id, project_id, parent_session_id):
