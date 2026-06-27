@@ -81,6 +81,15 @@ function onShow(event) { emit('select', event.detail.name) }
     box-shadow: var(--wa-shadow-l, 0 10px 40px rgba(0, 0, 0, 0.35));
     --overlay-border: var(--divider-size) solid var(--wa-color-surface-border, rgba(0, 0, 0, 0.12));
 }
+/* While a FilePane preview teleported into this overlay is expanded to full-window
+   (position:fixed; z-index:1000), the overlay's own z-index:11 stacking context traps it
+   below the gutters (z-index:12, resolved a context higher) — they paint over the fullscreen.
+   Lift the overlay above the gutters so the fullscreen escapes them. Same :has() trigger as
+   DockRegion's fix; there the region's stacking context comes from `isolation`, so it drops to
+   auto, but the overlay's comes from an explicit z-index, so we raise that instead. */
+.layout-overlay:has(.file-pane-preview--fullscreen) {
+    z-index: 13;
+}
 /* The overlay peeks from one edge; only its inner edge (toward the escape strip / center) is bordered. */
 .layout-overlay.left { border-right: var(--overlay-border); }
 .layout-overlay.right { border-left: var(--overlay-border); }
