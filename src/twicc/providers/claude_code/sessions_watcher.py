@@ -158,7 +158,14 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         if change_type != Change.deleted:
             workflow_session_id = self._workflow_json_session_id(path)
             if workflow_session_id is not None:
-                await self._handle_workflow_run(workflow_session_id, path, channel_layer)
+                await self._handle_workflow_run(workflow_session_id, path, change_type, channel_layer)
+                return True
+
+            # TEMP probe — observe whether the run's journal.jsonl grows live
+            # during the run or lands all at once at the end. Remove once settled.
+            journal_run_id = self._workflow_journal_run_id(path)
+            if journal_run_id is not None:
+                await self._journal_probe(journal_run_id, path, change_type)
                 return True
 
         # Direct children of projects_dir are project dirs.
@@ -192,7 +199,42 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
             return parts[1]
         return None
 
-    async def _handle_workflow_run(self, session_id: str, path: Path, channel_layer) -> None:
+    def _workflow_journal_run_id(self, path: Path) -> str | None:
+        """Run id if ``path`` is a run's ``journal.jsonl``, else ``None``.
+
+        Matches ``<project>/<session>/subagents/workflows/<run_id>/journal.jsonl``
+        relative to :attr:`projects_dir`. Pure path inspection. (TEMP — supports
+        the journal-write probe.)
+        """
+        try:
+            parts = path.relative_to(self.projects_dir).parts
+        except ValueError:
+            return None
+        if (
+            len(parts) == 6
+            and parts[2] == "subagents"
+            and parts[3] == "workflows"
+            and parts[5] == "journal.jsonl"
+        ):
+            return parts[4]
+        return None
+
+    async def _journal_probe(self, run_id: str, path: Path, change_type) -> None:
+        """Log the run journal's size/line counts on each write (TEMP probe)."""
+        try:
+            raw = await asyncio.to_thread(path.read_text, encoding="utf-8")
+        except OSError:
+            return
+        lines = [ln for ln in raw.splitlines() if ln.strip()]
+        started = sum(1 for ln in lines if '"type":"started"' in ln)
+        result = sum(1 for ln in lines if '"type":"result"' in ln)
+        logger.info(
+            "[journal-probe] run=%s change=%s bytes=%d lines=%d started=%d result=%d",
+            run_id, getattr(change_type, "name", change_type), len(raw),
+            len(lines), started, result,
+        )
+
+    async def _handle_workflow_run(self, session_id: str, path: Path, change_type, channel_layer) -> None:
         """React to a ``wf_*.json`` write: latch ``has_workflows`` + persist the run.
 
         No-op when the owning session row isn't synced yet (the boot backfill in
@@ -202,7 +244,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         if session is None:
             return
         await self._latch_session_workflows(session, channel_layer)
-        saved = await self._upsert_workflow_run(session.id, path)
+        saved = await self._upsert_workflow_run(session.id, path, change_type)
         # Tell open Workflows tabs to refetch — the run was created or its
         # envelope changed (the engine rewrites the file on each progress tick).
         if saved and not session.hidden:
@@ -228,7 +270,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 "session": serialize_session(session),
             })
 
-    async def _upsert_workflow_run(self, session_id: str, path: Path) -> bool:
+    async def _upsert_workflow_run(self, session_id: str, path: Path, change_type) -> bool:
         """Mirror a ``wf_*.json`` file into its :class:`Workflow` row (upsert by run_id).
 
         ``run_id`` is the filename stem (``wf_<hex>``). The file is read off the
@@ -243,9 +285,24 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         except OSError:
             return False
         try:
-            orjson.loads(raw)
+            parsed = orjson.loads(raw)
         except orjson.JSONDecodeError:
             return False
+
+        # TEMP probe — confirm empirically whether the wf_*.json is written once
+        # (at completion) or refreshed during the run. Every detected write logs
+        # its change type + the state carried by the content. Remove once settled.
+        agents = [
+            w for w in (parsed.get("workflowProgress") or [])
+            if isinstance(w, dict) and w.get("type") == "workflow_agent"
+        ]
+        done = sum(1 for w in agents if w.get("state") == "done")
+        logger.info(
+            "[wf-probe] run=%s change=%s bytes=%d status=%s agentCount=%s progress=%d/%d durationMs=%s",
+            run_id, getattr(change_type, "name", change_type), len(raw),
+            parsed.get("status"), parsed.get("agentCount"), done, len(agents), parsed.get("durationMs"),
+        )
+
         await sync_to_async(self._save_workflow_run)(session_id, run_id, raw)
         return True
 
