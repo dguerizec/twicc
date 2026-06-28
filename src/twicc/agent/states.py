@@ -101,6 +101,12 @@ class AgentInfo(NamedTuple):
     # for normal sessions; hybrid Claude sessions carry
     # ``{"mode": "hybrid", "terminal_blocked": bool}``.
     extra: dict | None = None
+    # True while a stop (``kill_agent``) is in flight but the process hasn't
+    # died yet. Carried verbatim to the front (live ``process_state`` + the
+    # initial ``active_processes`` snapshot) so the "stopping" spinner survives
+    # a WS reconnect or page refresh. In-memory only — a backend restart kills
+    # or re-adopts the agent, so there is nothing to persist.
+    stopping: bool = False
 
     @property
     def memory_rss_human(self) -> str | None:
@@ -146,4 +152,6 @@ def serialize_agent_info(info: AgentInfo) -> dict:
         data["last_started_tool_id"] = info.last_started_tool_id
     if info.extra:
         data["extra"] = info.extra
+    if info.stopping:
+        data["stopping"] = True
     return data

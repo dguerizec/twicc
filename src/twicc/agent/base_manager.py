@@ -136,6 +136,14 @@ class BaseAgentManager:
                 logger.info(
                     "Stopping agent for session %s (reason: %s)", session_id, reason,
                 )
+                # Surface the in-flight stop before the (possibly long) kill:
+                # ``interrupt_or_kill`` can block for up to ~30s (Claude Code
+                # normal), so push the flag now for live clients, and keep it in
+                # the agent's snapshot for any client that (re)connects meanwhile.
+                # Safe under ``_lock``: ``_broadcast_info`` / ``_on_state_change``
+                # never reacquire it.
+                if agent.mark_stopping():
+                    await self._broadcast_info(agent.get_info())
                 await agent.interrupt_or_kill(reason=reason)
                 return True
 

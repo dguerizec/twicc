@@ -102,6 +102,12 @@ class BaseAgent:
         self._dead_callback_done_event = asyncio.Event()
         self._state_change_callback: StateChangeCallback | None = None
 
+        # Set once a stop (``kill_agent``) has been requested, surfaced via
+        # ``get_info().stopping`` so the front's "stopping" spinner survives a
+        # WS reconnect / page refresh until the process actually dies. Never
+        # reset: the agent only proceeds from here to DEAD. See ``mark_stopping``.
+        self._stop_requested = False
+
         # Pending requests waiting on a user click (tool approval, ask user
         # question, …). Keyed by request_id (UUID). Provider subclasses populate
         # these via ``_await_pending_request``; the WS layer consumes them via
@@ -503,7 +509,22 @@ class BaseAgent:
             memory_rss=memory_rss,
             kill_reason=self.kill_reason,
             pending_requests=self.pending_requests,
+            stopping=self._stop_requested,
         )
+
+    def mark_stopping(self) -> bool:
+        """Flag that a stop has been requested so ``get_info`` reports it.
+
+        Returns ``True`` when newly set, so the caller (``kill_agent``) knows to
+        broadcast the snapshot now — live clients update immediately, and the
+        in-memory flag feeds the ``active_processes`` snapshot for any client
+        that (re)connects while the kill is still in flight. Idempotent; a no-op
+        once already set or once DEAD.
+        """
+        if self._stop_requested or self.state == AgentState.DEAD:
+            return False
+        self._stop_requested = True
+        return True
 
     # ------------------------------------------------------------------
     # Environment context reconciliation (shared by every provider)

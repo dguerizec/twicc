@@ -1054,6 +1054,7 @@ export function useWebSocket() {
                     session_title: msg.session_title,
                     project_name: msg.project_name,
                     extra: msg.extra,
+                    stopping: msg.stopping,
                 })
                 // Ensure the session is present in data.sessions so the cross-filter
                 // active block (sessions with a running process) can surface it

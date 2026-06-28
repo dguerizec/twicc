@@ -3920,10 +3920,12 @@ export const useDataStore = defineStore('data', {
         // Process state actions
 
         /**
-         * Mark a session as "stopping" so the UI can reflect it immediately.
-         * The flag is automatically cleared when the backend replaces the
-         * processState entry (on state transition, including DEAD).
-         * No-op if the session has no active process state.
+         * Optimistically mark a session as "stopping" so the spinner reacts to
+         * the click immediately, before the backend confirms. The backend is the
+         * source of truth from here on: it carries the flag on every
+         * `process_state` and in the `active_processes` snapshot, so the spinner
+         * survives a WS reconnect / page refresh and only drops when the process
+         * actually dies (entry removed). No-op if there is no active process.
          * @param {string} sessionId
          */
         setSessionStopping(sessionId) {
@@ -3944,6 +3946,13 @@ export const useDataStore = defineStore('data', {
             const previousState = this.processStates[sessionId]?.state
             const wasAssistantTurn = previousState === PROCESS_STATE.ASSISTANT_TURN
             const wasStarting = previousState === PROCESS_STATE.STARTING
+            // Keep an in-flight "stopping" flag across non-dead transitions so
+            // the spinner reflects the whole kill, not just the first state
+            // change the interrupt produces (e.g. assistant_turn → user_turn).
+            // The backend carries `stopping` on the message; we OR it with the
+            // optimistic local flag so neither a not-yet-confirmed click nor a
+            // pre-kill broadcast can drop it. It only clears on `dead` below.
+            const wasStopping = this.processStates[sessionId]?.stopping === true
 
             if (state === 'dead') {
                 // Remove dead processes from the map
@@ -3976,6 +3985,8 @@ export const useDataStore = defineStore('data', {
                     extra: extra.extra || null,
                     tools: [],
                     lastStartedToolId: null,
+                    // Backend truth OR optimistic local flag (see `wasStopping`).
+                    stopping: extra.stopping === true || wasStopping,
                 }
 
                 // Auto-unarchive: running and archived are mutually exclusive
@@ -4040,6 +4051,9 @@ export const useDataStore = defineStore('data', {
                         extra: p.extra || null,
                         tools: Array.isArray(p.active_tools) ? p.active_tools : [],
                         lastStartedToolId: p.last_started_tool_id || null,
+                        // Restore an in-flight stop from the snapshot so the
+                        // spinner survives this (re)connect / page refresh.
+                        stopping: p.stopping === true,
                     }
 
                     // Auto-unarchive: running and archived are mutually exclusive
