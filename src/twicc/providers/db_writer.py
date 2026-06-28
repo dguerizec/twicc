@@ -2472,9 +2472,11 @@ def _apply_upsert_workflow_payload(payload: UpsertWorkflowPayload) -> None:
         return
 
     with transaction.atomic():
+        # Boot backfill of a completed run = STATE 2: store the envelope and
+        # clear any synthesis (mirrors the live ``_save_workflow_run`` path).
         Workflow.objects.update_or_create(
             run_id=payload.run_id,
-            defaults={"session_id": payload.session_id, "raw_json": payload.raw_json},
+            defaults={"session_id": payload.session_id, "raw_json": payload.raw_json, "synthesis": None},
         )
 
 

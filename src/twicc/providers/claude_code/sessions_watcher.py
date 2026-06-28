@@ -9,6 +9,7 @@ updates, broadcasts, search indexing, polling) lives in the base.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -43,6 +44,21 @@ logger = logging.getLogger(__name__)
 # Real subagent files are named agent-a<hex>.jsonl (e.g. agent-a6c7d21.jsonl).
 # Sidechain files like agent-acompact-<hex>.jsonl or agent-aprompt_suggestion-<hex>.jsonl are excluded.
 _REAL_SUBAGENT_RE = re.compile(r"^agent-a[0-9a-f]+\.jsonl$")
+
+
+def _state0_raw_json(run_id: str, script_text: str) -> str:
+    """The minimalist STATE 0 ``raw_json``: a launched-but-unsynthesized run.
+
+    Just enough for a viewing front to recognise the run (``synthetic`` + no
+    ``phases``) and regenerate templates from ``script``. See
+    :class:`~twicc.core.models.Workflow` for the three states.
+    """
+    return orjson.dumps({
+        "runId": run_id,
+        "script": script_text,
+        "status": "pending",
+        "synthetic": True,
+    }).decode()
 
 
 class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
@@ -161,6 +177,16 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 await self._handle_workflow_run(workflow_session_id, path, change_type, channel_layer)
                 return True
 
+            # A workflow ``scripts/*.js`` file is written at LAUNCH, before any
+            # ``wf_*.json`` — its appearance is where a run first becomes visible
+            # (the minimalist STATE 0 row). A later write means the script
+            # changed mid-run (rare) → reset the synthesized state.
+            script_target = self._workflow_script_target(path)
+            if script_target is not None:
+                session_id, run_id = script_target
+                await self._handle_workflow_script(session_id, run_id, path, channel_layer)
+                return True
+
             # TEMP probe — observe whether the run's journal.jsonl grows live
             # during the run or lands all at once at the end. Remove once settled.
             journal_run_id = self._workflow_journal_run_id(path)
@@ -198,6 +224,32 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         ):
             return parts[1]
         return None
+
+    def _workflow_script_target(self, path: Path) -> tuple[str, str] | None:
+        """``(session_id, run_id)`` if ``path`` is a workflow launch script, else ``None``.
+
+        Matches ``<project>/<session>/workflows/scripts/<name>-<run_id>.js``
+        relative to :attr:`projects_dir`. The script filename is
+        ``<workflowName>-<run_id>.js`` and the ``run_id`` always starts with
+        ``wf_``; we split on the **last** ``-wf_`` so a workflow name containing
+        that substring still resolves correctly. Pure path inspection, no I/O.
+        """
+        try:
+            parts = path.relative_to(self.projects_dir).parts
+        except ValueError:
+            return None
+        if not (
+            len(parts) == 5
+            and parts[2] == "workflows"
+            and parts[3] == "scripts"
+            and parts[4].endswith(".js")
+        ):
+            return None
+        stem = parts[4][: -len(".js")]
+        _, sep, tail = stem.rpartition(f"-{WORKFLOW_FILE_PREFIX}")
+        if not sep:
+            return None
+        return parts[1], f"{WORKFLOW_FILE_PREFIX}{tail}"
 
     def _workflow_journal_run_id(self, path: Path) -> str | None:
         """Run id if ``path`` is a run's ``journal.jsonl``, else ``None``.
@@ -255,6 +307,74 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 "run_id": path.stem,
             })
 
+    async def _handle_workflow_script(
+        self, session_id: str, run_id: str, path: Path, channel_layer,
+    ) -> None:
+        """React to a ``workflows/scripts/*.js`` write: seed/refresh the STATE 0 row.
+
+        The script is written at LAUNCH, so this is where a run first becomes
+        visible — we create a minimalist ``pending`` :class:`Workflow` row
+        (``raw_json`` STATE 0). A later write to the same script (rare) resets an
+        already-synthesized row back to STATE 0 and drops its stale
+        ``synthesis``. A completed row (the real envelope already landed) is
+        never downgraded. No-op when the owning session isn't synced yet.
+        """
+        session = await get_session_by_id(session_id)
+        if session is None:
+            return
+        try:
+            script_text = await asyncio.to_thread(path.read_text, encoding="utf-8")
+        except OSError:
+            return
+        changed = await sync_to_async(self._save_workflow_script)(session.id, run_id, script_text)
+        if not changed:
+            return
+        await self._latch_session_workflows(session, channel_layer)
+        if not session.hidden:
+            await broadcast_message(channel_layer, {
+                "type": "workflow_changed",
+                "session_id": session.id,
+                "project_id": session.project_id,
+                "run_id": run_id,
+            })
+
+    @staticmethod
+    def _save_workflow_script(session_id: str, run_id: str, script_text: str) -> bool:
+        """Upsert the STATE 0 row for a launched run. Returns ``True`` when
+        ``raw_json`` was (re)written — created, or reset after a script change —
+        so the caller knows to latch + broadcast; ``False`` on a no-op.
+
+        No-op cases: the row already holds the real envelope (``synthetic``
+        falsy → STATE 2, never downgrade), or the script is unchanged (same
+        ``script_hash``).
+        """
+        script_hash = hashlib.sha256(script_text.encode("utf-8")).hexdigest()
+        raw0 = _state0_raw_json(run_id, script_text)
+        try:
+            wf = Workflow.objects.get(run_id=run_id)
+        except Workflow.DoesNotExist:
+            Workflow.objects.create(
+                session_id=session_id,
+                run_id=run_id,
+                raw_json=raw0,
+                script_hash=script_hash,
+            )
+            return True
+        try:
+            parsed = orjson.loads(wf.raw_json)
+        except orjson.JSONDecodeError:
+            parsed = {}
+        if not parsed.get("synthetic"):
+            return False  # real envelope already landed (STATE 2)
+        if wf.script_hash == script_hash:
+            return False  # same script — nothing to refresh
+        # Script changed mid-run → back to STATE 0, drop the now-stale synthesis.
+        wf.raw_json = raw0
+        wf.script_hash = script_hash
+        wf.synthesis = None
+        wf.save(update_fields=["raw_json", "script_hash", "synthesis", "updated_at"])
+        return True
+
     async def _latch_session_workflows(self, session, channel_layer) -> None:
         """Set ``has_workflows=True`` on a session and broadcast the change.
 
@@ -308,9 +428,11 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
 
     @staticmethod
     def _save_workflow_run(session_id: str, run_id: str, raw: str) -> None:
+        # The real envelope (STATE 2) supersedes any synthesized STATE 0/1: store
+        # it verbatim and drop the now-useless synthesis bundle.
         Workflow.objects.update_or_create(
             run_id=run_id,
-            defaults={"session_id": session_id, "raw_json": raw},
+            defaults={"session_id": session_id, "raw_json": raw, "synthesis": None},
         )
 
     async def _sync_project_and_broadcast(

@@ -827,6 +827,21 @@ class Workflow(models.Model):
     (``toolUseResult.runId``) — see ``views.workflow_links`` — and pushed live
     via the ``workflow_link_created`` WS event. So this table stays just the
     run envelope.
+
+    **``raw_json`` has three states** (the running view feeds off them):
+
+    - **STATE 0 — minimalist.** ``{runId, script, status:"pending",
+      synthetic:true}``. Written at LAUNCH, when the workflow ``scripts/*.js``
+      file first appears (before any ``wf_*.json``). The front's cue to
+      (re)generate templates from ``script``.
+    - **STATE 1 — synthesized.** The common view format (phases + agents tagged
+      with ``phaseTitle``), still ``status:"pending"``, ``synthetic:true``.
+      Built by the back from ``synthesis`` + the run's live ``journal.jsonl``.
+    - **STATE 2 — real.** The actual ``wf_*.json`` envelope, ``status:"completed"``,
+      no ``synthetic`` key. Supersedes any synthesized state at completion.
+
+    ``synthetic`` truthiness is the discriminator: STATE 0/1 carry it, STATE 2
+    never does (so a late script write never downgrades a completed row).
     """
 
     session = models.ForeignKey(
@@ -835,7 +850,13 @@ class Workflow(models.Model):
         related_name="workflows",
     )
     run_id = models.CharField(max_length=255, unique=True)  # e.g. "wf_cd590ff1-f54" — filename stem, resume handle
-    raw_json = models.TextField()  # The wf_*.json file content, verbatim (parse with orjson at the edges)
+    raw_json = models.TextField()  # The view envelope (3 states above), verbatim (parse with orjson at the edges)
+    # sha256 of the launch script text — cache key for ``synthesis``; reset when the script changes mid-run.
+    # Empty for STATE 2 rows backfilled straight from a ``wf_*.json`` (no synthesis ever generated).
+    script_hash = models.CharField(max_length=64, blank=True, default="")
+    # {meta, templates} POSTed by a viewing front; the back builds STATE 1 from it.
+    # Purged (set to None) when the script changes (hash differs) or the real envelope lands.
+    synthesis = models.JSONField(null=True, blank=True, default=None)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
