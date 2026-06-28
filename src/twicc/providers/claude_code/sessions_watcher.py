@@ -29,6 +29,7 @@ from .compute import (
     get_compute as _get_compute,
 )
 from .helpers import ClaudeCodeHelpers
+from .workflow_synthesis import rebuild_state1
 from twicc.providers.compute_base import BaseSessionCompute, ToolResultUpdate
 from twicc.providers.sessions_watcher import (
     BaseSessionsWatcher,
@@ -187,11 +188,13 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 await self._handle_workflow_script(session_id, run_id, path, channel_layer)
                 return True
 
-            # TEMP probe — observe whether the run's journal.jsonl grows live
-            # during the run or lands all at once at the end. Remove once settled.
+            # A run's journal.jsonl grows live as agents start/return. Each write
+            # rebuilds the synthesized running view (STATE 1) — but only once a
+            # viewing front has supplied templates (the row's ``synthesis``);
+            # until then it's a cheap no-op (nothing to detect against yet).
             journal_run_id = self._workflow_journal_run_id(path)
             if journal_run_id is not None:
-                await self._journal_probe(journal_run_id, path, change_type)
+                await self._handle_workflow_journal(journal_run_id, channel_layer)
                 return True
 
         # Direct children of projects_dir are project dirs.
@@ -255,8 +258,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         """Run id if ``path`` is a run's ``journal.jsonl``, else ``None``.
 
         Matches ``<project>/<session>/subagents/workflows/<run_id>/journal.jsonl``
-        relative to :attr:`projects_dir`. Pure path inspection. (TEMP — supports
-        the journal-write probe.)
+        relative to :attr:`projects_dir`. Pure path inspection, no I/O.
         """
         try:
             parts = path.relative_to(self.projects_dir).parts
@@ -271,20 +273,37 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
             return parts[4]
         return None
 
-    async def _journal_probe(self, run_id: str, path: Path, change_type) -> None:
-        """Log the run journal's size/line counts on each write (TEMP probe)."""
-        try:
-            raw = await asyncio.to_thread(path.read_text, encoding="utf-8")
-        except OSError:
+    async def _handle_workflow_journal(self, run_id: str, channel_layer) -> None:
+        """Rebuild a run's STATE 1 running view when its journal grows.
+
+        Lazy: a no-op until a viewing front has POSTed templates (the row's
+        ``synthesis``) — :func:`rebuild_state1` returns ``None`` then, and for an
+        already-completed run (STATE 2). When it does rebuild, broadcast so open
+        Workflows tabs refetch the fresh progress.
+        """
+        envelope = await sync_to_async(rebuild_state1)(run_id)
+        if envelope is None:
             return
-        lines = [ln for ln in raw.splitlines() if ln.strip()]
-        started = sum(1 for ln in lines if '"type":"started"' in ln)
-        result = sum(1 for ln in lines if '"type":"result"' in ln)
-        logger.info(
-            "[journal-probe] run=%s change=%s bytes=%d lines=%d started=%d result=%d",
-            run_id, getattr(change_type, "name", change_type), len(raw),
-            len(lines), started, result,
+        target = await sync_to_async(self._workflow_broadcast_target)(run_id)
+        if target is None or target[2]:  # missing row, or hidden session
+            return
+        session_id, project_id, _hidden = target
+        await broadcast_message(channel_layer, {
+            "type": "workflow_changed",
+            "session_id": session_id,
+            "project_id": project_id,
+            "run_id": run_id,
+        })
+
+    @staticmethod
+    def _workflow_broadcast_target(run_id: str) -> tuple[str, str, bool] | None:
+        """``(session_id, project_id, hidden)`` for a run's owning session, or None."""
+        workflow = (
+            Workflow.objects.select_related("session").filter(run_id=run_id).first()
         )
+        if workflow is None:
+            return None
+        return (workflow.session_id, workflow.session.project_id, workflow.session.hidden)
 
     async def _handle_workflow_run(self, session_id: str, path: Path, change_type, channel_layer) -> None:
         """React to a ``wf_*.json`` write: latch ``has_workflows`` + persist the run.

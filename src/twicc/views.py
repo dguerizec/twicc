@@ -1569,6 +1569,95 @@ async def workflow_links(request, project_id, session_id):
     return JsonResponse(links, safe=False)
 
 
+def _store_synthesis_and_build(session_id, run_id, meta, templates, script_hash):
+    """Store a front's ``{meta, templates}`` on the run (guarded by
+    ``script_hash``) and rebuild its STATE 1 envelope. Returns ``(status, payload)``:
+
+    - ``("ok", raw_dict)`` — synthesis stored, STATE 1 (re)built;
+    - ``("not_found", None)`` — no such run for this session;
+    - ``("completed", None)`` — the real envelope already landed (STATE 2);
+    - ``("stale_hash", current_hash)`` — the script changed since the front
+      generated, so its templates are stale; the front should regenerate.
+    """
+    from twicc.providers.claude_code.workflow_synthesis import rebuild_state1
+
+    try:
+        workflow = Workflow.objects.get(run_id=run_id, session_id=session_id)
+    except Workflow.DoesNotExist:
+        return ("not_found", None)
+    try:
+        prior = orjson.loads(workflow.raw_json)
+    except orjson.JSONDecodeError:
+        prior = {}
+    if not prior.get("synthetic"):
+        return ("completed", None)
+    if workflow.script_hash and workflow.script_hash != script_hash:
+        return ("stale_hash", workflow.script_hash)
+    workflow.synthesis = {"meta": meta, "templates": templates}
+    workflow.save(update_fields=["synthesis", "updated_at"])
+    return ("ok", rebuild_state1(run_id))
+
+
+async def workflow_synthesis(request, project_id, session_id, run_id):
+    """POST /api/projects/<id>/sessions/<sid>/workflows/<run_id>/synthesis/
+
+    A viewing front, seeing a STATE 0 run (``synthetic`` with no phases yet),
+    generates ``{meta, templates}`` from the launch script and POSTs them here.
+    We store them (guarded by ``script_hash`` — a stale POST after a mid-run
+    script change is rejected with 409), build the STATE 1 running view (phase
+    detection over the live journal), broadcast ``workflow_changed``, and return
+    the synthesized envelope. The browser owns template *generation* (eval); the
+    back owns the string-matching detection.
+    """
+    session = await _resolve_session_or_404(session_id, project_id, None)
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    meta = data.get("meta")
+    templates = data.get("templates")
+    script_hash = data.get("script_hash")
+    if not isinstance(meta, dict) or not isinstance(templates, list) or not isinstance(script_hash, str):
+        return JsonResponse(
+            {"error": "meta (object), templates (array) and script_hash (string) are required"},
+            status=400,
+        )
+
+    status, payload = await run_under_db_write_lock(
+        lambda: sync_to_async(_store_synthesis_and_build)(
+            session_id, run_id, meta, templates, script_hash
+        )
+    )
+    if status == "not_found":
+        raise Http404("Workflow run not found")
+    if status == "completed":
+        return JsonResponse({"error": "Run already completed"}, status=409)
+    if status == "stale_hash":
+        return JsonResponse(
+            {"error": "Script changed since generation; regenerate", "script_hash": payload},
+            status=409,
+        )
+    if payload is None:  # defensive: synthesis stored but the build yielded nothing
+        return JsonResponse({"error": "Failed to build running view"}, status=500)
+
+    # Tell other open Workflows tabs on this session to refetch (the POSTing
+    # front already has the payload below). Gated on hidden, like the watcher.
+    if not session.hidden:
+        channel_layer = get_channel_layer()
+        await channel_layer.group_send(
+            "updates",
+            {"type": "broadcast", "data": {
+                "type": "workflow_changed",
+                "session_id": session_id,
+                "project_id": project_id,
+                "run_id": run_id,
+            }},
+        )
+    return JsonResponse(payload, safe=False)
+
+
 async def directory_tree(request, project_id, session_id=None):
     """GET directory tree listing.
 

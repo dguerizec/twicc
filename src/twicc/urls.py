@@ -69,6 +69,7 @@ urlpatterns = [
     path("api/projects/<str:project_id>/sessions/<str:session_id>/tool-states/", views.tool_states),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/topology/", views.session_topology),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/workflows/", views.session_workflows),
+    path("api/projects/<str:project_id>/sessions/<str:session_id>/workflows/<str:run_id>/synthesis/", views.workflow_synthesis),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/workflow-links/", views.workflow_links),
     # Subagent routes (same views, with parent_session_id for validation)
     path("api/projects/<str:project_id>/sessions/<str:parent_session_id>/subagent/<str:session_id>/", views.session_detail),
