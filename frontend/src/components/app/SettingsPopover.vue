@@ -322,6 +322,14 @@ const shortcutGroups = computed(() => {
             ]
         },
         {
+            label: 'Workflow run tabs',
+            shortcuts: [
+                { keys: ['Alt', 'Ctrl', 'Shift', '1–9'], description: 'Jump to workflow run tab N' },
+                { keys: ['Alt', 'Ctrl', 'Shift', '←/→'], description: 'Previous / next workflow run tab' },
+                { keys: ['Alt', 'Ctrl', 'Shift', '↑/↓'], description: 'Last visited workflow run tab' },
+            ]
+        },
+        {
             label: 'In-session search',
             shortcuts: [
                 { keys: [mod, 'F'], description: 'Find in current session' },

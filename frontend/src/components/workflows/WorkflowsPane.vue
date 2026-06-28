@@ -205,15 +205,72 @@ function onWorkflowChanged(event) {
     reloadTimer = setTimeout(() => { if (hasLoaded.value) load() }, 400)
 }
 
+// ─── Keyboard shortcuts: workflow run-tab navigation (Alt+Ctrl+Shift+{1-9, ←/→, ↑/↓})
+// Events dispatched by App.vue, handled here by the active instance only — the
+// same system as the terminal tabs. Activation is URL-driven (like a tab click),
+// so we set activeRunId and sync the URL together.
+const workflowTabHistory = []
+const MAX_WORKFLOW_TAB_HISTORY = 50
+
+function pushWorkflowTabHistory(runId) {
+    if (runId == null) return
+    if (workflowTabHistory.length > 0 && workflowTabHistory[workflowTabHistory.length - 1] === runId) return
+    workflowTabHistory.push(runId)
+    if (workflowTabHistory.length > MAX_WORKFLOW_TAB_HISTORY) workflowTabHistory.shift()
+}
+
+// Track tab transitions for the last-visited jump — only while visible, and the
+// leaving run (Alt+Tab-like), matching the terminal pane.
+watch(activeRunId, (newId, oldId) => {
+    if (!props.active) return
+    if (oldId != null && oldId !== newId) pushWorkflowTabHistory(oldId)
+})
+
+function activateRun(runId) {
+    activeRunId.value = runId
+    syncUrl(runId)
+}
+
+function handleWorkflowTabShortcut(event) {
+    if (!props.active) return
+    const list = rows.value
+    if (!list.length) return
+    const { type, index } = event.detail
+
+    if (type === 'direct') {
+        // Number N → the Nth run tab (1-based positional).
+        const row = list[index - 1]
+        if (row) activateRun(row.run_id)
+    } else if (type === 'prev' || type === 'next') {
+        const currentIdx = list.findIndex(r => r.run_id === activeRunId.value)
+        if (currentIdx === -1) return
+        const newIdx = type === 'next'
+            ? (currentIdx + 1) % list.length
+            : (currentIdx - 1 + list.length) % list.length
+        activateRun(list[newIdx].run_id)
+    } else if (type === 'last-visited') {
+        const validIds = new Set(list.map(r => r.run_id))
+        for (let i = workflowTabHistory.length - 1; i >= 0; i--) {
+            const id = workflowTabHistory[i]
+            if (id !== activeRunId.value && validIds.has(id)) {
+                activateRun(id)
+                return
+            }
+        }
+    }
+}
+
 onMounted(() => {
     load()
     window.addEventListener('twicc:workflow-changed', onWorkflowChanged)
+    window.addEventListener('twicc:workflow-tab-shortcut', handleWorkflowTabShortcut)
 })
 watch(() => props.active, (active) => { if (active) load() })
 watch(() => props.sessionId, () => { hasLoaded.value = false; synthesized.clear(); load() })
 watch(() => props.focusRunId, (runId) => { if (runId && hasLoaded.value) focusRun(runId) })
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:workflow-changed', onWorkflowChanged)
+    window.removeEventListener('twicc:workflow-tab-shortcut', handleWorkflowTabShortcut)
     clearTimeout(reloadTimer)
     if (controller) controller.abort()
 })
