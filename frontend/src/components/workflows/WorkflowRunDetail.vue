@@ -13,6 +13,7 @@ import JsonHumanView from '../json/JsonHumanView.vue'
 import MarkdownContent from '../ui/MarkdownContent.vue'
 import ProcessDuration from '../ui/ProcessDuration.vue'
 import CostDisplay from '../ui/CostDisplay.vue'
+import WorkflowStateBadge from './WorkflowStateBadge.vue'
 import { useSettingsStore } from '../../stores/settings'
 import { formatDuration } from '../../utils/date'
 
@@ -34,9 +35,6 @@ const router = useRouter()
 const route = useRoute()
 const settingsStore = useSettingsStore()
 const showCosts = computed(() => settingsStore.areCostsShown)
-
-const STATE_LABELS = { running: 'Running', completed: 'Completed', failed: 'Failed' }
-const stateLabel = computed(() => STATE_LABELS[props.statusKind] || 'Running')
 
 const synthetic = computed(() => !!props.raw?.synthetic)
 const agentCount = computed(() => props.raw?.agentCount ?? 0)
@@ -70,6 +68,16 @@ function classifyAgent(state) {
     if (s === 'running') return 'running' // started, not finished
     if (s === 'queued' || s === 'pending') return 'pending' // not started yet
     return 'finished' // done/completed/success/failed/error/cancelled
+}
+
+// Agent state for the WorkflowStateBadge (distinguishes completed from failed,
+// which classifyAgent lumps into 'finished').
+function agentStatusKind(state) {
+    const s = String(state || '').toLowerCase()
+    if (s === 'running') return 'running'
+    if (s === 'queued' || s === 'pending') return 'pending'
+    if (s === 'failed' || s === 'error' || s === 'cancelled' || s === 'canceled') return 'failed'
+    return 'completed' // done/completed/success
 }
 
 // A phase's agents are those the back/engine stamped with that phase. Match on
@@ -107,7 +115,9 @@ const phaseRows = computed(() =>
             agents: list.map((a) => ({
                 agentId: a.agentId,
                 name: a.label || a.agentId, // label when the engine gives one, else the id
-                running: classifyAgent(a.state) === 'running',
+                statusKind: agentStatusKind(a.state),
+                durationMs: typeof a.durationMs === 'number' ? a.durationMs : null,
+                cost: typeof a.cost === 'number' ? a.cost : null,
                 promptPreview: a.promptPreview || null,
                 resultView: a.resultPreview != null ? jsonOrMarkdown(a.resultPreview) : null,
             })),
@@ -160,20 +170,14 @@ function onArgsToggle(event, open) {
 }
 
 // --- Agents (within a phase) ----------------------------------------------
-// Phase bodies and agent bodies are lazy-mounted (Sets of open keys). An agent
-// renders like a chat agent row: name/label + a "View Agent" button; its body
-// shows the prompt preview (markdown) and the result preview (JSON tree / text).
-const phaseOpen = ref(new Set())
-function onPhaseToggle(event, key, open) {
-    if (event.target !== event.currentTarget) return // ignore nested agent wa-* bubbling
-    if (open) phaseOpen.value.add(key)
-    else phaseOpen.value.delete(key)
-}
-const agentOpen = ref(new Set())
-function onAgentToggle(event, agentId, open) {
-    if (event.target !== event.currentTarget) return
-    if (open) agentOpen.value.add(agentId)
-    else agentOpen.value.delete(agentId)
+// Every disclosure body (phase, agent, and each agent's prompt/result) is
+// lazy-mounted — tracked in one Set of prefixed open keys (phase:/agent:/
+// prompt:/result:), so a 100-agent run renders nothing heavy until expanded.
+const open = ref(new Set())
+function toggleOpen(event, key, isOpen) {
+    if (event.target !== event.currentTarget) return // ignore nested wa-* bubbling
+    if (isOpen) open.value.add(key)
+    else open.value.delete(key)
 }
 
 // "View Agent" opens the workflow subagent in its own tab — the same route the
@@ -203,10 +207,7 @@ function agentsLabel(n) {
         <!-- Section 1 — info -->
         <div class="wf-info">
             <span class="wf-info-item">
-                <wa-spinner v-if="statusKind === 'running'" class="wf-state-icon"></wa-spinner>
-                <wa-icon v-else-if="statusKind === 'failed'" name="circle-xmark" class="wf-state-icon wf-state-failed"></wa-icon>
-                <wa-icon v-else name="circle-check" class="wf-state-icon wf-state-done"></wa-icon>
-                <span>{{ stateLabel }}</span>
+                <WorkflowStateBadge :kind="statusKind" />
             </span>
             <span class="wf-info-item">
                 <wa-icon name="stopwatch"></wa-icon>
@@ -257,8 +258,9 @@ function agentsLabel(n) {
                 :key="ph.key"
                 class="wf-row"
                 icon-placement="start"
-                @wa-show="onPhaseToggle($event, ph.key, true)"
-                @wa-hide="onPhaseToggle($event, ph.key, false)"
+                :open="open.has('phase:' + ph.key)"
+                @wa-show="toggleOpen($event, 'phase:' + ph.key, true)"
+                @wa-hide="toggleOpen($event, 'phase:' + ph.key, false)"
             >
                 <span slot="summary" class="items-details-summary">
                     <span class="items-details-summary-left">
@@ -272,8 +274,11 @@ function agentsLabel(n) {
                     <wa-icon v-else-if="ph.statusKind === 'pending'" name="hourglass-start" class="wf-status-icon wf-status-pending"></wa-icon>
                     <wa-icon v-else name="circle-check" class="wf-status-icon wf-status-done"></wa-icon>
                 </span>
-                <div v-if="phaseOpen.has(ph.key)" class="wf-phase-body">
+                <div v-if="open.has('phase:' + ph.key)" class="wf-phase-body">
                     <div class="wf-info wf-phase-info">
+                        <span class="wf-info-item">
+                            <WorkflowStateBadge :kind="ph.statusKind" />
+                        </span>
                         <span class="wf-info-item">
                             <wa-icon name="robot"></wa-icon>
                             <span>{{ agentsLabel(ph.agentCount) }}</span>
@@ -288,14 +293,15 @@ function agentsLabel(n) {
                             :key="ag.agentId"
                             class="wf-row wf-agent"
                             icon-placement="start"
-                            @wa-show="onAgentToggle($event, ag.agentId, true)"
-                            @wa-hide="onAgentToggle($event, ag.agentId, false)"
+                            :open="open.has('agent:' + ag.agentId)"
+                            @wa-show="toggleOpen($event, 'agent:' + ag.agentId, true)"
+                            @wa-hide="toggleOpen($event, 'agent:' + ag.agentId, false)"
                         >
                             <span slot="summary" class="items-details-summary">
                                 <span class="items-details-summary-left">
                                     <strong class="items-details-summary-name">{{ ag.name }}</strong>
                                 </span>
-                                <wa-spinner v-if="ag.running" class="wf-status-icon"></wa-spinner>
+                                <wa-spinner v-if="ag.statusKind === 'running'" class="wf-status-icon"></wa-spinner>
                                 <wa-button
                                     class="wf-agent-view"
                                     size="small"
@@ -307,16 +313,54 @@ function agentsLabel(n) {
                                     View Agent
                                 </wa-button>
                             </span>
-                            <div v-if="agentOpen.has(ag.agentId)" class="wf-agent-body">
-                                <div v-if="ag.promptPreview" class="wf-agent-part">
-                                    <div class="wf-section-label">Prompt</div>
-                                    <MarkdownContent :source="ag.promptPreview" />
+                            <div v-if="open.has('agent:' + ag.agentId)" class="wf-agent-body">
+                                <div class="wf-info wf-agent-info">
+                                    <span class="wf-info-item">
+                                        <WorkflowStateBadge :kind="ag.statusKind" />
+                                    </span>
+                                    <span v-if="ag.durationMs != null" class="wf-info-item">
+                                        <wa-icon name="stopwatch"></wa-icon>
+                                        <span>{{ formatDuration(ag.durationMs / 1000) }}</span>
+                                    </span>
+                                    <span v-if="showCosts" class="wf-info-item">
+                                        <CostDisplay :cost="ag.cost" />
+                                    </span>
                                 </div>
-                                <div v-if="ag.resultView" class="wf-agent-part">
-                                    <div class="wf-section-label">Result</div>
-                                    <JsonHumanView v-if="ag.resultView.mode === 'json'" :value="ag.resultView.value" />
-                                    <MarkdownContent v-else :source="ag.resultView.value" />
-                                </div>
+                                <wa-details
+                                    v-if="ag.promptPreview"
+                                    class="wf-row"
+                                    icon-placement="start"
+                                    :open="open.has('prompt:' + ag.agentId)"
+                                    @wa-show="toggleOpen($event, 'prompt:' + ag.agentId, true)"
+                                    @wa-hide="toggleOpen($event, 'prompt:' + ag.agentId, false)"
+                                >
+                                    <span slot="summary" class="items-details-summary">
+                                        <span class="items-details-summary-left">
+                                            <strong class="items-details-summary-name">Prompt</strong>
+                                        </span>
+                                    </span>
+                                    <div v-if="open.has('prompt:' + ag.agentId)" class="wf-row-body wf-args-body">
+                                        <MarkdownContent :source="ag.promptPreview" />
+                                    </div>
+                                </wa-details>
+                                <wa-details
+                                    v-if="ag.resultView"
+                                    class="wf-row"
+                                    icon-placement="start"
+                                    :open="open.has('result:' + ag.agentId)"
+                                    @wa-show="toggleOpen($event, 'result:' + ag.agentId, true)"
+                                    @wa-hide="toggleOpen($event, 'result:' + ag.agentId, false)"
+                                >
+                                    <span slot="summary" class="items-details-summary">
+                                        <span class="items-details-summary-left">
+                                            <strong class="items-details-summary-name">Result</strong>
+                                        </span>
+                                    </span>
+                                    <div v-if="open.has('result:' + ag.agentId)" class="wf-row-body wf-args-body">
+                                        <JsonHumanView v-if="ag.resultView.mode === 'json'" :value="ag.resultView.value" />
+                                        <MarkdownContent v-else :source="ag.resultView.value" />
+                                    </div>
+                                </wa-details>
                             </div>
                         </wa-details>
                     </div>
@@ -368,15 +412,6 @@ function agentsLabel(n) {
     gap: var(--wa-space-xs);
 }
 
-/* Run state icon in the info line — same colors as the tab/phase status. */
-.wf-state-failed {
-    color: var(--wa-color-danger-50);
-}
-
-.wf-state-done {
-    color: var(--wa-color-success-50);
-}
-
 /* Section 2 — description */
 .wf-description {
     margin: 0;
@@ -392,13 +427,14 @@ function agentsLabel(n) {
     flex-direction: column;
 }
 
+/* Section labels stand out from the content (was small + quiet — too discreet). */
 .wf-section-label,
 .wf-description-label {
-    font-size: var(--wa-font-size-xs);
+    font-size: var(--wa-font-size-s);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 600;
-    color: var(--wa-color-text-quiet);
+    font-weight: 700;
+    color: var(--wa-color-text-normal);
     margin-bottom: var(--wa-space-xs);
 }
 
@@ -415,6 +451,10 @@ function agentsLabel(n) {
     padding-right: 6px;
 }
 
+.wf-row::part(content) {
+    padding-block-start: 0;
+}
+
 .wf-row .items-details-summary {
     display: flex;
     align-items: center;
@@ -425,7 +465,6 @@ function agentsLabel(n) {
 
 .wf-row .items-details-summary-left {
     flex: 1;
-    min-width: 60%;
     display: inline-flex;
     align-items: center;
     gap: var(--wa-space-xs);
@@ -479,18 +518,15 @@ function agentsLabel(n) {
 .wf-agent-body {
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-m);
-    padding-top: var(--wa-space-xs);
 }
 
-.wf-agent-part {
-    display: flex;
-    flex-direction: column;
-    overflow-x: auto;
+.wf-agent-info {
+    margin-bottom: var(--wa-space-xs);
 }
 
-/* "View Agent" button: keep it from stretching the summary row (like the chat). */
+/* "View Agent" button: pinned right, and kept from stretching the row (like the chat). */
 .wf-agent .items-details-summary wa-button {
     margin-block: -0.4rem;
+    margin-left: auto;
 }
 </style>

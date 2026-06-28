@@ -139,7 +139,7 @@ def _agent_sessions(run_id: str) -> dict[str, dict]:
 
     prefix = f"{run_id}:"
     rows = Session.objects.filter(id__startswith=prefix).values(
-        "id", "model", "last_started_at", "last_updated_at"
+        "id", "model", "last_started_at", "last_updated_at", "total_cost"
     )
     return {r["id"][len(prefix):]: r for r in rows}
 
@@ -267,6 +267,8 @@ def build_state1(
                 entry["lastProgressAt"] = progress_ms
             if started_ms is not None and progress_ms is not None:
                 entry["durationMs"] = max(0, progress_ms - started_ms)
+            if meta_row.get("total_cost") is not None:
+                entry["cost"] = float(meta_row["total_cost"])
         prompt = helpers.get_first_user_message(f"{run_id}:{agent_id}")
         if prompt is not None:
             # Full prompt, not a preview: we have it (the agent's first user
@@ -346,8 +348,9 @@ def rebuild_state1(run_id: str) -> dict | None:
 
 
 def enrich_previews(envelope: dict, project_id: str, session_id: str, run_id: str) -> dict:
-    """Replace each agent's truncated promptPreview/resultPreview with the full
-    prompt + result, mutating and returning ``envelope`` (STATE 2 ingestion).
+    """Enrich each agent: full promptPreview/resultPreview (vs the engine's
+    truncated ones) + its per-agent cost. Mutates and returns ``envelope``
+    (STATE 2 ingestion).
 
     The engine truncates these for its own CLI display; we keep the full data,
     which is **durable past Claude's eventual deletion of the run's files** (the
@@ -369,6 +372,7 @@ def enrich_previews(envelope: dict, project_id: str, session_id: str, run_id: st
         for event in _read_journal(project_id, session_id, run_id)
         if event.get("type") == "result" and event.get("agentId")
     }
+    sessions = _agent_sessions(run_id)
     helpers = _get_helpers()
     for entry in agents:
         agent_id = entry.get("agentId")
@@ -379,6 +383,11 @@ def enrich_previews(envelope: dict, project_id: str, session_id: str, run_id: st
             entry["promptPreview"] = prompt
         if results.get(agent_id) is not None:
             entry["resultPreview"] = results[agent_id]
+        # The engine's STATE 2 agents carry durationMs but no cost — stamp it from
+        # the agent session's total_cost (matches the per-agent cost build_state1 adds).
+        cost = sessions.get(agent_id, {}).get("total_cost")
+        if cost is not None:
+            entry["cost"] = float(cost)
     return envelope
 
 
