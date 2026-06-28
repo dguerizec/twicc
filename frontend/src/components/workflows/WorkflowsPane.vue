@@ -47,16 +47,19 @@ function titleizeName(name) {
 }
 
 // Status shown by the tab's icon:
-//   running   → spinner (STATE 0/1 synthetic, or a real envelope still mid-run)
-//   completed → check     terminal success
-//   failed    → xmark      terminal failure
-// STATE 2's status is whatever the wf_*.json reports; STATE 0/1 are always running.
+//   running     → spinner    (STATE 0/1 synthetic, or a real envelope mid-run)
+//   completed   → check      terminal success
+//   interrupted → stop       terminal non-success (e.g. a killed run)
+// The back normalizes this into raw_json.statusKind (so the CLI reads the same
+// value); we read it, falling back to the same by-exclusion rule for an envelope
+// stored before the field existed. We never guess a "failed" token — see
+// _run_status_kind in workflow_synthesis.py.
 function statusKindOf(raw) {
+    if (raw.statusKind) return raw.statusKind
     if (raw.synthetic) return 'running'
     const s = String(raw.status || '').toLowerCase()
     if (s === 'completed' || s === 'success' || s === 'done') return 'completed'
-    if (s === 'failed' || s === 'error' || s === 'cancelled' || s === 'canceled') return 'failed'
-    return 'running'
+    return 'interrupted'
 }
 
 // Decorate each run with the fields the tab + panel need. Name comes from the
@@ -301,7 +304,7 @@ onBeforeUnmount(() => {
             <wa-tab v-for="row in rows" :key="row.run_id" slot="nav" :panel="row.run_id" class="workflow-tab">
                 <span class="workflow-tab-name">{{ row.name }}</span>
                 <wa-spinner v-if="row.statusKind === 'running'" class="workflow-tab-status"></wa-spinner>
-                <wa-icon v-else-if="row.statusKind === 'failed'" name="circle-xmark" class="workflow-tab-status workflow-tab-status-failed"></wa-icon>
+                <wa-icon v-else-if="row.statusKind === 'interrupted'" name="circle-stop" class="workflow-tab-status workflow-tab-status-interrupted"></wa-icon>
                 <wa-icon v-else name="circle-check" class="workflow-tab-status workflow-tab-status-done"></wa-icon>
             </wa-tab>
             <wa-tab-panel v-for="row in rows" :key="row.run_id" :name="row.run_id" class="workflow-panel">
@@ -379,8 +382,8 @@ onBeforeUnmount(() => {
     color: var(--wa-color-success-50);
 }
 
-.workflow-tab-status-failed {
-    color: var(--wa-color-danger-50);
+.workflow-tab-status-interrupted {
+    color: var(--wa-color-warning-50);
 }
 
 .workflow-panel {

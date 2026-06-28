@@ -1,17 +1,24 @@
 <script setup>
 // Shared "state" indicator (icon + label) for a workflow run, a phase, or an
-// agent. kind ∈ 'running' | 'completed' | 'failed' | 'pending'.
-defineProps({ kind: { type: String, required: true } })
-const LABELS = { running: 'Running', completed: 'Completed', failed: 'Failed', pending: 'Pending' }
+// agent. kind ∈ 'running' | 'completed' | 'interrupted' | 'pending'. 'interrupted'
+// = a terminal non-success (e.g. a killed run / its frozen agents); there's no
+// guessed 'failed' kind — the engine's failure vocabulary is unconfirmed.
+// `label` overrides the default text — used to relay the engine's raw status
+// verbatim on an interrupted run (e.g. "Killed").
+defineProps({
+    kind: { type: String, required: true },
+    label: { type: String, default: null },
+})
+const LABELS = { running: 'Running', completed: 'Completed', interrupted: 'Interrupted', pending: 'Pending' }
 </script>
 
 <template>
     <span class="wf-state">
         <wa-spinner v-if="kind === 'running'" class="wf-state-icon"></wa-spinner>
-        <wa-icon v-else-if="kind === 'failed'" name="circle-xmark" class="wf-state-icon wf-state-failed"></wa-icon>
+        <wa-icon v-else-if="kind === 'interrupted'" name="circle-stop" class="wf-state-icon wf-state-interrupted"></wa-icon>
         <wa-icon v-else-if="kind === 'pending'" name="hourglass-start" class="wf-state-icon wf-state-pending"></wa-icon>
         <wa-icon v-else name="circle-check" class="wf-state-icon wf-state-done"></wa-icon>
-        <span>{{ LABELS[kind] || kind }}</span>
+        <span>{{ label || LABELS[kind] || kind }}</span>
     </span>
 </template>
 
@@ -26,8 +33,8 @@ const LABELS = { running: 'Running', completed: 'Completed', failed: 'Failed', p
     font-size: 1.1em;
 }
 
-.wf-state-failed {
-    color: var(--wa-color-danger-50);
+.wf-state-interrupted {
+    color: var(--wa-color-warning-50);
 }
 
 .wf-state-pending {

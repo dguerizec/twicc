@@ -21,7 +21,8 @@ import { sessionRouteLocation } from '../../utils/sessionRoute'
 const props = defineProps({
     // The view envelope (any of the 3 raw_json states).
     raw: { type: Object, required: true },
-    // Run state: 'running' | 'completed' | 'failed' (resolved in WorkflowsPane).
+    // Run state: 'running' | 'completed' | 'interrupted' (from raw_json.statusKind,
+    // resolved in WorkflowsPane).
     statusKind: { type: String, default: 'running' },
     // Total run cost (dedicated column, not in raw_json); null when unknown.
     cost: { type: Number, default: null },
@@ -54,6 +55,28 @@ const durationSec = computed(() => {
 
 const summary = computed(() => props.raw?.summary || '')
 
+// Run-level phase-completion summary the back stamps into raw_json
+// ({total, completed, allCompleted}); also what the CLI returns. Drives the
+// "completed but not every phase ran" warning below.
+const phaseCompletion = computed(() => props.raw?.phaseCompletion || null)
+// A run the engine marked completed, yet a declared phase never ran (no finished
+// agent) — it likely stopped early (e.g. a budget cap). Only warn on a completed
+// run: a running run has pending phases by nature, and an interrupted run gets its
+// own badge + callout below.
+const incompleteRun = computed(
+    () => props.statusKind === 'completed' && phaseCompletion.value?.allCompleted === false,
+)
+// A run cut short before completing (a terminal status that isn't a success, e.g.
+// "killed"); drives a dedicated callout.
+const interruptedRun = computed(() => props.statusKind === 'interrupted')
+// Capitalized raw engine status, shown on the run badge for an interrupted run
+// (e.g. "Killed") — we relay the engine's own word rather than invent one.
+const statusLabel = computed(() => {
+    if (props.statusKind !== 'interrupted') return null
+    const s = props.raw?.status
+    return typeof s === 'string' && s ? s.charAt(0).toUpperCase() + s.slice(1) : null
+})
+
 // --- Phases ---------------------------------------------------------------
 const phases = computed(() => (Array.isArray(props.raw?.phases) ? props.raw.phases : []))
 const agents = computed(() => {
@@ -77,24 +100,21 @@ const phaseStateByIndex = computed(() => {
     return map
 })
 
-// Normalize an agent's lifecycle across the two state vocabularies:
-//   STATE 1 (journal): running | completed
-//   STATE 2 (wf json): queued | running | done | failed | error | …
-function classifyAgent(state) {
-    const s = String(state || '').toLowerCase()
-    if (s === 'running') return 'running' // started, not finished
-    if (s === 'queued' || s === 'pending') return 'pending' // not started yet
-    return 'finished' // done/completed/success/failed/error/cancelled
-}
+// The run is terminal (not live) when its normalized kind isn't 'running' — lets
+// us tell a frozen agent (e.g. 'progress' in a killed run) from a live one.
+const runTerminal = computed(() => props.statusKind !== 'running')
 
-// Agent state for the WorkflowStateBadge (distinguishes completed from failed,
-// which classifyAgent lumps into 'finished').
-function agentStatusKind(state) {
-    const s = String(state || '').toLowerCase()
-    if (s === 'running') return 'running'
+// An agent's normalized kind (completed | running | interrupted | pending). The
+// back stamps `statusKind` into each workflow_agent; we read it, falling back to
+// the same by-exclusion rule for an envelope stored before the field existed
+// (mirror of _agent_status_kind). No guessed 'failed' token: an agent still
+// in flight (e.g. 'progress') when the run ended terminally is 'interrupted'.
+function agentKind(a) {
+    if (a.statusKind) return a.statusKind
+    const s = String(a.state || '').toLowerCase()
+    if (s === 'done' || s === 'completed' || s === 'success') return 'completed'
     if (s === 'queued' || s === 'pending') return 'pending'
-    if (s === 'failed' || s === 'error' || s === 'cancelled' || s === 'canceled') return 'failed'
-    return 'completed' // done/completed/success
+    return runTerminal.value ? 'interrupted' : 'running'
 }
 
 // A phase's agents are those the back/engine stamped with that phase. Match on
@@ -105,32 +125,37 @@ function agentsOfPhase(index1) {
     return agents.value.filter((a) => a.phaseIndex === index1)
 }
 
-// Phase status from a list of agents (it isn't necessarily linear). Now a
-// fallback to the back's stamped phase.state (see phaseStateByIndex), still the
-// primary source for the Unassigned bucket, which has no workflow_phase entry:
-//   pending   — no agent of the phase has started
-//   running   — at least one started agent isn't finished
-//   completed — every started agent is finished
+// Phase status from a list of agents. The back's stamped phase.state is the
+// primary source (phaseStateByIndex); this stays the source for the Unassigned
+// bucket (no workflow_phase entry) and as a fallback:
+//   pending     — no agent of the phase has started
+//   interrupted — at least one agent was interrupted
+//   running     — at least one started agent isn't finished
+//   completed   — every started agent finished OK
 function phaseStatusOf(list) {
-    const started = list.map((a) => classifyAgent(a.state)).filter((c) => c !== 'pending')
-    if (!started.length) return 'pending'
-    if (started.some((c) => c === 'running')) return 'running'
+    const kinds = list.map(agentKind).filter((k) => k !== 'pending')
+    if (!kinds.length) return 'pending'
+    if (kinds.some((k) => k === 'interrupted')) return 'interrupted'
+    if (kinds.some((k) => k === 'running')) return 'running'
     return 'completed'
 }
 
 // Map raw workflow_agent entries to the shape the agent rows render. Shared by
 // the phase rows and the unassigned bucket.
 function mapAgents(list) {
-    return list.map((a) => ({
-        agentId: a.agentId,
-        name: a.label || a.agentId, // label when the engine gives one, else the id
-        statusKind: agentStatusKind(a.state),
-        active: classifyAgent(a.state) !== 'finished', // still running/queued → pulsing robot
-        durationMs: typeof a.durationMs === 'number' ? a.durationMs : null,
-        cost: typeof a.cost === 'number' ? a.cost : null,
-        promptPreview: a.promptPreview || null,
-        resultView: a.resultPreview != null ? jsonOrMarkdown(a.resultPreview) : null,
-    }))
+    return list.map((a) => {
+        const kind = agentKind(a)
+        return {
+            agentId: a.agentId,
+            name: a.label || a.agentId, // label when the engine gives one, else the id
+            statusKind: kind,
+            active: kind === 'running', // only a live agent pulses its robot
+            durationMs: typeof a.durationMs === 'number' ? a.durationMs : null,
+            cost: typeof a.cost === 'number' ? a.cost : null,
+            promptPreview: a.promptPreview || null,
+            resultView: a.resultPreview != null ? jsonOrMarkdown(a.resultPreview) : null,
+        }
+    })
 }
 
 const phaseRows = computed(() =>
@@ -260,7 +285,7 @@ function agentsLabel(n) {
         <!-- Section 1 — info -->
         <div class="wf-info">
             <span class="wf-info-item">
-                <WorkflowStateBadge :kind="statusKind" />
+                <WorkflowStateBadge :kind="statusKind" :label="statusLabel" />
             </span>
             <span class="wf-info-item">
                 <wa-icon name="stopwatch"></wa-icon>
@@ -276,6 +301,22 @@ function agentsLabel(n) {
                 <CostDisplay :cost="cost" />
             </span>
         </div>
+
+        <!-- "Completed but not every phase ran" warning (e.g. stopped early on a
+             budget cap). Counts come straight from raw_json.phaseCompletion. -->
+        <wa-callout v-if="incompleteRun" variant="warning" appearance="filled-outlined" size="small" class="wf-incomplete">
+            <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
+            This workflow is marked completed, but only
+            <strong>{{ phaseCompletion.completed }} of its {{ phaseCompletion.total }} phases</strong>
+            completed — it may have stopped early.
+        </wa-callout>
+
+        <!-- Interrupted run (a terminal status that isn't a success, e.g. killed).
+             The badge already relays the raw status; this spells out the meaning. -->
+        <wa-callout v-else-if="interruptedRun" variant="warning" appearance="filled-outlined" size="small" class="wf-incomplete">
+            <wa-icon slot="icon" name="circle-stop"></wa-icon>
+            This workflow was <strong>interrupted</strong> before completing — it did not run to the end.
+        </wa-callout>
 
         <!-- Section 2 — full description (untruncated, unlike the title) -->
         <div v-if="summary" class="wf-section">
@@ -324,6 +365,7 @@ function agentsLabel(n) {
                         </template>
                     </span>
                     <wa-spinner v-if="ph.statusKind === 'running'" class="wf-status-icon"></wa-spinner>
+                    <wa-icon v-else-if="ph.statusKind === 'interrupted'" name="circle-stop" class="wf-status-icon wf-status-interrupted"></wa-icon>
                     <wa-icon v-else-if="ph.statusKind === 'pending'" name="hourglass-start" class="wf-status-icon wf-status-pending"></wa-icon>
                     <wa-icon v-else name="circle-check" class="wf-status-icon wf-status-done"></wa-icon>
                 </span>
@@ -362,6 +404,7 @@ function agentsLabel(n) {
                                     @click.stop="viewAgent(ag.agentId)"
                                 >
                                     <wa-icon v-if="ag.active" slot="start" name="robot" class="wf-agent-running"></wa-icon>
+                                    <wa-icon v-else-if="ag.statusKind === 'interrupted'" slot="start" name="circle-stop" class="wf-agent-interrupted"></wa-icon>
                                     View Agent
                                 </wa-button>
                             </span>
@@ -446,6 +489,11 @@ function agentsLabel(n) {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-l);
+}
+
+/* "Completed but incomplete" warning — match the dense detail font size. */
+.wf-incomplete {
+    font-size: var(--wa-font-size-s);
 }
 
 /* Section 1 — info */
@@ -541,6 +589,10 @@ function agentsLabel(n) {
     color: var(--wa-color-success-50);
 }
 
+.wf-row .wf-status-interrupted {
+    color: var(--wa-color-warning-50);
+}
+
 .wf-row .wf-status-pending {
     color: var(--wa-color-text-quiet);
 }
@@ -587,6 +639,12 @@ function agentsLabel(n) {
  * (ProcessIndicator's pulse, 1s). */
 .wf-agent-running {
     animation: pulse 1s ease-in-out infinite;
+}
+
+/* Interrupted agent: a static "stopped" icon in the same slot as the pulsing
+ * robot (warning-colored, matching the interrupted badge). */
+.wf-agent-interrupted {
+    color: var(--wa-color-warning-50);
 }
 
 @keyframes pulse {

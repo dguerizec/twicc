@@ -386,63 +386,118 @@ def pending_prompt_agent_ids(envelope: dict) -> set[str]:
     }
 
 
-def _classify_agent_lifecycle(state) -> str:
-    """Normalize an agent state to its lifecycle bucket across both vocabularies
-    (STATE 1 journal: ``running``/``completed``; STATE 2 engine: ``queued``/
-    ``running``/``done``/``failed``/…): ``'pending'`` (not started), ``'running'``
-    (started, unfinished), or ``'finished'`` (done/failed/…). Mirror of the
-    front's ``classifyAgent``."""
-    s = str(state or "").lower()
-    if s == "running":
+# Tokens we've actually observed. Success: a run/agent that finished OK. Pending:
+# not started. Everything else on a *terminal* envelope is a non-success we don't
+# try to name — the engine's status vocabulary is undocumented, and the only
+# non-success run status we've seen is "killed" (a clean Ctrl-C, agents frozen at
+# "progress"). Guessing "failed"/"error"/"cancelled" bought nothing (it missed the
+# real "killed"/"progress") so we don't: we surface a single ``interrupted`` kind
+# and relay the raw status/state verbatim as the label.
+_SUCCESS_STATES = {"completed", "success", "done"}
+_PENDING_STATES = {"queued", "pending"}
+
+
+def _run_status_kind(envelope: dict) -> str:
+    """Normalized run status — ``running`` / ``completed`` / ``interrupted``.
+
+    ``synthetic`` (our STATE 1 marker) is always ``running``: it's our own flag,
+    never a guess. A finished envelope is ``completed`` only for a known success
+    status; any *other* terminal status (``killed``, or one we've never seen) is
+    ``interrupted`` — derived by exclusion, so an unknown status can never again
+    fall back to a forever-spinning ``running``. The raw ``status`` stays in the
+    envelope for an honest label."""
+    if envelope.get("synthetic"):
         return "running"
-    if s in ("queued", "pending"):
+    if str(envelope.get("status") or "").lower() in _SUCCESS_STATES:
+        return "completed"
+    return "interrupted"
+
+
+def _agent_status_kind(state, run_terminal: bool) -> str:
+    """Normalized agent status — ``completed`` / ``running`` / ``interrupted`` /
+    ``pending``.
+
+    Finished-OK tokens are ``done`` (STATE 2) / ``completed`` (our STATE 1); the
+    in-flight token is ``progress`` (STATE 2) / ``running`` (STATE 1). An agent
+    still in flight when the run ended terminally — a killed run freezes its
+    agents at ``progress`` — is ``interrupted``, neither ``completed`` (it never
+    finished) nor a forever-spinning ``running``. By exclusion, so an unknown
+    token is handled the same honest way."""
+    s = str(state or "").lower()
+    if s in _SUCCESS_STATES:
+        return "completed"
+    if s in _PENDING_STATES:
         return "pending"
-    return "finished"
+    return "interrupted" if run_terminal else "running"
 
 
-def _phase_state(agents: list[dict]) -> str:
-    """A phase's status from its agents: ``'pending'`` (none started),
-    ``'running'`` (≥1 started agent unfinished), or ``'completed'`` (every started
-    agent finished). Mirror of the front's ``phaseStatusOf``. A failed agent
-    counts as finished — no phase-level ``'failed'`` yet (deferred: needs the
-    interrupted-run case handled first)."""
-    started = [
-        bucket
-        for bucket in (_classify_agent_lifecycle(a.get("state")) for a in agents)
-        if bucket != "pending"
-    ]
+def _phase_state(agent_kinds: list[str]) -> str:
+    """A phase's status from its agents' normalized kinds: ``pending`` (none
+    started), ``interrupted`` (≥1 agent interrupted), ``running`` (≥1 started
+    agent unfinished), or ``completed`` (every started agent finished OK)."""
+    started = [k for k in agent_kinds if k != "pending"]
     if not started:
         return "pending"
-    if any(bucket == "running" for bucket in started):
+    if any(k == "interrupted" for k in started):
+        return "interrupted"
+    if any(k == "running" for k in started):
         return "running"
     return "completed"
 
 
 def stamp_phase_states(envelope: dict) -> dict:
-    """Stamp a derived ``state`` on each ``workflow_phase`` entry of
-    ``workflowProgress`` (``pending``/``running``/``completed``), from the agents
-    matched to it by ``phaseIndex``. Mutates and returns ``envelope``.
+    """Normalize every derived state field the UI + CLI read, on both STATE 1
+    (synthetic) and STATE 2 (the real envelope, shipped without any of them), so
+    neither side re-guesses the engine's undocumented status vocabulary. Mutates
+    and returns ``envelope``. Sets:
 
-    Computed on the back so both STATE 1 (synthetic) and STATE 2 (the real
-    envelope, which the engine ships without it) carry the same field — the front
-    reads it instead of re-deriving. Agents with no ``phaseIndex`` (e.g. a live
-    agent whose phase isn't detected yet) belong to no phase here, exactly like
-    the front's per-phase grouping; the front still buckets them under
-    "Unassigned" on its own."""
+      - run-level ``statusKind`` — ``running`` / ``completed`` / ``interrupted``;
+      - per-agent ``statusKind`` on each ``workflow_agent`` — ``completed`` /
+        ``running`` / ``interrupted`` / ``pending``;
+      - per-phase ``state`` on each ``workflow_phase`` — ``pending`` / ``running``
+        / ``completed`` / ``interrupted``, from the agents matched by ``phaseIndex``;
+      - a run-level ``phaseCompletion`` summary ``{total, completed, allCompleted}``.
+
+    The raw ``status`` / agent ``state`` are left untouched (the label relays them
+    verbatim). ``phaseCompletion`` surfaces the "marked completed but not every
+    phase ran" case (stopped early, e.g. a budget cap: ``status`` stays
+    ``completed`` yet ``allCompleted`` is ``False``); ``statusKind:"interrupted"``
+    surfaces a run cut short (e.g. killed). Both derive from the agents actually
+    observed — never the script-built ``result``/``logs``.
+
+    Agents with no ``phaseIndex`` (e.g. a live agent whose phase isn't detected
+    yet) belong to no phase here, exactly like the front's per-phase grouping; the
+    front still buckets them under "Unassigned" on its own."""
+    envelope["statusKind"] = _run_status_kind(envelope)
+    run_terminal = envelope["statusKind"] != "running"
+
     progress = envelope.get("workflowProgress")
     if not isinstance(progress, list):
         return envelope
-    by_phase: dict[object, list[dict]] = {}
+
+    by_phase: dict[object, list[str]] = {}
     for entry in progress:
-        if (
-            isinstance(entry, dict)
-            and entry.get("type") == "workflow_agent"
-            and entry.get("phaseIndex") is not None
-        ):
-            by_phase.setdefault(entry["phaseIndex"], []).append(entry)
+        if isinstance(entry, dict) and entry.get("type") == "workflow_agent":
+            kind = _agent_status_kind(entry.get("state"), run_terminal)
+            entry["statusKind"] = kind
+            if entry.get("phaseIndex") is not None:
+                by_phase.setdefault(entry["phaseIndex"], []).append(kind)
+
+    total = 0
+    completed = 0
     for entry in progress:
         if isinstance(entry, dict) and entry.get("type") == "workflow_phase":
-            entry["state"] = _phase_state(by_phase.get(entry.get("index"), []))
+            state = _phase_state(by_phase.get(entry.get("index"), []))
+            entry["state"] = state
+            total += 1
+            if state == "completed":
+                completed += 1
+    envelope["phaseCompletion"] = {
+        "total": total,
+        "completed": completed,
+        # No phases declared → nothing can be "incomplete" (allCompleted stays True).
+        "allCompleted": completed == total if total else True,
+    }
     return envelope
 
 
