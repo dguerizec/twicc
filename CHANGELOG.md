@@ -9,12 +9,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **Plan tab** — a Claude session with a plan now shows it in a dedicated, read-only tab; the plan is also retrievable from the CLI (+skill/API).
-- **Tasks tab** — a session with a task list now shows its latest state in a dedicated tab.
+- **Tasks tab** — a session with a task list now shows its latest state in a dedicated tab; the tasks list is also accessible via CLI (+skill/API) with other session info.
 - **Codex `view_image` tool** — dedicated display that shows the viewed image instead of a raw tool result.
 
 ### Changed
 
-- **Image preview** — small images now open in a roomier view, so zooming in actually shows the detail.
+- **Image preview** — small images now open in a roomier view, making them more practical to zoom into.
+- **Git diff → Files** — opening a Git diff in the Files tab now lands on the line you were looking at.
+- **Dockable layouts** — several small improvements.
+
+### Fixed
+
+- **Terminals** — several fixes to the multi-terminal setup and to attaching tabs from higher scopes.
+- **Reconnect** — after a WebSocket reconnect (common on mobile), the open session no longer stays frozen on a "thinking" block.
+- **Worktree sessions** — filtering a project on a fresh page load now correctly includes its git worktrees' sessions.
+- **Artifacts** — returning to an artifact preview no longer breaks its approved network calls.
+- **Archived sessions** — an archived session is no longer marked as unread.
+- **Session switcher** — a just-created session now stays in the Ctrl+` switcher.
 
 ## [1.9.2] - 2026-06-24
 
