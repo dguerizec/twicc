@@ -43,7 +43,14 @@ const tasks = computed(() => store.getSessionTasks(props.sessionId))
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: var(--wa-space-l);
+    padding: var(--wa-space-s);
+}
+/* TodoContent is shared with the conversation timeline; tighten it only here. */
+.task-scroll :deep(.todo-list) {
+    font-size: var(--wa-font-size-s);
+}
+.task-scroll :deep(.todo-item) {
+    margin-inline-start: 0;
 }
 .task-state {
     display: flex;
