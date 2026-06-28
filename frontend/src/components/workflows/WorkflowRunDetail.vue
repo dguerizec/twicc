@@ -8,6 +8,7 @@
 //                  from start time (now − start).
 // Sections: (1) info, (2) description, (3) args, (4) phases, (5) result.
 import { ref, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import JsonHumanView from '../json/JsonHumanView.vue'
 import MarkdownContent from '../ui/MarkdownContent.vue'
 import ProcessDuration from '../ui/ProcessDuration.vue'
@@ -24,8 +25,13 @@ const props = defineProps({
     cost: { type: Number, default: null },
     // Per-phase cost breakdown {phaseIndex(str): cost}; from the phases_cost column.
     phasesCost: { type: Object, default: () => ({}) },
+    // The run's project + main session — for the "View Agent" subagent route.
+    projectId: { type: String, default: null },
+    sessionId: { type: String, default: null },
 })
 
+const router = useRouter()
+const route = useRoute()
 const settingsStore = useSettingsStore()
 const showCosts = computed(() => settingsStore.areCostsShown)
 
@@ -98,6 +104,13 @@ const phaseRows = computed(() =>
             statusKind: phaseStatusOf(list),
             agentCount: list.length,
             cost: typeof cost === 'number' ? cost : null,
+            agents: list.map((a) => ({
+                agentId: a.agentId,
+                name: a.label || a.agentId, // label when the engine gives one, else the id
+                running: classifyAgent(a.state) === 'running',
+                promptPreview: a.promptPreview || null,
+                resultView: a.resultPreview != null ? jsonOrMarkdown(a.resultPreview) : null,
+            })),
         }
     }),
 )
@@ -115,33 +128,69 @@ function onResultToggle(event, open) {
     resultOpen.value = open
 }
 
+// Decide how to render a value: a JSON object/array — or a string that parses to
+// one — goes to JsonHumanView; anything else (plain text, a truncated preview)
+// renders as a markdown block. Shared by args and agent result previews.
+function jsonOrMarkdown(value) {
+    if (value == null) return null
+    if (typeof value !== 'string') return { mode: 'json', value }
+    const trimmed = value.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+            return { mode: 'json', value: JSON.parse(value) }
+        } catch { /* not valid JSON → fall through to markdown */ }
+    }
+    return { mode: 'markdown', value }
+}
+
 // --- Args -----------------------------------------------------------------
-// The launch args — only in the final wf_*.json (STATE 2). The engine stores them
-// as a string: when that string is a JSON object/array, render the parsed tree in
-// JsonHumanView; a plain-text arg (e.g. a research question) renders as a markdown
-// block. A non-string arg (should it ever occur) goes straight to JHV. Lazy on expand.
+// The launch args — from the final wf_*.json (STATE 2) or recovered from the
+// launching tool_use for a live run. JSON → JsonHumanView, plain text (e.g. a
+// research question) → markdown. Lazy on expand.
 const args = computed(() => props.raw?.args)
 const hasArgs = computed(() => {
     const a = args.value
     return a != null && !(typeof a === 'string' && a === '')
 })
-// { mode: 'json' | 'markdown', value } — how to render the args.
-const argsView = computed(() => {
-    const a = args.value
-    if (a == null) return null
-    if (typeof a !== 'string') return { mode: 'json', value: a }
-    const trimmed = a.trim()
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        try {
-            return { mode: 'json', value: JSON.parse(a) }
-        } catch { /* not valid JSON → fall through to markdown */ }
-    }
-    return { mode: 'markdown', value: a }
-})
+const argsView = computed(() => jsonOrMarkdown(args.value))
 const argsOpen = ref(false)
 function onArgsToggle(event, open) {
     if (event.target !== event.currentTarget) return // ignore nested wa-* bubbling
     argsOpen.value = open
+}
+
+// --- Agents (within a phase) ----------------------------------------------
+// Phase bodies and agent bodies are lazy-mounted (Sets of open keys). An agent
+// renders like a chat agent row: name/label + a "View Agent" button; its body
+// shows the prompt preview (markdown) and the result preview (JSON tree / text).
+const phaseOpen = ref(new Set())
+function onPhaseToggle(event, key, open) {
+    if (event.target !== event.currentTarget) return // ignore nested agent wa-* bubbling
+    if (open) phaseOpen.value.add(key)
+    else phaseOpen.value.delete(key)
+}
+const agentOpen = ref(new Set())
+function onAgentToggle(event, agentId, open) {
+    if (event.target !== event.currentTarget) return
+    if (open) agentOpen.value.add(agentId)
+    else agentOpen.value.delete(agentId)
+}
+
+// "View Agent" opens the workflow subagent in its own tab — the same route the
+// chat uses. A workflow agent's Session id is the composite <run_id>:<agent_id>
+// and its parent is this run's main session, so the subagent route resolves it.
+const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
+function viewAgent(agentId) {
+    const runId = props.raw?.runId
+    if (!runId || !props.sessionId) return
+    router.push({
+        name: isAllProjectsMode.value ? 'projects-session-subagent' : 'session-subagent',
+        params: {
+            projectId: props.projectId,
+            sessionId: props.sessionId,
+            subagentId: `${runId}:${agentId}`,
+        },
+    }).catch(() => {})
 }
 
 function agentsLabel(n) {
@@ -208,6 +257,8 @@ function agentsLabel(n) {
                 :key="ph.key"
                 class="wf-row"
                 icon-placement="start"
+                @wa-show="onPhaseToggle($event, ph.key, true)"
+                @wa-hide="onPhaseToggle($event, ph.key, false)"
             >
                 <span slot="summary" class="items-details-summary">
                     <span class="items-details-summary-left">
@@ -221,14 +272,54 @@ function agentsLabel(n) {
                     <wa-icon v-else-if="ph.statusKind === 'pending'" name="hourglass-start" class="wf-status-icon wf-status-pending"></wa-icon>
                     <wa-icon v-else name="circle-check" class="wf-status-icon wf-status-done"></wa-icon>
                 </span>
-                <div class="wf-info wf-phase-info">
-                    <span class="wf-info-item">
-                        <wa-icon name="robot"></wa-icon>
-                        <span>{{ agentsLabel(ph.agentCount) }}</span>
-                    </span>
-                    <span v-if="showCosts" class="wf-info-item">
-                        <CostDisplay :cost="ph.cost" />
-                    </span>
+                <div v-if="phaseOpen.has(ph.key)" class="wf-phase-body">
+                    <div class="wf-info wf-phase-info">
+                        <span class="wf-info-item">
+                            <wa-icon name="robot"></wa-icon>
+                            <span>{{ agentsLabel(ph.agentCount) }}</span>
+                        </span>
+                        <span v-if="showCosts" class="wf-info-item">
+                            <CostDisplay :cost="ph.cost" />
+                        </span>
+                    </div>
+                    <div v-if="ph.agents.length" class="wf-agents">
+                        <wa-details
+                            v-for="ag in ph.agents"
+                            :key="ag.agentId"
+                            class="wf-row wf-agent"
+                            icon-placement="start"
+                            @wa-show="onAgentToggle($event, ag.agentId, true)"
+                            @wa-hide="onAgentToggle($event, ag.agentId, false)"
+                        >
+                            <span slot="summary" class="items-details-summary">
+                                <span class="items-details-summary-left">
+                                    <strong class="items-details-summary-name">{{ ag.name }}</strong>
+                                </span>
+                                <wa-spinner v-if="ag.running" class="wf-status-icon"></wa-spinner>
+                                <wa-button
+                                    class="wf-agent-view"
+                                    size="small"
+                                    variant="brand"
+                                    appearance="outlined"
+                                    @click.stop="viewAgent(ag.agentId)"
+                                >
+                                    <wa-icon slot="start" name="robot"></wa-icon>
+                                    View Agent
+                                </wa-button>
+                            </span>
+                            <div v-if="agentOpen.has(ag.agentId)" class="wf-agent-body">
+                                <div v-if="ag.promptPreview" class="wf-agent-part">
+                                    <div class="wf-section-label">Prompt</div>
+                                    <MarkdownContent :source="ag.promptPreview" />
+                                </div>
+                                <div v-if="ag.resultView" class="wf-agent-part">
+                                    <div class="wf-section-label">Result</div>
+                                    <JsonHumanView v-if="ag.resultView.mode === 'json'" :value="ag.resultView.value" />
+                                    <MarkdownContent v-else :source="ag.resultView.value" />
+                                </div>
+                            </div>
+                        </wa-details>
+                    </div>
                 </div>
             </wa-details>
         </div>
@@ -370,5 +461,36 @@ function agentsLabel(n) {
 .wf-result-body,
 .wf-args-body {
     overflow-x: auto;
+}
+
+/* Phase body: the info line + the nested agent rows. */
+.wf-phase-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-s);
+}
+
+.wf-agents {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Agent body: prompt + result previews, stacked. */
+.wf-agent-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-m);
+    padding-top: var(--wa-space-xs);
+}
+
+.wf-agent-part {
+    display: flex;
+    flex-direction: column;
+    overflow-x: auto;
+}
+
+/* "View Agent" button: keep it from stretching the summary row (like the chat). */
+.wf-agent .items-details-summary wa-button {
+    margin-block: -0.4rem;
 }
 </style>

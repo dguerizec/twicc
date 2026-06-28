@@ -235,7 +235,7 @@ onBeforeUnmount(() => {
                 <wa-icon v-else name="circle-check" class="workflow-tab-status workflow-tab-status-done"></wa-icon>
             </wa-tab>
             <wa-tab-panel v-for="row in rows" :key="row.run_id" :name="row.run_id" class="workflow-panel">
-                <WorkflowRunDetail :raw="row.raw" :status-kind="row.statusKind" :cost="row.cost" :phases-cost="row.phasesCost" />
+                <WorkflowRunDetail :raw="row.raw" :status-kind="row.statusKind" :cost="row.cost" :phases-cost="row.phasesCost" :project-id="projectId" :session-id="sessionId" />
             </wa-tab-panel>
         </wa-tab-group>
     </div>
