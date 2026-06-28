@@ -21,6 +21,7 @@ import { debounce } from '../../utils/debounce'
 import { formatDate } from '../../utils/date'
 import { presetToDate } from '../../utils/datePresets'
 import { pendingSessionSearch } from '../../utils/pendingSearch'
+import { sessionRouteLocation } from '../../utils/sessionRoute'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import ProjectSelectOptions from '../project/ProjectSelectOptions.vue'
@@ -383,20 +384,13 @@ function navigateToResult(result) {
             params: { projectId: filters.projectId, sessionId: result.session_id },
         }
     } else {
-        const inAllProjectsMode = route.name?.startsWith('projects-') || !route.params.projectId
-        if (inAllProjectsMode) {
-            destination = {
-                name: 'projects-session',
-                params: { projectId: result.project_id, sessionId: result.session_id },
-                query: route.query,
-            }
-        } else {
-            destination = {
-                name: 'session',
-                params: { projectId: route.params.projectId, sessionId: result.session_id },
-                query: route.query,
-            }
-        }
+        // No filter — "search everywhere". Preserve the caller's current frame
+        // (prefix mode + current project filter + workspace) via the shared
+        // helper, so clicking a result does not disrupt navigation.
+        destination = sessionRouteLocation(
+            { id: result.session_id, project_id: result.project_id },
+            route,
+        )
     }
 
     router.push(destination)

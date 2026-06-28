@@ -17,6 +17,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { clearUserTurnToast, markSessionReadState } from '../../composables/useWebSocket'
 import { parseProcessError } from '../../utils/errorParsing'
+import { sessionRouteLocation } from '../../utils/sessionRoute'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import WorktreeBadge from '../project/WorktreeBadge.vue'
 
@@ -115,26 +116,14 @@ function markRead() {
     props.item?.clear?.()
 }
 
-/** Navigate to the session, switching project if needed, then dismiss the toast. */
+/** Navigate to the session, preserving the current visual frame, then dismiss the toast. */
 function goToSession() {
     if (!projectId.value) return
-
-    const isAllProjectsMode = route.name?.startsWith('projects-')
-
-    if (isAllProjectsMode) {
-        router.push({
-            name: 'projects-session',
-            params: { projectId: projectId.value, sessionId: props.sessionId },
-        })
-    } else {
-        // Single-project mode: router.push will switch project automatically
-        // if the session belongs to a different project
-        router.push({
-            name: 'session',
-            params: { projectId: projectId.value, sessionId: props.sessionId },
-        })
-    }
-
+    // Keep the user's current frame (prefix mode + current project filter +
+    // workspace): in single-project mode the session renders cross-filter rather
+    // than switching the sidebar to its own project. projectId.value is only used
+    // as the path's project in all-projects mode.
+    router.push(sessionRouteLocation({ id: props.sessionId, project_id: projectId.value }, route))
     // Dismiss the toast
     props.item?.clear?.()
 }

@@ -10,6 +10,7 @@
 // unchanged from before. Non-hidden titles link to the session; hidden ones
 // get a crossed-out eye and no link. Self-references for recursion via filename.
 import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import CostDisplay from '../ui/CostDisplay.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import JsonHumanView from '../json/JsonHumanView.vue'
@@ -17,9 +18,11 @@ import AgentSettingsSummaryView from '../message/AgentSettingsSummaryView.vue'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import { getProviderHelpers, getProviderStore } from '../../providers'
 import { formatDate, formatDuration } from '../../utils/date'
+import { sessionRouteLocation } from '../../utils/sessionRoute'
 import { useSettingsStore } from '../../stores/settings'
 
 const settingsStore = useSettingsStore()
+const route = useRoute()
 
 // Honour the global "Show costs" toggle, like every other cost display in the
 // app (SessionHeader, ProjectCard, SessionListItem, …). The orchestration tree
@@ -57,10 +60,12 @@ const isCurrent = computed(() => props.node.id === props.currentSessionId)
 
 const isHidden = computed(() => nodeData.value?.session?.hidden === true)
 
-const sessionRoute = computed(() => ({
-    name: 'session',
-    params: { projectId: nodeData.value?.session?.project_id, sessionId: props.node.id },
-}))
+// Preserve the current frame (all-projects vs single-project prefix + current
+// project filter + workspace); only the session id changes.
+const sessionRoute = computed(() => sessionRouteLocation(
+    { id: props.node.id, project_id: nodeData.value?.session?.project_id },
+    route,
+))
 
 // Project the node's session was launched in. Rendered through the shared
 // ProjectBadge (color dot + name); ``use-directory-for-unnamed`` shows the full

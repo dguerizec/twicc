@@ -12,6 +12,7 @@ import { getSessionCutoffMs } from '../../../../utils/sessions'
 import { getParsedContent, hasContent } from '../../../../utils/parsedContent'
 import { getToolHelpers, getProviderHelpers } from '../../../../providers'
 import { fileRootsFromStore } from '../../../../utils/projectRoots'
+import { sessionRouteLocation } from '../../../../utils/sessionRoute'
 import JsonHumanView from '../../../json/JsonHumanView.vue'
 import MarkdownContent from '../../../ui/MarkdownContent.vue'
 import AppTooltip from '../../../ui/AppTooltip.vue'
@@ -38,9 +39,6 @@ const providerHelpers = computed(() => {
 
 // Cross-tab file reveal (provided by SessionView)
 const viewFileInFilesTab = inject('viewFileInFilesTab', null)
-
-// Detect "All Projects" mode from route name
-const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
 
 const props = defineProps({
     name: {
@@ -836,14 +834,14 @@ watch(isAgentRunning, (running) => {
  */
 function navigateToSubagent() {
     if (!agentId.value) return
-    router.push({
-        name: isAllProjectsMode.value ? 'projects-session-subagent' : 'session-subagent',
-        params: {
-            projectId: props.projectId,
-            sessionId: props.sessionId,
-            subagentId: agentId.value
-        }
-    })
+    // Preserve the current frame (prefix mode + current project + workspace) and
+    // only open the subagent suffix. Carrying the workspace explicitly keeps it
+    // even when viewing a cross-filter session whose project is outside it.
+    router.push(sessionRouteLocation(
+        { id: props.sessionId, project_id: props.projectId },
+        route,
+        { subagentId: agentId.value },
+    ))
 }
 
 /**

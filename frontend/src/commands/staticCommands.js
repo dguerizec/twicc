@@ -15,6 +15,7 @@ import { useWorkspacesStore } from '../stores/workspaces'
 import { getRegisteredProviders, getProviderHelpers, getProviderOptions } from '../providers'
 import { useRoute } from 'vue-router'
 import { clearTabRouteParams } from '../utils/granularRoutes'
+import { sessionRouteLocation } from '../utils/sessionRoute'
 import { computeSidebarSessionBlocks } from '../utils/sidebarSessions'
 import { isSessionUnread } from '../utils/sessions'
 import { worktreeLabel } from '../utils/worktree'
@@ -249,18 +250,10 @@ function buildSessionNavItems({
         showActiveAcrossFilters: settings.isShowActiveAcrossFilters,
     })
 
-    const navigate = (s) => {
-        const name = allProjects ? 'projects-session' : 'session'
-        // Mirror ProjectView.handleSessionSelect: in single-project mode the
-        // URL keeps the current filter project; in all-projects mode the URL
-        // path has to carry a real project so the session's own is used.
-        const params = {
-            projectId: allProjects ? s.project_id : (currentProjectId || s.project_id),
-            sessionId: s.id,
-        }
-        const query = activeWorkspaceId ? { workspace: activeWorkspaceId } : {}
-        router.push({ name, params, query })
-    }
+    // Mirror ProjectView.handleSessionSelect via the shared helper: keep the
+    // current frame (prefix mode + current project filter + workspace) and change
+    // only the session id.
+    const navigate = (s) => router.push(sessionRouteLocation(s, route))
 
     // Each session item carries the visual metadata the palette uses to
     // mirror a sidebar row: project color dot + pin icon on the left, process

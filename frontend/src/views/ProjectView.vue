@@ -42,6 +42,7 @@ import BulkArchiveConfirmDialog from '../components/sidebar/BulkArchiveConfirmDi
 import { getUsageRingColor, formatRecentDelta } from '../utils/usage'
 import { buildProjectTree, flattenProjectTree } from '../utils/projectTree'
 import { projectPathTitle } from '../utils/projectName'
+import { sessionRouteLocation } from '../utils/sessionRoute'
 import CostDisplay from '../components/ui/CostDisplay.vue'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import UsageGraphDialog from '../components/app/UsageGraphDialog.vue'
@@ -961,23 +962,14 @@ function handleSessionSelect(session) {
         } else {
             router.push({ name: 'project', params: { projectId: projectId.value } })
         }
-    } else if (isAllProjectsMode.value) {
-        // Preserve the active workspace explicitly so the router guard does not
-        // drop it when the destination project is outside the workspace (e.g.
-        // clicking a cross-filter pinned/active session owned by another project).
-        // This keeps the sidebar on its current workspace context — same
-        // behavior as the deep-linked "extra" session.
-        router.push({
-            name: 'projects-session',
-            params: { projectId: session.project_id, sessionId: session.id },
-            query: activeWorkspaceId.value ? { workspace: activeWorkspaceId.value } : {},
-        })
     } else {
-        router.push({
-            name: 'session',
-            params: { projectId: projectId.value, sessionId: session.id },
-            query: activeWorkspaceId.value ? { workspace: activeWorkspaceId.value } : {},
-        })
+        // Preserve the current frame (prefix mode + current project filter +
+        // workspace); only the session id changes. The shared helper carries the
+        // workspace explicitly so the router guard keeps it even when the
+        // destination project is outside the workspace (e.g. a cross-filter
+        // pinned/active session owned by another project), and it matches
+        // SessionListItem's href exactly so click and middle-click agree.
+        router.push(sessionRouteLocation(session, route))
     }
 }
 
