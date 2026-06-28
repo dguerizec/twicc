@@ -2480,13 +2480,17 @@ def _apply_upsert_workflow_payload(payload: UpsertWorkflowPayload) -> None:
         # truncated prompt/result previews for the full values before storing —
         # durable past Claude deleting the run's files. ``enrich_previews`` is
         # Claude-Code-specific, but so are workflows, so the lazy import is fine.
-        from twicc.providers.claude_code.workflow_synthesis import enrich_previews
+        from twicc.providers.claude_code.workflow_synthesis import (
+            enrich_previews,
+            stamp_phase_states,
+        )
 
         try:
             envelope = orjson.loads(payload.raw_json)
         except orjson.JSONDecodeError:
             envelope = {}
         enrich_previews(envelope, project_id, payload.session_id, payload.run_id)
+        stamp_phase_states(envelope)
         cost, phases_cost = Workflow.compute_costs(payload.run_id, envelope)
         Workflow.objects.update_or_create(
             run_id=payload.run_id,

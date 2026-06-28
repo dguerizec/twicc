@@ -34,6 +34,7 @@ from .workflow_synthesis import (
     enrich_previews,
     pending_prompt_agent_ids,
     rebuild_state1,
+    stamp_phase_states,
 )
 from twicc.providers.compute_base import BaseSessionCompute, ToolResultUpdate
 from twicc.providers.sessions_watcher import (
@@ -523,6 +524,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         except orjson.JSONDecodeError:
             envelope = {}
         enrich_previews(envelope, project_id, session_id, run_id)
+        stamp_phase_states(envelope)
         cost, phases_cost = Workflow.compute_costs(run_id, envelope)
         Workflow.objects.update_or_create(
             run_id=run_id,

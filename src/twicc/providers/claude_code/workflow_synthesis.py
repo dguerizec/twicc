@@ -291,7 +291,7 @@ def build_state1(
     # its own args verbatim.
     args = prior_args if prior_args is not None else _launch_args(session_id, run_id)
 
-    return {
+    envelope = {
         "synthetic": True,
         "status": "pending",
         "runId": run_id,
@@ -307,6 +307,8 @@ def build_state1(
         "agentCount": len(order),
         "workflowProgress": progress,
     }
+    # Derive each phase's state from its agents (same field STATE 2 gets, below).
+    return stamp_phase_states(envelope)
 
 
 def rebuild_state1(run_id: str) -> dict | None:
@@ -382,6 +384,66 @@ def pending_prompt_agent_ids(envelope: dict) -> set[str]:
         and entry.get("agentId")
         and "promptPreview" not in entry
     }
+
+
+def _classify_agent_lifecycle(state) -> str:
+    """Normalize an agent state to its lifecycle bucket across both vocabularies
+    (STATE 1 journal: ``running``/``completed``; STATE 2 engine: ``queued``/
+    ``running``/``done``/``failed``/…): ``'pending'`` (not started), ``'running'``
+    (started, unfinished), or ``'finished'`` (done/failed/…). Mirror of the
+    front's ``classifyAgent``."""
+    s = str(state or "").lower()
+    if s == "running":
+        return "running"
+    if s in ("queued", "pending"):
+        return "pending"
+    return "finished"
+
+
+def _phase_state(agents: list[dict]) -> str:
+    """A phase's status from its agents: ``'pending'`` (none started),
+    ``'running'`` (≥1 started agent unfinished), or ``'completed'`` (every started
+    agent finished). Mirror of the front's ``phaseStatusOf``. A failed agent
+    counts as finished — no phase-level ``'failed'`` yet (deferred: needs the
+    interrupted-run case handled first)."""
+    started = [
+        bucket
+        for bucket in (_classify_agent_lifecycle(a.get("state")) for a in agents)
+        if bucket != "pending"
+    ]
+    if not started:
+        return "pending"
+    if any(bucket == "running" for bucket in started):
+        return "running"
+    return "completed"
+
+
+def stamp_phase_states(envelope: dict) -> dict:
+    """Stamp a derived ``state`` on each ``workflow_phase`` entry of
+    ``workflowProgress`` (``pending``/``running``/``completed``), from the agents
+    matched to it by ``phaseIndex``. Mutates and returns ``envelope``.
+
+    Computed on the back so both STATE 1 (synthetic) and STATE 2 (the real
+    envelope, which the engine ships without it) carry the same field — the front
+    reads it instead of re-deriving. Agents with no ``phaseIndex`` (e.g. a live
+    agent whose phase isn't detected yet) belong to no phase here, exactly like
+    the front's per-phase grouping; the front still buckets them under
+    "Unassigned" on its own."""
+    progress = envelope.get("workflowProgress")
+    if not isinstance(progress, list):
+        return envelope
+    by_phase: dict[object, list[dict]] = {}
+    for entry in progress:
+        if (
+            isinstance(entry, dict)
+            and entry.get("type") == "workflow_agent"
+            and entry.get("phaseIndex") is not None
+        ):
+            by_phase.setdefault(entry["phaseIndex"], []).append(entry)
+    for entry in progress:
+        if isinstance(entry, dict) and entry.get("type") == "workflow_phase":
+            entry["state"] = _phase_state(by_phase.get(entry.get("index"), []))
+    return envelope
 
 
 def enrich_previews(envelope: dict, project_id: str, session_id: str, run_id: str) -> dict:

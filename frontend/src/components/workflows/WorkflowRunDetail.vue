@@ -60,6 +60,22 @@ const agents = computed(() => {
     return Array.isArray(wp) ? wp.filter((e) => e?.type === 'workflow_agent') : []
 })
 
+// Phase status now comes from the back: each workflow_phase entry carries a
+// derived `state` (pending/running/completed), stamped identically for STATE 1
+// and STATE 2 (stamp_phase_states). Map it by the phase's 1-based index; the
+// front falls back to phaseStatusOf when absent (old envelopes, or an unstamped
+// phase) and still computes the Unassigned bucket's status itself.
+const phaseStateByIndex = computed(() => {
+    const wp = props.raw?.workflowProgress
+    const map = {}
+    if (Array.isArray(wp)) {
+        for (const e of wp) {
+            if (e?.type === 'workflow_phase' && e.index != null && e.state) map[e.index] = e.state
+        }
+    }
+    return map
+})
+
 // Normalize an agent's lifecycle across the two state vocabularies:
 //   STATE 1 (journal): running | completed
 //   STATE 2 (wf json): queued | running | done | failed | error | …
@@ -88,7 +104,9 @@ function agentsOfPhase(index1) {
     return agents.value.filter((a) => a.phaseIndex === index1)
 }
 
-// Phase status, recomputed live (it isn't necessarily linear):
+// Phase status from a list of agents (it isn't necessarily linear). Now a
+// fallback to the back's stamped phase.state (see phaseStateByIndex), still the
+// primary source for the Unassigned bucket, which has no workflow_phase entry:
 //   pending   — no agent of the phase has started
 //   running   — at least one started agent isn't finished
 //   completed — every started agent is finished
@@ -123,7 +141,8 @@ const phaseRows = computed(() =>
             key: `${i}:${title}`,
             title: title || `Phase ${i + 1}`,
             detail,
-            statusKind: phaseStatusOf(list),
+            // Prefer the back's stamped phase.state; fall back to local derivation.
+            statusKind: phaseStateByIndex.value[i + 1] || phaseStatusOf(list),
             agentCount: list.length,
             cost: typeof cost === 'number' ? cost : null,
             agents: mapAgents(list),
