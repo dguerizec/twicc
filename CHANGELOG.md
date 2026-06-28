@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Plan tab** — a Claude session with a plan now shows it in a dedicated, read-only tab; the plan is also retrievable from the CLI (+skill/API).
 - **Tasks tab** — a session with a task list now shows its latest state in a dedicated tab; the tasks list is also accessible via CLI (+skill/API) with other session info.
+- **Workflows tab** — a Claude session that ran workflows now shows them in a dedicated tab, live as they run; workflows are also accessible via CLI (+skill/API).
 - **Codex `view_image` tool** — dedicated display that shows the viewed image instead of a raw tool result.
 
 ### Changed
