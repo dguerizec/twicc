@@ -8,9 +8,11 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import WorkflowRunDetail from './WorkflowRunDetail.vue'
 import { generateTemplates, sha256Hex, extractMeta } from '../../utils/workflowTemplates'
+import { useWorkflowRunsStore } from '../../stores/workflowRuns'
 
 const router = useRouter()
 const route = useRoute()
+const workflowRunsStore = useWorkflowRunsStore()
 
 const props = defineProps({
     sessionId: { type: String, required: true },
@@ -260,17 +262,28 @@ function handleWorkflowTabShortcut(event) {
     }
 }
 
+// Mirror runs + active tab into a store so the command palette can list and
+// navigate them (it has no access to this component's local state).
+watch(rows, (r) => {
+    workflowRunsStore.setRuns(props.sessionId, r.map(row => ({ run_id: row.run_id, name: row.name })))
+}, { immediate: true })
+watch(activeRunId, (id) => workflowRunsStore.setActive(props.sessionId, id), { immediate: true })
+
 onMounted(() => {
     load()
     window.addEventListener('twicc:workflow-changed', onWorkflowChanged)
     window.addEventListener('twicc:workflow-tab-shortcut', handleWorkflowTabShortcut)
 })
 watch(() => props.active, (active) => { if (active) load() })
-watch(() => props.sessionId, () => { hasLoaded.value = false; synthesized.clear(); load() })
+watch(() => props.sessionId, (newId, oldId) => {
+    if (oldId) workflowRunsStore.clear(oldId)
+    hasLoaded.value = false; synthesized.clear(); load()
+})
 watch(() => props.focusRunId, (runId) => { if (runId && hasLoaded.value) focusRun(runId) })
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:workflow-changed', onWorkflowChanged)
     window.removeEventListener('twicc:workflow-tab-shortcut', handleWorkflowTabShortcut)
+    workflowRunsStore.clear(props.sessionId)
     clearTimeout(reloadTimer)
     if (controller) controller.abort()
 })

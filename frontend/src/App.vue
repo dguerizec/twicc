@@ -37,6 +37,7 @@ import {
 } from './composables/useStopSessionProcess'
 import { canStealFocus, hasBlockingOverlay } from './utils/focusGuard'
 import { focusChatPrimary, gotoChatFooterPanel } from './utils/focusChat'
+import { TERMINAL_ROUTES, WORKFLOW_ROUTES } from './utils/tabRoutes'
 import { toggleSearchInActiveCodeMirror } from './composables/useCodeMirror'
 import { useSessionSwitcher } from './composables/useSessionSwitcher'
 
@@ -174,16 +175,8 @@ const PROJECT_DETAIL_ROUTES = new Set([
     'projects-all', 'projects-files', 'projects-git', 'projects-terminal',
 ])
 
-// Terminal route names (for terminal tab shortcuts: Alt+Ctrl+Shift+{1-9, ←, →, ↑})
-const TERMINAL_ROUTES = new Set([
-    'session-terminal', 'projects-session-terminal',
-    'project-terminal', 'projects-terminal',
-])
-
-// Workflows route names (for workflow run-tab shortcuts: Alt+Ctrl+Shift+{1-9, ←, →, ↑, ↓})
-const WORKFLOW_ROUTES = new Set([
-    'session-workflows', 'projects-session-workflows',
-])
+// TERMINAL_ROUTES / WORKFLOW_ROUTES come from ./utils/tabRoutes — shared with the
+// command registry's route-gated "Go to … tab" commands (imported above).
 
 // Routes whose Files / Git panel hosts a CodeMirror editor with an Edit switch
 // (for the Alt+E toggle-edit shortcut).

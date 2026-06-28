@@ -1371,6 +1371,14 @@ watch(activeIndex, (newIndex, oldIndex) => {
     if (oldIndex !== undefined && oldIndex !== newIndex) pushTerminalTabHistory(oldIndex)
 })
 
+// Announce this panel to the store while it's the visible one, so the command
+// palette's "Go to … terminal" commands know which terminal is shown + active
+// (and its worktree-aware contextKey) without recomputing it.
+watch([() => props.active, activeIndex], ([active, idx]) => {
+    if (active) terminalTabsStore.setActivePanel(props.contextKey, idx)
+    else terminalTabsStore.clearActivePanel(props.contextKey)
+}, { immediate: true })
+
 function handleTerminalTabShortcut(event) {
     if (!props.active) return
 
@@ -1404,6 +1412,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:terminal-tab-shortcut', handleTerminalTabShortcut)
+    terminalTabsStore.clearActivePanel(props.contextKey)
 })
 
 defineExpose({ activeIndex })

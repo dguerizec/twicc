@@ -9,6 +9,13 @@ export const useTerminalTabsStore = defineStore('terminalTabs', {
         // contextKey → { terminalIndex: true } — "auto-attach into children" flags
         // from the @twicc_autoattach tmux user option (only truthy entries kept)
         autoAttach: {},
+        // The contextKey of the terminal panel currently visible (props.active),
+        // and per-contextKey its shown terminal index — mirrored from TerminalPanel
+        // so global consumers (the command palette's "Go to … terminal" commands)
+        // can read which terminal is shown + active without recomputing a
+        // worktree-aware contextKey. Null when no terminal panel is visible.
+        activeContextKey: null,
+        active: {},
     }),
     actions: {
         setIndices(contextKey, terminalIndices) {
@@ -75,6 +82,17 @@ export const useTerminalTabsStore = defineStore('terminalTabs', {
         },
         isAutoAttach(contextKey, index) {
             return !!this.autoAttach[contextKey]?.[index]
+        },
+        // The visible terminal panel announces itself here (called while props.active);
+        // last writer wins if several were ever active.
+        setActivePanel(contextKey, index) {
+            this.activeContextKey = contextKey
+            this.active[contextKey] = index
+        },
+        // Called when a panel stops being visible / unmounts. Only clears the
+        // global pointer when it was the one showing (keeps its remembered index).
+        clearActivePanel(contextKey) {
+            if (this.activeContextKey === contextKey) this.activeContextKey = null
         },
     },
 })

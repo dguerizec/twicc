@@ -24,6 +24,9 @@ import { ARTIFACT_ICON } from '../utils/artifactBookmark'
 import { lastSessionsLocation, lastArtifactsLocation } from '../utils/sidebarViewMemory'
 import { apiFetch } from '../utils/api'
 import { toast } from '../composables/useToast'
+import { useTerminalTabsStore } from '../stores/terminalTabs'
+import { useWorkflowRunsStore } from '../stores/workflowRuns'
+import { TERMINAL_ROUTES, WORKFLOW_ROUTES } from '../utils/tabRoutes'
 import {
     DISPLAY_MODE,
     COLOR_SCHEME,
@@ -305,6 +308,8 @@ export function initStaticCommands(router) {
     const settings = useSettingsStore()
     const data = useDataStore()
     const workspaces = useWorkspacesStore()
+    const terminalTabsStore = useTerminalTabsStore()
+    const workflowRunsStore = useWorkflowRunsStore()
     const route = useRoute()
 
     // ── Helpers ────────────────────────────────────────────────────────────
@@ -322,6 +327,16 @@ export function initStaticCommands(router) {
     /** Project ID from the current route (if any) */
     function routeProjectId() {
         return route.params.projectId || null
+    }
+
+    /** Terminal indices of the currently visible terminal panel (empty if none). */
+    function terminalIndices() {
+        const ctx = terminalTabsStore.activeContextKey
+        return ctx ? (terminalTabsStore.indices[ctx] || []) : []
+    }
+    /** Workflows of the route's session (empty if none). */
+    function workflowRunList() {
+        return workflowRunsStore.getRuns(routeSessionId())
     }
 
     const PROJECT_DETAIL_ROUTES = new Set([
@@ -756,6 +771,76 @@ export function initStaticCommands(router) {
                     },
                     query: route.query,
                 })
+            },
+        },
+
+        // Terminal / workflow tab navigation — palette twins of the Alt+Ctrl+Shift
+        // shortcuts: gated to the matching route, hidden with < 2 tabs (no point
+        // navigating a single one), reusing the same CustomEvents the shortcuts
+        // dispatch (the visible panel handles them). The pickers mark the current tab.
+        {
+            id: 'nav.terminal.prev',
+            label: 'Go to Previous Terminal',
+            icon: 'terminal',
+            category: 'navigation',
+            when: () => TERMINAL_ROUTES.has(route.name) && terminalIndices().length >= 2,
+            action: () => window.dispatchEvent(new CustomEvent('twicc:terminal-tab-shortcut', { detail: { type: 'prev' } })),
+        },
+        {
+            id: 'nav.terminal.next',
+            label: 'Go to Next Terminal',
+            icon: 'terminal',
+            category: 'navigation',
+            when: () => TERMINAL_ROUTES.has(route.name) && terminalIndices().length >= 2,
+            action: () => window.dispatchEvent(new CustomEvent('twicc:terminal-tab-shortcut', { detail: { type: 'next' } })),
+        },
+        {
+            id: 'nav.terminal.pick',
+            label: 'Go to Terminal…',
+            icon: 'terminal',
+            category: 'navigation',
+            when: () => TERMINAL_ROUTES.has(route.name) && terminalIndices().length >= 2,
+            items: () => {
+                const ctx = terminalTabsStore.activeContextKey
+                const activeIdx = ctx ? terminalTabsStore.active[ctx] : null
+                return terminalIndices().map((termIndex, pos) => ({
+                    id: String(termIndex),
+                    label: terminalTabsStore.getLabel(ctx, termIndex) || (termIndex === 0 ? 'Main' : `Term ${termIndex + 1}`),
+                    active: termIndex === activeIdx,
+                    action: () => window.dispatchEvent(new CustomEvent('twicc:terminal-tab-shortcut', { detail: { type: 'direct', index: pos + 1 } })),
+                }))
+            },
+        },
+        {
+            id: 'nav.workflow.prev',
+            label: 'Go to Previous Workflow',
+            icon: 'sitemap',
+            category: 'navigation',
+            when: () => WORKFLOW_ROUTES.has(route.name) && workflowRunList().length >= 2,
+            action: () => window.dispatchEvent(new CustomEvent('twicc:workflow-tab-shortcut', { detail: { type: 'prev' } })),
+        },
+        {
+            id: 'nav.workflow.next',
+            label: 'Go to Next Workflow',
+            icon: 'sitemap',
+            category: 'navigation',
+            when: () => WORKFLOW_ROUTES.has(route.name) && workflowRunList().length >= 2,
+            action: () => window.dispatchEvent(new CustomEvent('twicc:workflow-tab-shortcut', { detail: { type: 'next' } })),
+        },
+        {
+            id: 'nav.workflow.pick',
+            label: 'Go to Workflow…',
+            icon: 'sitemap',
+            category: 'navigation',
+            when: () => WORKFLOW_ROUTES.has(route.name) && workflowRunList().length >= 2,
+            items: () => {
+                const activeId = workflowRunsStore.getActive(routeSessionId())
+                return workflowRunList().map((run, pos) => ({
+                    id: run.run_id,
+                    label: run.name || run.run_id,
+                    active: run.run_id === activeId,
+                    action: () => window.dispatchEvent(new CustomEvent('twicc:workflow-tab-shortcut', { detail: { type: 'direct', index: pos + 1 } })),
+                }))
             },
         },
 
