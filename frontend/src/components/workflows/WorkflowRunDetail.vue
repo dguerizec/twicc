@@ -99,6 +99,20 @@ function phaseStatusOf(list) {
     return 'completed'
 }
 
+// Map raw workflow_agent entries to the shape the agent rows render. Shared by
+// the phase rows and the unassigned bucket.
+function mapAgents(list) {
+    return list.map((a) => ({
+        agentId: a.agentId,
+        name: a.label || a.agentId, // label when the engine gives one, else the id
+        statusKind: agentStatusKind(a.state),
+        durationMs: typeof a.durationMs === 'number' ? a.durationMs : null,
+        cost: typeof a.cost === 'number' ? a.cost : null,
+        promptPreview: a.promptPreview || null,
+        resultView: a.resultPreview != null ? jsonOrMarkdown(a.resultPreview) : null,
+    }))
+}
+
 const phaseRows = computed(() =>
     phases.value.map((p, i) => {
         const title = p && typeof p === 'object' ? p.title : String(p)
@@ -112,17 +126,37 @@ const phaseRows = computed(() =>
             statusKind: phaseStatusOf(list),
             agentCount: list.length,
             cost: typeof cost === 'number' ? cost : null,
-            agents: list.map((a) => ({
-                agentId: a.agentId,
-                name: a.label || a.agentId, // label when the engine gives one, else the id
-                statusKind: agentStatusKind(a.state),
-                durationMs: typeof a.durationMs === 'number' ? a.durationMs : null,
-                cost: typeof a.cost === 'number' ? a.cost : null,
-                promptPreview: a.promptPreview || null,
-                resultView: a.resultPreview != null ? jsonOrMarkdown(a.resultPreview) : null,
-            })),
+            agents: mapAgents(list),
         }
     }),
+)
+
+// Agents the back/engine left without a phase — STATE 1 transient (prompt not
+// synced yet, so no detection) or a permanent detection miss (prompt present
+// but no template matched). Without this bucket they'd belong to no phase row
+// yet still count in the header's agentCount — silently vanishing. Robust
+// definition: any agent whose phaseIndex matches no declared phase. Rendered
+// like a phase, last. Empty (e.g. every STATE 2 agent has a phase) → omitted.
+const unassignedRow = computed(() => {
+    const declared = new Set(phases.value.map((_, i) => i + 1))
+    const list = agents.value.filter((a) => !declared.has(a.phaseIndex))
+    if (!list.length) return null
+    const costs = list.map((a) => a.cost).filter((c) => typeof c === 'number')
+    return {
+        key: '__unassigned__',
+        title: 'Unassigned',
+        detail: 'Agents not matched to a phase',
+        statusKind: phaseStatusOf(list),
+        agentCount: list.length,
+        cost: costs.length ? costs.reduce((sum, c) => sum + c, 0) : null,
+        agents: mapAgents(list),
+    }
+})
+
+// Phases first, then the unassigned bucket (when non-empty) — so every agent in
+// the header count is visible somewhere.
+const displayRows = computed(() =>
+    unassignedRow.value ? [...phaseRows.value, unassignedRow.value] : phaseRows.value,
 )
 
 // --- Result ---------------------------------------------------------------
@@ -250,11 +284,11 @@ function agentsLabel(n) {
             </wa-details>
         </div>
 
-        <!-- Section 4 — phases -->
-        <div v-if="phaseRows.length" class="wf-section">
+        <!-- Section 4 — phases (+ the unassigned bucket, last, when non-empty) -->
+        <div v-if="displayRows.length" class="wf-section">
             <div class="wf-section-label">Phases</div>
             <wa-details
-                v-for="ph in phaseRows"
+                v-for="ph in displayRows"
                 :key="ph.key"
                 class="wf-row"
                 icon-placement="start"

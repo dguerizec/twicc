@@ -347,6 +347,43 @@ def rebuild_state1(run_id: str) -> dict | None:
     return envelope
 
 
+def agent_first_message(run_id: str, agent_id: str) -> str | None:
+    """The workflow agent's first user message (its prompt), or ``None`` if its
+    Session/items aren't synced to the DB yet.
+
+    Same lookup :func:`build_state1` uses to detect a phase, exposed for the
+    watcher's pending-prompt resolution: when the journal reports an agent
+    ``started`` before its own file has synced, the prompt is missing and the
+    phase can't be detected; the watcher polls this on the agent's later file
+    syncs to rebuild as soon as the prompt lands (instead of waiting a journal
+    tick). Sync; wrap in ``sync_to_async`` at the call site.
+    """
+    return _get_helpers().get_first_user_message(f"{run_id}:{agent_id}")
+
+
+def pending_prompt_agent_ids(envelope: dict) -> set[str]:
+    """Agent ids in a STATE 1 envelope that started but carry no ``promptPreview``.
+
+    These are agents the journal reported ``started`` while their first user
+    message wasn't synced yet — :func:`build_state1` could neither store a
+    prompt nor detect a phase for them, but both will resolve once the prompt
+    lands. An agent that **has** a ``promptPreview`` but no ``phaseTitle`` is
+    deliberately excluded: its prompt is present and detection simply found no
+    match, so a rebuild would change nothing — flagging it would never clear.
+    """
+    progress = envelope.get("workflowProgress")
+    if not isinstance(progress, list):
+        return set()
+    return {
+        entry["agentId"]
+        for entry in progress
+        if isinstance(entry, dict)
+        and entry.get("type") == "workflow_agent"
+        and entry.get("agentId")
+        and "promptPreview" not in entry
+    }
+
+
 def enrich_previews(envelope: dict, project_id: str, session_id: str, run_id: str) -> dict:
     """Enrich each agent: full promptPreview/resultPreview (vs the engine's
     truncated ones) + its per-agent cost. Mutates and returns ``envelope``

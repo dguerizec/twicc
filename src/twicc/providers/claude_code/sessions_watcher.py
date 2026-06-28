@@ -29,10 +29,16 @@ from .compute import (
     get_compute as _get_compute,
 )
 from .helpers import ClaudeCodeHelpers
-from .workflow_synthesis import enrich_previews, rebuild_state1
+from .workflow_synthesis import (
+    agent_first_message,
+    enrich_previews,
+    pending_prompt_agent_ids,
+    rebuild_state1,
+)
 from twicc.providers.compute_base import BaseSessionCompute, ToolResultUpdate
 from twicc.providers.sessions_watcher import (
     BaseSessionsWatcher,
+    IndexingRequest,
     ParsedSessionFile,
     broadcast_message,
     get_project_by_id,
@@ -82,6 +88,19 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
     """
 
     projects_dir: ClassVar[Path] = ClaudeCodeHelpers.PROJECTS_DIR
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Workflow agents the journal reported ``started`` while their first user
+        # message wasn't synced yet — so STATE 1 couldn't detect their phase.
+        # Keyed run_id → set of agent_id. Filled on each journal rebuild
+        # (:meth:`_rebuild_workflow_state1`) and drained when the agent's own
+        # file syncs and its prompt is finally available
+        # (:meth:`_maybe_resolve_pending_phase`), which rebuilds at once instead
+        # of waiting for the next ~10-15s journal tick. In-memory only: a backend
+        # restart drops it harmlessly (the next tick re-resolves), and a run's
+        # entry is purged when its real envelope lands (:meth:`_handle_workflow_run`).
+        self._workflow_pending_prompt: dict[str, set[str]] = {}
 
     async def parse_session_file(self, path: Path) -> ParsedSessionFile | None:
         try:
@@ -274,7 +293,13 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         return None
 
     async def _handle_workflow_journal(self, run_id: str, channel_layer) -> None:
-        """Rebuild a run's STATE 1 running view when its journal grows.
+        """Rebuild a run's STATE 1 running view when its journal grows."""
+        await self._rebuild_workflow_state1(run_id, channel_layer)
+
+    async def _rebuild_workflow_state1(self, run_id: str, channel_layer) -> None:
+        """Rebuild a run's STATE 1 envelope, refresh its pending-prompt flags,
+        and broadcast. Shared by the journal-grow trigger and the agent-sync
+        resolver (both already run under the DB write lock).
 
         Lazy: a no-op until a viewing front has POSTed templates (the row's
         ``synthesis``) — :func:`rebuild_state1` returns ``None`` then, and for an
@@ -284,6 +309,15 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         envelope = await sync_to_async(rebuild_state1)(run_id)
         if envelope is None:
             return
+        # Refresh which started agents still lack their prompt (hence their
+        # phase). Replace the run's set wholesale: agents resolved since the last
+        # rebuild drop out, newly-started prompt-less ones come in — so a later
+        # agent-file sync can resolve them without waiting for the next tick.
+        pending = pending_prompt_agent_ids(envelope)
+        if pending:
+            self._workflow_pending_prompt[run_id] = pending
+        else:
+            self._workflow_pending_prompt.pop(run_id, None)
         target = await sync_to_async(self._workflow_broadcast_target)(run_id)
         if target is None or target[2]:  # missing row, or hidden session
             return
@@ -305,6 +339,50 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
             return None
         return (workflow.session_id, workflow.session.project_id, workflow.session.hidden)
 
+    async def sync_and_broadcast(
+        self,
+        path: Path,
+        parsed: ParsedSessionFile,
+        change_type: Change,
+        channel_layer,
+    ) -> IndexingRequest | None:
+        """Base sync, then resolve a workflow agent's pending phase if this event
+        synced the agent a STATE 1 rebuild was waiting on for its prompt.
+
+        Runs under the same DB write lock as the base call (the live loop holds
+        it across this method), so the follow-up rebuild writes safely — mirroring
+        the journal handler, which also rebuilds + broadcasts under the lock.
+        """
+        indexing = await super().sync_and_broadcast(path, parsed, change_type, channel_layer)
+        await self._maybe_resolve_pending_phase(parsed, channel_layer)
+        return indexing
+
+    async def _maybe_resolve_pending_phase(self, parsed: ParsedSessionFile, channel_layer) -> None:
+        """If ``parsed`` is a workflow agent flagged as waiting on its first user
+        message, rebuild STATE 1 now that the message may have synced.
+
+        A workflow agent's Session id is the composite ``<run_id>:<agent_id>``.
+        Only agents in :attr:`_workflow_pending_prompt` are considered — so a run
+        with nothing pending never triggers a rebuild here, and a normal subagent
+        (no ``:`` in its id) is ignored. If the prompt is still missing the flag
+        is kept for the agent's next file write; otherwise the rebuild re-detects
+        its phase and drains the flag (in :meth:`_rebuild_workflow_state1`).
+        """
+        if parsed.type != SessionType.SUBAGENT:
+            return
+        run_id, sep, agent_id = parsed.session_id.partition(":")
+        if not sep:
+            return  # a normal subagent, not a workflow agent
+        pending = self._workflow_pending_prompt.get(run_id)
+        if not pending or agent_id not in pending:
+            return
+        # Cheap pre-check (one query): only rebuild once the prompt is actually
+        # there, else keep the flag for the agent's next write.
+        prompt = await sync_to_async(agent_first_message)(run_id, agent_id)
+        if prompt is None:
+            return
+        await self._rebuild_workflow_state1(run_id, channel_layer)
+
     async def _handle_workflow_run(self, session_id: str, path: Path, channel_layer) -> None:
         """React to a ``wf_*.json`` write: latch ``has_workflows`` + persist the run.
 
@@ -316,6 +394,9 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
             return
         await self._latch_session_workflows(session, channel_layer)
         saved = await self._upsert_workflow_run(session.id, session.project_id, path)
+        # The real envelope landed (STATE 2) — its agents now carry their phase
+        # from the file itself, so drop any pending-prompt flags for this run.
+        self._workflow_pending_prompt.pop(path.stem, None)
         # Tell open Workflows tabs to refetch — the run was created or its
         # envelope changed (the engine rewrites the file on each progress tick).
         if saved and not session.hidden:
