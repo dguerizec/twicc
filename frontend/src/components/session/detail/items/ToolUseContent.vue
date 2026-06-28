@@ -854,14 +854,12 @@ const viewWorkflowButtonId = computed(() => `view-workflow-${props.toolId}`)
 /** Open the Workflows tab focused on this run. */
 function navigateToWorkflow() {
     if (!workflowRunId.value) return
-    router.push({
-        name: isAllProjectsMode.value ? 'projects-session-workflows' : 'session-workflows',
-        params: {
-            projectId: props.projectId,
-            sessionId: props.sessionId,
-            runId: workflowRunId.value,
-        }
-    })
+    // Same session, Workflows tab focused on this run: reuse the frame logic
+    // (prefix mode + current project + workspace) and switch to the workflows tab.
+    const location = sessionRouteLocation({ id: props.sessionId, project_id: props.projectId }, route)
+    location.name = `${location.name}-workflows`
+    location.params.runId = workflowRunId.value
+    router.push(location)
 }
 
 /**

@@ -16,6 +16,7 @@ import CostDisplay from '../ui/CostDisplay.vue'
 import WorkflowStateBadge from './WorkflowStateBadge.vue'
 import { useSettingsStore } from '../../stores/settings'
 import { formatDuration } from '../../utils/date'
+import { sessionRouteLocation } from '../../utils/sessionRoute'
 
 const props = defineProps({
     // The view envelope (any of the 3 raw_json states).
@@ -237,18 +238,16 @@ function toggleOpen(event, key, isOpen) {
 // "View Agent" opens the workflow subagent in its own tab — the same route the
 // chat uses. A workflow agent's Session id is the composite <run_id>:<agent_id>
 // and its parent is this run's main session, so the subagent route resolves it.
-const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
 function viewAgent(agentId) {
     const runId = props.raw?.runId
     if (!runId || !props.sessionId) return
-    router.push({
-        name: isAllProjectsMode.value ? 'projects-session-subagent' : 'session-subagent',
-        params: {
-            projectId: props.projectId,
-            sessionId: props.sessionId,
-            subagentId: `${runId}:${agentId}`,
-        },
-    }).catch(() => {})
+    // Preserve the current frame (prefix mode + current project + workspace) and
+    // open the agent as a subagent suffix — mirrors the chat's "View Agent".
+    router.push(sessionRouteLocation(
+        { id: props.sessionId, project_id: props.projectId },
+        route,
+        { subagentId: `${runId}:${agentId}` },
+    )).catch(() => {})
 }
 
 function agentsLabel(n) {
