@@ -6,11 +6,13 @@
 // it should be treated as a Vue Router route, a resolvable file path, or a
 // file path that doesn't match any known root (rendered as plain text).
 
-const LINE_SUFFIX_RE = /(?::|#L)(\d+)$/
+const LINE_SUFFIX_RE = /(?::|#L)(\d+)(?:-L?\d+)?$/
 const EXTENSION_RE = /\.[a-zA-Z0-9]+$/
 
 /**
- * Strip a trailing `:N` or `#L<N>` line-number suffix from a path.
+ * Strip a trailing `:N` or `#L<N>` line-number suffix from a path, returning the
+ * line number. A range suffix (`:N-M`, `#L<N>-L<M>`) is also accepted: only the
+ * first number is kept — we reveal a single line, ranges aren't supported.
  */
 export function parseLineSuffix(href) {
     const m = href.match(LINE_SUFFIX_RE)

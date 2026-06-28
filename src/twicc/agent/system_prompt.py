@@ -56,7 +56,8 @@ need the data, not speculatively.
 - Use Markdown freely, incl. Mermaid diagrams (they render), when they help.
 - A file path written as a Markdown link `[label](path)` opens TwiCC's file
   viewer on click; a bare path stays inert. Use an absolute or
-  project-root-relative path.
+  project-root-relative path. Append `:N` to land on a line, e.g.
+  `[foo.py:42](src/foo.py:42)`.
 
 ## Self
 
