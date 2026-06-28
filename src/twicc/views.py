@@ -1497,18 +1497,24 @@ async def session_workflows(request, project_id, session_id):
     straight from the ``Workflow`` rows ingestion fills — no filesystem access —
     so a finished run stays available after Claude Code sublimates its files.
     """
-    await _resolve_session_or_404(session_id, project_id, None)
+    session = await _resolve_session_or_404(session_id, project_id, None)
+
+    from twicc.providers.claude_code.workflow_synthesis import apply_orphan_status
 
     workflows = await sync_to_async(list)(
         Workflow.objects.filter(session_id=session_id)
     )
+    cutoff = session.cutoff
     data = [
         {
             "run_id": w.run_id,
             "updated_at": w.updated_at.isoformat(),
             "cost": float(w.cost),
             "phases_cost": w.phases_cost,
-            "raw": orjson.loads(w.raw_json),
+            # An orphaned synthetic run (its session restarted or stopped without a
+            # wf_*.json ever landing) is surfaced as interrupted at read time —
+            # derived, not stored (no file event fires for a crash that writes nothing).
+            "raw": apply_orphan_status(orjson.loads(w.raw_json), w.updated_at, cutoff),
         }
         for w in workflows
     ]

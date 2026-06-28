@@ -290,7 +290,7 @@ function agentsLabel(n) {
             <span class="wf-info-item">
                 <wa-icon name="stopwatch"></wa-icon>
                 <span v-if="durationSec != null">{{ formatDuration(durationSec) }}</span>
-                <ProcessDuration v-else-if="synthetic && startTimeSec != null" :state-changed-at="startTimeSec" />
+                <ProcessDuration v-else-if="statusKind === 'running' && startTimeSec != null" :state-changed-at="startTimeSec" />
                 <span v-else>—</span>
             </span>
             <span class="wf-info-item">

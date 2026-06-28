@@ -400,16 +400,19 @@ _PENDING_STATES = {"queued", "pending"}
 def _run_status_kind(envelope: dict) -> str:
     """Normalized run status — ``running`` / ``completed`` / ``interrupted``.
 
-    ``synthetic`` (our STATE 1 marker) is always ``running``: it's our own flag,
-    never a guess. A finished envelope is ``completed`` only for a known success
-    status; any *other* terminal status (``killed``, or one we've never seen) is
-    ``interrupted`` — derived by exclusion, so an unknown status can never again
-    fall back to a forever-spinning ``running``. The raw ``status`` stays in the
-    envelope for an honest label."""
-    if envelope.get("synthetic"):
-        return "running"
-    if str(envelope.get("status") or "").lower() in _SUCCESS_STATES:
+    A finished envelope is ``completed`` only for a known success status.
+    ``synthetic`` (our STATE 1 marker) is otherwise ``running`` — it's our own
+    flag, never a guess — *unless* it was explicitly stamped ``interrupted``
+    (an orphaned run: the session restarted without its ``wf_*.json`` ever
+    landing — see :func:`apply_orphan_status`). Any other terminal status
+    (``killed``, or one we've never seen) is ``interrupted``, derived by
+    exclusion so an unknown status can never fall back to a forever-spinning
+    ``running``. The raw ``status`` stays in the envelope for an honest label."""
+    status = str(envelope.get("status") or "").lower()
+    if status in _SUCCESS_STATES:
         return "completed"
+    if envelope.get("synthetic") and status != "interrupted":
+        return "running"
     return "interrupted"
 
 
@@ -498,6 +501,45 @@ def stamp_phase_states(envelope: dict) -> dict:
         # No phases declared → nothing can be "incomplete" (allCompleted stays True).
         "allCompleted": completed == total if total else True,
     }
+    return envelope
+
+
+def apply_orphan_status(envelope: dict, workflow_updated_at, session_cutoff) -> dict:
+    """Mark an orphaned run ``interrupted`` at **read time** (never persisted).
+    Mutates and returns ``envelope``.
+
+    A run whose envelope is still ``synthetic`` (STATE 0/1 — no real ``wf_*.json``
+    ever landed) yet was last touched **before** its session's most recent
+    lifecycle boundary (``Session.cutoff`` = max of ``last_started_at`` /
+    ``last_stopped_at``) belonged to a run that has since **restarted or stopped**
+    without writing its envelope — i.e. it died. We can't write this into
+    ``raw_json`` (no file event fires for a crash that writes *nothing*), so we
+    derive it whenever the envelope is served (REST + CLI both call this).
+
+    Using ``cutoff`` (not just ``last_started_at``) also catches a run whose
+    session **stopped and was never resumed**. Residual gap: ``last_stopped_at``
+    is set only for TwiCC-driven sessions ("our processes only"), so a
+    hard-killed-and-never-resumed run, or an external/hybrid session, can still
+    slip through (would need the journal mtime to catch).
+
+    ``synthetic`` stays truthful (it *is* a reconstructed view); we only stamp
+    ``status="interrupted"`` and re-run :func:`stamp_phase_states`, which flips
+    the run, its agents and phases to ``interrupted`` (``_run_status_kind`` honors
+    the explicit ``interrupted`` status even while ``synthetic``).
+
+    Timestamps are aware datetimes on the same host (``updated_at`` is
+    ``auto_now``; ``cutoff`` derives from the session lifecycle) — comparable; the
+    gap we test (a resume/stop, minutes/hours later) dwarfs any sub-second drift.
+    """
+    if (
+        isinstance(envelope, dict)
+        and envelope.get("synthetic")
+        and session_cutoff is not None
+        and workflow_updated_at is not None
+        and workflow_updated_at < session_cutoff
+    ):
+        envelope["status"] = "interrupted"
+        stamp_phase_states(envelope)
     return envelope
 
 
