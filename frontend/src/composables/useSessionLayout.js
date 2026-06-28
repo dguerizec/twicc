@@ -209,12 +209,23 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     const maximizedRegion = computed(() => render.value.regions.find((r) => r.kind === 'maximized') || null)
     const isCenterMaximized = computed(() => !!maximizedRegion.value?.slots.some((s) => s.dockId === 'center'))
 
-    // Route drives the focus → keep the active tab visible: reveal it if its dock is minimized
-    // (restore) or its side lost mutual exclusion (swap its column in). Then record it as its
-    // region's remembered tab so the region keeps it when focus moves away. Mirrors the overlay's
-    // route-derived visibility; together they uphold "the active tab is always shown somewhere".
+    // Route drives the focus → keep the active tab visible: if a region that doesn't hold it is
+    // maximized, restore first (the resolver renders ONLY the maximized region, so the tab would be
+    // hidden); then reveal it if its dock is minimized (restore) or its side lost mutual exclusion
+    // (swap its column in). Then record it as its region's remembered tab so the region keeps it when
+    // focus moves away. Mirrors the overlay's route-derived visibility; together they uphold "the
+    // active tab is always shown somewhere".
     watch(routeActiveTabId, (id) => {
         if (!id) return
+        // Demaximize when focusing a tab outside the maximized region — covers any programmatic focus
+        // into a tab the maximized region hides (View Agent from a workflow in a maximized dock,
+        // opening a file in Files from a maximized Git, …). Must run BEFORE the dock guard below,
+        // which early-returns for any center tab (no assignment). No assignment ⇒ the center.
+        // Minimized docks / overlays reveal themselves below / via the route — only maximize is left.
+        const maximized = intention.value.maximized
+        if (maximized?.length && !maximized.includes(intention.value.assignment[id] || 'center')) {
+            restoreMaximized()
+        }
         const dock = intention.value.assignment[id]
         if (!dock || !DOCKS.includes(dock)) return
         // While this dock IS the maximized region, freeze its underlying rail state: don't un-minimize
