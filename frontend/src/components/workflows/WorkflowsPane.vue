@@ -7,6 +7,7 @@
 // UI comes later.
 import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import JsonHumanView from '../json/JsonHumanView.vue'
+import { generateTemplates, sha256Hex } from '../../utils/workflowTemplates'
 
 const props = defineProps({
     sessionId: { type: String, required: true },
@@ -26,6 +27,10 @@ const hasLoaded = ref(false)
 const openRuns = ref(new Set())
 
 let controller = null
+// `${run_id}:${scriptHash}` already generated + POSTed this component's life,
+// so a STATE 0 run is synthesized at most once per script version (dedupe across
+// the many load() triggers: mount, tab activation, live workflow_changed).
+const synthesized = new Set()
 
 async function load() {
     if (controller) controller.abort()
@@ -45,6 +50,7 @@ async function load() {
         openRuns.value = new Set([...openRuns.value].filter(id => ids.has(id)))
         if (!openRuns.value.size && data.length) openRuns.value.add(data[0].run_id)
         hasLoaded.value = true
+        maybeSynthesize(data)
         if (props.focusRunId && ids.has(props.focusRunId)) {
             openRuns.value.add(props.focusRunId)
             scrollToRun(props.focusRunId)
@@ -55,6 +61,55 @@ async function load() {
     } finally {
         loading.value = false
     }
+}
+
+// A RUNNING run can't be phase-tagged on the back alone: building the templates
+// the detector needs means *executing* the workflow script. When a run is STATE
+// 0 (synthetic, no phases yet), generate {meta, templates} in the browser from
+// its launch script and POST them — the back then builds the running view
+// (STATE 1) and broadcasts, which refetches here. No-op for STATE 1/2.
+async function maybeSynthesize(list) {
+    for (const w of list) {
+        const raw = w.raw
+        if (!raw || !raw.synthetic) continue                          // STATE 2 (real) — done
+        if (Array.isArray(raw.phases) && raw.phases.length) continue  // STATE 1 — already synthesized
+        if (typeof raw.script !== 'string' || !raw.script) continue
+        let hash
+        try { hash = await sha256Hex(raw.script) } catch { continue }
+        const key = `${w.run_id}:${hash}`
+        if (synthesized.has(key)) continue
+        synthesized.add(key)
+        try {
+            const { meta, templates } = await generateTemplates(raw.script, { runs: 100 })
+            await postSynthesis(w.run_id, meta, templates, hash, key)
+        } catch (e) {
+            // Generation is deterministic — a retry on the same script won't help;
+            // keep the guard and surface it for debugging.
+            console.warn('[workflow] template generation failed for', w.run_id, e)
+        }
+    }
+}
+
+async function postSynthesis(runId, meta, templates, scriptHash, key) {
+    const url = `/api/projects/${encodeURIComponent(props.projectId)}`
+        + `/sessions/${encodeURIComponent(props.sessionId)}`
+        + `/workflows/${encodeURIComponent(runId)}/synthesis/`
+    let res
+    try {
+        res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ meta, templates, script_hash: scriptHash }),
+        })
+    } catch {
+        synthesized.delete(key)   // transient network error — let a later load() retry
+        return
+    }
+    // 5xx → transient, allow retry. 4xx (stale hash / completed / bad input):
+    // a changed script re-triggers under a new hash, a done run needs nothing —
+    // keep the guard. On success the back broadcasts workflow_changed, which
+    // refetches and renders STATE 1; no explicit reload needed here.
+    if (!res.ok && res.status >= 500) synthesized.delete(key)
 }
 
 // Keep openRuns in sync with native wa-details toggles. Guard against custom
@@ -99,7 +154,7 @@ onMounted(() => {
     window.addEventListener('twicc:workflow-changed', onWorkflowChanged)
 })
 watch(() => props.active, (active) => { if (active) load() })
-watch(() => props.sessionId, () => { hasLoaded.value = false; load() })
+watch(() => props.sessionId, () => { hasLoaded.value = false; synthesized.clear(); load() })
 watch(() => props.focusRunId, (runId) => { if (runId && hasLoaded.value) focusRun(runId) })
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:workflow-changed', onWorkflowChanged)
