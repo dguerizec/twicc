@@ -124,6 +124,7 @@ function mapAgents(list) {
         agentId: a.agentId,
         name: a.label || a.agentId, // label when the engine gives one, else the id
         statusKind: agentStatusKind(a.state),
+        active: classifyAgent(a.state) !== 'finished', // still running/queued → pulsing robot
         durationMs: typeof a.durationMs === 'number' ? a.durationMs : null,
         cost: typeof a.cost === 'number' ? a.cost : null,
         promptPreview: a.promptPreview || null,
@@ -354,7 +355,6 @@ function agentsLabel(n) {
                                 <span class="items-details-summary-left">
                                     <strong class="items-details-summary-name">{{ ag.name }}</strong>
                                 </span>
-                                <wa-spinner v-if="ag.statusKind === 'running'" class="wf-status-icon"></wa-spinner>
                                 <wa-button
                                     class="wf-agent-view"
                                     size="small"
@@ -362,7 +362,7 @@ function agentsLabel(n) {
                                     appearance="outlined"
                                     @click.stop="viewAgent(ag.agentId)"
                                 >
-                                    <wa-icon slot="start" name="robot"></wa-icon>
+                                    <wa-icon v-if="ag.active" slot="start" name="robot" class="wf-agent-running"></wa-icon>
                                     View Agent
                                 </wa-button>
                             </span>
@@ -581,5 +581,17 @@ function agentsLabel(n) {
 .wf-agent .items-details-summary wa-button {
     margin-block: -0.4rem;
     margin-left: auto;
+}
+
+/* The "View Agent" robot pulses while the agent is still running, and is hidden
+ * (v-if) once finished — the live "robot pulses while it works" cue
+ * (ProcessIndicator's pulse, 1s). */
+.wf-agent-running {
+    animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
 }
 </style>
