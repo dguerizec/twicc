@@ -433,10 +433,22 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
     @staticmethod
     def _save_workflow_run(session_id: str, run_id: str, raw: str) -> None:
         # The real envelope (STATE 2) supersedes any synthesized STATE 0/1: store
-        # it verbatim and drop the now-useless synthesis bundle.
+        # it verbatim and drop the now-useless synthesis bundle. ``raw`` is already
+        # validated JSON (_upsert_workflow_run); parse it for the cost grouping.
+        try:
+            envelope = orjson.loads(raw)
+        except orjson.JSONDecodeError:
+            envelope = {}
+        cost, phases_cost = Workflow.compute_costs(run_id, envelope)
         Workflow.objects.update_or_create(
             run_id=run_id,
-            defaults={"session_id": session_id, "raw_json": raw, "synthesis": None},
+            defaults={
+                "session_id": session_id,
+                "raw_json": raw,
+                "synthesis": None,
+                "cost": cost,
+                "phases_cost": phases_cost,
+            },
         )
 
     async def _sync_project_and_broadcast(

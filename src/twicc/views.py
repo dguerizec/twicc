@@ -1506,6 +1506,8 @@ async def session_workflows(request, project_id, session_id):
         {
             "run_id": w.run_id,
             "updated_at": w.updated_at.isoformat(),
+            "cost": float(w.cost),
+            "phases_cost": w.phases_cost,
             "raw": orjson.loads(w.raw_json),
         }
         for w in workflows

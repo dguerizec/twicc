@@ -2474,9 +2474,20 @@ def _apply_upsert_workflow_payload(payload: UpsertWorkflowPayload) -> None:
     with transaction.atomic():
         # Boot backfill of a completed run = STATE 2: store the envelope and
         # clear any synthesis (mirrors the live ``_save_workflow_run`` path).
+        try:
+            envelope = orjson.loads(payload.raw_json)
+        except orjson.JSONDecodeError:
+            envelope = {}
+        cost, phases_cost = Workflow.compute_costs(payload.run_id, envelope)
         Workflow.objects.update_or_create(
             run_id=payload.run_id,
-            defaults={"session_id": payload.session_id, "raw_json": payload.raw_json, "synthesis": None},
+            defaults={
+                "session_id": payload.session_id,
+                "raw_json": payload.raw_json,
+                "synthesis": None,
+                "cost": cost,
+                "phases_cost": phases_cost,
+            },
         )
 
 

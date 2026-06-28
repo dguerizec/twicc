@@ -857,10 +857,46 @@ class Workflow(models.Model):
     # {meta, templates} POSTed by a viewing front; the back builds STATE 1 from it.
     # Purged (set to None) when the script changes (hash differs) or the real envelope lands.
     synthesis = models.JSONField(null=True, blank=True, default=None)
+    # Total cost = sum of the run's agent sessions' total_cost in USD (see
+    # ``compute_costs``). Recomputed at each row write (STATE 1 rebuild, STATE 2).
+    cost = models.DecimalField(max_digits=12, decimal_places=6, default=0)
+    # Per-phase cost breakdown ``{phaseIndex(str): cost(float)}`` — agents grouped
+    # by their 1-based phaseIndex. Recomputed alongside ``cost`` at each row write.
+    phases_cost = models.JSONField(default=dict, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.run_id} ({self.session_id})"
+
+    @staticmethod
+    def compute_costs(run_id: str, envelope: dict) -> tuple[Decimal, dict]:
+        """``(total, phases_cost)`` for a run, from its agent sessions + envelope.
+
+        A workflow agent is a :class:`Session` keyed ``<run_id>:<agent_id>`` whose
+        ``total_cost`` already rolls up its nested subagents. ``total`` sums them
+        all; ``phases_cost`` is ``{phaseIndex: cost}`` — each agent's cost added to
+        the 1-based phase it was stamped with in ``envelope.workflowProgress``
+        (orphan agents with no phaseIndex count toward ``total`` but no phase).
+        Phase values are floats (JSON-friendly); ``total`` stays Decimal for the
+        ``cost`` column. One query; called at each row write.
+        """
+        prefix = f"{run_id}:"
+        by_agent = {
+            sid[len(prefix):]: cost
+            for sid, cost in Session.objects.filter(id__startswith=prefix).values_list("id", "total_cost")
+        }
+        total = sum((c for c in by_agent.values() if c is not None), Decimal("0"))
+        phases: dict[str, Decimal] = {}
+        for entry in (envelope or {}).get("workflowProgress", []):
+            if entry.get("type") != "workflow_agent":
+                continue
+            idx = entry.get("phaseIndex")
+            cost = by_agent.get(entry.get("agentId"))
+            if idx is None or cost is None:
+                continue
+            key = str(idx)
+            phases[key] = phases.get(key, Decimal("0")) + cost
+        return total, {k: float(v) for k, v in phases.items()}
 
 
 class ModelPrice(models.Model):

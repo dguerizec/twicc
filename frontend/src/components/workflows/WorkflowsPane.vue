@@ -74,6 +74,9 @@ const rows = computed(() => workflows.value.map((w) => {
         name: titleizeName(name),
         summary: summary || '',
         statusKind: statusKindOf(raw),
+        // Cost lives in dedicated columns (not raw_json): total + {phaseIndex: cost}.
+        cost: typeof w.cost === 'number' ? w.cost : null,
+        phasesCost: w.phases_cost || {},
     }
 }))
 
@@ -238,7 +241,7 @@ onBeforeUnmount(() => {
                         <wa-icon v-else name="circle-check" class="workflow-status-icon workflow-status-done"></wa-icon>
                     </span>
                     <div v-if="openRuns.has(row.run_id)" class="workflow-body">
-                        <WorkflowRunDetail :raw="row.raw" />
+                        <WorkflowRunDetail :raw="row.raw" :cost="row.cost" :phases-cost="row.phasesCost" />
                     </div>
                 </wa-details>
             </section>

@@ -10,12 +10,21 @@
 import { ref, computed } from 'vue'
 import JsonHumanView from '../json/JsonHumanView.vue'
 import ProcessDuration from '../ui/ProcessDuration.vue'
+import CostDisplay from '../ui/CostDisplay.vue'
+import { useSettingsStore } from '../../stores/settings'
 import { formatDate, formatDuration } from '../../utils/date'
 
 const props = defineProps({
     // The view envelope (any of the 3 raw_json states).
     raw: { type: Object, required: true },
+    // Total run cost (dedicated column, not in raw_json); null when unknown.
+    cost: { type: Number, default: null },
+    // Per-phase cost breakdown {phaseIndex(str): cost}; from the phases_cost column.
+    phasesCost: { type: Object, default: () => ({}) },
 })
+
+const settingsStore = useSettingsStore()
+const showCosts = computed(() => settingsStore.areCostsShown)
 
 const synthetic = computed(() => !!props.raw?.synthetic)
 const agentCount = computed(() => props.raw?.agentCount ?? 0)
@@ -75,12 +84,14 @@ const phaseRows = computed(() =>
         const title = p && typeof p === 'object' ? p.title : String(p)
         const detail = p && typeof p === 'object' ? p.detail || '' : ''
         const list = agentsOfPhase(i + 1)
+        const cost = props.phasesCost?.[String(i + 1)]
         return {
             key: `${i}:${title}`,
             title: title || `Phase ${i + 1}`,
             detail,
             statusKind: phaseStatusOf(list),
             agentCount: list.length,
+            cost: typeof cost === 'number' ? cost : null,
         }
     }),
 )
@@ -121,6 +132,9 @@ function agentsLabel(n) {
                 <wa-icon name="robot"></wa-icon>
                 <span>{{ agentsLabel(agentCount) }}</span>
             </span>
+            <span v-if="showCosts" class="wf-info-item">
+                <CostDisplay :cost="cost" />
+            </span>
         </div>
 
         <!-- Section 2 — full description (untruncated, unlike the title) -->
@@ -150,7 +164,15 @@ function agentsLabel(n) {
                     <wa-icon v-else-if="ph.statusKind === 'pending'" name="hourglass-start" class="wf-status-icon wf-status-pending"></wa-icon>
                     <wa-icon v-else name="circle-check" class="wf-status-icon wf-status-done"></wa-icon>
                 </span>
-                <div class="wf-row-body">{{ agentsLabel(ph.agentCount) }}</div>
+                <div class="wf-info wf-phase-info">
+                    <span class="wf-info-item">
+                        <wa-icon name="robot"></wa-icon>
+                        <span>{{ agentsLabel(ph.agentCount) }}</span>
+                    </span>
+                    <span v-if="showCosts" class="wf-info-item">
+                        <CostDisplay :cost="ph.cost" />
+                    </span>
+                </div>
             </wa-details>
         </div>
 

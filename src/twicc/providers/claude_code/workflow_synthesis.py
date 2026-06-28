@@ -145,6 +145,27 @@ def _stringify(value) -> str:
         return str(value)
 
 
+def _agent_sessions(run_id: str) -> dict[str, dict]:
+    """Per-agent Session metadata for a run, keyed by agent_id.
+
+    Workflow agents are Sessions keyed ``<run_id>:<agent_id>`` (already synced by
+    the watcher). We surface the few fields the real wf_*.json carries that the
+    journal lacks — model + timing — so the synthetic STATE 1 envelope mirrors it.
+    """
+    from twicc.core.models import Session
+
+    prefix = f"{run_id}:"
+    rows = Session.objects.filter(id__startswith=prefix).values(
+        "id", "model", "last_started_at", "last_updated_at"
+    )
+    return {r["id"][len(prefix):]: r for r in rows}
+
+
+def _to_ms(dt) -> int | None:
+    """Aware datetime → epoch milliseconds (matches the engine's startedAt/…)."""
+    return int(dt.timestamp() * 1000) if dt is not None else None
+
+
 def build_state1(
     run_id: str,
     project_id: str,
@@ -183,14 +204,31 @@ def build_state1(
             agents[agent_id]["result"] = event.get("result")
 
     helpers = _get_helpers()
+    agent_meta = _agent_sessions(run_id)
     progress: list[dict] = [
         {"type": "workflow_phase", "index": i + 1, "title": p.get("title")}
         for i, p in enumerate(phases)
         if isinstance(p, dict)
     ]
-    for agent_id in order:
+    for i, agent_id in enumerate(order):
         info = agents[agent_id]
-        entry: dict = {"type": "workflow_agent", "agentId": agent_id, "state": info["state"]}
+        # ``index`` mirrors the engine's 1-based agent ordinal (= journal start
+        # order). model/startedAt/lastProgressAt/durationMs come from the agent's
+        # synced Session — the journal carries no timestamps. The rest of the real
+        # envelope's agent fields (tokens, toolCalls, label, …) have no live source.
+        entry: dict = {"type": "workflow_agent", "index": i + 1, "agentId": agent_id, "state": info["state"]}
+        meta_row = agent_meta.get(agent_id)
+        if meta_row:
+            if meta_row.get("model"):
+                entry["model"] = meta_row["model"]
+            started_ms = _to_ms(meta_row.get("last_started_at"))
+            progress_ms = _to_ms(meta_row.get("last_updated_at"))
+            if started_ms is not None:
+                entry["startedAt"] = started_ms
+            if progress_ms is not None:
+                entry["lastProgressAt"] = progress_ms
+            if started_ms is not None and progress_ms is not None:
+                entry["durationMs"] = max(0, progress_ms - started_ms)
         prompt = helpers.get_first_user_message(f"{run_id}:{agent_id}")
         if prompt is not None:
             entry["promptPreview"] = _preview(prompt)
@@ -251,8 +289,9 @@ def rebuild_state1(run_id: str) -> dict | None:
         workflow.synthesis,
         prior.get("script"),
     )
+    workflow.cost, workflow.phases_cost = Workflow.compute_costs(run_id, envelope)
     workflow.raw_json = orjson.dumps(envelope).decode()
-    workflow.save(update_fields=["raw_json", "updated_at"])
+    workflow.save(update_fields=["raw_json", "cost", "phases_cost", "updated_at"])
     return envelope
 
 
