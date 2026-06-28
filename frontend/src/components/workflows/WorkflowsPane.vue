@@ -5,8 +5,12 @@
 // The active tab's panel holds the run's structured detail (WorkflowRunDetail).
 // Newest run active by default; a "View Workflow" navigation selects its tab.
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import WorkflowRunDetail from './WorkflowRunDetail.vue'
 import { generateTemplates, sha256Hex, extractMeta } from '../../utils/workflowTemplates'
+
+const router = useRouter()
+const route = useRoute()
 
 const props = defineProps({
     sessionId: { type: String, required: true },
@@ -156,12 +160,28 @@ async function postSynthesis(runId, meta, templates, scriptHash, key) {
 }
 
 // User switched tabs. wa-tab-group also (re)emits wa-tab-show on (re)mount for
-// the already-active tab — forward only real changes (re-affirmation guard). The
-// template uses @wa-tab-show.stop so this never reaches DockRegion's own
-// wa-tab-group (our pane lives inside one of its tabs).
+// the already-active tab — forward only real changes (re-affirmation guard, which
+// also keeps programmatic :active changes from re-writing the URL). The template
+// uses @wa-tab-show.stop so this never reaches DockRegion's own wa-tab-group (our
+// pane lives inside one of its tabs).
 function onTabShow(event) {
     const name = event.detail?.name
-    if (name && name !== activeRunId.value) activeRunId.value = name
+    if (!name || name === activeRunId.value) return
+    activeRunId.value = name
+    syncUrl(name)
+}
+
+// URL-drive the tabs: reflect the active run in the address bar so a tab click is
+// a real navigation (replace → no history spam). The route's runId param flows
+// back as focusRunId, keeping clicks and external "View Workflow" links in sync.
+// No-op when the URL already targets this run.
+function syncUrl(runId) {
+    if (route.params.runId === runId) return
+    const name = route.name?.startsWith('projects-') ? 'projects-session-workflows' : 'session-workflows'
+    router.replace({
+        name,
+        params: { projectId: props.projectId, sessionId: props.sessionId, runId },
+    }).catch(() => {})
 }
 
 // Select the targeted run's tab (from a "View Workflow" click). If it isn't in
