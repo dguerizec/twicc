@@ -6,17 +6,20 @@
 //                  injects into STATE 1 — both epoch ms.
 //   - duration   : envelope.durationMs when finished; otherwise a live ticker
 //                  from start time (now − start).
-// Sections: (1) info, (2) full description, (3) phases, (4) result.
+// Sections: (1) info, (2) description, (3) args, (4) phases, (5) result.
 import { ref, computed } from 'vue'
 import JsonHumanView from '../json/JsonHumanView.vue'
+import MarkdownContent from '../ui/MarkdownContent.vue'
 import ProcessDuration from '../ui/ProcessDuration.vue'
 import CostDisplay from '../ui/CostDisplay.vue'
 import { useSettingsStore } from '../../stores/settings'
-import { formatDate, formatDuration } from '../../utils/date'
+import { formatDuration } from '../../utils/date'
 
 const props = defineProps({
     // The view envelope (any of the 3 raw_json states).
     raw: { type: Object, required: true },
+    // Run state: 'running' | 'completed' | 'failed' (resolved in WorkflowsPane).
+    statusKind: { type: String, default: 'running' },
     // Total run cost (dedicated column, not in raw_json); null when unknown.
     cost: { type: Number, default: null },
     // Per-phase cost breakdown {phaseIndex(str): cost}; from the phases_cost column.
@@ -25,6 +28,9 @@ const props = defineProps({
 
 const settingsStore = useSettingsStore()
 const showCosts = computed(() => settingsStore.areCostsShown)
+
+const STATE_LABELS = { running: 'Running', completed: 'Completed', failed: 'Failed' }
+const stateLabel = computed(() => STATE_LABELS[props.statusKind] || 'Running')
 
 const synthetic = computed(() => !!props.raw?.synthetic)
 const agentCount = computed(() => props.raw?.agentCount ?? 0)
@@ -109,6 +115,35 @@ function onResultToggle(event, open) {
     resultOpen.value = open
 }
 
+// --- Args -----------------------------------------------------------------
+// The launch args — only in the final wf_*.json (STATE 2). The engine stores them
+// as a string: when that string is a JSON object/array, render the parsed tree in
+// JsonHumanView; a plain-text arg (e.g. a research question) renders as a markdown
+// block. A non-string arg (should it ever occur) goes straight to JHV. Lazy on expand.
+const args = computed(() => props.raw?.args)
+const hasArgs = computed(() => {
+    const a = args.value
+    return a != null && !(typeof a === 'string' && a === '')
+})
+// { mode: 'json' | 'markdown', value } — how to render the args.
+const argsView = computed(() => {
+    const a = args.value
+    if (a == null) return null
+    if (typeof a !== 'string') return { mode: 'json', value: a }
+    const trimmed = a.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+            return { mode: 'json', value: JSON.parse(a) }
+        } catch { /* not valid JSON → fall through to markdown */ }
+    }
+    return { mode: 'markdown', value: a }
+})
+const argsOpen = ref(false)
+function onArgsToggle(event, open) {
+    if (event.target !== event.currentTarget) return // ignore nested wa-* bubbling
+    argsOpen.value = open
+}
+
 function agentsLabel(n) {
     return `${n} ${n === 1 ? 'agent' : 'agents'}`
 }
@@ -119,8 +154,10 @@ function agentsLabel(n) {
         <!-- Section 1 — info -->
         <div class="wf-info">
             <span class="wf-info-item">
-                <wa-icon name="clock"></wa-icon>
-                <span>{{ startTimeSec != null ? formatDate(startTimeSec, { smart: true }) : '—' }}</span>
+                <wa-spinner v-if="statusKind === 'running'" class="wf-state-icon"></wa-spinner>
+                <wa-icon v-else-if="statusKind === 'failed'" name="circle-xmark" class="wf-state-icon wf-state-failed"></wa-icon>
+                <wa-icon v-else name="circle-check" class="wf-state-icon wf-state-done"></wa-icon>
+                <span>{{ stateLabel }}</span>
             </span>
             <span class="wf-info-item">
                 <wa-icon name="stopwatch"></wa-icon>
@@ -143,7 +180,27 @@ function agentsLabel(n) {
             <p class="wf-description">{{ summary }}</p>
         </div>
 
-        <!-- Section 3 — phases -->
+        <!-- Section 3 — args (final wf_*.json only; string → markdown, else JSON) -->
+        <div v-if="hasArgs" class="wf-section">
+            <wa-details
+                class="wf-row"
+                icon-placement="start"
+                @wa-show="onArgsToggle($event, true)"
+                @wa-hide="onArgsToggle($event, false)"
+            >
+                <span slot="summary" class="items-details-summary">
+                    <span class="items-details-summary-left">
+                        <strong class="items-details-summary-name">Arguments</strong>
+                    </span>
+                </span>
+                <div v-if="argsOpen" class="wf-row-body wf-args-body">
+                    <JsonHumanView v-if="argsView?.mode === 'json'" :value="argsView.value" />
+                    <MarkdownContent v-else :source="argsView?.value" />
+                </div>
+            </wa-details>
+        </div>
+
+        <!-- Section 4 — phases -->
         <div v-if="phaseRows.length" class="wf-section">
             <div class="wf-section-label">Phases</div>
             <wa-details
@@ -176,7 +233,7 @@ function agentsLabel(n) {
             </wa-details>
         </div>
 
-        <!-- Section 4 — result (only once there is one; full tree on expand) -->
+        <!-- Section 5 — result (only once there is one; full tree on expand) -->
         <div v-if="hasResult" class="wf-section">
             <wa-details
                 class="wf-row"
@@ -208,7 +265,8 @@ function agentsLabel(n) {
 .wf-info {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--wa-space-l);
+    column-gap: var(--wa-space-l);
+    row-gap: var(--wa-space-xs);
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
 }
@@ -217,6 +275,15 @@ function agentsLabel(n) {
     display: inline-flex;
     align-items: center;
     gap: var(--wa-space-xs);
+}
+
+/* Run state icon in the info line — same colors as the tab/phase status. */
+.wf-state-failed {
+    color: var(--wa-color-danger-50);
+}
+
+.wf-state-done {
+    color: var(--wa-color-success-50);
 }
 
 /* Section 2 — description */
@@ -300,7 +367,8 @@ function agentsLabel(n) {
     color: var(--wa-color-text-quiet);
 }
 
-.wf-result-body {
+.wf-result-body,
+.wf-args-body {
     overflow-x: auto;
 }
 </style>

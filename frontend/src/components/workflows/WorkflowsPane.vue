@@ -1,30 +1,28 @@
 <script setup>
-// A session's workflow runs: fetch the persisted Workflow rows (the 3-state
-// view envelope) and render each in a wa-details. The summary header mirrors the
-// chat's tool rows — caret left, "Name — description", a status icon (spinner
-// while running, check/xmark when done) pinned right. The body is rendered lazily
-// (v-if on open) and is still the raw JsonHumanView tree; the structured running
-// view comes later.
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+// A session's workflow runs: fetch the persisted Workflow rows (the 3-state view
+// envelope) and render them as a tab bar — one tab per run, labelled with the
+// title-cased workflow name + a status icon (spinner running, check/xmark done).
+// The active tab's panel holds the run's structured detail (WorkflowRunDetail).
+// Newest run active by default; a "View Workflow" navigation selects its tab.
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import WorkflowRunDetail from './WorkflowRunDetail.vue'
 import { generateTemplates, sha256Hex, extractMeta } from '../../utils/workflowTemplates'
 
 const props = defineProps({
     sessionId: { type: String, required: true },
     projectId: { type: String, required: true },
-    // run_id to focus (open + scroll), from a "View Workflow" navigation.
+    // run_id to focus (select its tab), from a "View Workflow" navigation.
     focusRunId: { type: String, default: null },
     // True while the Workflows tab is the shown tab in its region.
     active: { type: Boolean, default: false },
 })
 
-const paneRef = ref(null)
 const workflows = ref([])
 const loading = ref(false)
 const error = ref(null)
 const hasLoaded = ref(false)
-// run_ids whose body is open (and thus mounted).
-const openRuns = ref(new Set())
+// run_id of the active tab (controlled wa-tab-group). Null before the first load.
+const activeRunId = ref(null)
 
 let controller = null
 // `${run_id}:${scriptHash}` already generated + POSTed this component's life,
@@ -42,7 +40,7 @@ function titleizeName(name) {
         .join(' ')
 }
 
-// Status shown by the summary's right-side icon:
+// Status shown by the tab's icon:
 //   running   → spinner (STATE 0/1 synthetic, or a real envelope still mid-run)
 //   completed → check     terminal success
 //   failed    → xmark      terminal failure
@@ -55,24 +53,20 @@ function statusKindOf(raw) {
     return 'running'
 }
 
-// Decorate each run with the fields the summary header needs. Name/description
-// come from the envelope (workflowName/summary); for a STATE 0 row not yet
-// synthesized those are absent, so we read them straight from the launch script's
-// meta literal — a correct first paint before STATE 1 lands.
+// Decorate each run with the fields the tab + panel need. Name comes from the
+// envelope (workflowName); for a STATE 0 row not yet synthesized it's absent, so
+// we read it straight from the launch script's meta literal — a correct first
+// paint before STATE 1 lands.
 const rows = computed(() => workflows.value.map((w) => {
     const raw = w.raw || {}
     let name = raw.workflowName
-    let summary = raw.summary
-    if ((name == null || summary == null) && typeof raw.script === 'string' && raw.script) {
-        const meta = extractMeta(raw.script)
-        if (name == null) name = meta.name
-        if (summary == null) summary = meta.description
+    if (name == null && typeof raw.script === 'string' && raw.script) {
+        name = extractMeta(raw.script).name
     }
     return {
         run_id: w.run_id,
         raw,
         name: titleizeName(name),
-        summary: summary || '',
         statusKind: statusKindOf(raw),
         // Cost lives in dedicated columns (not raw_json): total + {phaseIndex: cost}.
         cost: typeof w.cost === 'number' ? w.cost : null,
@@ -92,16 +86,17 @@ async function load() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const data = await response.json()
         workflows.value = data
-        // Preserve open runs across live refetches; auto-open the newest only
-        // when nothing is open; focus the targeted run when it's present.
+        // Keep the active tab across live refetches when it's still present;
+        // otherwise default to the newest run (data is newest-first). A pending
+        // "View Workflow" navigation wins.
         const ids = new Set(data.map(w => w.run_id))
-        openRuns.value = new Set([...openRuns.value].filter(id => ids.has(id)))
-        if (!openRuns.value.size && data.length) openRuns.value.add(data[0].run_id)
+        if (!activeRunId.value || !ids.has(activeRunId.value)) {
+            activeRunId.value = data.length ? data[0].run_id : null
+        }
         hasLoaded.value = true
         maybeSynthesize(data)
         if (props.focusRunId && ids.has(props.focusRunId)) {
-            openRuns.value.add(props.focusRunId)
-            scrollToRun(props.focusRunId)
+            activeRunId.value = props.focusRunId
         }
     } catch (e) {
         if (e.name === 'AbortError') return
@@ -160,32 +155,25 @@ async function postSynthesis(runId, meta, templates, scriptHash, key) {
     if (!res.ok && res.status >= 500) synthesized.delete(key)
 }
 
-// Keep openRuns in sync with native wa-details toggles. Guard against custom
-// events bubbling up from any nested wa-* element (only react to our own).
-function onRunToggle(event, runId, open) {
-    if (event.target !== event.currentTarget) return
-    if (open) openRuns.value.add(runId)
-    else openRuns.value.delete(runId)
+// User switched tabs. wa-tab-group also (re)emits wa-tab-show on (re)mount for
+// the already-active tab — forward only real changes (re-affirmation guard). The
+// template uses @wa-tab-show.stop so this never reaches DockRegion's own
+// wa-tab-group (our pane lives inside one of its tabs).
+function onTabShow(event) {
+    const name = event.detail?.name
+    if (name && name !== activeRunId.value) activeRunId.value = name
 }
 
-function scrollToRun(runId) {
-    nextTick(() => {
-        const el = paneRef.value?.querySelector(`section[data-run-id="${CSS.escape(runId)}"]`)
-        el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
-}
-
-// Open + scroll the targeted run (from a "View Workflow" click). If it isn't in
-// the loaded list yet — a brand-new run whose row just appeared — refetch; the
-// reload opens it once present (the live workflow_changed event also refetches).
+// Select the targeted run's tab (from a "View Workflow" click). If it isn't in
+// the loaded list yet — a brand-new run whose row just appeared — refetch; load()
+// activates it once present (the live workflow_changed event also refetches).
 function focusRun(runId) {
     if (!runId) return
-    openRuns.value.add(runId)
     if (hasLoaded.value && !workflows.value.some(w => w.run_id === runId)) {
         load()
         return
     }
-    scrollToRun(runId)
+    activeRunId.value = runId
 }
 
 // Live refresh: the watcher broadcasts workflow_changed when a wf_*.json is
@@ -212,40 +200,24 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <div class="workflows-pane" ref="paneRef">
+    <div class="workflows-pane">
         <div v-if="error" class="workflows-state workflows-error">
             <wa-icon name="triangle-exclamation"></wa-icon>
             <span>{{ error }}</span>
         </div>
         <div v-else-if="loading && !hasLoaded" class="workflows-state">Loading…</div>
-        <div v-else-if="!workflows.length" class="workflows-state">No workflows for this session.</div>
-        <div v-else class="workflows-list">
-            <section v-for="row in rows" :key="row.run_id" class="workflow" :data-run-id="row.run_id">
-                <wa-details
-                    class="workflow-details"
-                    icon-placement="start"
-                    :open="openRuns.has(row.run_id)"
-                    @wa-show="onRunToggle($event, row.run_id, true)"
-                    @wa-hide="onRunToggle($event, row.run_id, false)"
-                >
-                    <span slot="summary" class="items-details-summary">
-                        <span class="items-details-summary-left">
-                            <strong class="items-details-summary-name">{{ row.name }}</strong>
-                            <template v-if="row.summary">
-                                <span class="items-details-summary-separator"> — </span>
-                                <span class="items-details-summary-description">{{ row.summary }}</span>
-                            </template>
-                        </span>
-                        <wa-spinner v-if="row.statusKind === 'running'" class="workflow-status-icon workflow-status-running"></wa-spinner>
-                        <wa-icon v-else-if="row.statusKind === 'failed'" name="circle-xmark" class="workflow-status-icon workflow-status-failed"></wa-icon>
-                        <wa-icon v-else name="circle-check" class="workflow-status-icon workflow-status-done"></wa-icon>
-                    </span>
-                    <div v-if="openRuns.has(row.run_id)" class="workflow-body">
-                        <WorkflowRunDetail :raw="row.raw" :cost="row.cost" :phases-cost="row.phasesCost" />
-                    </div>
-                </wa-details>
-            </section>
-        </div>
+        <div v-else-if="!rows.length" class="workflows-state">No workflows for this session.</div>
+        <wa-tab-group v-else class="workflows-tabs" :active="activeRunId" @wa-tab-show.stop="onTabShow">
+            <wa-tab v-for="row in rows" :key="row.run_id" slot="nav" :panel="row.run_id" class="workflow-tab">
+                <span class="workflow-tab-name">{{ row.name }}</span>
+                <wa-spinner v-if="row.statusKind === 'running'" class="workflow-tab-status"></wa-spinner>
+                <wa-icon v-else-if="row.statusKind === 'failed'" name="circle-xmark" class="workflow-tab-status workflow-tab-status-failed"></wa-icon>
+                <wa-icon v-else name="circle-check" class="workflow-tab-status workflow-tab-status-done"></wa-icon>
+            </wa-tab>
+            <wa-tab-panel v-for="row in rows" :key="row.run_id" :name="row.run_id" class="workflow-panel">
+                <WorkflowRunDetail :raw="row.raw" :status-kind="row.statusKind" :cost="row.cost" :phases-cost="row.phasesCost" />
+            </wa-tab-panel>
+        </wa-tab-group>
     </div>
 </template>
 
@@ -255,8 +227,6 @@ onBeforeUnmount(() => {
     flex-direction: column;
     height: 100%;
     min-height: 0;
-    overflow: auto;
-    padding: var(--wa-space-m, 1rem);
 }
 
 .workflows-state {
@@ -271,66 +241,59 @@ onBeforeUnmount(() => {
     color: var(--wa-color-danger-fill-loud, #d73a49);
 }
 
-.workflows-list {
+/* One tab per run; the active panel holds its structured detail. Make the
+ * tab-group fill the pane and scroll its body (not the whole pane), so the tab
+ * bar stays put while a long run detail scrolls. */
+.workflows-tabs {
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-m, 1rem);
 }
 
-/* Mirror the chat's tool-row summary (ToolUseContent.vue + SessionItem.vue):
- * caret on the left (icon-placement="start"), name — description on the left,
- * status icon pinned right. The .items-details-summary* layout classes are
- * scoped per-component there, so we replicate the bits we need here; the inner
- * text classes (.items-details-summary-description, …) are declared globally by
- * ToolUseContent.vue and apply as-is. */
-.workflow-details {
+.workflows-tabs::part(base) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.workflows-tabs::part(body) {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+/* Compact tab bar (the default wa-tab padding is tall) — same recipe as the
+ * terminal tab bar: smaller label font, trimmed tab padding, no nav padding.
+ * Scoped to the tabs so the panel content keeps its own sizing. */
+.workflows-tabs::part(nav) {
+    padding-bottom: 0;
+}
+
+.workflow-tab {
     font-size: var(--wa-font-size-s);
 }
 
-.workflow-details::part(header) {
-    padding-right: 6px;
+/* Tab label: title-cased name + a status icon right after it. */
+.workflow-tab::part(base) {
+    padding: var(--wa-space-2xs) var(--wa-space-xs);
+    gap: var(--wa-space-2xs);
 }
 
-.workflow-details .items-details-summary {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--wa-space-m);
-    width: 100%;
+.workflow-tab-status {
+    font-size: 1.1em;
 }
 
-.workflow-details .items-details-summary-left {
-    flex: 1;
-    min-width: 60%; /* force the status icon to wrap below before text gets too narrow */
-    display: inline-flex;
-    align-items: center;
-    gap: var(--wa-space-xs);
-    max-width: 100%;
-}
-
-.workflow-details .items-details-summary-name {
-    color: var(--wa-color-text-normal);
-    font-weight: 600;
-}
-
-.workflow-details .items-details-summary-separator {
-    color: var(--wa-color-text-quiet);
-}
-
-.workflow-details .workflow-status-icon {
-    font-size: 1.2em;
-    margin-left: auto; /* stay right-aligned even when the row wraps */
-}
-
-.workflow-details .workflow-status-done {
+.workflow-tab-status-done {
     color: var(--wa-color-success-50);
 }
 
-.workflow-details .workflow-status-failed {
+.workflow-tab-status-failed {
     color: var(--wa-color-danger-50);
 }
 
-.workflow-body {
-    overflow: auto;
+.workflow-panel {
+    --padding: var(--wa-space-m);
 }
 </style>

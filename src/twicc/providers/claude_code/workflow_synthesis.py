@@ -166,12 +166,63 @@ def _to_ms(dt) -> int | None:
     return int(dt.timestamp() * 1000) if dt is not None else None
 
 
+def _launch_args(session_id: str, run_id: str):
+    """The ``args`` passed to the Workflow tool that launched ``run_id``, or None.
+
+    The final wf_*.json carries ``args``, but a still-running STATE 1 run has no
+    such file yet — the args only live in the launching tool_use's input. Map
+    run_id → tool_use_id via the tool_result's ``toolUseResult.runId`` (like
+    :func:`views._derive_workflow_links`), then read that Workflow tool_use's
+    ``input.args``. Read-only, from synced SessionItems (survives JSONL removal).
+    Called once per run then cached in the envelope — never re-scanned each tick.
+    """
+    from twicc.core.models import SessionItem
+
+    base = SessionItem.objects.filter(session_id=session_id).only("content")
+    # 1) run_id → launching tool_use_id (from its tool_result).
+    tool_use_id = None
+    for it in base.filter(content__contains=run_id).iterator(chunk_size=20):
+        try:
+            parsed = orjson.loads(it.content)
+        except orjson.JSONDecodeError:
+            continue
+        tur = parsed.get("toolUseResult")
+        if not isinstance(tur, dict) or tur.get("runId") != run_id:
+            continue
+        content = (parsed.get("message") or {}).get("content")
+        if isinstance(content, list):
+            tool_use_id = next(
+                (b.get("tool_use_id") for b in content
+                 if isinstance(b, dict) and b.get("type") == "tool_result"),
+                None,
+            )
+        if tool_use_id:
+            break
+    if not tool_use_id:
+        return None
+    # 2) tool_use_id → the Workflow tool_use's input.args.
+    for it in base.filter(content__contains=tool_use_id).iterator(chunk_size=20):
+        try:
+            parsed = orjson.loads(it.content)
+        except orjson.JSONDecodeError:
+            continue
+        content = (parsed.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if (isinstance(b, dict) and b.get("type") == "tool_use"
+                    and b.get("id") == tool_use_id and b.get("name") == "Workflow"):
+                return (b.get("input") or {}).get("args")
+    return None
+
+
 def build_state1(
     run_id: str,
     project_id: str,
     session_id: str,
     synthesis: dict,
     script: str | None,
+    prior_args=None,
 ) -> dict:
     """Assemble the STATE 1 (synthesized) view envelope for a live run.
 
@@ -180,6 +231,10 @@ def build_state1(
     user message) → phase detection. An agent present in the journal but **not
     yet synced** to the DB is included with its journal state but no phase — it
     gets tagged on the next rebuild (the journal ticks every ~10-15s).
+
+    ``prior_args`` is the args already resolved on an earlier rebuild (carried in
+    the prior envelope) — passed back so the launching tool_use is scanned at most
+    once per run, not every tick.
     """
     meta = synthesis.get("meta") or {}
     templates = synthesis.get("templates") or []
@@ -241,12 +296,18 @@ def build_state1(
             entry["resultPreview"] = _preview(_stringify(info["result"]))
         progress.append(entry)
 
+    # Args live only in the launching tool_use until the final wf_*.json — recover
+    # them once (reusing a value already found on a prior rebuild). STATE 2 carries
+    # its own args verbatim.
+    args = prior_args if prior_args is not None else _launch_args(session_id, run_id)
+
     return {
         "synthetic": True,
         "status": "pending",
         "runId": run_id,
         "workflowName": meta.get("name"),
         "summary": meta.get("description"),
+        "args": args,
         # Launch time (script mtime) so the front can show a start time + a live
         # duration for a run still in flight. STATE 2 overwrites this with the
         # wf_*.json's own startTime/durationMs.
@@ -288,6 +349,7 @@ def rebuild_state1(run_id: str) -> dict | None:
         workflow.session_id,
         workflow.synthesis,
         prior.get("script"),
+        prior.get("args"),
     )
     workflow.cost, workflow.phases_cost = Workflow.compute_costs(run_id, envelope)
     workflow.raw_json = orjson.dumps(envelope).decode()
