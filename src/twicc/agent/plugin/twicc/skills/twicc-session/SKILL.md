@@ -1,18 +1,20 @@
 ---
 name: twicc-session
-description: Inspect a single session — view metadata, read raw item content by line number, read user/assistant messages, list subagents, or read its plan. Use when you or the user want to examine a session, read conversation content, or explore subagent activity.
-argument-hint: <session_id> [content|messages|agents|plan]
+description: Inspect a single session — view metadata, read raw item content by line number, read user/assistant messages, list subagents, read its plan, or list/inspect its workflows. Use when you or the user want to examine a session, read conversation content, or explore subagent activity.
+argument-hint: <session_id> [content|messages|agents|plan|workflows|workflow]
 ---
 
 # TwiCC Session
 
-Inspect a single session. Five sub-commands:
+Inspect a single session. Seven sub-commands:
 
 - Default — full session metadata.
 - `content [LINE_OR_RANGE] [--contains TEXT ...]` — raw JSONL items by line number and/or content substring(s) (provider-specific schema).
 - `messages [--contains TEXT ...]` — user/assistant messages only, uniform shape across providers.
 - `agents` — list subagents spawned by this session.
 - `plan` — the session's plan markdown (provider-specific; Claude Code only for now).
+- `workflows [--limit N] [--offset N]` — list this session's workflows (Claude Code only).
+- `workflow <ID>` — show one (Claude Code only).
 
 ## When to use
 
@@ -20,6 +22,7 @@ Inspect a single session. Five sub-commands:
 - You want to read conversation content (raw items or clean messages).
 - You want to see which subagents were spawned by a session.
 - You want to read the session's plan (e.g. inspect what a worker session planned).
+- You want to list a session's workflows, or inspect one.
 
 ## How to invoke
 
@@ -192,6 +195,22 @@ The session's plan document (what Claude Code's *plan mode* writes), as a single
 
 Provider-specific — a **Claude Code** concept; **Codex** has none. Errors (exit 1) when the session has no plan. The default view's `has_plan` boolean says whether one exists; check it first, or just call `plan` and handle the error.
 
+### Workflows — list runs
+
+```bash
+$TWICC session <SESSION_ID> workflows [--limit N] [--offset N]
+```
+
+This session's workflows, newest first (**Claude Code** only). The default view's `has_workflows` boolean says whether any exist.
+
+### Workflow — one run
+
+```bash
+$TWICC session <SESSION_ID> workflow <ID>
+```
+
+One workflow, by the `id` from `workflows`. Errors (exit 1) when unknown.
+
 ## Examples
 
 ```bash
@@ -208,6 +227,9 @@ $TWICC session abc123 messages --role assistant --contains auth --tail 1
 $TWICC session abc123 agents
 $TWICC session abc123 agents --limit 50
 $TWICC session abc123 plan
+$TWICC session abc123 workflows
+$TWICC session abc123 workflows --limit 5
+$TWICC session abc123 workflow wf_cd590ff1
 ```
 
 ## Related commands

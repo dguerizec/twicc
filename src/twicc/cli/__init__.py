@@ -428,6 +428,29 @@ def plan(
     session_plan(ctx.obj)
 
 
+@session_app.command()
+def workflows(
+    ctx: typer.Context,
+    limit: int = typer.Option(20, help="Max number of workflows to return."),
+    offset: int = typer.Option(0, help="Skip first N workflows."),
+) -> None:
+    """List the session's workflows as JSON (Claude Code only)."""
+    from twicc.cli.session import workflows as session_workflows
+
+    session_workflows(ctx.obj, limit=limit, offset=offset)
+
+
+@session_app.command()
+def workflow(
+    ctx: typer.Context,
+    id: str = typer.Argument(help="The workflow ID."),
+) -> None:
+    """Show one of the session's workflows as JSON (Claude Code only)."""
+    from twicc.cli.session import workflow as session_workflow
+
+    session_workflow(ctx.obj, id)
+
+
 artifacts_app = typer.Typer(
     name="artifacts",
     help="List bookmarked artifacts, or bookmark / unbookmark one.",

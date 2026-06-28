@@ -256,3 +256,48 @@ def plan(session_id: str) -> None:
         emit_error(f"Error: plan file not found for session '{session_id}'.", code=1)
 
     emit_json({"content": plan_content})
+
+
+def _workflow_envelope(run) -> dict:
+    """The run's parsed ``raw_json`` with its ``runId`` key renamed ``id`` (first)."""
+    try:
+        raw = orjson.loads(run.raw_json)
+    except orjson.JSONDecodeError:
+        raw = {}
+    if not isinstance(raw, dict):
+        return {"id": run.run_id, "raw": raw}
+    return {"id": raw.pop("runId", run.run_id), **raw}
+
+
+def workflows(session_id: str, *, limit: int = 20, offset: int = 0) -> None:
+    """List a session's workflows as JSON to stdout (newest first)."""
+    import django
+
+    django.setup()
+
+    from twicc.core.models import Workflow
+
+    _get_session(session_id)
+
+    runs = Workflow.objects.filter(session_id=session_id).order_by("-updated_at")[offset : offset + limit]
+    data = [_workflow_envelope(w) for w in runs]
+
+    emit_json(data)
+
+
+def workflow(session_id: str, workflow_id: str) -> None:
+    """Show one of a session's workflows as JSON to stdout."""
+    import django
+
+    django.setup()
+
+    from twicc.core.models import Workflow
+
+    _get_session(session_id)
+
+    try:
+        run = Workflow.objects.get(run_id=workflow_id, session_id=session_id)
+    except Workflow.DoesNotExist:
+        emit_error(f"Error: workflow '{workflow_id}' not found for session '{session_id}'.", code=1)
+
+    emit_json(_workflow_envelope(run))
