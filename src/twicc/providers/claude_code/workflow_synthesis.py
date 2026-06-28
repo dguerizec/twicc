@@ -33,9 +33,6 @@ from .helpers import ClaudeCodeHelpers
 logger = logging.getLogger(__name__)
 
 _WS_RE = re.compile(r"\s+")
-# Preview cap for prompt / result snippets in the synthesized envelope. The real
-# wf_*.json truncates these too; STATE 2 will overwrite them with the real ones.
-_PREVIEW_LEN = 280
 
 
 def _norm(text: str) -> str:
@@ -129,20 +126,6 @@ def _read_journal(project_id: str, session_id: str, run_id: str) -> list[dict]:
         except orjson.JSONDecodeError:
             continue
     return events
-
-
-def _preview(text: str) -> str:
-    return text if len(text) <= _PREVIEW_LEN else text[:_PREVIEW_LEN]
-
-
-def _stringify(value) -> str:
-    """Render an agent's schema ``result`` as the envelope's string preview."""
-    if isinstance(value, str):
-        return value
-    try:
-        return orjson.dumps(value).decode()
-    except (TypeError, orjson.JSONEncodeError):
-        return str(value)
 
 
 def _agent_sessions(run_id: str) -> dict[str, dict]:
@@ -286,14 +269,19 @@ def build_state1(
                 entry["durationMs"] = max(0, progress_ms - started_ms)
         prompt = helpers.get_first_user_message(f"{run_id}:{agent_id}")
         if prompt is not None:
-            entry["promptPreview"] = _preview(prompt)
+            # Full prompt, not a preview: we have it (the agent's first user
+            # message) and storing it whole is durable past Claude deleting the
+            # run's files. The engine's "Preview" naming is just a CLI display cap.
+            entry["promptPreview"] = prompt
             phase_title = detect_phase(prompt, templates)
             if phase_title is not None:
                 entry["phaseTitle"] = phase_title
                 if phase_title in phase_index:
                     entry["phaseIndex"] = phase_index[phase_title]
         if info["result"] is not None:
-            entry["resultPreview"] = _preview(_stringify(info["result"]))
+            # Full result as its structured value (not stringified/truncated), so
+            # the front renders a clean JsonHumanView.
+            entry["resultPreview"] = info["result"]
         progress.append(entry)
 
     # Args live only in the launching tool_use until the final wf_*.json — recover
@@ -354,6 +342,43 @@ def rebuild_state1(run_id: str) -> dict | None:
     workflow.cost, workflow.phases_cost = Workflow.compute_costs(run_id, envelope)
     workflow.raw_json = orjson.dumps(envelope).decode()
     workflow.save(update_fields=["raw_json", "cost", "phases_cost", "updated_at"])
+    return envelope
+
+
+def enrich_previews(envelope: dict, project_id: str, session_id: str, run_id: str) -> dict:
+    """Replace each agent's truncated promptPreview/resultPreview with the full
+    prompt + result, mutating and returning ``envelope`` (STATE 2 ingestion).
+
+    The engine truncates these for its own CLI display; we keep the full data,
+    which is **durable past Claude's eventual deletion of the run's files** (the
+    reason we mirror the envelope at all). Sources:
+      - prompt ← the agent session's first user message (synced, persists in DB);
+      - result ← the run journal's ``result`` event for the agent (present until
+        the subagent files are sublimated).
+    Each falls back to the envelope's own value when its source is unavailable.
+    Sync; the caller wraps it (live watcher path / boot db-writer path).
+    """
+    progress = envelope.get("workflowProgress")
+    if not isinstance(progress, list):
+        return envelope
+    agents = [e for e in progress if isinstance(e, dict) and e.get("type") == "workflow_agent"]
+    if not agents:
+        return envelope
+    results = {
+        event["agentId"]: event.get("result")
+        for event in _read_journal(project_id, session_id, run_id)
+        if event.get("type") == "result" and event.get("agentId")
+    }
+    helpers = _get_helpers()
+    for entry in agents:
+        agent_id = entry.get("agentId")
+        if not agent_id:
+            continue
+        prompt = helpers.get_first_user_message(f"{run_id}:{agent_id}")
+        if prompt is not None:
+            entry["promptPreview"] = prompt
+        if results.get(agent_id) is not None:
+            entry["resultPreview"] = results[agent_id]
     return envelope
 
 

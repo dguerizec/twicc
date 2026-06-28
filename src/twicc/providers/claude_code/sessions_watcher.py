@@ -29,7 +29,7 @@ from .compute import (
     get_compute as _get_compute,
 )
 from .helpers import ClaudeCodeHelpers
-from .workflow_synthesis import rebuild_state1
+from .workflow_synthesis import enrich_previews, rebuild_state1
 from twicc.providers.compute_base import BaseSessionCompute, ToolResultUpdate
 from twicc.providers.sessions_watcher import (
     BaseSessionsWatcher,
@@ -315,7 +315,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         if session is None:
             return
         await self._latch_session_workflows(session, channel_layer)
-        saved = await self._upsert_workflow_run(session.id, path)
+        saved = await self._upsert_workflow_run(session.id, session.project_id, path)
         # Tell open Workflows tabs to refetch — the run was created or its
         # envelope changed (the engine rewrites the file on each progress tick).
         if saved and not session.hidden:
@@ -409,7 +409,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
                 "session": serialize_session(session),
             })
 
-    async def _upsert_workflow_run(self, session_id: str, path: Path) -> bool:
+    async def _upsert_workflow_run(self, session_id: str, project_id: str, path: Path) -> bool:
         """Mirror a ``wf_*.json`` file into its :class:`Workflow` row (upsert by run_id).
 
         ``run_id`` is the filename stem (``wf_<hex>``). The file is read off the
@@ -427,24 +427,27 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
             orjson.loads(raw)
         except orjson.JSONDecodeError:
             return False
-        await sync_to_async(self._save_workflow_run)(session_id, run_id, raw)
+        await sync_to_async(self._save_workflow_run)(session_id, project_id, run_id, raw)
         return True
 
     @staticmethod
-    def _save_workflow_run(session_id: str, run_id: str, raw: str) -> None:
-        # The real envelope (STATE 2) supersedes any synthesized STATE 0/1: store
-        # it verbatim and drop the now-useless synthesis bundle. ``raw`` is already
-        # validated JSON (_upsert_workflow_run); parse it for the cost grouping.
+    def _save_workflow_run(session_id: str, project_id: str, run_id: str, raw: str) -> None:
+        # The real envelope (STATE 2) supersedes any synthesized STATE 0/1: drop the
+        # now-useless synthesis bundle. ``raw`` is already validated JSON
+        # (_upsert_workflow_run). We don't store it verbatim: enrich_previews swaps
+        # the engine's truncated prompt/result previews for the full values (durable
+        # past Claude deleting the run's files), then we store the enriched envelope.
         try:
             envelope = orjson.loads(raw)
         except orjson.JSONDecodeError:
             envelope = {}
+        enrich_previews(envelope, project_id, session_id, run_id)
         cost, phases_cost = Workflow.compute_costs(run_id, envelope)
         Workflow.objects.update_or_create(
             run_id=run_id,
             defaults={
                 "session_id": session_id,
-                "raw_json": raw,
+                "raw_json": orjson.dumps(envelope).decode(),
                 "synthesis": None,
                 "cost": cost,
                 "phases_cost": phases_cost,

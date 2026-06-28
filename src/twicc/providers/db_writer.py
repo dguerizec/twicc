@@ -2464,7 +2464,10 @@ def _apply_upsert_workflow_payload(payload: UpsertWorkflowPayload) -> None:
     """
     from twicc.core.models import Session, Workflow
 
-    if not Session.objects.filter(id=payload.session_id).exists():
+    project_id = (
+        Session.objects.filter(id=payload.session_id).values_list("project_id", flat=True).first()
+    )
+    if project_id is None:
         logger.warning(
             "Skipping workflow %s: session %s does not exist",
             payload.run_id, payload.session_id,
@@ -2472,18 +2475,24 @@ def _apply_upsert_workflow_payload(payload: UpsertWorkflowPayload) -> None:
         return
 
     with transaction.atomic():
-        # Boot backfill of a completed run = STATE 2: store the envelope and
-        # clear any synthesis (mirrors the live ``_save_workflow_run`` path).
+        # Boot backfill of a run TwiCC missed live = STATE 2: clear any synthesis
+        # and, like the live ``_save_workflow_run`` path, swap the engine's
+        # truncated prompt/result previews for the full values before storing —
+        # durable past Claude deleting the run's files. ``enrich_previews`` is
+        # Claude-Code-specific, but so are workflows, so the lazy import is fine.
+        from twicc.providers.claude_code.workflow_synthesis import enrich_previews
+
         try:
             envelope = orjson.loads(payload.raw_json)
         except orjson.JSONDecodeError:
             envelope = {}
+        enrich_previews(envelope, project_id, payload.session_id, payload.run_id)
         cost, phases_cost = Workflow.compute_costs(payload.run_id, envelope)
         Workflow.objects.update_or_create(
             run_id=payload.run_id,
             defaults={
                 "session_id": payload.session_id,
-                "raw_json": payload.raw_json,
+                "raw_json": orjson.dumps(envelope).decode(),
                 "synthesis": None,
                 "cost": cost,
                 "phases_cost": phases_cost,
