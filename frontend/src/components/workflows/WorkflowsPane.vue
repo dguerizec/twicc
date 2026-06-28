@@ -1,13 +1,13 @@
 <script setup>
-// Minimal "JSON human view" of a session's workflow runs: fetch the persisted
-// Workflow rows (the verbatim wf_*.json envelopes) and render each with the
-// shared JsonHumanView. JsonHumanView has no collapse of its own, so each run
-// sits in a wa-details whose body is rendered lazily (v-if) — opening a run is
-// what mounts its (potentially large) tree. Validation view; the real workflow
-// UI comes later.
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import JsonHumanView from '../json/JsonHumanView.vue'
-import { generateTemplates, sha256Hex } from '../../utils/workflowTemplates'
+// A session's workflow runs: fetch the persisted Workflow rows (the 3-state
+// view envelope) and render each in a wa-details. The summary header mirrors the
+// chat's tool rows — caret left, "Name — description", a status icon (spinner
+// while running, check/xmark when done) pinned right. The body is rendered lazily
+// (v-if on open) and is still the raw JsonHumanView tree; the structured running
+// view comes later.
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import WorkflowRunDetail from './WorkflowRunDetail.vue'
+import { generateTemplates, sha256Hex, extractMeta } from '../../utils/workflowTemplates'
 
 const props = defineProps({
     sessionId: { type: String, required: true },
@@ -31,6 +31,51 @@ let controller = null
 // so a STATE 0 run is synthesized at most once per script version (dedupe across
 // the many load() triggers: mount, tab activation, live workflow_changed).
 const synthesized = new Set()
+
+// "find-flaky-tests" → "Find Flaky Tests": dashes to spaces, capitalize each word.
+function titleizeName(name) {
+    if (!name) return ''
+    return String(name)
+        .split(/[-\s]+/)
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ')
+}
+
+// Status shown by the summary's right-side icon:
+//   running   → spinner (STATE 0/1 synthetic, or a real envelope still mid-run)
+//   completed → check     terminal success
+//   failed    → xmark      terminal failure
+// STATE 2's status is whatever the wf_*.json reports; STATE 0/1 are always running.
+function statusKindOf(raw) {
+    if (raw.synthetic) return 'running'
+    const s = String(raw.status || '').toLowerCase()
+    if (s === 'completed' || s === 'success' || s === 'done') return 'completed'
+    if (s === 'failed' || s === 'error' || s === 'cancelled' || s === 'canceled') return 'failed'
+    return 'running'
+}
+
+// Decorate each run with the fields the summary header needs. Name/description
+// come from the envelope (workflowName/summary); for a STATE 0 row not yet
+// synthesized those are absent, so we read them straight from the launch script's
+// meta literal — a correct first paint before STATE 1 lands.
+const rows = computed(() => workflows.value.map((w) => {
+    const raw = w.raw || {}
+    let name = raw.workflowName
+    let summary = raw.summary
+    if ((name == null || summary == null) && typeof raw.script === 'string' && raw.script) {
+        const meta = extractMeta(raw.script)
+        if (name == null) name = meta.name
+        if (summary == null) summary = meta.description
+    }
+    return {
+        run_id: w.run_id,
+        raw,
+        name: titleizeName(name),
+        summary: summary || '',
+        statusKind: statusKindOf(raw),
+    }
+}))
 
 async function load() {
     if (controller) controller.abort()
@@ -172,21 +217,28 @@ onBeforeUnmount(() => {
         <div v-else-if="loading && !hasLoaded" class="workflows-state">Loading…</div>
         <div v-else-if="!workflows.length" class="workflows-state">No workflows for this session.</div>
         <div v-else class="workflows-list">
-            <section v-for="w in workflows" :key="w.run_id" class="workflow" :data-run-id="w.run_id">
+            <section v-for="row in rows" :key="row.run_id" class="workflow" :data-run-id="row.run_id">
                 <wa-details
                     class="workflow-details"
-                    :open="openRuns.has(w.run_id)"
-                    @wa-show="onRunToggle($event, w.run_id, true)"
-                    @wa-hide="onRunToggle($event, w.run_id, false)"
+                    icon-placement="start"
+                    :open="openRuns.has(row.run_id)"
+                    @wa-show="onRunToggle($event, row.run_id, true)"
+                    @wa-hide="onRunToggle($event, row.run_id, false)"
                 >
-                    <div slot="summary" class="workflow-head">
-                        <code class="workflow-run">{{ w.run_id }}</code>
-                        <span v-if="w.raw?.workflowName" class="workflow-name">{{ w.raw.workflowName }}</span>
-                        <span v-if="w.raw?.status" class="workflow-status">{{ w.raw.status }}</span>
-                        <span v-if="w.raw?.agentCount != null" class="workflow-agents">{{ w.raw.agentCount }} agents</span>
-                    </div>
-                    <div v-if="openRuns.has(w.run_id)" class="workflow-json">
-                        <JsonHumanView :value="w.raw" />
+                    <span slot="summary" class="items-details-summary">
+                        <span class="items-details-summary-left">
+                            <strong class="items-details-summary-name">{{ row.name }}</strong>
+                            <template v-if="row.summary">
+                                <span class="items-details-summary-separator"> — </span>
+                                <span class="items-details-summary-description">{{ row.summary }}</span>
+                            </template>
+                        </span>
+                        <wa-spinner v-if="row.statusKind === 'running'" class="workflow-status-icon workflow-status-running"></wa-spinner>
+                        <wa-icon v-else-if="row.statusKind === 'failed'" name="circle-xmark" class="workflow-status-icon workflow-status-failed"></wa-icon>
+                        <wa-icon v-else name="circle-check" class="workflow-status-icon workflow-status-done"></wa-icon>
+                    </span>
+                    <div v-if="openRuns.has(row.run_id)" class="workflow-body">
+                        <WorkflowRunDetail :raw="row.raw" />
                     </div>
                 </wa-details>
             </section>
@@ -222,31 +274,60 @@ onBeforeUnmount(() => {
     gap: var(--wa-space-m, 1rem);
 }
 
-.workflow-head {
+/* Mirror the chat's tool-row summary (ToolUseContent.vue + SessionItem.vue):
+ * caret on the left (icon-placement="start"), name — description on the left,
+ * status icon pinned right. The .items-details-summary* layout classes are
+ * scoped per-component there, so we replicate the bits we need here; the inner
+ * text classes (.items-details-summary-description, …) are declared globally by
+ * ToolUseContent.vue and apply as-is. */
+.workflow-details {
+    font-size: var(--wa-font-size-s);
+}
+
+.workflow-details::part(header) {
+    padding-right: 6px;
+}
+
+.workflow-details .items-details-summary {
     display: flex;
-    align-items: baseline;
-    gap: var(--wa-space-s, 0.5rem);
+    align-items: center;
     flex-wrap: wrap;
-    font-size: var(--wa-font-size-s, 0.875rem);
+    gap: var(--wa-space-m);
+    width: 100%;
 }
 
-.workflow-run {
-    font-weight: 700;
-    font-family: var(--wa-font-family-code, monospace);
+.workflow-details .items-details-summary-left {
+    flex: 1;
+    min-width: 60%; /* force the status icon to wrap below before text gets too narrow */
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    max-width: 100%;
 }
 
-.workflow-name {
-    color: var(--wa-color-brand-fill-loud, #5b9aff);
+.workflow-details .items-details-summary-name {
+    color: var(--wa-color-text-normal);
     font-weight: 600;
 }
 
-.workflow-status,
-.workflow-agents {
-    color: var(--wa-color-text-quiet, #8b97a7);
+.workflow-details .items-details-summary-separator {
+    color: var(--wa-color-text-quiet);
 }
 
-.workflow-json {
-    margin-top: var(--wa-space-s, 0.5rem);
+.workflow-details .workflow-status-icon {
+    font-size: 1.2em;
+    margin-left: auto; /* stay right-aligned even when the row wraps */
+}
+
+.workflow-details .workflow-status-done {
+    color: var(--wa-color-success-50);
+}
+
+.workflow-details .workflow-status-failed {
+    color: var(--wa-color-danger-50);
+}
+
+.workflow-body {
     overflow: auto;
 }
 </style>

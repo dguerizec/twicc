@@ -83,6 +83,30 @@ def _journal_path(project_id: str, session_id: str, run_id: str):
     )
 
 
+def _script_start_time_ms(project_id: str, session_id: str, run_id: str) -> int | None:
+    """Best-effort launch time of a live run: the mtime of its launch script.
+
+    The engine writes ``workflows/scripts/<name>-<run_id>.js`` once, at launch, so
+    its mtime is a stable proxy for "when the run started" — the only such signal
+    available while a run is in flight (the journal carries no timestamps, and
+    OSes don't reliably expose a file's birth time). STATE 2 never uses this: a
+    finished run reads ``startTime``/``durationMs`` straight from its wf_*.json.
+    """
+    scripts_dir = (
+        ClaudeCodeHelpers.PROJECTS_DIR / project_id / session_id / "workflows" / "scripts"
+    )
+    try:
+        matches = sorted(scripts_dir.glob(f"*-{run_id}.js"))
+    except OSError:
+        return None
+    for path in matches:
+        try:
+            return int(path.stat().st_mtime * 1000)
+        except OSError:
+            continue
+    return None
+
+
 def _read_journal(project_id: str, session_id: str, run_id: str) -> list[dict]:
     """Parse the run journal into ``{type, key, agentId, result?}`` events.
 
@@ -139,7 +163,10 @@ def build_state1(
     meta = synthesis.get("meta") or {}
     templates = synthesis.get("templates") or []
     phases = meta.get("phases") or []
-    phase_index = {p.get("title"): i for i, p in enumerate(phases) if isinstance(p, dict)}
+    # phaseIndex is 1-based, mirroring the engine's wf_*.json (phases[0] → index 1):
+    # the front matches agents to phases by title, but the synthetic envelope stays
+    # a faithful mirror of the real one so both states share one shape.
+    phase_index = {p.get("title"): i + 1 for i, p in enumerate(phases) if isinstance(p, dict)}
 
     # Aggregate journal events per agent, preserving first-seen (start) order.
     order: list[str] = []
@@ -157,7 +184,7 @@ def build_state1(
 
     helpers = _get_helpers()
     progress: list[dict] = [
-        {"type": "workflow_phase", "index": i, "title": p.get("title")}
+        {"type": "workflow_phase", "index": i + 1, "title": p.get("title")}
         for i, p in enumerate(phases)
         if isinstance(p, dict)
     ]
@@ -182,6 +209,10 @@ def build_state1(
         "runId": run_id,
         "workflowName": meta.get("name"),
         "summary": meta.get("description"),
+        # Launch time (script mtime) so the front can show a start time + a live
+        # duration for a run still in flight. STATE 2 overwrites this with the
+        # wf_*.json's own startTime/durationMs.
+        "startTime": _script_start_time_ms(project_id, session_id, run_id),
         "phases": phases,
         "script": script,
         "agentCount": len(order),

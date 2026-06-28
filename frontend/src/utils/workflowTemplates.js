@@ -178,7 +178,7 @@ function findMetaLiteral(src) {
     return null
 }
 
-function extractMeta(scriptText) {
+export function extractMeta(scriptText) {
     const literal = findMetaLiteral(scriptText)
     if (!literal) return {}
     try {
