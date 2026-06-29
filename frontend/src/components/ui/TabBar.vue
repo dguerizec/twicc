@@ -119,4 +119,12 @@ onBeforeUnmount(() => {
     padding: var(--wa-space-2xs) var(--wa-space-xs);
     gap: var(--wa-space-2xs);
 }
+
+/* WA's track (the line under the tabs) is the bottom border of ::part(tabs), which
+   lives inside the scroller — so it stops short of the scroll chevrons, leaving a gap
+   under them. The chevrons span the bar's full height (top:0; bottom:0), so a matching
+   bottom border lands exactly on the tabs' track and runs the line edge to edge. */
+.tab-bar::part(scroll-button) {
+    border-bottom: var(--track-width) solid var(--track-color);
+}
 </style>
