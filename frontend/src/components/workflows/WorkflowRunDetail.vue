@@ -607,6 +607,21 @@ function agentsLabel(n) {
 
 .wf-row .wf-status-pending {
     color: var(--wa-color-text-quiet);
+    /* A light "hop + squash" so a waiting phase reads as alive (not stalled).
+     * transform-origin at the base so the squash lands on its feet. */
+    animation: wf-hop 1s ease-in-out infinite;
+    transform-origin: center bottom;
+}
+
+@keyframes wf-hop {
+    0%, 50%, 100% { transform: translateY(0) scaleY(1); }
+    60%           { transform: translateY(-0.3em) scaleY(1.03); }
+    72%           { transform: translateY(0) scaleY(0.9); }
+    80%           { transform: translateY(0) scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .wf-row .wf-status-pending { animation: none; }
 }
 
 .wf-row-body {
