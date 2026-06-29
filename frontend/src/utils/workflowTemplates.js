@@ -200,13 +200,24 @@ function buildBody(scriptText) {
 
 /**
  * Generate phase-tagged prompt templates for a workflow script.
- * @returns {Promise<{ meta: object, templates: Array<{phase: string|null, segments: string[]}> }>}
+ *
+ * Never throws: ``meta`` extraction is robust (a recognized literal), but the
+ * template part *executes* the script and can fail (a syntax edge the
+ * AsyncFunction wrapper trips on, etc.). On failure we still return the meta
+ * with empty templates and ``failed: true`` — the caller POSTs that so the back
+ * builds a degraded running view (phases shown, agents Unassigned) and flags
+ * detection as unavailable, instead of leaving a mute STATE 0.
+ * @returns {Promise<{ meta: object, templates: Array<{phase: string|null, segments: string[]}>, failed: boolean }>}
  */
 export async function generateTemplates(scriptText, { runs = 100 } = {}) {
     const meta = extractMeta(scriptText)
-    const body = buildBody(scriptText)
-    const templates = await makeHarness(body, { runs })
-    return { meta, templates }
+    try {
+        const body = buildBody(scriptText)
+        const templates = await makeHarness(body, { runs })
+        return { meta, templates, failed: false }
+    } catch {
+        return { meta, templates: [], failed: true }
+    }
 }
 
 /** sha256 hex of `text` (UTF-8) — must match the back's hashlib.sha256(...).hexdigest(). */

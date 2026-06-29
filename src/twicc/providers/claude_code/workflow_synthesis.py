@@ -307,6 +307,11 @@ def build_state1(
         "agentCount": len(order),
         "workflowProgress": progress,
     }
+    # The front couldn't build templates (script wouldn't execute), so phase
+    # detection ran with none → every agent is Unassigned. Flag it so the front
+    # shows a "phases undetectable" callout (vs the normal odd-agent Unassigned).
+    if synthesis.get("detectionUnavailable"):
+        envelope["detectionUnavailable"] = True
     # Derive each phase's state from its agents (same field STATE 2 gets, below).
     return stamp_phase_states(envelope)
 

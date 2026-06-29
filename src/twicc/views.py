@@ -1577,7 +1577,7 @@ async def workflow_links(request, project_id, session_id):
     return JsonResponse(links, safe=False)
 
 
-def _store_synthesis_and_build(session_id, run_id, meta, templates, script_hash):
+def _store_synthesis_and_build(session_id, run_id, meta, templates, script_hash, detection_unavailable=False):
     """Store a front's ``{meta, templates}`` on the run (guarded by
     ``script_hash``) and rebuild its STATE 1 envelope. Returns ``(status, payload)``:
 
@@ -1601,8 +1601,13 @@ def _store_synthesis_and_build(session_id, run_id, meta, templates, script_hash)
         return ("completed", None)
     if workflow.script_hash and workflow.script_hash != script_hash:
         return ("stale_hash", workflow.script_hash)
-    workflow.synthesis = {"meta": meta, "templates": templates}
+    workflow.synthesis = {"meta": meta, "templates": templates, "detectionUnavailable": detection_unavailable}
     workflow.save(update_fields=["synthesis", "updated_at"])
+    if detection_unavailable:
+        logger.warning(
+            "[workflow] browser template generation failed for run %s — building a "
+            "degraded running view (phases shown, agents Unassigned)", run_id,
+        )
     return ("ok", rebuild_state1(run_id))
 
 
@@ -1627,6 +1632,9 @@ async def workflow_synthesis(request, project_id, session_id, run_id):
     meta = data.get("meta")
     templates = data.get("templates")
     script_hash = data.get("script_hash")
+    # The front sets this when it could extract meta but not execute the script to
+    # derive templates — we still build a degraded view and flag detection.
+    detection_unavailable = bool(data.get("detection_unavailable"))
     if not isinstance(meta, dict) or not isinstance(templates, list) or not isinstance(script_hash, str):
         return JsonResponse(
             {"error": "meta (object), templates (array) and script_hash (string) are required"},
@@ -1635,7 +1643,7 @@ async def workflow_synthesis(request, project_id, session_id, run_id):
 
     status, payload = await run_under_db_write_lock(
         lambda: sync_to_async(_store_synthesis_and_build)(
-            session_id, run_id, meta, templates, script_hash
+            session_id, run_id, meta, templates, script_hash, detection_unavailable
         )
     )
     if status == "not_found":

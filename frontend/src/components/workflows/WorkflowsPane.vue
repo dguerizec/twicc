@@ -131,18 +131,18 @@ async function maybeSynthesize(list) {
         const key = `${w.run_id}:${hash}`
         if (synthesized.has(key)) continue
         synthesized.add(key)
-        try {
-            const { meta, templates } = await generateTemplates(raw.script, { runs: 100 })
-            await postSynthesis(w.run_id, meta, templates, hash, key)
-        } catch (e) {
-            // Generation is deterministic — a retry on the same script won't help;
-            // keep the guard and surface it for debugging.
-            console.warn('[workflow] template generation failed for', w.run_id, e)
-        }
+        // generateTemplates never throws: on a script it can't execute it returns
+        // failed:true with empty templates. We POST anyway (meta + the flag) so the
+        // back builds a degraded view + flags detection unavailable, rather than
+        // leaving a mute STATE 0. The hash dedup stops it retrying until the script
+        // changes (a deterministic failure won't fix itself on retry).
+        const { meta, templates, failed } = await generateTemplates(raw.script, { runs: 100 })
+        if (failed) console.error('[workflow] template generation failed for', w.run_id)
+        await postSynthesis(w.run_id, meta, templates, hash, key, failed)
     }
 }
 
-async function postSynthesis(runId, meta, templates, scriptHash, key) {
+async function postSynthesis(runId, meta, templates, scriptHash, key, detectionUnavailable = false) {
     const url = `/api/projects/${encodeURIComponent(props.projectId)}`
         + `/sessions/${encodeURIComponent(props.sessionId)}`
         + `/workflows/${encodeURIComponent(runId)}/synthesis/`
@@ -151,7 +151,7 @@ async function postSynthesis(runId, meta, templates, scriptHash, key) {
         res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ meta, templates, script_hash: scriptHash }),
+            body: JSON.stringify({ meta, templates, script_hash: scriptHash, detection_unavailable: detectionUnavailable }),
         })
     } catch {
         synthesized.delete(key)   // transient network error — let a later load() retry

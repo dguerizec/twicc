@@ -76,6 +76,11 @@ const statusLabel = computed(() => {
     const s = props.raw?.status
     return typeof s === 'string' && s ? s.charAt(0).toUpperCase() + s.slice(1) : null
 })
+// The back set this when the browser couldn't build phase-detection templates
+// (the script wouldn't execute): phases still show, but no agent could be tagged,
+// so they all fall under Unassigned. Distinct from the normal case of a few
+// unmatched agents — only a true generation failure raises it.
+const detectionUnavailable = computed(() => !!props.raw?.detectionUnavailable)
 
 // --- Phases ---------------------------------------------------------------
 const phases = computed(() => (Array.isArray(props.raw?.phases) ? props.raw.phases : []))
@@ -316,6 +321,13 @@ function agentsLabel(n) {
         <wa-callout v-else-if="interruptedRun" variant="warning" appearance="filled-outlined" size="small" class="wf-incomplete">
             <wa-icon slot="icon" name="circle-stop"></wa-icon>
             This workflow was <strong>interrupted</strong> before completing — it did not run to the end.
+        </wa-callout>
+
+        <!-- Phase detection unavailable: the script couldn't be executed to build
+             templates, so agents can't be tagged to a phase (all Unassigned). -->
+        <wa-callout v-if="detectionUnavailable" variant="warning" appearance="filled-outlined" size="small" class="wf-incomplete">
+            <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
+            Agent <strong>phases couldn't be detected</strong> for this workflow — its agents are grouped under Unassigned.
         </wa-callout>
 
         <!-- Section 2 — full description (untruncated, unlike the title) -->
