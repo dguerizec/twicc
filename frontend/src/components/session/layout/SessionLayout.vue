@@ -169,7 +169,7 @@ onBeforeUnmount(endDrag)
 </script>
 
 <template>
-    <div ref="sessionLayoutEl" class="session-layout" :class="rootClasses">
+    <div ref="sessionLayoutEl" class="session-layout" :class="[rootClasses, { resizing: draggingId !== null }]">
         <div class="center-slot" :style="centerStyle" v-show="centerVisible">
             <slot></slot>
         </div>
@@ -251,6 +251,13 @@ onBeforeUnmount(endDrag)
     min-height: 0;
     min-width: 0;
     overflow: hidden;
+}
+/* While dragging a resize splitter, neutralize iframe panes (HTML/PDF previews): an iframe is a
+   separate browsing context that would otherwise capture pointermove/up as soon as the pointer
+   crosses into it, freezing the window-level drag. pointer-events:none lets the events fall through
+   to the parent document so the drag keeps tracking. */
+.session-layout.resizing :deep(iframe) {
+    pointer-events: none;
 }
 .center-slot {
     position: absolute;
