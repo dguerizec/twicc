@@ -2335,7 +2335,13 @@ onBeforeUnmount(() => {
     flex-direction: column;
 }
 
-.session-tabs :deep(wa-tab-panel::part(base)) {
+/* Direct-child combinator on purpose: this zeroes padding on the center's OWN tab
+   panels (main/files/git/…), which must sit edge-to-edge. Without the `>` it was a
+   descendant selector and leaked through a teleported pane into a NESTED wa-tab-panel
+   — e.g. the Workflows pane's per-run panel, whose `--wa-space-m` padding got wiped in
+   the center but survived in a dock (outside .session-tabs). Scoping to direct children
+   keeps the center bare while letting nested panes keep their own padding. */
+.session-tabs > :deep(wa-tab-panel::part(base)) {
     padding: 0;
 }
 
