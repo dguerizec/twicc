@@ -95,8 +95,35 @@ function makeRouteIssue(before, detail = null, after = '') {
     return { before, detail, after }
 }
 
+// Transient sibling of routeFileIssue: shown (same look) when a file the user
+// was viewing vanishes live — a commit or refresh drops it from the view. It
+// auto-dismisses after a few seconds and lives in its own ref so route resets
+// can't wipe it and it can't be requalified as a permanent dead-deep-link
+// callout. Posted in both the route-owner and docked (non-owner) paths so the
+// behaviour is identical whether or not the Git tab currently owns the URL.
+const TRANSIENT_FILE_NOTICE_MS = 5000
+const transientFileNotice = ref(null)
+let transientFileNoticeTimer = null
+
+function showTransientFileGone(filePath) {
+    if (transientFileNoticeTimer) clearTimeout(transientFileNoticeTimer)
+    transientFileNotice.value = makeRouteIssue('File ', filePath, ' is no longer available in this view.')
+    transientFileNoticeTimer = setTimeout(() => {
+        transientFileNotice.value = null
+        transientFileNoticeTimer = null
+    }, TRANSIENT_FILE_NOTICE_MS)
+}
+
+function clearTransientFileNotice() {
+    if (transientFileNoticeTimer) {
+        clearTimeout(transientFileNoticeTimer)
+        transientFileNoticeTimer = null
+    }
+    transientFileNotice.value = null
+}
+
 const routeIssueMessage = computed(() =>
-    routeRootIssue.value || routeCommitIssue.value || routeFileIssue.value
+    routeRootIssue.value || routeCommitIssue.value || routeFileIssue.value || transientFileNotice.value
 )
 
 // ---------------------------------------------------------------------------
@@ -169,6 +196,7 @@ function handleRootSelect(key) {
         selectedRootKey.value = key
         selectedCommit.value = null
         clearSelectedFile()
+        clearTransientFileNotice()
         emitNavigate({ rootKey: key, commitRef: 'index' })
     }
 }
@@ -300,12 +328,14 @@ function toggleGitLog() {
 
 function onBranchChange(event) {
     selectedBranch.value = event.target.value
+    clearTransientFileNotice()
     refreshGitLog()
 }
 
 function onCommitSelected(commit) {
     selectedCommit.value = commit || null
     clearSelectedFile()
+    clearTransientFileNotice()
     if (commit) {
         gitLogOpen.value = false
     }
@@ -521,6 +551,7 @@ function doSearch(query) {
 
 function handleFileSelect(path) {
     if (!props.active || syncingFromRoute) return
+    clearTransientFileNotice()
     emitNavigate({
         rootKey: selectedRootKey.value,
         commitRef: selectedCommit.value?.hash ?? 'index',
@@ -556,17 +587,23 @@ function fileExistsInTree(node, targetPath) {
 }
 
 // Re-run search and clear stale file selection when the tree data changes.
+// When a file the user was viewing disappears (a commit/refresh dropped it),
+// flash a self-dismissing notice. The route-owner path is handled by the route
+// watcher below (which can also drop the dead filePath from the URL); here we
+// only cover the docked, non-owner path, whose route props are blanked.
 watch(displayTree, (tree) => {
     fileTreePanelRef.value?.clearSearch()
 
     if (!tree) {
-        // Tree is empty/null: clear stale selection and diff data
+        // Tree emptied (e.g. every uncommitted change was just committed).
+        if (selectedFile.value && !props.routeOwner) showTransientFileGone(selectedFile.value)
         clearSelectedFile()
         diffData.value = null
         return
     }
 
     if (selectedFile.value && !fileExistsInTree(tree, selectedFile.value)) {
+        if (!props.routeOwner) showTransientFileGone(selectedFile.value)
         clearSelectedFile()
     }
 })
@@ -989,7 +1026,7 @@ watch(
 
 watch(
     () => [props.active, displayTree.value, props.routeFilePath, selectedRootKey.value, selectedCommit.value?.hash ?? 'index', props.routeOwner],
-    async ([active, tree, routeFilePath, rootKey, commitHash]) => {
+    async ([active, tree, routeFilePath, rootKey, commitHash], [, oldTree] = []) => {
         if (!active || !props.routeOwner || !rootKey) return
 
         if (routeFilePath == null) {
@@ -1007,20 +1044,34 @@ watch(
             return
         }
 
-        if (!tree) return
-
-        if (!fileExistsInTree(tree, routeFilePath)) {
+        // The route points at a file absent from the current view (the tree may
+        // also be empty now, e.g. everything was just committed). Tell apart a
+        // file that vanished while on screen (case B — present in the previous
+        // tree, dropped by a commit/refresh) from a dead deep-link the user never
+        // saw (case A — absent all along).
+        if (!tree || !fileExistsInTree(tree, routeFilePath)) {
             if (selectedFile.value) {
                 syncingFromRoute = true
                 clearSelectedFile()
                 await nextTick()
                 syncingFromRoute = false
             }
-            routeFileIssue.value = makeRouteIssue('File ', routeFilePath, ' is no longer available in this view.')
+            if (oldTree && fileExistsInTree(oldTree, routeFilePath)) {
+                // Case B: flash a self-dismissing notice, then drop the now-dead
+                // filePath from the route so a later refresh can't requalify it
+                // as case A and pin a permanent callout.
+                showTransientFileGone(routeFilePath)
+                routeFileIssue.value = null
+                emitNavigate({ filePath: undefined, replace: true })
+            } else {
+                // Case A: persistent — it explains why nothing is selected.
+                routeFileIssue.value = makeRouteIssue('File ', routeFilePath, ' is no longer available in this view.')
+            }
             return
         }
 
         routeFileIssue.value = null
+        clearTransientFileNotice()
 
         if (selectedFile.value === routeFilePath) return
 
@@ -1248,6 +1299,7 @@ onUnmounted(() => {
     indexPoll.cancel()
     gitLogPoll.cancel()
     document.removeEventListener('visibilitychange', onPollVisibilityChange)
+    clearTransientFileNotice()
 })
 
 // ---------------------------------------------------------------------------
