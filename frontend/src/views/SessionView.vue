@@ -31,6 +31,7 @@ import { useLayoutsStore, SINGLE_PANE_ID, SINGLE_PANE_NAME } from '../stores/lay
 import { ancestorChain } from '../utils/projectAgentDefaults'
 import { resolveProjectLayoutId } from '../utils/layoutDefaults'
 import AppTooltip from '../components/ui/AppTooltip.vue'
+import TabBar from '../components/ui/TabBar.vue'
 import ProcessIndicator from '../components/ui/ProcessIndicator.vue'
 import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
 import { useCodeCommentsStore } from '../stores/codeComments'
@@ -1068,7 +1069,8 @@ function onCenterTabDblClick(event) {
 // common ancestor of the bar region and nothing else, so the tooltip covers the whole bar (empty area +
 // tabs, found via flat-tree traversal) and never the panel content below.
 async function syncCenterBarTitle() {
-    const group = sessionTabsRef.value
+    // sessionTabsRef is the TabBar wrapper instance; the native <wa-tab-group> is on `.el`.
+    const group = sessionTabsRef.value?.el
     if (!group) return
     if (group.updateComplete) await group.updateComplete
     const nav = group.shadowRoot?.querySelector('[part~="nav"]')
@@ -1947,7 +1949,7 @@ onBeforeUnmount(() => {
             @overlay-activate="onOverlayActivate"
             @overlay-dismiss="onOverlayDismiss"
         >
-        <wa-tab-group
+        <TabBar
             ref="sessionTabsRef"
             :active="centerActiveTab"
             @wa-tab-show="onTabShow"
@@ -2111,7 +2113,7 @@ onBeforeUnmount(() => {
             <wa-tab-panel v-if="isToolTabPresent('workflows') && showInCenter('workflows')" name="workflows">
                 <div :ref="centerTargetSetters.workflows" class="layout-center-target"></div>
             </wa-tab-panel>
-        </wa-tab-group>
+        </TabBar>
         </SessionLayout>
 
         <!-- Session not found (backend returned 404) -->
@@ -2303,7 +2305,6 @@ onBeforeUnmount(() => {
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    --track-width: var(--divider-size);
 }
 
 /* Right-aligned tab-nav cluster: [Select] [Save] [Maximize]. A real-box wrapper carries the
@@ -2343,11 +2344,6 @@ onBeforeUnmount(() => {
    keeps the center bare while letting nested panes keep their own padding. */
 .session-tabs > :deep(wa-tab-panel::part(base)) {
     padding: 0;
-}
-
-wa-tab::part(base) {
-    padding: var(--wa-space-2xs) var(--wa-space-xs);
-    gap: var(--wa-space-2xs);
 }
 
 /* Active-region cue: when a dock owns the route, the center is a non-active region, so its tab bar

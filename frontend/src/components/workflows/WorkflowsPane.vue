@@ -9,6 +9,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import WorkflowRunDetail from './WorkflowRunDetail.vue'
+import TabBar from '../ui/TabBar.vue'
 import { generateTemplates, sha256Hex, extractMeta } from '../../utils/workflowTemplates'
 import { useWorkflowRunsStore } from '../../stores/workflowRuns'
 
@@ -323,7 +324,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-else-if="loading && !hasLoaded" class="workflows-state">Loading…</div>
         <div v-else-if="!rows.length" class="workflows-state">No workflows for this session.</div>
-        <wa-tab-group v-else class="workflows-tabs" :active="activeRunId" @wa-tab-show.stop="onTabShow">
+        <TabBar v-else class="workflows-tabs" :active="activeRunId" @wa-tab-show.stop="onTabShow">
             <wa-tab v-for="row in rows" :key="row.run_id" slot="nav" :panel="row.run_id" class="workflow-tab">
                 <span class="workflow-tab-name">{{ row.name }}</span>
                 <wa-spinner v-if="row.statusKind === 'running'" class="workflow-tab-status"></wa-spinner>
@@ -333,7 +334,7 @@ onBeforeUnmount(() => {
             <wa-tab-panel v-for="row in rows" :key="row.run_id" :name="row.run_id" class="workflow-panel">
                 <WorkflowRunDetail :raw="row.raw" :status-kind="row.statusKind" :cost="row.cost" :phases-cost="row.phasesCost" :project-id="projectId" :session-id="sessionId" />
             </wa-tab-panel>
-        </wa-tab-group>
+        </TabBar>
     </div>
 </template>
 
@@ -380,21 +381,15 @@ onBeforeUnmount(() => {
     overflow: auto;
 }
 
-/* Compact tab bar (the default wa-tab padding is tall) — same recipe as the
- * terminal tab bar: smaller label font, trimmed tab padding, no nav padding.
- * Scoped to the tabs so the panel content keeps its own sizing. */
+/* Compact tab bar: the trimmed tab padding + thin track come from TabBar; here we
+ * only shrink the label font (like the terminal bar) and drop the nav's bottom
+ * padding, scoped to the tabs so the panel content keeps its own sizing. */
 .workflows-tabs::part(nav) {
     padding-bottom: 0;
 }
 
 .workflow-tab {
     font-size: var(--wa-font-size-s);
-}
-
-/* Tab label: title-cased name + a status icon right after it. */
-.workflow-tab::part(base) {
-    padding: var(--wa-space-2xs) var(--wa-space-xs);
-    gap: var(--wa-space-2xs);
 }
 
 .workflow-tab-status {

@@ -4,6 +4,7 @@
 // is a Teleport target registered under 'overlay' (only the overlay-active panel targets it).
 import { computed, ref, watchEffect } from 'vue'
 import TabPlacementMenu from './TabPlacementMenu.vue'
+import TabBar from '../../ui/TabBar.vue'
 
 const props = defineProps({
     overlay: { type: Object, required: true }, // { edge, rect:{x,y,w,h}, tabs }
@@ -37,7 +38,7 @@ function onShow(event) { emit('select', event.detail.name) }
     <div class="overlay-layer">
         <div class="overlay-backdrop" @click="emit('close')"></div>
         <div class="layout-overlay" :class="overlay.edge" :style="style" @click.stop>
-            <wa-tab-group class="overlay-tabnav" :active="activeTabId" @wa-tab-show.stop="onShow">
+            <TabBar class="overlay-tabnav" :active="activeTabId" @wa-tab-show.stop="onShow">
                 <wa-tab v-for="t in overlay.tabs" :key="t.id" slot="nav" :panel="t.id" class="overlay-tab">
                     <wa-icon v-if="t.icon" :name="t.icon" class="overlay-tab-icon"></wa-icon>
                     <span>{{ t.label }}</span>
@@ -58,7 +59,7 @@ function onShow(event) { emit('select', event.detail.name) }
                 >
                     <wa-icon name="xmark"></wa-icon>
                 </wa-button>
-            </wa-tab-group>
+            </TabBar>
             <div ref="bodyRef" class="overlay-body"></div>
         </div>
     </div>
@@ -98,7 +99,6 @@ function onShow(event) { emit('select', event.detail.name) }
     flex: 0 0 auto;
     min-width: 0;
     overflow: hidden;
-    --track-width: var(--divider-size);
 }
 .overlay-tabnav::part(body) {
     display: none;
@@ -109,8 +109,6 @@ function onShow(event) { emit('select', event.detail.name) }
 .overlay-tab::part(base) {
     display: inline-flex;
     align-items: center;
-    padding: var(--wa-space-2xs) var(--wa-space-xs);
-    gap: var(--wa-space-2xs);
 }
 .overlay-tab-icon {
     font-size: 0.85em;

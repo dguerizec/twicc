@@ -12,6 +12,7 @@ import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import { expandWorktreeTemplate } from '../../utils/worktreePath'
 import { resolveProjectTrust } from '../../utils/trust'
 import ProjectAgentDefaultsSection from './ProjectAgentDefaultsSection.vue'
+import TabBar from '../ui/TabBar.vue'
 import HelpIconButton from '../help/HelpIconButton.vue'
 import ProjectBadge from './ProjectBadge.vue'
 import WorktreeBadge from './WorktreeBadge.vue'
@@ -630,7 +631,7 @@ defineExpose({
             <!-- Two main tabs: "Project" holds everything; "Agent settings" the
                  per-provider defaults. In create mode there is no agent tab, and
                  the nav bar is hidden (single tab → looks like a flat form). -->
-            <wa-tab-group
+            <TabBar
                 class="project-main-tabs"
                 :class="{ 'hide-nav': isCreateMode }"
                 :active="mainTab"
@@ -881,7 +882,7 @@ defineExpose({
                         <ProjectAgentDefaultsSection ref="agentDefaultsRef" :project="project" />
                     </div>
                 </wa-tab-panel>
-            </wa-tab-group>
+            </TabBar>
 
             <!-- Callouts live outside the tabs so they stay visible on either tab -->
             <wa-callout v-if="directoryNotFound" variant="warning" size="small" class="directory-not-found-callout">

@@ -24,6 +24,7 @@ import { useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
 import { ancestorChain } from '../../utils/projectAgentDefaults'
 import { formatBundleSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
+import TabBar from '../ui/TabBar.vue'
 
 const props = defineProps({
     project: { type: Object, required: true },
@@ -311,7 +312,7 @@ defineExpose({ getChangedFields, reset: initLocal })
         <!-- .stop on the tab events so our per-provider tabs never bubble up to
              the dialog's main "Project / Agent settings" tab-group; the handler
              keeps activeTab in sync so the controlled :active never snaps back. -->
-        <wa-tab-group
+        <TabBar
             :active="activeTab"
             @wa-tab-show.stop="activeTab = $event.detail?.name ?? activeTab"
             @wa-tab-hide.stop
@@ -403,7 +404,7 @@ defineExpose({ getChangedFields, reset: initLocal })
                     This provider has no configurable agent settings.
                 </div>
             </wa-tab-panel>
-        </wa-tab-group>
+        </TabBar>
     </div>
 </template>
 

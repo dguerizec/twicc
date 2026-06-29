@@ -7,6 +7,7 @@
 import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
 import { getProviderOptions, getProviderHelpers } from '../../providers'
+import TabBar from '../ui/TabBar.vue'
 
 const props = defineProps({
     provider: { type: String, required: true },
@@ -919,7 +920,7 @@ function onTabShow(event) {
                 <span class="usage-graph-period-label">{{ visiblePeriodLabel }}</span>
             </div>
 
-            <wa-tab-group @wa-tab-show="onTabShow">
+            <TabBar @wa-tab-show="onTabShow">
                 <wa-tab slot="nav" panel="five-hour" :active="activeTab === 'five-hour'">5h Quota</wa-tab>
                 <wa-tab slot="nav" panel="seven-day" :active="activeTab === 'seven-day'">7d Quota</wa-tab>
 
@@ -1136,7 +1137,7 @@ function onTabShow(event) {
                         </div>
                     </div>
                 </wa-tab-panel>
-            </wa-tab-group>
+            </TabBar>
         </div>
     </wa-dialog>
 </template>

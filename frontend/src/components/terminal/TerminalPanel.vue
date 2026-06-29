@@ -13,6 +13,7 @@ import { useFocusRetry } from '../../composables/useFocusRetry'
 import { toast } from '../../composables/useToast'
 import { getUnavailablePlaceholders } from '../../utils/snippetPlaceholders'
 import AppTooltip from '../ui/AppTooltip.vue'
+import TabBar from '../ui/TabBar.vue'
 import AttachTerminalMenu from './AttachTerminalMenu.vue'
 import TerminalRenameDialog from './TerminalRenameDialog.vue'
 import TerminalExtraKeysBar from './TerminalExtraKeysBar.vue'
@@ -1422,8 +1423,8 @@ defineExpose({ activeIndex })
     <div class="terminal-panel">
         <!-- Merged toolbar: terminal tabs (left) + action buttons (right) -->
         <div class="terminal-actions-bar">
-            <!-- Left: wa-tab-group used only for its scrollable nav -->
-            <wa-tab-group
+            <!-- Left: TabBar used only for its scrollable nav -->
+            <TabBar
                 :active="activeTabPanel"
                 class="terminal-tab-nav"
                 @wa-tab-show="onTerminalTabShow"
@@ -1469,7 +1470,7 @@ defineExpose({ activeIndex })
                 >
                     <wa-icon name="plus"></wa-icon>
                 </wa-button>
-            </wa-tab-group>
+            </TabBar>
 
             <!-- Right: rename button (always visible) + terminal-specific actions (when connected) -->
             <div v-if="!showUnavailableState" class="terminal-actions">
@@ -1757,13 +1758,12 @@ defineExpose({ activeIndex })
     min-height: 2rem;
 }
 
-/* wa-tab-group used only for its scrollable nav — hide its body */
+/* TabBar used only for its scrollable nav — hide its body */
 .terminal-tab-nav {
     flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     font-size: var(--wa-font-size-s);
-    --track-width: var(--divider-size);
     margin-bottom: calc(-1.5 * var(--divider-size));
     padding-top: 2.5px;
 }
@@ -1782,10 +1782,6 @@ defineExpose({ activeIndex })
 }
 .terminal-tab-nav::part(tabs) {
     align-items: center;
-}
-.terminal-tab-nav wa-tab::part(base) {
-    padding: var(--wa-space-2xs) var(--wa-space-xs);
-    gap: var(--wa-space-2xs);
 }
 .terminal-unavailable-tab {
     display: none;

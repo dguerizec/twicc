@@ -14,6 +14,7 @@ import ContributionGraphs from '../activity/ContributionGraphs.vue'
 import FilesPanel from '../files/FilesPanel.vue'
 import GitPanel from '../git/GitPanel.vue'
 import TerminalPanel from '../terminal/TerminalPanel.vue'
+import TabBar from '../ui/TabBar.vue'
 import { deriveFileRoots, getWorktreeParent } from '../../utils/projectRoots'
 import {
     buildFilesRouteParams,
@@ -435,7 +436,7 @@ onBeforeUnmount(() => {
 
         <wa-divider></wa-divider>
 
-        <wa-tab-group
+        <TabBar
             :active="activeTab"
             class="detail-tabs"
             @wa-tab-show="onTabShow"
@@ -491,7 +492,7 @@ onBeforeUnmount(() => {
                     @navigate="onTerminalNavigate"
                 />
             </wa-tab-panel>
-        </wa-tab-group>
+        </TabBar>
     </div>
 </template>
 
@@ -515,7 +516,6 @@ wa-divider {
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    --track-width: var(--divider-size);
 }
 
 .detail-tabs::part(base) {
@@ -533,11 +533,6 @@ wa-divider {
 
 .detail-tabs :deep(wa-tab-panel::part(base)) {
     padding: 0;
-}
-
-wa-tab::part(base) {
-    padding: var(--wa-space-2xs) var(--wa-space-xs);
-    gap: var(--wa-space-2xs);
 }
 
 .detail-tabs :deep(wa-tab-panel[active]) {

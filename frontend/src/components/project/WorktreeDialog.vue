@@ -14,6 +14,7 @@ import { expandWorktreeTemplate } from '../../utils/worktreePath'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import ProjectBadge from './ProjectBadge.vue'
 import WorktreeBadge from './WorktreeBadge.vue'
+import TabBar from '../ui/TabBar.vue'
 
 const emit = defineEmits(['resolved'])
 
@@ -458,7 +459,7 @@ defineExpose({
             <span class="dialog-title-subtitle">Create a new worktree, or open an existing one</span>
         </div>
 
-        <wa-tab-group :active="activeTab" @wa-tab-show="onTabShow" class="worktree-tabs">
+        <TabBar :active="activeTab" @wa-tab-show="onTabShow" class="worktree-tabs">
             <wa-tab panel="new">New worktree</wa-tab>
             <wa-tab panel="existing">Existing worktree</wa-tab>
 
@@ -589,7 +590,7 @@ defineExpose({
                     </wa-callout>
                 </div>
             </wa-tab-panel>
-        </wa-tab-group>
+        </TabBar>
 
         <div slot="footer" class="dialog-footer">
             <wa-button variant="neutral" appearance="outlined" @click="close" :disabled="isCreating || isOpening">

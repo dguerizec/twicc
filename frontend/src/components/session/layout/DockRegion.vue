@@ -5,6 +5,7 @@
 // holds one dockId (split) or two (merged) — its body is registered under each.
 import { computed, ref, watchEffect } from 'vue'
 import TabPlacementMenu from './TabPlacementMenu.vue'
+import TabBar from '../../ui/TabBar.vue'
 
 const props = defineProps({
     region: { type: Object, required: true },
@@ -96,7 +97,7 @@ function onEmptyBarDblClick(event) {
 
 <template>
     <div class="dock-region" :class="region.kind" :data-rid="region.id" :style="style">
-        <wa-tab-group class="dock-tabnav" :class="{ 'tabnav-dimmed': !isRouteActive }" :active="activeTabId" :title="maximized ? 'Double-click to restore' : 'Double-click to maximize'" @wa-tab-show.stop="onShow" @click="onEmptyBarClick" @dblclick="onEmptyBarDblClick">
+        <TabBar class="dock-tabnav" :class="{ 'tabnav-dimmed': !isRouteActive }" :active="activeTabId" :title="maximized ? 'Double-click to restore' : 'Double-click to maximize'" @wa-tab-show.stop="onShow" @click="onEmptyBarClick" @dblclick="onEmptyBarDblClick">
             <!-- Clicking a tab header activates it: focuses its filter + claims the route (onTabClick).
                  wa-tab-show handles switching to a *different* tab; the claim also covers clicking the
                  tab that is ALREADY this group's active one (no wa-tab-show fires then) while another
@@ -155,7 +156,7 @@ function onEmptyBarDblClick(event) {
                     <wa-icon name="expand"></wa-icon>
                 </wa-button>
             </template>
-        </wa-tab-group>
+        </TabBar>
         <div ref="bodyRef" class="dock-body" @click.capture="onBodyClick"></div>
     </div>
 </template>
@@ -197,12 +198,11 @@ function onEmptyBarDblClick(event) {
 .dock-region[data-rid="right-bottom"] { border-top: var(--dock-border); }
 .dock-region[data-rid="bottom-right"] { border-left: var(--dock-border); }
 
-/* wa-tab-group used only for its nav — hide its (empty) body, like TerminalPanel */
+/* TabBar used only for its nav — hide its (empty) body, like TerminalPanel */
 .dock-tabnav {
     flex: 0 0 auto;
     min-width: 0;
     overflow: hidden;
-    --track-width: var(--divider-size);
     transition: opacity var(--wa-transition-fast, 0.15s) var(--wa-transition-easing, ease);
 }
 /* Active-region cue: a dock that doesn't own the route dims its tab bar (this nav-only group; the
@@ -231,8 +231,6 @@ function onEmptyBarDblClick(event) {
 .dock-tab::part(base) {
     display: inline-flex;
     align-items: center;
-    padding: var(--wa-space-2xs) var(--wa-space-xs);
-    gap: var(--wa-space-2xs);
 }
 .dock-tab-icon {
     font-size: 0.85em;
