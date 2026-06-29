@@ -7,7 +7,7 @@ import { useHelpStore } from '../stores/help'
 import { getProviderHelpers } from '../providers'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { requestTitleSuggestion, notifySessionViewed, forceNotifySessionViewed, markSessionReadState, cancelSessionViewedThrottle } from '../composables/useWebSocket'
-import { stopSessionProcess } from '../composables/useStopSessionProcess'
+import { stopSessionProcess, hardKillSessionProcess } from '../composables/useStopSessionProcess'
 import { useDragHover } from '../composables/useDragHover'
 import { useSessionLayout } from '../composables/useSessionLayout'
 import { PROCESS_STATE } from '../constants'
@@ -1527,6 +1527,17 @@ function registerSessionCommands() {
                 return !!ps && ps.state !== PROCESS_STATE.DEAD && !ps.synthetic
             },
             action: () => stopSessionProcess(sessionId.value),
+        },
+        {
+            id: 'session.force-stop',
+            label: 'Force Kill Process',
+            icon: 'bolt',
+            category: 'session',
+            when: () => {
+                const ps = store.getProcessState(sessionId.value)
+                return !!ps && ps.state !== PROCESS_STATE.DEAD && !ps.synthetic
+            },
+            action: () => hardKillSessionProcess(sessionId.value),
         },
         {
             id: 'session.delete-draft',

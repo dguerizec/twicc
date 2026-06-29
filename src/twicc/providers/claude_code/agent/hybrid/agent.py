@@ -835,7 +835,7 @@ class HybridClaudeAgent(BaseAgent):
         # keeps returning False until the turn is interrupted, then we fall
         # through to the forced kill if that never happens within the budget.
         submitted = False
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self._force_kill.is_set():
             try:
                 if await self._checked_paste("/exit"):
                     submitted = True
@@ -847,7 +847,7 @@ class HybridClaudeAgent(BaseAgent):
         if not submitted:
             return False
         # Wait for the CLI to actually quit (pane gone or marked dead).
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self._force_kill.is_set():
             try:
                 pane_pid, pane_dead = await asyncio.to_thread(
                     hybrid_tmux.pane_status, self.session_id,
@@ -882,7 +882,7 @@ class HybridClaudeAgent(BaseAgent):
         # SIGTERM → (2s) → SIGKILL the claude process tree via the LIVE pane pid
         # (claude runs as its child, so a stale stored pid can't make us miss).
         exited = False
-        if reason != "shutdown":
+        if reason != "shutdown" and not self._force_kill.is_set():
             exited = await self._graceful_cli_exit()
         if not exited:
             pane_pid, _ = await asyncio.to_thread(hybrid_tmux.pane_status, self.session_id)

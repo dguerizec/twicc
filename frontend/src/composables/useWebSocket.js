@@ -177,10 +177,11 @@ export function sendWsMessage(data) {
  * @param {string} sessionId - The session ID of the process to kill
  * @returns {boolean} - True if message was sent, false if not connected
  */
-export function killProcess(sessionId) {
+export function killProcess(sessionId, { force = false } = {}) {
     return sendWsMessage({
         type: 'kill_process',
-        session_id: sessionId
+        session_id: sessionId,
+        force,
     })
 }
 

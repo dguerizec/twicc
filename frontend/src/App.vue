@@ -33,6 +33,7 @@ import {
     confirmPendingStop,
     cancelPendingStop,
     stopSessionProcess,
+    hardKillSessionProcess,
 } from './composables/useStopSessionProcess'
 import { canStealFocus, hasBlockingOverlay } from './utils/focusGuard'
 import { focusChatPrimary, gotoChatFooterPanel } from './utils/focusChat'
@@ -512,11 +513,17 @@ function handleGlobalKeydown(e) {
         if (escapeTimestamps.length >= 3) {
             lastTripleEscapeAt = now
             escapeTimestamps = []
+            // Holding Shift on the triggering Escape forces a hard kill (no
+            // grace, no confirmation); a plain triple-Escape runs the soft stop.
+            const force = e.shiftKey
             // Defer to the next tick so the triggering Escape event finishes
             // propagating BEFORE the confirmation dialog opens. Otherwise the
             // wa-dialog would catch the still-bubbling Escape and close itself
             // immediately (only visible in the crons-confirmation path).
-            setTimeout(() => stopSessionProcess(sessionId), 0)
+            setTimeout(() => {
+                if (force) hardKillSessionProcess(sessionId)
+                else stopSessionProcess(sessionId)
+            }, 0)
         }
     }
 }

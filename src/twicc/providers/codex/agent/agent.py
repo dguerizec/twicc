@@ -760,7 +760,7 @@ class CodexAgent(BaseAgent):
         # could re-arm a turn before we observe DEAD. Issuing interrupt is a
         # best-effort no-op if no turn is active server-side.
         turn_handle = self._current_turn
-        if turn_handle is not None:
+        if turn_handle is not None and not self._force_kill.is_set():
             try:
                 await turn_handle.interrupt()
             except Exception as e:
@@ -774,26 +774,35 @@ class CodexAgent(BaseAgent):
         # its rollout before we tear the transport down: ``_turn_task`` consumes
         # the stream and ends on ``turn/completed`` (interrupted status), the
         # clean analog of Claude Code's post-interrupt ``wait_for_dead``. Bounded
-        # and shielded so the timeout doesn't cancel the task — we close + cancel
-        # below if it overruns. Skipped on shutdown, where speed wins.
+        # and we race the force-kill event so a hard kill bails immediately. We
+        # don't cancel ``_turn_task`` here (we close + cancel below if it
+        # overruns). Skipped on shutdown and on a force-kill, where speed wins.
         if (
             reason != "shutdown"
+            and not self._force_kill.is_set()
             and self._turn_task is not None
             and not self._turn_task.done()
         ):
+            force_wait = asyncio.ensure_future(self._force_kill.wait())
             try:
-                await asyncio.wait_for(
-                    asyncio.shield(self._turn_task),
+                done, _ = await asyncio.wait(
+                    {self._turn_task, force_wait},
                     timeout=self.GRACEFUL_TURN_END_TIMEOUT,
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
-            except asyncio.TimeoutError:
-                logger.debug(
-                    "Turn didn't unwind within %ss for session %s — closing transport",
-                    self.GRACEFUL_TURN_END_TIMEOUT, self.session_id,
-                )
-            except Exception:
-                # The turn task surfaced its own error via ``_run_turn`` already.
-                pass
+                if self._turn_task not in done:
+                    logger.debug(
+                        "Turn didn't unwind (timeout/forced) for session %s — "
+                        "closing transport",
+                        self.session_id,
+                    )
+            finally:
+                if not force_wait.done():
+                    force_wait.cancel()
+                    try:
+                        await force_wait
+                    except asyncio.CancelledError:
+                        pass
 
         # Close the codex transport — the turn task lands in DEAD via
         # TransportClosedError. Idempotent on the SDK side. Bounded so a wedged

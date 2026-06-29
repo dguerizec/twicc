@@ -147,6 +147,37 @@ class BaseAgentManager:
                 await agent.interrupt_or_kill(reason=reason)
                 return True
 
+    async def hard_kill_agent(self, session_id: str, reason: str = "force") -> bool:
+        """Hard-kill one agent: SIGKILL the OS process tree NOW, then finalize.
+
+        A soft stop holds ``self._lock`` for up to ~30s (its grace window), so a
+        hard kill must NOT wait on the lock. We read the pid (an atomic dict
+        read), latch the force flag, and SIGKILL the process tree *out-of-lock*.
+        That kills the process immediately AND unblocks any in-flight soft stop:
+        its graceful wait races ``_force_kill`` and bails to its forced teardown.
+        We then call :meth:`kill_agent` to finalize — it either no-ops (the soft
+        stop already reached DEAD and freed the lock) or takes the now-free lock
+        and runs the forced teardown (``interrupt_or_kill`` sees ``_force_kill``
+        set and skips the grace window).
+        """
+        with provider_log_context(self.provider):
+            agent = self._agents.get(session_id)
+            if agent is None or agent.state == AgentState.DEAD:
+                return False
+            logger.info(
+                "Hard-killing agent for session %s (reason: %s)", session_id, reason,
+            )
+            agent.kill_reason = reason
+            agent.request_force_kill()
+            if agent.mark_stopping():
+                await self._broadcast_info(agent.get_info())
+            pid = agent.get_pid()
+            if pid is not None:
+                await agent._kill_system_process(pid)
+        # Finalize via the normal path (lock now free / freeing). No-ops if the
+        # soft stop already transitioned the agent to DEAD.
+        return await self.kill_agent(session_id, reason=reason)
+
     async def stop_subagent(self, session_id: str, subagent_id: str) -> bool:
         """Stop a running subagent (Task) within ``session_id``.
 

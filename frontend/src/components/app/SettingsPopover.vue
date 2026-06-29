@@ -278,6 +278,7 @@ const shortcutGroups = computed(() => {
                     { keys: ['Alt', 'Shift', 'H'], description: 'Toggle hybrid mode on a Claude session, where it can be toggled (from any session tab)' },
                 ] : []),
                 { keys: ['Quick triple Esc'], description: 'Emergency stop of the running process' },
+                { keys: ['Shift', 'Quick triple Esc'], description: 'Force kill the running process — no grace window, no confirmation (also: Shift-click the Stop button, or click it again while stopping)' },
             ]
         },
         {

@@ -108,6 +108,12 @@ class BaseAgent:
         # reset: the agent only proceeds from here to DEAD. See ``mark_stopping``.
         self._stop_requested = False
 
+        # Latched by ``request_force_kill`` when the user escalates a stop to a
+        # hard kill. The graceful waits in every ``interrupt_or_kill`` race this
+        # event and bail out immediately, going straight to the forced teardown
+        # instead of waiting out the grace window. See ``_race_force``.
+        self._force_kill: asyncio.Event = asyncio.Event()
+
         # Pending requests waiting on a user click (tool approval, ask user
         # question, …). Keyed by request_id (UUID). Provider subclasses populate
         # these via ``_await_pending_request``; the WS layer consumes them via
@@ -525,6 +531,46 @@ class BaseAgent:
             return False
         self._stop_requested = True
         return True
+
+    def request_force_kill(self) -> None:
+        """Escalate a stop to a hard kill.
+
+        Latches the force flag so the graceful waits in ``interrupt_or_kill``
+        race it and bail straight to the forced process-tree teardown. The
+        manager pairs this with an out-of-lock SIGKILL of the OS process, which
+        is what lets a hard kill bypass the manager lock a soft stop may hold.
+        Idempotent — a hard kill never de-escalates.
+        """
+        self._force_kill.set()
+
+    async def _race_force(self, coro: Any, timeout: float) -> bool:
+        """Await ``coro`` until it finishes, the timeout fires, or a force-kill
+        is requested.
+
+        Returns ``True`` iff ``coro`` finished first with a truthy result. On
+        force-kill or timeout, ``coro``'s task is cancelled — so use this only
+        for side-effect-free waits (e.g. :meth:`wait_for_dead`); a wait that
+        owns external state (a turn task, a tmux loop) must race the
+        ``_force_kill`` event itself and keep ownership of its own cleanup.
+        """
+        task = asyncio.ensure_future(coro)
+        force = asyncio.ensure_future(self._force_kill.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {task, force}, timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if task in done and not task.cancelled() and task.exception() is None:
+                return bool(task.result())
+            return False
+        finally:
+            for fut in (task, force):
+                if not fut.done():
+                    fut.cancel()
+                    try:
+                        await fut
+                    except BaseException:
+                        pass
 
     # ------------------------------------------------------------------
     # Environment context reconciliation (shared by every provider)

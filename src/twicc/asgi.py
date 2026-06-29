@@ -1108,7 +1108,12 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 pass  # Unknown provider value — let the registry handle it
 
         registry = get_agent_manager_registry()
-        killed = await registry.kill_agent(session_id, reason="manual")
+        # ``force`` escalates to a hard kill: SIGKILL the process tree now,
+        # bypassing the manager lock a soft stop may hold (no grace window).
+        if content.get("force"):
+            killed = await registry.hard_kill_agent(session_id)
+        else:
+            killed = await registry.kill_agent(session_id, reason="manual")
 
         if not killed:
             # Process not found or not in killable state - not an error, just log

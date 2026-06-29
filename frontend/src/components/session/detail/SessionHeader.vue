@@ -7,7 +7,7 @@ import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES } from '../../
 import { getProviderHelpers, getProviderLabel, getProviderIcon } from '../../../providers'
 import { getAgentDisplayLabel } from '../../../utils/agentLabel'
 import { stopSubagent } from '../../../composables/useWebSocket'
-import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
+import { stopSessionProcess, hardKillSessionProcess } from '../../../composables/useStopSessionProcess'
 import ProjectBadge from '../../project/ProjectBadge.vue'
 import WorktreeBadge from '../../project/WorktreeBadge.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
@@ -242,11 +242,15 @@ watch(canStopAgent, (canStop) => {
 })
 
 /**
- * Stop the current process. Delegates to the centralized composable, which
- * handles the active-crons confirmation and the stopping flag.
+ * Stop the current process. A plain click runs the graceful stop; Shift-click,
+ * or clicking again while a stop is already in flight (escalation), hard-kills
+ * the process tree now — no grace window, no confirmation.
  */
-function handleStopProcess() {
-    if (stoppingProcess.value) return
+function handleStopProcess(event) {
+    if (event?.shiftKey || stoppingProcess.value) {
+        hardKillSessionProcess(props.sessionId)
+        return
+    }
     stopSessionProcess(props.sessionId)
 }
 
@@ -654,13 +658,22 @@ defineExpose({
                         appearance="filled"
                         size="small"
                         class="stop-button reduced-height"
-                        :loading="stoppingProcess"
-                        :disabled="stoppingProcess"
-                        @click="handleStopProcess"
+                        :class="{ forcing: stoppingProcess }"
+                        @click="handleStopProcess($event)"
                     >
-                        <wa-icon name="ban" label="Stop"></wa-icon>
+                        <span class="stop-icon-wrap">
+                            <wa-icon
+                                :name="stoppingProcess ? 'skull-crossbones' : 'ban'"
+                                :variant="stoppingProcess ? 'solid' : undefined"
+                                :label="stoppingProcess ? 'Force kill' : 'Stop'"
+                            ></wa-icon>
+                            <wa-spinner
+                                v-if="stoppingProcess"
+                                class="stop-overlay-spinner"
+                            ></wa-spinner>
+                        </span>
                     </wa-button>
-                    <AppTooltip :for="`session-header-${sessionId}-stop-button`">Stop the {{ providerLabel }} process</AppTooltip>
+                    <AppTooltip :for="`session-header-${sessionId}-stop-button`">{{ stoppingProcess ? 'Force kill' : `Stop the ${providerLabel} process` }}</AppTooltip>
 
                     <wa-button
                         v-if="canStopAgent"
@@ -908,6 +921,34 @@ wa-divider {
 
 .stop-button:hover {
     opacity: 1;
+}
+
+/* While a stop is in flight the button stays fully lit and clickable: clicking
+   (or Shift-clicking) escalates to a force kill. */
+.stop-button.forcing {
+    opacity: 1;
+}
+
+/* Stop button content: the icon (skull while stopping), with a spinner overlaid
+   on top to keep the "in progress" cue. The spinner is click-through so the
+   button still escalates to a force kill when clicked. */
+.stop-icon-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.stop-overlay-spinner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    --size: 1.5em;
+    --track-width: 2px;
+    --indicator-color: white;
+    --track-color: transparent;
 }
 
 .pin-button,

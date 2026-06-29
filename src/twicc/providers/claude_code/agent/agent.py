@@ -1058,14 +1058,19 @@ class ClaudeCodeAgent(BaseAgent):
         Args:
             reason: Reason for stopping (e.g., "manual", "apply-settings")
         """
-        if self.state in (AgentState.ASSISTANT_TURN, AgentState.STARTING):
+        # Hard kill: skip the polite interrupt + grace window entirely.
+        if (
+            not self._force_kill.is_set()
+            and self.state in (AgentState.ASSISTANT_TURN, AgentState.STARTING)
+        ):
             try:
                 self.kill_reason = reason
                 await self.interrupt()
-                if await self.wait_for_dead():
+                # Wait for the clean DEAD, but bail early on a force-kill.
+                if await self._race_force(self.wait_for_dead(), timeout=30.0):
                     return
                 logger.debug(
-                    "Interrupt timeout for session %s, falling back to kill",
+                    "Interrupt timeout/forced for session %s, falling back to kill",
                     self.session_id,
                 )
             except Exception:

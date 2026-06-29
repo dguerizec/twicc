@@ -115,6 +115,21 @@ export function stopSessionProcess(sessionId, { archive = false } = {}) {
 }
 
 /**
+ * Hard-kill a session's process: SIGKILL the process tree now, no grace window.
+ *
+ * Deliberately skips the active-crons confirmation (the triggering gesture —
+ * Shift, or escalating an in-flight stop — is already explicit) and the
+ * re-entrance debounce (you can force-kill *while* a soft stop is running).
+ * Sets the "stopping" flag so the spinner reacts immediately; the backend is
+ * authoritative from there.
+ */
+export function hardKillSessionProcess(sessionId) {
+    const store = useDataStore()
+    store.setSessionStopping(sessionId)
+    killProcess(sessionId, { force: true })
+}
+
+/**
  * Called by the global StopProcessConfirmDialog when the user confirms.
  * The `mode` carried by the dialog payload overrides the pending mode
  * (they are always the same today, but honoring the payload is defensive).
@@ -146,6 +161,7 @@ export function useStopSessionProcess() {
     return {
         stopSessionProcess,
         stopSessionProcessUnconfirmed,
+        hardKillSessionProcess,
         isStoppable,
         confirmPendingStop,
         cancelPendingStop,

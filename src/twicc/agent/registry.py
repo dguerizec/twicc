@@ -105,6 +105,13 @@ class AgentManagerRegistry:
             return False
         return await mgr.kill_agent(session_id, reason=reason)
 
+    async def hard_kill_agent(self, session_id: str, reason: str = "force") -> bool:
+        """Hard-kill an agent (force, no grace) regardless of its provider."""
+        mgr = self.find_manager_for_session(session_id)
+        if mgr is None:
+            return False
+        return await mgr.hard_kill_agent(session_id, reason=reason)
+
     def touch_agent_activity(self, session_id: str) -> bool:
         """Refresh ``last_activity`` regardless of which provider owns the session."""
         mgr = self.find_manager_for_session(session_id)
