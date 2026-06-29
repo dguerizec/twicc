@@ -7,6 +7,10 @@
  * pass straight through. The wrapper only carries our shared defaults so the
  * compact size no longer has to be re-declared at every call site.
  *
+ * Behaviour added on top: when the tabs overflow (WA shows its scroll chevrons),
+ * a vertical mouse wheel over the tab strip scrolls it horizontally. Touch panning
+ * and horizontal trackpad scrolling already work via the native overflow-x.
+ *
  * Usage:
  *   <TabBar :active="activeId" @wa-tab-show="onShow">
  *     <wa-tab slot="nav" panel="a">A</wa-tab>
@@ -21,12 +25,36 @@
  *     shadow root (e.g. setting a title on ::part(nav)). A template `ref` on this
  *     component yields the Vue instance, not the element — reach the host via `.el`.
  */
-import { ref } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 
 defineOptions({ inheritAttrs: false })
 
 const el = ref(null)
 defineExpose({ el })
+
+// Wheel-to-horizontal scroll, scoped to WA's internal `.nav` scroller (the same
+// element its chevrons drive) so wheeling over a tab panel is never hijacked. Only
+// a vertical wheel is translated, and only when the strip overflows — otherwise the
+// page scrolls as usual. Horizontal wheel (deltaX / trackpad) and touch panning are
+// left to the native overflow-x. `.nav` is a WA internal, so we no-op if it's gone.
+let navEl = null
+
+function onWheel(event) {
+    if (event.deltaY === 0 || event.shiftKey) return
+    if (!navEl || navEl.scrollWidth <= navEl.clientWidth) return
+    navEl.scrollLeft += event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY
+    event.preventDefault()
+}
+
+onMounted(async () => {
+    if (el.value?.updateComplete) await el.value.updateComplete
+    navEl = el.value?.shadowRoot?.querySelector('.nav')
+    navEl?.addEventListener('wheel', onWheel, { passive: false })
+})
+
+onBeforeUnmount(() => {
+    navEl?.removeEventListener('wheel', onWheel)
+})
 </script>
 
 <template>
