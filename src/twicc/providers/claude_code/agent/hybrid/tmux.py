@@ -297,6 +297,16 @@ def paste_text(session_id: str, text: str, *, submit: bool = True) -> None:
         _ensure_submitted(session_id, target, text)
 
 
+def interrupt_turn(session_id: str) -> None:
+    """Send Escape to the pane to interrupt an in-flight turn.
+
+    The Claude CLI TUI treats Escape as "stop the current turn", which returns
+    it to an empty composer — used before submitting ``/exit`` so the composer
+    is free to accept it. Best-effort.
+    """
+    _run(["send-keys", "-t", _pane_target(session_id), "Escape"])
+
+
 def kill_session(session_id: str) -> None:
     _run(["kill-session", "-t", "=" + hybrid_tmux_session_name(session_id)])
 

@@ -812,5 +812,74 @@ class BaseAgent:
         raise NotImplementedError
 
     async def interrupt_or_kill(self, reason: str) -> None:
-        """Interrupt the agent gracefully, falling back to a hard kill."""
+        """Stop the agent: try a graceful teardown, then force-kill.
+
+        Every provider/mode honours the same shape — attempt a clean stop
+        (interrupt / transport close / tmux kill), bounded by a timeout, then
+        guarantee the OS process tree is gone via :meth:`_kill_system_process`
+        (SIGTERM → wait → SIGKILL). The graceful timeout and what counts as
+        "graceful" are provider-specific; the forced backstop is shared so a
+        wedged CLI can never keep running after a stop.
+        """
         raise NotImplementedError
+
+    async def _kill_system_process(self, pid: int) -> None:
+        """Force-kill an OS process and all its children (SIGTERM → SIGKILL).
+
+        Shared forced-teardown backstop for every provider/mode: uses psutil to
+        SIGTERM the whole tree (children first), waits up to 2s for a graceful
+        exit, then SIGKILLs any survivor. No-op if ``pid`` is already gone.
+        Runs in a thread executor to avoid any async context pollution that
+        could cause cancel-scope leaks.
+
+        Args:
+            pid: Process ID to kill (the root of the tree to take down).
+        """
+        import psutil
+
+        def _do_kill() -> None:
+            """Synchronous kill logic, runs in a separate thread."""
+            try:
+                parent = psutil.Process(pid)
+            except psutil.NoSuchProcess:
+                logger.debug("Process %d already dead", pid)
+                return
+
+            # Get all children recursively BEFORE killing parent
+            # (once parent is dead, children become orphans and harder to find)
+            try:
+                children = parent.children(recursive=True)
+            except psutil.NoSuchProcess:
+                children = []
+
+            all_procs = children + [parent]  # Kill children first, then parent
+            logger.debug("Killing process %d and %d children", pid, len(children))
+
+            # SIGTERM to all processes
+            for proc in all_procs:
+                try:
+                    proc.terminate()  # SIGTERM
+                    logger.debug("Sent SIGTERM to process %d", proc.pid)
+                except psutil.NoSuchProcess:
+                    pass
+
+            # Wait for graceful termination (up to 2 seconds)
+            gone, alive = psutil.wait_procs(all_procs, timeout=2)
+
+            if gone:
+                logger.debug("%d process(es) terminated gracefully", len(gone))
+
+            # SIGKILL any survivors
+            for proc in alive:
+                try:
+                    logger.warning(
+                        "Process %d did not terminate after SIGTERM, sending SIGKILL",
+                        proc.pid,
+                    )
+                    proc.kill()  # SIGKILL
+                except psutil.NoSuchProcess:
+                    pass
+
+        # Run in thread executor for complete isolation from async context
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _do_kill)

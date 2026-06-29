@@ -174,6 +174,12 @@ class CodexAgent(BaseAgent):
 
     provider: ClassVar[Provider] = Provider.CODEX
 
+    # Bounded patience for an interrupted turn to unwind on its own — the
+    # app-server emits ``turn/completed`` and finalizes its rollout — before we
+    # tear the transport down. Mirrors Claude Code's ``wait_for_dead`` window so
+    # every provider gives a turn the same grace to finalize on a stop.
+    GRACEFUL_TURN_END_TIMEOUT: ClassVar[float] = 30.0
+
     def __init__(
         self,
         session_id: str,
@@ -714,14 +720,20 @@ class CodexAgent(BaseAgent):
             task.cancel()
 
     async def interrupt_or_kill(self, reason: str) -> None:
-        """Stop the agent. Tries a clean ``turn/interrupt`` first, then closes.
+        """Stop the agent: interrupt the turn, let it unwind, then close.
 
-        Always lands in ``DEAD``. Safe to call multiple times.
+        Fires ``turn/interrupt`` on the active turn, waits (bounded) for it to
+        finalize on its own — the analog of Claude Code's ``wait_for_dead`` —
+        then closes the transport and force-kills if needed. Always lands in
+        ``DEAD``. Safe to call multiple times.
         """
         if self.state == AgentState.DEAD:
             return
 
         self.kill_reason = reason
+        # Capture the CLI subprocess pid up front: ``codex.close()`` clears the
+        # SDK's ``_proc`` handle, so ``get_pid`` returns None afterwards.
+        pid = self.get_pid()
 
         # A manual /compact may be mid-flight — drop its safety-timeout task
         # and flag so a late firing can't touch a dying agent.
@@ -758,10 +770,46 @@ class CodexAgent(BaseAgent):
                     self.session_id, e,
                 )
 
+        # Let the interrupted turn unwind on its own so the app-server finalizes
+        # its rollout before we tear the transport down: ``_turn_task`` consumes
+        # the stream and ends on ``turn/completed`` (interrupted status), the
+        # clean analog of Claude Code's post-interrupt ``wait_for_dead``. Bounded
+        # and shielded so the timeout doesn't cancel the task — we close + cancel
+        # below if it overruns. Skipped on shutdown, where speed wins.
+        if (
+            reason != "shutdown"
+            and self._turn_task is not None
+            and not self._turn_task.done()
+        ):
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._turn_task),
+                    timeout=self.GRACEFUL_TURN_END_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.debug(
+                    "Turn didn't unwind within %ss for session %s — closing transport",
+                    self.GRACEFUL_TURN_END_TIMEOUT, self.session_id,
+                )
+            except Exception:
+                # The turn task surfaced its own error via ``_run_turn`` already.
+                pass
+
         # Close the codex transport — the turn task lands in DEAD via
-        # TransportClosedError. Idempotent on the SDK side.
+        # TransportClosedError. Idempotent on the SDK side. Bounded so a wedged
+        # close can't hang the stop forever; the forced backstop below then
+        # takes over. ``close_ok`` gates that backstop: we only touch the pid
+        # when the clean teardown did NOT happen, since a cleanly-closed
+        # transport may already have freed the pid (avoids PID reuse).
+        close_ok = False
         try:
-            await self._codex.close()
+            await asyncio.wait_for(self._codex.close(), timeout=5.0)
+            close_ok = True
+        except asyncio.TimeoutError:
+            logger.warning(
+                "codex.close() timed out for session %s — forcing process kill",
+                self.session_id,
+            )
         except Exception as e:
             logger.warning(
                 "codex.close() failed for session %s: %s", self.session_id, e,
@@ -796,6 +844,12 @@ class CodexAgent(BaseAgent):
         # transport). The TTL would clean them up eventually; this just
         # makes the boundary explicit.
         clear_original_files_for_session(self.session_id)
+
+        # Forced backstop: if the transport didn't tear down cleanly, the Rust
+        # ``codex app-server`` subprocess may still be alive — SIGTERM → SIGKILL
+        # its process tree so a stop always kills (uniform across providers).
+        if not close_ok and pid is not None:
+            await self._kill_system_process(pid)
 
         if self.state != AgentState.DEAD:
             self.last_activity = time.time()

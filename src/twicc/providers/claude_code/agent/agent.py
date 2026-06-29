@@ -1630,69 +1630,6 @@ class ClaudeCodeAgent(BaseAgent):
         if pid is not None:
             await self._kill_system_process(pid)
 
-    async def _kill_system_process(self, pid: int) -> None:
-        """Kill the system process and all its children, isolated from anyio.
-
-        Uses psutil to find and kill all child processes recursively (including
-        bash commands spawned by tools). Falls back to single process kill if
-        psutil fails.
-
-        Uses SIGTERM first for graceful shutdown, then SIGKILL after timeout.
-        Runs in a thread executor to avoid any async context pollution that
-        could cause cancel scope leaks.
-
-        Args:
-            pid: Process ID to kill
-        """
-        import psutil
-
-        def _do_kill() -> None:
-            """Synchronous kill logic, runs in a separate thread."""
-            try:
-                parent = psutil.Process(pid)
-            except psutil.NoSuchProcess:
-                logger.debug("Process %d already dead", pid)
-                return
-
-            # Get all children recursively BEFORE killing parent
-            # (once parent is dead, children become orphans and harder to find)
-            try:
-                children = parent.children(recursive=True)
-            except psutil.NoSuchProcess:
-                children = []
-
-            all_procs = children + [parent]  # Kill children first, then parent
-            logger.debug("Killing process %d and %d children", pid, len(children))
-
-            # SIGTERM to all processes
-            for proc in all_procs:
-                try:
-                    proc.terminate()  # SIGTERM
-                    logger.debug("Sent SIGTERM to process %d", proc.pid)
-                except psutil.NoSuchProcess:
-                    pass
-
-            # Wait for graceful termination (up to 2 seconds)
-            gone, alive = psutil.wait_procs(all_procs, timeout=2)
-
-            if gone:
-                logger.debug("%d process(es) terminated gracefully", len(gone))
-
-            # SIGKILL any survivors
-            for proc in alive:
-                try:
-                    logger.warning(
-                        "Process %d did not terminate after SIGTERM, sending SIGKILL",
-                        proc.pid,
-                    )
-                    proc.kill()  # SIGKILL
-                except psutil.NoSuchProcess:
-                    pass
-
-        # Run in thread executor for complete isolation from async context
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _do_kill)
-
     async def _broadcast_process_tools(self) -> None:
         """Broadcast the current list of in-progress tools for the status display."""
         if await self._is_session_hidden():

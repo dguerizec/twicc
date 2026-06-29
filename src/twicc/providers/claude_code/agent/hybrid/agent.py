@@ -815,6 +815,50 @@ class HybridClaudeAgent(BaseAgent):
     # Kill / interrupt
     # ------------------------------------------------------------------
 
+    async def _graceful_cli_exit(self) -> bool:
+        """Best-effort clean shutdown of the embedded CLI via ``/exit``.
+
+        Mirrors the SDK agents' graceful interrupt: free the composer (Escape
+        stops any in-flight turn so it returns to an empty composer), submit
+        ``/exit`` so the CLI finalizes its transcript and quits on its own, then
+        wait (bounded) for the process to go. Returns ``True`` if it exited,
+        ``False`` to fall through to the forced teardown. Never raises.
+        """
+        deadline = time.monotonic() + self.HYBRID_GRACEFUL_EXIT_TIMEOUT
+        # Stop any running turn so the composer is free to accept /exit.
+        try:
+            await asyncio.to_thread(hybrid_tmux.interrupt_turn, self.session_id)
+        except Exception:
+            logger.debug("Escape send failed for hybrid %s", self.session_id, exc_info=True)
+        # Submit /exit once the composer is free. ``_checked_paste`` only pastes
+        # onto an empty composer, so it never clobbers user-typed text — it just
+        # keeps returning False until the turn is interrupted, then we fall
+        # through to the forced kill if that never happens within the budget.
+        submitted = False
+        while time.monotonic() < deadline:
+            try:
+                if await self._checked_paste("/exit"):
+                    submitted = True
+                    break
+            except Exception:
+                logger.debug("/exit paste failed for hybrid %s", self.session_id, exc_info=True)
+                break
+            await asyncio.sleep(0.25)
+        if not submitted:
+            return False
+        # Wait for the CLI to actually quit (pane gone or marked dead).
+        while time.monotonic() < deadline:
+            try:
+                pane_pid, pane_dead = await asyncio.to_thread(
+                    hybrid_tmux.pane_status, self.session_id,
+                )
+            except Exception:
+                return False
+            if pane_pid is None or pane_dead:
+                return True
+            await asyncio.sleep(0.2)
+        return False
+
     async def kill(self, reason: str = "manual") -> None:
         if self.state == AgentState.DEAD:
             return
@@ -831,10 +875,20 @@ class HybridClaudeAgent(BaseAgent):
         # the leftover files are swept as orphans at the next boot. Every other
         # reason kills the tmux synchronously, taking the hooks with it — delete.
         self._clear_all_pendings("detach" if reason == "shutdown" else "delete")
-        # Stop the embedded CLI like an SDK agent: a TwiCC shutdown now kills the
-        # hybrid tmux too (best-effort — kill_session swallows errors and the
-        # manager's shutdown is time-bounded). A session that nonetheless
-        # survives (kill failed, or a hard crash) is re-adopted at the next boot.
+        # Graceful → forced, the same intent as the SDK agents. First let the
+        # CLI quit cleanly via ``/exit`` so it finalizes its transcript and
+        # shuts down on its own. Skipped on shutdown (we want speed there, and a
+        # survivor is re-adopted at the next boot). If it doesn't land in time,
+        # SIGTERM → (2s) → SIGKILL the claude process tree via the LIVE pane pid
+        # (claude runs as its child, so a stale stored pid can't make us miss).
+        exited = False
+        if reason != "shutdown":
+            exited = await self._graceful_cli_exit()
+        if not exited:
+            pane_pid, _ = await asyncio.to_thread(hybrid_tmux.pane_status, self.session_id)
+            if pane_pid is not None:
+                await self._kill_system_process(pane_pid)
+        # Drop the tmux session itself either way (best-effort cleanup).
         await asyncio.to_thread(hybrid_tmux.kill_session, self.session_id)
         await self._transition_to_dead()
 
@@ -852,6 +906,13 @@ class HybridClaudeAgent(BaseAgent):
 
     AUTO_PASTE_RETRY_INTERVAL = 3.0
     AUTO_PASTE_RETRY_TIMEOUT = 300.0
+
+    # Total budget for the graceful ``/exit`` shutdown attempt on stop (freeing
+    # the composer, submitting /exit, and waiting for the CLI to quit) before
+    # falling through to the forced process-tree kill. Mirrors Claude Code SDK's
+    # ``wait_for_dead`` window so every mode gives the CLI the same grace to
+    # finalize on a stop. See ``_graceful_cli_exit``.
+    HYBRID_GRACEFUL_EXIT_TIMEOUT = 30.0
 
     def _spawn_auto_paste(self, purpose: str, commands: list[str]) -> None:
         """Run ``commands`` in a background retry task (latest-wins per purpose).
