@@ -4028,9 +4028,14 @@ export const useDataStore = defineStore('data', {
                     stopping: extra.stopping === true || wasStopping,
                 }
 
-                // Auto-unarchive: running and archived are mutually exclusive
+                // Auto-unarchive: running and archived are mutually exclusive.
+                // But a stop-in-progress is NOT a start: the `stopping`
+                // process_state broadcast before the (up-to-30s) kill must not
+                // resurrect the session the user just archived (archiving stops
+                // the process, which emits exactly this non-dead broadcast).
+                // Only a genuine (re)start (stopping=false) un-archives.
                 const session = this.sessions[sessionId]
-                if (session?.archived && projectId) {
+                if (session?.archived && projectId && !this.processStates[sessionId].stopping) {
                     this.setSessionArchived(projectId, sessionId, false)
                 }
             }
@@ -4095,9 +4100,12 @@ export const useDataStore = defineStore('data', {
                         stopping: p.stopping === true,
                     }
 
-                    // Auto-unarchive: running and archived are mutually exclusive
+                    // Auto-unarchive: running and archived are mutually exclusive.
+                    // Skip a stopping process (see handleProcessState): a
+                    // stop-in-progress snapshot landing during the kill window
+                    // (or a reconnect mid-archive) must not undo a fresh archive.
                     const session = this.sessions[p.session_id]
-                    if (session?.archived && p.project_id) {
+                    if (session?.archived && p.project_id && p.stopping !== true) {
                         this.setSessionArchived(p.project_id, p.session_id, false)
                     }
                 }
