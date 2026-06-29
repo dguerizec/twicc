@@ -80,6 +80,21 @@ def _journal_path(project_id: str, session_id: str, run_id: str):
     )
 
 
+def _wf_json_path(project_id: str, session_id: str, run_id: str):
+    """Path of a run's completion envelope (``wf_<runId>.json``)."""
+    return (
+        ClaudeCodeHelpers.PROJECTS_DIR / project_id / session_id / "workflows" / f"{run_id}.json"
+    )
+
+
+def _mtime(path) -> float | None:
+    """File mtime in seconds, or ``None`` if it doesn't exist / can't be stat'd."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
 def _script_start_time_ms(project_id: str, session_id: str, run_id: str) -> int | None:
     """Best-effort launch time of a live run: the mtime of its launch script.
 
@@ -316,14 +331,33 @@ def build_state1(
     return stamp_phase_states(envelope)
 
 
+def _run_resumed(project_id: str, session_id: str, run_id: str) -> bool:
+    """True if a completed run (STATE 2) has **resumed** — its live journal is
+    newer than its ``wf_*.json`` (or the envelope file is gone while the journal
+    lives). Claude reuses the ``runId`` and the **same** ``journal.jsonl`` on
+    resume, so a journal that grew *after* the completion envelope means the run
+    is producing agents the stored envelope doesn't know → flip back to a live
+    STATE 1 until the final ``wf_*.json`` is rewritten (which makes the envelope
+    newer again). Compares the two files' mtimes (one filesystem, one clock) — a
+    deleted envelope counts as "resumed" too (a moving journal wins)."""
+    journal_mtime = _mtime(_journal_path(project_id, session_id, run_id))
+    if journal_mtime is None:
+        return False  # no journal → nothing live to show
+    wf_mtime = _mtime(_wf_json_path(project_id, session_id, run_id))
+    return wf_mtime is None or journal_mtime > wf_mtime
+
+
 def rebuild_state1(run_id: str) -> dict | None:
     """Rebuild a run's STATE 1 ``raw_json`` from its stored synthesis + live
     journal, persist it, and return the new envelope dict.
 
-    Returns ``None`` (no write) when the run is not in a synthesizable state:
-    no row, no ``synthesis`` yet (no front has generated templates), or the real
-    envelope already landed (STATE 2 — never regress a completed run). Sync;
-    wrap in ``sync_to_async`` at the call site.
+    Returns ``None`` (no write) when the run is not in a synthesizable state: no
+    row, or no ``synthesis`` (no front ever generated templates). A run whose real
+    envelope already landed (STATE 2) is normally left alone — **except** when it
+    has **resumed** (:func:`_run_resumed`): the same ``runId`` restarted, its
+    journal grew past the envelope, so we re-synthesize a live STATE 1 from the
+    retained templates until the final ``wf_*.json`` is rewritten. Sync; wrap in
+    ``sync_to_async`` at the call site.
     """
     from twicc.core.models import Workflow
 
@@ -337,8 +371,10 @@ def rebuild_state1(run_id: str) -> dict | None:
         prior = orjson.loads(workflow.raw_json)
     except orjson.JSONDecodeError:
         prior = {}
-    if not prior.get("synthetic"):
-        return None  # STATE 2 already
+    if not prior.get("synthetic") and not _run_resumed(
+        workflow.session.project_id, workflow.session_id, run_id
+    ):
+        return None  # STATE 2 and not resumed — never regress a completed run
 
     envelope = build_state1(
         run_id,

@@ -304,8 +304,9 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
 
         Lazy: a no-op until a viewing front has POSTed templates (the row's
         ``synthesis``) — :func:`rebuild_state1` returns ``None`` then, and for an
-        already-completed run (STATE 2). When it does rebuild, broadcast so open
-        Workflows tabs refetch the fresh progress.
+        already-completed run (STATE 2) **unless it has resumed** (the journal grew
+        past the envelope). When it does rebuild, broadcast so open Workflows tabs
+        refetch the fresh progress.
         """
         envelope = await sync_to_async(rebuild_state1)(run_id)
         if envelope is None:
@@ -514,11 +515,14 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
 
     @staticmethod
     def _save_workflow_run(session_id: str, project_id: str, run_id: str, raw: str) -> None:
-        # The real envelope (STATE 2) supersedes any synthesized STATE 0/1: drop the
-        # now-useless synthesis bundle. ``raw`` is already validated JSON
-        # (_upsert_workflow_run). We don't store it verbatim: enrich_previews swaps
-        # the engine's truncated prompt/result previews for the full values (durable
-        # past Claude deleting the run's files), then we store the enriched envelope.
+        # The real envelope (STATE 2) supersedes any synthesized STATE 0/1, but we
+        # KEEP the synthesis bundle (templates): the same runId can resume, and the
+        # retained templates let us re-synthesize a live STATE 1 then without a
+        # front round-trip (see rebuild_state1 / _run_resumed). ``raw`` is already
+        # validated JSON (_upsert_workflow_run). We don't store it verbatim:
+        # enrich_previews swaps the engine's truncated prompt/result previews for
+        # the full values (durable past Claude deleting the run's files), then we
+        # store the enriched envelope.
         try:
             envelope = orjson.loads(raw)
         except orjson.JSONDecodeError:
@@ -531,7 +535,6 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
             defaults={
                 "session_id": session_id,
                 "raw_json": orjson.dumps(envelope).decode(),
-                "synthesis": None,
                 "cost": cost,
                 "phases_cost": phases_cost,
             },

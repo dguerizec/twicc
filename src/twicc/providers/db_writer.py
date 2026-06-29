@@ -2475,11 +2475,12 @@ def _apply_upsert_workflow_payload(payload: UpsertWorkflowPayload) -> None:
         return
 
     with transaction.atomic():
-        # Boot backfill of a run TwiCC missed live = STATE 2: clear any synthesis
-        # and, like the live ``_save_workflow_run`` path, swap the engine's
-        # truncated prompt/result previews for the full values before storing —
-        # durable past Claude deleting the run's files. ``enrich_previews`` is
-        # Claude-Code-specific, but so are workflows, so the lazy import is fine.
+        # Boot backfill of a run TwiCC missed live = STATE 2. Like the live
+        # ``_save_workflow_run`` path, swap the engine's truncated prompt/result
+        # previews for the full values before storing — durable past Claude deleting
+        # the run's files — and KEEP any existing synthesis (templates) so a resume
+        # can re-synthesize a live STATE 1. ``enrich_previews`` is Claude-Code-
+        # specific, but so are workflows, so the lazy import is fine.
         from twicc.providers.claude_code.workflow_synthesis import (
             enrich_previews,
             stamp_phase_states,
@@ -2497,7 +2498,6 @@ def _apply_upsert_workflow_payload(payload: UpsertWorkflowPayload) -> None:
             defaults={
                 "session_id": payload.session_id,
                 "raw_json": orjson.dumps(envelope).decode(),
-                "synthesis": None,
                 "cost": cost,
                 "phases_cost": phases_cost,
             },
