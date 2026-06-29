@@ -3,7 +3,9 @@
 // envelope) and render them as a tab bar — one tab per run, labelled with the
 // title-cased workflow name + a status icon (spinner running, check/xmark done).
 // The active tab's panel holds the run's structured detail (WorkflowRunDetail).
-// Newest run active by default; a "View Workflow" navigation selects its tab.
+// Newest run active by default; a "View Workflow" navigation selects its tab; a
+// run that appears live (a new tab) auto-activates, but only as it's added (a
+// manual switch to another run isn't undone by later refetches).
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import WorkflowRunDetail from './WorkflowRunDetail.vue'
@@ -35,6 +37,9 @@ let controller = null
 // so a STATE 0 run is synthesized at most once per script version (dedupe across
 // the many load() triggers: mount, tab activation, live workflow_changed).
 const synthesized = new Set()
+// run_ids seen on the last successful load — to spot a *freshly added* run (a new
+// tab) and auto-activate it, but only at the moment it appears (see load()).
+let knownRunIds = new Set()
 
 // "find-flaky-tests" → "Find Flaky Tests": dashes to spaces, capitalize each word.
 function titleizeName(name) {
@@ -94,19 +99,31 @@ async function load() {
         const response = await fetch(url, { signal: controller.signal })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const data = await response.json()
+        const ids = new Set(data.map(w => w.run_id))
+        // Runs that appeared since the last successful load (newest-first in
+        // `data`). Empty on the first load — we don't hijack the default/focus
+        // selection then, only auto-activate genuinely new tabs that arrive live.
+        const newlyAdded = hasLoaded.value ? data.filter(w => !knownRunIds.has(w.run_id)) : []
         workflows.value = data
         // Keep the active tab across live refetches when it's still present;
-        // otherwise default to the newest run (data is newest-first). A pending
-        // "View Workflow" navigation wins.
-        const ids = new Set(data.map(w => w.run_id))
+        // otherwise default to the newest run (data is newest-first).
         if (!activeRunId.value || !ids.has(activeRunId.value)) {
             activeRunId.value = data.length ? data[0].run_id : null
         }
-        hasLoaded.value = true
-        maybeSynthesize(data)
+        // A pending "View Workflow" navigation wins over the default.
         if (props.focusRunId && ids.has(props.focusRunId)) {
             activeRunId.value = props.focusRunId
         }
+        // A freshly-appeared run becomes the active tab — but only at the moment
+        // it's added (it's no longer "new" on later refetches, so a manual switch
+        // to another run sticks). `activateRun` also syncs the URL, so the stale
+        // focusRunId (still pointing at the previously-active run) can't revert it.
+        if (newlyAdded.length) {
+            activateRun(newlyAdded[0].run_id)
+        }
+        knownRunIds = ids
+        hasLoaded.value = true
+        maybeSynthesize(data)
     } catch (e) {
         if (e.name === 'AbortError') return
         error.value = e.message || 'Failed to load workflows'
@@ -286,7 +303,7 @@ onMounted(() => {
 watch(() => props.active, (active) => { if (active) load() })
 watch(() => props.sessionId, (newId, oldId) => {
     if (oldId) workflowRunsStore.clear(oldId)
-    hasLoaded.value = false; synthesized.clear(); load()
+    hasLoaded.value = false; synthesized.clear(); knownRunIds = new Set(); load()
 })
 watch(() => props.focusRunId, (runId) => { if (runId && hasLoaded.value) focusRun(runId) })
 onBeforeUnmount(() => {
