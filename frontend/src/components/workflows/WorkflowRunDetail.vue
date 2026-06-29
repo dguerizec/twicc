@@ -317,10 +317,13 @@ function agentsLabel(n) {
         </wa-callout>
 
         <!-- Interrupted run (a terminal status that isn't a success, e.g. killed).
-             The badge already relays the raw status; this spells out the meaning. -->
+             The badge already relays the raw status; this spells out the meaning
+             and hints the user can ask the agent to resume it (the engine reuses
+             the runId + journal, so a resume continues the same run). -->
         <wa-callout v-else-if="interruptedRun" variant="warning" appearance="filled-outlined" size="small" class="wf-incomplete">
             <wa-icon slot="icon" name="circle-stop"></wa-icon>
             This workflow was <strong>interrupted</strong> before completing — it did not run to the end.
+            You can ask the agent to try resuming it if needed.
         </wa-callout>
 
         <!-- Phase detection unavailable: the script couldn't be executed to build
