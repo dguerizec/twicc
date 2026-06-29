@@ -9,7 +9,7 @@ argument-hint: <session_id> [stop | wait <status>...]
 Inspect or control the live process attached to one session. Three sub-commands:
 
 - Default (no sub-command) — show current state, last transition, OS PID.
-- `stop` — kill the live agent (same as the UI's *Stop process* button). Does not modify the session row.
+- `stop` — kill the live agent (same as the UI's *Stop process* button); `--force` hard-kills (SIGKILL the process tree now, no grace window) for a wedged agent. Does not modify the session row.
 - `wait <STATUS>... --timeout N` — block until the process reaches any of the listed states, or timeout.
 
 ## When to use
@@ -42,7 +42,7 @@ $TWICC process <SESSION_ID>
 ### Stop
 
 ```bash
-$TWICC process <SESSION_ID> stop [--timeout N]
+$TWICC process <SESSION_ID> stop [--timeout N] [--force]
 ```
 
 Idempotent — succeeds even if no live process is attached.

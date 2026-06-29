@@ -65,6 +65,7 @@ def stop_cmd(
     session_ids: list[str],
     *,
     timeout: int,
+    force: bool = False,
     spawned_by: str | None = None,
     descendants: str | None = None,
     annotation: list[str] | None = None,
@@ -207,10 +208,10 @@ def stop_cmd(
             entry["error"] = e.message
             continue
 
-        drop = write_drop_file(
-            {"session_id": resolved.session_id},
-            kind="process:stop",
-        )
+        payload = {"session_id": resolved.session_id}
+        if force:
+            payload["force"] = True
+        drop = write_drop_file(payload, kind="process:stop")
         status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
         entry["request_uuid"] = drop.request_uuid
         initial_drops.append((sid, drop, status_path))

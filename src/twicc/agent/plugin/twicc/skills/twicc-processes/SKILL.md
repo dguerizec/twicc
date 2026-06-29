@@ -64,10 +64,10 @@ Returns one entry per id in input order (duplicates collapsed). No filter flags.
 ### Batch stop (`stop`)
 
 ```bash
-$TWICC processes stop [SESSION_ID...] [--timeout N] [--spawned-by X|--descendants X] [--annotation KEY[OP]VALUE]...
+$TWICC processes stop [SESSION_ID...] [--timeout N] [--force] [--spawned-by X|--descendants X] [--annotation KEY[OP]VALUE]...
 ```
 
-Idempotent. Explicit IDs and filtered IDs are merged (explicit IDs first, duplicates collapsed). IDs that fail pre-check (unknown, subagent, stale, no directory, unknown provider) get a `skipped_*` status — they don't consume timeout budget. Valid drops are processed in parallel, so `--timeout` (default 30 s) is a wall-clock budget for the whole batch.
+Idempotent. Explicit IDs and filtered IDs are merged (explicit IDs first, duplicates collapsed). IDs that fail pre-check (unknown, subagent, stale, no directory, unknown provider) get a `skipped_*` status — they don't consume timeout budget. Valid drops are processed in parallel, so `--timeout` (default 30 s) is a wall-clock budget for the whole batch. `--force` hard-kills every selected process (SIGKILL the tree, no grace window) — for wedged agents.
 
 Filter flags for process control:
 

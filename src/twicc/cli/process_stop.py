@@ -19,6 +19,7 @@ def stop_cmd(
     session_id: str,
     *,
     timeout: int,
+    force: bool = False,
 ) -> None:
     """Drop a ``kind="process:stop"`` request and wait for the status."""
     # Lazy imports to keep --help fast (no Django setup until we need it).
@@ -54,6 +55,8 @@ def stop_cmd(
         raise typer.Exit(1)
 
     payload = {"session_id": resolved.session_id}
+    if force:
+        payload["force"] = True
 
     drop = write_drop_file(payload, kind="process:stop")
 

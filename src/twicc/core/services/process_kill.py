@@ -38,6 +38,9 @@ async def kill_session_process_from_payload(payload: dict) -> UpdateSessionResul
 
     Expected keys in ``payload``:
     - ``session_id`` (required).
+    - ``force`` (optional): when truthy, hard-kill — SIGKILL the process tree
+      now, bypassing the grace window and the manager lock a soft stop may
+      hold. Mirrors the WS ``kill_process`` ``force`` branch.
 
     Idempotent: if no live agent is currently attached to the session, the
     call still succeeds with the standard ``UpdateSessionResult`` (no
@@ -62,11 +65,15 @@ async def kill_session_process_from_payload(payload: dict) -> UpdateSessionResul
 
     from twicc.agent.registry import get_agent_manager_registry
     registry = get_agent_manager_registry()
-    killed = await registry.kill_agent(session_id, reason="manual")
+    force = bool(payload.get("force"))
+    if force:
+        killed = await registry.hard_kill_agent(session_id)
+    else:
+        killed = await registry.kill_agent(session_id, reason="manual")
 
     logger.info(
-        "[kill_session_process] session=%s killed=%s",
-        session_id, killed,
+        "[kill_session_process] session=%s force=%s killed=%s",
+        session_id, force, killed,
     )
 
     return UpdateSessionResult(

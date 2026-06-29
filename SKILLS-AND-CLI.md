@@ -306,13 +306,13 @@ List bookmarked artifacts (viewable files saved from a session's Artifacts tab),
 List or act on the live agent processes the backend currently runs. The CLI projects state onto four virtual values: `starting`, `assistant_turn` (generating), `awaiting_user_input` (blocked on a UI click), `user_turn` (idle).
 - Listing: `--provider`, `--state <virtual>`, `--limit` (default 20), `--offset`, plus the shared filiation/visibility filters. `--annotation` requires a filiation scope here; use `--spawned-by self --annotation ...` for direct children, or `--spawn-tree self --annotation ...` only when you explicitly want the whole tree.
 - `get <SESSION_ID...>` — live state per id (`state="dead"` placeholder for stopped; `session_known` flags typos).
-- `stop [SESSION_ID...]` — batch-stop (idempotent, tolerant). Optional scoped selection: `--spawned-by <ID|self>` or `--descendants <ID|self>`, plus `--annotation` to narrow that scope. No `parent`, no `--spawn-tree`. `--timeout` is a wall-clock budget for the whole batch.
+- `stop [SESSION_ID...]` — batch-stop (idempotent, tolerant). Optional scoped selection: `--spawned-by <ID|self>` or `--descendants <ID|self>`, plus `--annotation` to narrow that scope. No `parent`, no `--spawn-tree`. `--timeout` is a wall-clock budget for the whole batch; `--force` hard-kills every selected process (SIGKILL the tree, no grace window).
 - `wait [SESSION_ID...] <STATUS...>` — block until session ids reach matching virtual states. Items mix ids and statuses, auto-discriminated. Optional scoped selection: `--spawned-by <ID|self>` or `--descendants <ID|self>`, plus `--annotation` to narrow that scope. Required `--timeout FLOAT`; `--all` (default) / `--first`; `--transition` (require a state change first).
 - Skill: [`twicc-processes`](src/twicc/agent/plugin/twicc/skills/twicc-processes/SKILL.md).
 
 ### `twicc process <SESSION_ID> <SUBCOMMAND>`
 Inspect or control one session's live process. Bare `twicc process <id>` prints the current row.
-- `stop` — kill the live agent (`reason="manual"`, like the UI's *Stop process*; idempotent). Option `--timeout`.
+- `stop` — kill the live agent (`reason="manual"`, like the UI's *Stop process*; idempotent). Options `--timeout`; `--force` (hard kill — SIGKILL the process tree now, no grace window).
 - `wait <STATUS...>` — block until the process reaches any listed virtual state (`starting`, `assistant_turn`, `awaiting_user_input`, `user_turn`, `dead`). Required `--timeout FLOAT`; `--transition`.
 - Skill: [`twicc-process`](src/twicc/agent/plugin/twicc/skills/twicc-process/SKILL.md).
 

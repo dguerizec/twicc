@@ -840,6 +840,15 @@ def _processes_stop(
             "by the deadline are reported with status=\"timeout\". Must be > 0."
         ),
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Hard kill every selected process: SIGKILL the process tree now, "
+            "bypassing the grace window (no clean turn finalization). For "
+            "wedged processes."
+        ),
+    ),
     spawned_by: str = typer.Option(
         None,
         "--spawned-by",
@@ -882,6 +891,7 @@ def _processes_stop(
     stop_cmd(
         session_ids or [],
         timeout=timeout,
+        force=force,
         spawned_by=spawned_by,
         descendants=descendants,
         annotation=annotation,
@@ -1015,18 +1025,29 @@ def process_stop(
             "server side."
         ),
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Hard kill: SIGKILL the process tree now, bypassing the grace "
+            "window (no clean turn finalization). For a wedged process."
+        ),
+    ),
 ) -> None:
     """Stop the live agent process attached to the session.
 
     Equivalent to clicking the UI's *Stop process* button: asks the agent
     manager to kill the agent with ``reason="manual"``. Idempotent — if no
     live agent is currently attached, the command still exits 0.
+
+    ``--force`` hard-kills (SIGKILL the process tree) without the grace window.
     """
     from twicc.cli.process_stop import stop_cmd
 
     stop_cmd(
         ctx.obj,
         timeout=timeout,
+        force=force,
     )
 
 
