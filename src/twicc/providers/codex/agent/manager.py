@@ -13,6 +13,7 @@ approval policy come from the user's ``permission_mode`` preset via
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, ClassVar
 
@@ -23,6 +24,7 @@ from asgiref.sync import sync_to_async
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager, SendDeliveryError
 from twicc.context_injection import inject_context
 from twicc.core.enums import Provider
+from twicc.logging_context import provider_log_context
 from twicc.pending_session_attributes import get_pending_session_attributes
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
@@ -33,6 +35,12 @@ from .agent import CodexAgent
 from .hardcoded_commands import HardcodedCommand, parse_hardcoded_command
 
 logger = logging.getLogger(__name__)
+
+# Delay before re-pushing a resumed session's title to Codex, giving the first
+# turn's append (which re-derives ``threads.title`` from the first user message)
+# time to land — pushing earlier would be overwritten. Matches the rename
+# verify's delay.
+_RESUME_TITLE_REPUSH_DELAY = 5.0
 
 
 class CodexAgentManager(BaseAgentManager):
@@ -56,11 +64,106 @@ class CodexAgentManager(BaseAgentManager):
 
     provider: ClassVar[Provider] = Provider.CODEX
 
-    # No ``_on_state_change`` override: the pending-title flush is handled
-    # by :meth:`BaseAgentManager._flush_pending_title`, which delegates to
-    # :meth:`CodexHelpers.rename_session` for the Codex-specific
-    # ``thread/name/set`` SDK call. Nothing else needed at state-change
-    # time on this provider.
+    # ------------------------------------------------------------------
+    # State-change hook — post-resume title re-assert (Codex-only)
+    # ------------------------------------------------------------------
+
+    async def _on_state_change(self, agent: BaseAgent) -> None:
+        """Base lifecycle, plus a Codex-only post-resume title re-assert.
+
+        The base skeleton handles every generic transition and the draft
+        pending-title flush on ``ASSISTANT_TURN``. On top of that, a *resumed*
+        Codex thread needs :meth:`_reassert_codex_title_after_resume` to defend
+        its title against the app-server re-deriving ``threads.title`` from the
+        first user message on the first turn (see that method and
+        :mod:`twicc.providers.codex.titles`).
+        """
+        await super()._on_state_change(agent)
+        if agent.get_info().state != AgentState.ASSISTANT_TURN:
+            return
+        # Only a (cold) resume can be clobbered: a brand-new session derives its
+        # title from the first message for the first time, which is correct.
+        if not getattr(agent, "_resumed", False):
+            return
+        # One-shot per agent run — only the first turn re-derives the title; a
+        # later cold resume gets a fresh agent instance, re-arming this flag.
+        if getattr(agent, "_codex_title_reasserted", False):
+            return
+        agent._codex_title_reasserted = True
+        await self._reassert_codex_title_after_resume(agent)
+
+    async def _reassert_codex_title_after_resume(self, agent: BaseAgent) -> None:
+        """Schedule a post-delay re-push of ``Session.title`` to Codex.
+
+        Codex (0.136 → main) re-derives ``threads.title`` from the first user
+        message on every cold resume: ``ThreadMetadataSync`` resets its
+        in-memory ``title_seen`` per process and carries no "custom title"
+        flag, so a curated name set via ``thread/name/set`` is silently
+        reverted on the first turn's append. TwiCC keeps its own
+        ``Session.title`` (the live sync never overwrites a non-null title and
+        the boot import skips Codex defaults), but the Codex side — and any
+        other client or future recovery — would lose the name. So once the
+        first turn has run, we push our title back.
+
+        Skipped when a draft-title flush or another title task is already
+        converging on this session (the rename path covers those).
+        """
+        from twicc.core.models import Session
+        from twicc.pending_titles import get_pending_title
+
+        session_id = agent.session_id
+        if (
+            get_pending_title(session_id)
+            or session_id in self._pending_title_retry_tasks
+            or session_id in self._pending_title_verify_tasks
+        ):
+            return
+
+        title = await sync_to_async(
+            lambda: Session.objects.filter(id=session_id)
+            .values_list("title", flat=True)
+            .first()
+        )()
+        if not title:
+            return
+
+        task = asyncio.create_task(
+            self._repush_codex_title_after_delay(session_id, title),
+            name=f"codex-resume-title-reassert-{session_id}",
+        )
+        self._pending_title_verify_tasks[session_id] = task
+
+    async def _repush_codex_title_after_delay(self, session_id: str, title: str) -> None:
+        """Sleep, then unconditionally re-push ``title`` as the Codex thread name.
+
+        The first turn after a cold resume re-derives ``threads.title``
+        deterministically, so we skip the read-back verify and push our title
+        directly — one ``thread/name/set`` round-trip instead of the verify's
+        read-then-maybe-write two. The delay lets that re-derivation land first;
+        pushing earlier would be overwritten (``title_seen`` only latches once
+        the first append has been observed).
+
+        One-shot: self-cleans from ``_pending_title_verify_tasks`` and is
+        cancelled if the agent dies before the delay elapses
+        (:meth:`BaseAgentManager._cancel_pending_title_verify`).
+        """
+        with provider_log_context(self.provider):
+            try:
+                await asyncio.sleep(_RESUME_TITLE_REPUSH_DELAY)
+                await get_provider_helpers(self.provider).rename_session(session_id, title)
+                logger.info(
+                    "Codex post-resume title re-push for session %s: %r",
+                    session_id, title,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(
+                    "Codex post-resume title re-push failed for session %s: %s",
+                    session_id, e,
+                )
+            finally:
+                self._pending_title_verify_tasks.pop(session_id, None)
 
     # ------------------------------------------------------------------
     # Public API (Codex-specific signatures)

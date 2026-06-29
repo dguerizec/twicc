@@ -314,6 +314,12 @@ class CodexAgent(BaseAgent):
         :meth:`run_hardcoded_command`.
         """
         self._state_change_callback = on_state_change
+        # Whether this run is a (cold) resume of an existing thread rather than a
+        # brand-new session. Read by ``CodexAgentManager._on_state_change`` to
+        # decide whether to re-assert our title after the first turn — Codex
+        # re-derives ``threads.title`` from the first user message on resume
+        # (see that manager hook and :mod:`twicc.providers.codex.titles`).
+        self._resumed = resume
 
         # First place we're guaranteed to be inside a running loop. Captured
         # so the SDK's worker threads can resume our coroutines back here

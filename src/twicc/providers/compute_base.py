@@ -2211,7 +2211,16 @@ class BaseSessionCompute:
 
         tool_use_map: dict[str, ToolUseEntry] = {}
         task_tool_use_map: dict[str, tuple[int, bool, datetime]] = {}
-        initial_title_set = False
+        # Mirror the live path's guard (see sync_session_items_from_file:
+        # ``initial_title_needs_set = session.title is None``). The
+        # first-user-message title is only an INITIAL placeholder; it must never
+        # overwrite a title that already exists — whether set by a manual rename,
+        # an AI suggestion, or imported from a provider store (e.g. Codex's
+        # thread name). Without this guard a recompute (compute-version bump)
+        # reverts every session's title back to its first user message. Custom
+        # titles carried in the JSONL (Claude Code) come through the separate
+        # ``extract_custom_title`` branch below and are unaffected.
+        initial_title_set = session.title is not None
         session_titles: dict[str, str] = {}
         user_message_count = 0
         affected_days: set[str] = set()
