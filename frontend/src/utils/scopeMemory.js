@@ -35,6 +35,13 @@ const ALL_PROJECTS_NAMES = new Set([
 // Bare entry routes (homes) per scope family.
 const HOME_NAMES = new Set(['session', 'projects-session', 'project', 'projects-all'])
 
+// The Artifacts browser is a separate sidebar MODE (it has its own last-location
+// memory in sidebarViewMemory.js), not a screen within a scope — so it must never
+// be recorded as a scope's last location. Kept in the name sets above only so
+// scopeKey() still resolves them, which keeps the restore guard's intra-scope
+// detection correct (a return artifacts→home stays "intra-scope", no restore).
+const ARTIFACTS_BROWSER_NAMES = new Set(['project-artifacts', 'projects-artifacts'])
+
 // --- Pure helpers ---
 //
 // These only ever receive normalized vue-router RouteLocations (from guards), so
@@ -125,6 +132,7 @@ export function registerScopeMemory(router) {
     router.afterEach((to, from, failure) => {
         if (failure) return
         currentPosition = window.history.state?.position ?? currentPosition
+        if (ARTIFACTS_BROWSER_NAMES.has(to.name)) return   // separate mode — never a scope's last location
         const key = scopeKey(to)
         if (key) memory.set(key, scopeRelative(to))
     })
