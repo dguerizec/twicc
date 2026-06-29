@@ -43,10 +43,13 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   ``exec_command_id`` here).
 - ``response_item.function_call`` / ``custom_tool_call`` /
   ``local_shell_call`` / ``web_search_call`` → ``TOOL_USE`` (->
-  ``COLLAPSIBLE``), except ``function_call name=write_stdin`` which is
-  bucketed as ``SYSTEM`` (no tool card). Its ``function_call_output``
-  is rebound to the parent ``exec_command``'s ``call_id`` via
-  :meth:`CodexSessionCompute.remap_tool_result_id`. ``local_shell_call``
+  ``COLLAPSIBLE``), except ``function_call name=write_stdin`` and the
+  read-only Goal probe ``function_call name=get_goal`` which are
+  bucketed as ``SYSTEM`` (no tool card). ``write_stdin``'s
+  ``function_call_output`` is rebound to the parent ``exec_command``'s
+  ``call_id`` via :meth:`CodexSessionCompute.remap_tool_result_id`;
+  ``get_goal``'s output is already DEBUG_ONLY via ``is_tool_result_item``.
+  ``local_shell_call``
   doesn't carry a ``name`` field — its tool name is the sub_type itself
   (``"local_shell_call"``), supplied via
   :data:`_NATIVE_TOOL_NAME_BY_SUB_TYPE` in
@@ -297,6 +300,18 @@ _SHELL_FAMILY_TOOLS = frozenset({
 # :data:`_IGNORED_FUNCTION_NAMES` (``wait_agent``) the pairing is
 # dropped entirely — see that constant's docstring.
 _NON_TOOL_FUNCTION_NAMES = frozenset({"write_stdin", "wait_agent"})
+
+# Function-call ``name`` values that ARE real tool calls but carry nothing
+# worth a visible card, so their ``function_call`` is bucketed as SYSTEM
+# (-> DEBUG_ONLY). Unlike :data:`_NON_TOOL_FUNCTION_NAMES` there's no remap
+# or pairing subtlety: the matching ``function_call_output`` already lands
+# at DEBUG_ONLY via :meth:`is_tool_result_item`, so both ends stay hidden
+# from the normal flow and reappear together only in debug mode.
+#
+# ``get_goal`` (Codex-only) is a read-only probe of the thread Goal — the
+# whole goal state is redundant with the surrounding ``create_goal`` /
+# ``update_goal`` cards, so the lone read adds noise without information.
+_DEBUG_ONLY_FUNCTION_NAMES = frozenset({"get_goal"})
 
 # Function-call ``name`` values whose result is fully redundant with
 # another signal we already capture, so we drop them entirely from the
@@ -1432,6 +1447,15 @@ class CodexSessionCompute(BaseSessionCompute):
                 if (
                     sub_type == "function_call"
                     and payload.get("name") in _NON_TOOL_FUNCTION_NAMES
+                ):
+                    return ItemKind.SYSTEM
+                # Real tool calls with nothing worth a card (``get_goal``):
+                # bucket as SYSTEM so they land at DEBUG_ONLY. Their
+                # ``function_call_output`` is already DEBUG_ONLY via
+                # ``is_tool_result_item``.
+                if (
+                    sub_type == "function_call"
+                    and payload.get("name") in _DEBUG_ONLY_FUNCTION_NAMES
                 ):
                     return ItemKind.SYSTEM
                 return ItemKind.TOOL_USE

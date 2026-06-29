@@ -291,7 +291,7 @@ LOGGING = {
 # rules change to trigger recomputation. ``None`` declares "no compute pipeline
 # yet" — sessions of that provider are reported up-to-date as-is.
 CLAUDE_CODE_COMPUTE_VERSION = 101  # 101: backfill Session.has_workflows (100 = tasks snapshot)
-CODEX_COMPUTE_VERSION = 30
+CODEX_COMPUTE_VERSION = 31  # 31: get_goal -> DEBUG_ONLY (Goal probe, no card)
 
 # Search index version
 # Bumped when the schema or document layout changes — forces a full

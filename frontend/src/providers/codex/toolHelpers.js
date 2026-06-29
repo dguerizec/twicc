@@ -34,6 +34,7 @@ import MultiFileSummary from '../../components/session/detail/items/summary/Mult
 import TodoSummary from '../../components/session/detail/items/summary/TodoSummary.vue'
 import WebFetchSummary from '../../components/session/detail/items/summary/WebFetchSummary.vue'
 import WebSearchSummary from '../../components/session/detail/items/summary/WebSearchSummary.vue'
+import GoalUpdateSummary from '../../components/session/detail/items/summary/GoalUpdateSummary.vue'
 import ExecResultContent from '../../components/session/detail/items/codex/ExecResultContent.vue'
 import ReadResultContent from '../../components/session/detail/items/codex/ReadResultContent.vue'
 import ApplyPatchContent from '../../components/session/detail/items/codex/ApplyPatchContent.vue'
@@ -786,6 +787,35 @@ function planToTodos(plan) {
     return plan.map(p => ({ content: p.step, status: p.status }))
 }
 
+// ─── Goal tools (Codex-only) ────────────────────────────────────────────
+//
+// Codex exposes three thread-Goal tools: ``create_goal`` (objective +
+// token_budget), ``get_goal`` (read-only, filtered out upstream as
+// DEBUG_ONLY), and ``update_goal`` (mutate status / objective / budget).
+// Only the summary line and header label differ from the generic tool
+// card — the detail (input) and result keep the default JSON rendering.
+
+/**
+ * Decompose an ``update_goal`` call's arguments for the summary line. The
+ * keys present in the input ARE the fields being changed (Codex only sends
+ * what it mutates). Returns ``{ status, changedKeys }`` — ``status`` is the
+ * new status value when ``status`` was among the changed fields (else
+ * ``null``), ``changedKeys`` lists the other changed field names. The
+ * rendering (labels, the green ``complete`` check) lives in
+ * :class:`GoalUpdateSummary`. Returns ``null`` when there's nothing to
+ * show (empty / non-object input).
+ */
+function parseGoalUpdate(input) {
+    if (!input || typeof input !== 'object') return null
+    const keys = Object.keys(input)
+    if (keys.length === 0) return null
+    const hasStatus = Object.prototype.hasOwnProperty.call(input, 'status')
+    return {
+        status: hasStatus ? String(input.status) : null,
+        changedKeys: keys.filter((k) => k !== 'status'),
+    }
+}
+
 /**
  * Read the body of a `<subagent_notification>` user message ToolResultLink
  * row. Returns `{agentPath, status}` (where `status` is the raw enum
@@ -986,6 +1016,12 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // ``view_image`` loads a local image for the model — show the
         // clean "Image" header instead of the raw ``view_image`` name.
         if (name === VIEW_IMAGE_TOOL_NAME) return 'Image'
+        // Codex-only thread Goal tools: the raw snake_case names would
+        // surface verbatim in the header, so give them clean labels.
+        // ``get_goal`` never reaches here — the backend buckets it as
+        // SYSTEM (DEBUG_ONLY).
+        if (name === 'create_goal') return 'Create goal'
+        if (name === 'update_goal') return 'Update goal'
         if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
         const parsed = resolveParsedCommand(name, input)
         if (!parsed) return null
@@ -1015,6 +1051,26 @@ export class CodexToolHelpers extends BaseToolHelpers {
             return {
                 component: TodoSummary,
                 props: { parts: getTodoDescription(planToTodos(input.plan)) },
+            }
+        }
+        // Codex Goal tools. ``create_goal`` shows the (truncated) objective;
+        // the token_budget is intentionally omitted from the summary (the
+        // detail view still shows it). ``update_goal`` shows the changed
+        // fields via :class:`GoalUpdateSummary` (see :func:`parseGoalUpdate`).
+        if (name === 'create_goal') {
+            const objective = typeof input?.objective === 'string' ? input.objective.trim() : ''
+            if (!objective) return null
+            return {
+                component: DescriptionSummary,
+                props: { description: objective, fileIconSrc: null, truncate: true },
+            }
+        }
+        if (name === 'update_goal') {
+            const parsed = parseGoalUpdate(input)
+            if (!parsed) return null
+            return {
+                component: GoalUpdateSummary,
+                props: { status: parsed.status, changedKeys: parsed.changedKeys },
             }
         }
         if (name === 'web_search_call') {
@@ -1356,6 +1412,30 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 nickname: ack?.nickname ?? null,
                 agentId: ack?.agentId ?? notif.agentPath,
             }
+        }
+        // ``create_goal`` / ``update_goal`` (Codex Goal tools): the
+        // ``function_call_output.output`` is itself a JSON document (the
+        // goal state ``{goal, remainingTokens, completionBudgetReport}``).
+        // Surface its parsed content so the default JsonHumanView renders
+        // the goal payload directly instead of the ``{type, call_id,
+        // output}`` envelope with ``output`` shown as an opaque JSON
+        // string. ``get_goal`` never reaches here — it's DEBUG_ONLY upstream.
+        if (name === 'create_goal' || name === 'update_goal') {
+            if (!Array.isArray(resultData)) return undefined
+            const row = resultData.find((r) => r?.type === 'function_call_output')
+            const out = row?.output
+            // Already an object (defensive — a future Codex build could
+            // ship real JSON instead of a JSON-encoded string).
+            if (out && typeof out === 'object') return out
+            if (typeof out !== 'string' || !out) return undefined
+            try {
+                const parsed = JSON.parse(out)
+                if (parsed && typeof parsed === 'object') return parsed
+            } catch {
+                // Not JSON after all — fall back to the default rendering
+                // (raw row, ``output`` shown as a plain string).
+            }
+            return undefined
         }
         if (typeof name !== 'string' || !name.startsWith(MCP_TOOL_NAME_PREFIX)) {
             return undefined
