@@ -345,6 +345,38 @@ def _resolve_changelog_versions() -> tuple[str, str, bool]:
     return previous, last, show_forced
 
 
+# Detached background tasks spawned from the WS consumer (e.g. agent stops, which
+# hold the manager grace window for up to ~30s in ``interrupt_or_kill``). Awaiting
+# such an operation inline in ``receive_json`` would freeze the consumer: Channels
+# dispatches a connection's events serially (``await_many_dispatch``), so a blocked
+# handler stops the consumer answering the heartbeat ``ping`` — the client then
+# drops and reconnects the WS — and stops it flushing queued broadcasts until the
+# operation returns. Running detached keeps the receive loop free.
+#
+# The set lives at module scope, not on the consumer, on purpose: a stop must run
+# to completion (actually kill the agent) even if the spawning connection goes
+# away first. asyncio keeps only a weak reference to a running task, so without a
+# strong ref here the GC could destroy one mid-flight.
+_DETACHED_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_detached(coro, *, label: str) -> None:
+    """Run ``coro`` detached from the consumer's serial receive loop.
+
+    Keeps a strong reference until completion and logs any exception (a bare
+    ``create_task`` would let both the reference and the error escape silently).
+    """
+    task = asyncio.create_task(coro)
+    _DETACHED_TASKS.add(task)
+
+    def _on_done(t: asyncio.Task) -> None:
+        _DETACHED_TASKS.discard(t)
+        if not t.cancelled() and (exc := t.exception()) is not None:
+            logger.error("Detached WS task %s failed", label, exc_info=exc)
+
+    task.add_done_callback(_on_done)
+
+
 class WSConsumer(AsyncJsonWebsocketConsumer):
     """
     WebSocket consumer for broadcasting real-time updates.
@@ -1008,7 +1040,6 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         CLI can never go back to the SDK.
         """
         from twicc.core.models import Session, SessionType
-        from twicc.core.serializers import serialize_session
 
         if not settings.CLAUDE_HYBRID_ENABLED:
             await self.send_json({
@@ -1045,8 +1076,21 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             })
             return
 
-        # A live SDK agent cannot survive the switch (the CLI will own the
-        # session from now on) — kill it first.
+        # A live SDK agent cannot survive the switch (the CLI will own the session
+        # from now on) — kill it first, then flip the flag. Detached: the kill
+        # holds the manager grace window for up to ~30s, and the whole tail must
+        # stay ordered (kill → DB → broadcast), so run it off the receive loop to
+        # avoid freezing this consumer (no heartbeat → the WS would drop).
+        _spawn_detached(
+            self._run_switch_hybrid(session_id),
+            label=f"switch_hybrid({session_id})",
+        )
+
+    async def _run_switch_hybrid(self, session_id: str) -> None:
+        """Kill the SDK agent, mark the session hybrid, broadcast. Off the receive loop."""
+        from twicc.core.models import Session
+        from twicc.core.serializers import serialize_session
+
         manager = get_agent_manager_registry().get(Provider.CLAUDE_CODE)
         await manager.kill_agent(session_id, reason="switch-hybrid")
 
@@ -1107,16 +1151,29 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             except ValueError:
                 pass  # Unknown provider value — let the registry handle it
 
+        # Detached: a soft stop holds the manager grace window for up to ~30s
+        # (``interrupt_or_kill`` interrupts, waits, then force-kills). Awaiting it
+        # here would freeze this consumer's serial receive loop for that whole
+        # window — no heartbeat ``pong`` (the client drops + reconnects the WS),
+        # no broadcasts flushed. Nothing here needs the result: the stop reports
+        # itself via broadcasts (``stopping`` then the DEAD ``process_state``).
+        # ``hard_kill_agent`` is fast but detached too, for uniformity.
+        _spawn_detached(
+            self._run_kill_process(session_id, force=bool(content.get("force"))),
+            label=f"kill_process({session_id})",
+        )
+
+    async def _run_kill_process(self, session_id: str, *, force: bool) -> None:
+        """Stop an agent off the receive loop. See ``_handle_kill_process``."""
         registry = get_agent_manager_registry()
         # ``force`` escalates to a hard kill: SIGKILL the process tree now,
         # bypassing the manager lock a soft stop may hold (no grace window).
-        if content.get("force"):
+        if force:
             killed = await registry.hard_kill_agent(session_id)
         else:
             killed = await registry.kill_agent(session_id, reason="manual")
-
         if not killed:
-            # Process not found or not in killable state - not an error, just log
+            # Process not found or not in killable state — not an error, just log.
             logger.debug(
                 "kill_process: session %s not killed (not found or not active)",
                 session_id,
