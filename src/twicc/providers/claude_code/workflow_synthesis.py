@@ -224,11 +224,17 @@ def build_state1(
 ) -> dict:
     """Assemble the STATE 1 (synthesized) view envelope for a live run.
 
-    ``synthesis`` is ``{meta, templates}`` (front-supplied). Agents come from the
-    journal, in start order; each is looked up in the DB for its prompt (first
-    user message) → phase detection. An agent present in the journal but **not
-    yet synced** to the DB is included with its journal state but no phase — it
-    gets tagged on the next rebuild (the journal ticks every ~10-15s).
+    ``synthesis`` is ``{meta, templates}`` (front-supplied). Agents are discovered
+    from the **union of the agent Sessions and the journal**: each spawned agent
+    is a Session keyed ``<run_id>:<agent_id>`` that syncs in real time (the instant
+    its first message lands), whereas the journal is written by the engine in
+    bursts — so discovering agents from the Sessions surfaces each one the moment
+    its prompt is in the DB (in its detected phase), instead of waiting for the
+    next journal burst. The journal supplies only what the Sessions can't: an
+    agent's ``completed`` state and its structured ``result``. Agents are ordered
+    by their Session ``last_started_at`` (the true start order). An agent whose
+    first user message hasn't synced yet is skipped (no prompt → no phase) and
+    reappears on its own file's next sync (the watcher rebuilds then).
 
     ``prior_args`` is the args already resolved on an earlier rebuild (carried in
     the prior envelope) — passed back so the launching tool_use is scanned at most
@@ -242,34 +248,56 @@ def build_state1(
     # a faithful mirror of the real one so both states share one shape.
     phase_index = {p.get("title"): i + 1 for i, p in enumerate(phases) if isinstance(p, dict)}
 
-    # Aggregate journal events per agent, preserving first-seen (start) order.
-    order: list[str] = []
-    agents: dict[str, dict] = {}
+    # Journal state per agent: the only source of an agent's ``completed`` state
+    # and its structured ``result``. NOT used to *discover* agents — the journal
+    # lags in bursts, which made agents appear all at once in a block.
+    journal_state: dict[str, dict] = {}
     for event in _read_journal(project_id, session_id, run_id):
         agent_id = event.get("agentId")
         if not agent_id:
             continue
-        if agent_id not in agents:
-            agents[agent_id] = {"state": "running", "result": None}
-            order.append(agent_id)
+        info = journal_state.setdefault(agent_id, {"state": "running", "result": None})
         if event.get("type") == "result":
-            agents[agent_id]["state"] = "completed"
-            agents[agent_id]["result"] = event.get("result")
+            info["state"] = "completed"
+            info["result"] = event.get("result")
 
     helpers = _get_helpers()
+    # Real-time discovery source: every agent the engine has spawned has a synced
+    # Session (keyed ``<run_id>:<agent_id>``), written as it runs. Union with the
+    # journal in case it ever names an agent whose Session hasn't synced (skipped
+    # below for lack of a prompt, but its journal state is then ready).
     agent_meta = _agent_sessions(run_id)
+    candidate_ids = set(journal_state) | set(agent_meta)
     progress: list[dict] = [
         {"type": "workflow_phase", "index": i + 1, "title": p.get("title")}
         for i, p in enumerate(phases)
         if isinstance(p, dict)
     ]
-    for i, agent_id in enumerate(order):
-        info = agents[agent_id]
-        # ``index`` mirrors the engine's 1-based agent ordinal (= journal start
-        # order). model/startedAt/lastProgressAt/durationMs come from the agent's
-        # synced Session — the journal carries no timestamps. The rest of the real
-        # envelope's agent fields (tokens, toolCalls, label, …) have no live source.
-        entry: dict = {"type": "workflow_agent", "index": i + 1, "agentId": agent_id, "state": info["state"]}
+
+    def _start_order(agent_id: str):
+        # Order by the Session's real start time; the journal's bursty order would
+        # reshuffle as it catches up. A journal-only agent (no Session) sorts last,
+        # by id, deterministically.
+        row = agent_meta.get(agent_id)
+        started = _to_ms(row.get("last_started_at")) if row else None
+        return (started is None, started or 0, agent_id)
+
+    surfaced_index = 0
+    for agent_id in sorted(candidate_ids, key=_start_order):
+        # Skip an agent until its first user message has synced: without it we
+        # can't detect its phase, and surfacing it phase-less would drop it under
+        # "Unassigned" only to move it seconds later — jarring at the eye. It
+        # reappears on its own file's next sync (the watcher rebuilds then).
+        prompt = helpers.get_first_user_message(f"{run_id}:{agent_id}")
+        if prompt is None:
+            continue
+        surfaced_index += 1
+        # A Session-only agent the journal hasn't reported yet is ``running``.
+        info = journal_state.get(agent_id) or {"state": "running", "result": None}
+        # ``index`` is the 1-based ordinal among surfaced agents, in start order.
+        # model/startedAt/lastProgressAt/durationMs come from the agent's synced
+        # Session — the journal carries no timestamps.
+        entry: dict = {"type": "workflow_agent", "index": surfaced_index, "agentId": agent_id, "state": info["state"]}
         meta_row = agent_meta.get(agent_id)
         if meta_row:
             if meta_row.get("model"):
@@ -284,17 +312,14 @@ def build_state1(
                 entry["durationMs"] = max(0, progress_ms - started_ms)
             if meta_row.get("total_cost") is not None:
                 entry["cost"] = float(meta_row["total_cost"])
-        prompt = helpers.get_first_user_message(f"{run_id}:{agent_id}")
-        if prompt is not None:
-            # Full prompt, not a preview: we have it (the agent's first user
-            # message) and storing it whole is durable past Claude deleting the
-            # run's files. The engine's "Preview" naming is just a CLI display cap.
-            entry["promptPreview"] = prompt
-            phase_title = detect_phase(prompt, templates)
-            if phase_title is not None:
-                entry["phaseTitle"] = phase_title
-                if phase_title in phase_index:
-                    entry["phaseIndex"] = phase_index[phase_title]
+        # Full prompt, not a preview: we have it (the agent's first user message)
+        # and storing it whole is durable past Claude deleting the run's files.
+        entry["promptPreview"] = prompt
+        phase_title = detect_phase(prompt, templates)
+        if phase_title is not None:
+            entry["phaseTitle"] = phase_title
+            if phase_title in phase_index:
+                entry["phaseIndex"] = phase_index[phase_title]
         if info["result"] is not None:
             # Full result as its structured value (not stringified/truncated), so
             # the front renders a clean JsonHumanView.
@@ -319,7 +344,9 @@ def build_state1(
         "startTime": _script_start_time_ms(project_id, session_id, run_id),
         "phases": phases,
         "script": script,
-        "agentCount": len(order),
+        # Surfaced agents only (prompt-less ones are skipped above) — so the header
+        # count matches what's shown; a still-syncing agent isn't counted yet.
+        "agentCount": sum(1 for e in progress if e.get("type") == "workflow_agent"),
         "workflowProgress": progress,
     }
     # The front couldn't build templates (script wouldn't execute), so phase
@@ -395,36 +422,12 @@ def agent_first_message(run_id: str, agent_id: str) -> str | None:
     Session/items aren't synced to the DB yet.
 
     Same lookup :func:`build_state1` uses to detect a phase, exposed for the
-    watcher's pending-prompt resolution: when the journal reports an agent
-    ``started`` before its own file has synced, the prompt is missing and the
-    phase can't be detected; the watcher polls this on the agent's later file
-    syncs to rebuild as soon as the prompt lands (instead of waiting a journal
-    tick). Sync; wrap in ``sync_to_async`` at the call site.
+    watcher's agent-sync rebuild: an agent is discovered the moment its Session
+    syncs, but :func:`build_state1` can only surface it once its prompt is in the
+    DB; the watcher pre-checks this on an agent-file sync so it rebuilds only when
+    the prompt is actually there. Sync; wrap in ``sync_to_async`` at the call site.
     """
     return _get_helpers().get_first_user_message(f"{run_id}:{agent_id}")
-
-
-def pending_prompt_agent_ids(envelope: dict) -> set[str]:
-    """Agent ids in a STATE 1 envelope that started but carry no ``promptPreview``.
-
-    These are agents the journal reported ``started`` while their first user
-    message wasn't synced yet — :func:`build_state1` could neither store a
-    prompt nor detect a phase for them, but both will resolve once the prompt
-    lands. An agent that **has** a ``promptPreview`` but no ``phaseTitle`` is
-    deliberately excluded: its prompt is present and detection simply found no
-    match, so a rebuild would change nothing — flagging it would never clear.
-    """
-    progress = envelope.get("workflowProgress")
-    if not isinstance(progress, list):
-        return set()
-    return {
-        entry["agentId"]
-        for entry in progress
-        if isinstance(entry, dict)
-        and entry.get("type") == "workflow_agent"
-        and entry.get("agentId")
-        and "promptPreview" not in entry
-    }
 
 
 # Tokens we've actually observed. Success: a run/agent that finished OK. Pending:
