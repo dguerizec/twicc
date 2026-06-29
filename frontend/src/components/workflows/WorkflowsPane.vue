@@ -210,6 +210,12 @@ function onWorkflowChanged(event) {
     reloadTimer = setTimeout(() => { if (hasLoaded.value) load() }, 400)
 }
 
+// Exposed so SessionView can refetch us on a WebSocket reconnection (a
+// workflow_changed broadcast may have been dropped while the socket was down,
+// e.g. a run completing → STATE 2). Same mechanism as PlanPane/FilesPanel —
+// SessionView is the stable listener; a per-pane window listener is unreliable.
+defineExpose({ reload: load })
+
 // ─── Keyboard shortcuts: workflow run-tab navigation (Alt+Ctrl+Shift+{1-9, ←/→, ↑/↓})
 // Events dispatched by App.vue, handled here by the active instance only — the
 // same system as the terminal tabs. Activation is URL-driven (like a tab click),

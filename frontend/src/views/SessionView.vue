@@ -75,6 +75,10 @@ const artifactsPanelRef = ref(null)
 // Reference to the Plan tab's pane (read-only plan markdown)
 const planPaneRef = ref(null)
 
+// Reference to the Workflows tab's pane — refetched on WS reconnect (a
+// workflow_changed broadcast may have been dropped during the outage).
+const workflowsPaneRef = ref(null)
+
 const gitPanelRef = ref(null)
 const terminalPanelRef = ref(null)
 
@@ -142,6 +146,7 @@ function handleWsReconnected() {
     if (!isActive.value) return
     artifactsPanelRef.value?.reloadAll()
     planPaneRef.value?.reload()
+    workflowsPaneRef.value?.reload()
 }
 
 onActivated(() => {
@@ -2250,6 +2255,7 @@ onBeforeUnmount(() => {
             <Teleport v-if="isToolTabPresent('workflows')" :to="toolTarget('workflows')" :disabled="!toolTarget('workflows')">
                 <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('workflows')">
                     <WorkflowsPane
+                        ref="workflowsPaneRef"
                         :session-id="session.id"
                         :project-id="session.project_id"
                         :focus-run-id="workflowFocusRunId"
