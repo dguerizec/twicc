@@ -33,6 +33,7 @@ const BUILTIN_COMMANDS = [
     { name: 'context', plugin_name: null, is_builtin: true, is_global: true, description: 'Show the current context window usage', argument_hint: null },
     { name: 'init', plugin_name: null, is_builtin: true, is_global: true, description: 'Initialize a new CLAUDE.md file with codebase documentation', argument_hint: null },
     { name: 'loop', plugin_name: null, is_builtin: true, is_global: true, description: "Run a prompt or slash command on a recurring interval until the session ends (e.g. /loop 5m /foo, defaults to 10m)", argument_hint: '[interval] [command or prompt]' },
+    { name: 'goal', plugin_name: null, is_builtin: true, is_global: true, description: "Set a completion condition Claude keeps working toward across turns until an evaluator agent confirms it's met; run with no argument to show status, or 'clear' to cancel", argument_hint: '[condition | clear]' },
 ]
 
 // Map of usage-file field names (cross-provider) → Claude Code store

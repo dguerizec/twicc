@@ -181,20 +181,28 @@ class ParsedCommand(NamedTuple):
     args: str | None
 
 
+_RE_COMMAND_NAME = re.compile(r'<command-name>(.*?)</command-name>', re.DOTALL)
+_RE_COMMAND_MESSAGE = re.compile(r'<command-message>(.*?)</command-message>', re.DOTALL)
+_RE_COMMAND_ARGS = re.compile(r'<command-args>(.*?)</command-args>', re.DOTALL)
+
+
 def extract_command(text: str) -> ParsedCommand | None:
     if not text.startswith("<command-"):
         return None
-    xml_text = f"<root>{text}</root>"
-    try:
-        parsed = xmltodict.parse(xml_text)
-    except Exception:
+    # The CLI writes the command fields verbatim, NOT XML-escaped, so the content
+    # can carry bare ``&``/``<``/``>`` (e.g. ``/goal ... echo 'a' && echo 'b'``).
+    # A strict XML parser rejects those and we'd lose the whole command; the flat
+    # structure lets us pull each field with a regex instead (mirrors the frontend
+    # ``extractCommand`` and the manual task-notification fallback below).
+    name_match = _RE_COMMAND_NAME.search(text)
+    if not name_match or not (name := name_match.group(1)):
         return None
-    if not (name := (root := parsed["root"]).get("command-name")):
-        return None
+    message_match = _RE_COMMAND_MESSAGE.search(text)
+    args_match = _RE_COMMAND_ARGS.search(text)
     return ParsedCommand(
         name=name,
-        message=root.get("command-message"),
-        args=root.get("command-args"),
+        message=message_match.group(1) if message_match else None,
+        args=args_match.group(1) if args_match else None,
     )
 
 
