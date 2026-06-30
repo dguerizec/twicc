@@ -4,6 +4,8 @@ Claude Code agent: wraps a single SDK client instance for one TwiCC session.
 
 import asyncio
 import logging
+import re
+import shlex
 import time
 import uuid
 from datetime import datetime, timezone
@@ -47,6 +49,51 @@ from .sdk_logger import patch_client as patch_client_for_logging
 from .tool_label_filter import filter_tool_input
 
 logger = logging.getLogger(__name__)
+
+
+# ripgrep's ``-r`` is ``--replace``, NOT ``--recursive`` (rg recurses by
+# default). A glued ``-r<letter>`` such as ``-rn``/``-rln`` is silently parsed as
+# ``--replace=<letter>`` and corrupts the output with no error — a frequent
+# grep-reflex mistake the model makes. The PreToolUse hook denies such a Bash
+# command so it gets re-run without the ``r``. Only the glued form is matched
+# (a glued non-letter like ``-r$1`` is a deliberate replacement template), and
+# only within actual ``rg`` segments. Validated by tests/test_rg_replace_trap.py.
+_RG_GLUED_REPLACE_RE = re.compile(r"^-[A-Za-z]*r[A-Za-z]")
+_RG_SHELL_OPS = frozenset({"|", "||", "&&", ";", "&", "|&"})
+_RG_REPLACE_DENY_REASON = (
+    "TwiCC blocked this command. In ripgrep (rg), `-r` means `--replace` (it "
+    "substitutes matches in the printed output), NOT `--recursive`. That is the "
+    "grep reflex — but ripgrep already searches the current directory recursively "
+    "by default, so there is no recursive flag and none is needed. A glued "
+    "`-r<letter>` such as `-rn` or `-rln` is parsed as `--replace=<letter>`, which "
+    "silently rewrites your results and corrupts the output with no error. Re-run "
+    "the same command with the `r` removed from that flag (e.g. `-rn` -> `-n`, "
+    "`-rln` -> `-ln`)."
+)
+
+
+def _rg_replace_trap(command: str) -> bool:
+    """True if ``command`` runs ``rg`` with a glued ``-r<letter>`` (the
+    ``--replace``-mistaken-for-``--recursive`` trap).
+
+    Scoped to actual ``rg`` segments so a ``-rn`` belonging to another command
+    does not trigger. Heuristic, not a shell parser; every miss is fail-safe
+    (a false negative just falls back to the status quo, never a wrong block).
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False  # unbalanced quotes etc. -> never block
+    segment: list[str] = []
+    for tok in [*tokens, "|"]:  # trailing sentinel flushes the last segment
+        if tok in _RG_SHELL_OPS:
+            if segment and Path(segment[0]).name == "rg":
+                if any(_RG_GLUED_REPLACE_RE.match(arg) for arg in segment[1:]):
+                    return True
+            segment = []
+        else:
+            segment.append(tok)
+    return False
 
 
 def _capture_original_file(input_data: dict, tool_use_id: str) -> None:
@@ -775,6 +822,19 @@ class ClaudeCodeAgent(BaseAgent):
 
             async def _pre_tool_use(input_data: dict, tool_use_id: str | None, context: Any) -> dict:
                 tool_name = input_data.get("tool_name", "") or ""
+                # Deny the recurring ``rg -r<letter>`` mistake (``-r`` is
+                # ``--replace``, not ``--recursive``) so the call is re-run
+                # without the glued ``r``. Applies to subagent Bash too.
+                if tool_name == "Bash":
+                    command = (input_data.get("tool_input") or {}).get("command", "") or ""
+                    if _rg_replace_trap(command):
+                        return {
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": _RG_REPLACE_DENY_REASON,
+                            }
+                        }
                 # Subagent tools carry an "agent_id" field; the parent session must
                 # ignore them so its working-status feed stays scoped to its own work.
                 is_subagent_tool = "agent_id" in input_data
