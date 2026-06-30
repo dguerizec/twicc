@@ -192,8 +192,7 @@ onUnmounted(() => {
                 </div>
             </div>
             <div class="orch-note">
-                Read-only view — open a session to interact with it. Sessions marked
-                <wa-icon name="eye-slash" class="orch-note-icon"></wa-icon> can't be opened.
+                Sessions marked <wa-icon name="eye-slash" class="orch-note-icon"></wa-icon> were created hidden by their parent and can't be opened.
             </div>
         </div>
 
@@ -240,7 +239,8 @@ onUnmounted(() => {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--wa-space-s);
+    column-gap: var(--wa-space-s);
+    flex-wrap: wrap;
 }
 
 .orch-toolbar-actions {
@@ -282,7 +282,7 @@ onUnmounted(() => {
 
 .orch-note {
     margin-top: var(--wa-space-2xs);
-    font-size: var(--wa-font-size-s);
+    font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
     font-style: italic;
 }
@@ -297,7 +297,7 @@ onUnmounted(() => {
     display: flex;
     align-items: baseline;
     flex-wrap: wrap;
-    gap: var(--wa-space-xs);
+    column-gap: var(--wa-space-xs);
     min-width: 0;
 }
 

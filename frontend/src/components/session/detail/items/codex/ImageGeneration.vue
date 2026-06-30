@@ -178,23 +178,8 @@ function onPromptHide() {
     cursor: pointer;
 }
 
-.image-generation-prompt {
-    &::part(content) {
-        padding-top: 0;
-    }
-
-    .items-details-summary {
-        display: flex !important;
-        gap: var(--wa-space-s);
-        align-items: center;
-        width: 100%;
-        margin-right: var(--wa-space-xs);
-    }
-}
-
-.image-generation-prompt-body {
-    padding: var(--wa-space-xs) 0;
-    font-family: var(--wa-font-sans);
+wa-details::part(content) {
+    padding-top: 0;
 }
 
 .image-generation-path {

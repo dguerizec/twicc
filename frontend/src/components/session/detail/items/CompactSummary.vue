@@ -82,23 +82,8 @@ function onHide() {
 </template>
 
 <style scoped>
-wa-details {
-    &::part(content) {
-        padding-top: 0;
-    }
-
-    .items-details-summary {
-        display: flex !important;
-        gap: var(--wa-space-s);
-        align-items: center;
-        justify-content: space-between;
-        width: 100%;
-        margin-right: var(--wa-space-xs);
-    }
-}
 
 .compact-summary-body {
-    padding: var(--wa-space-xs) 0;
     word-break: break-word;
 }
 

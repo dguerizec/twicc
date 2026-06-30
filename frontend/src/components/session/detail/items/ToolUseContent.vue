@@ -875,9 +875,9 @@ function handleStopAgent() {
 </script>
 
 <template>
-    <wa-details ref="toolUseDetailsRef" :open="isOpen" :style="instantOpen ? { '--show-duration': '0ms', '--hide-duration': '0ms' } : null" class="item-details tool-use" :class="{'with-right-part' : (isTask && !parentSessionId) || (isWorkflow && !parentSessionId && workflowRunId) || isToolRunning || isToolError || fileChangeStats || canViewInFilesTab}" icon-placement="start" @wa-show.self="onToolUseOpen" @wa-hide.self="onToolUseClose">
-        <span slot="summary" class="items-details-summary">
-            <span class="items-details-summary-left">
+    <wa-details ref="toolUseDetailsRef" :open="isOpen" :style="instantOpen ? { '--show-duration': '0ms', '--hide-duration': '0ms' } : null" class="item-details tool-use" icon-placement="start" @wa-show.self="onToolUseOpen" @wa-hide.self="onToolUseClose">
+        <div slot="summary" class="items-details-summary">
+            <div class="items-details-summary-left">
                 <strong v-if="isTask && displayName" class="items-details-summary-name">{{ displayName.name }}<span v-if="displayName.namespace" class="items-details-summary-quiet"> ({{ displayName.namespace }})</span></strong>
                 <strong v-else-if="headerLabel" class="items-details-summary-name">{{ headerLabel }}</strong>
                 <strong v-else class="items-details-summary-name">{{ formatToolNameForHeader(name) }}</strong>
@@ -886,93 +886,95 @@ function handleStopAgent() {
                     <component :is="summaryRendering.component" v-bind="summaryRendering.props" />
                     <CodeCommentsIndicator :count="toolCommentsCount" :show-tooltip="false" class="tool-comments-indicator" />
                 </template>
-            </span>
-            <!-- View Agent indicator for Task tool_use (only in regular sessions) -->
-            <template v-if="isTask && !parentSessionId">
-                <!-- Agent not yet started: spinner. Hidden when the spawn
-                     itself failed (toolState.error) or was otherwise
-                     flagged terminated by the backend — see
-                     isAgentSpawnPending. -->
-                <wa-spinner v-if="isAgentSpawnPending" class="agent-starting-spinner"></wa-spinner>
-                <!-- Agent started: View Agent button (with pulsing robot
-                     if still running). Skipped when the spawn ack failed
-                     and no AgentLink was ever created — the error
-                     callout below already tells the user what happened,
-                     and a View Agent click would just be a no-op. -->
-                <template v-else-if="agentId">
-                    <AppTooltip v-if="isAgentRunning && toolStartedAt" :for="viewAgentButtonId">
-                        Agent running for <ProcessDuration :state-changed-at="toolStartedAt" />
-                    </AppTooltip>
+            </div>
+            <div class="items-details-summary-right">
+                <!-- View Agent indicator for Task tool_use (only in regular sessions) -->
+                <template v-if="isTask && !parentSessionId">
+                    <!-- Agent not yet started: spinner. Hidden when the spawn
+                         itself failed (toolState.error) or was otherwise
+                         flagged terminated by the backend — see
+                         isAgentSpawnPending. -->
+                    <wa-spinner v-if="isAgentSpawnPending" class="agent-starting-spinner"></wa-spinner>
+                    <!-- Agent started: View Agent button (with pulsing robot
+                         if still running). Skipped when the spawn ack failed
+                         and no AgentLink was ever created — the error
+                         callout below already tells the user what happened,
+                         and a View Agent click would just be a no-op. -->
+                    <template v-else-if="agentId">
+                        <AppTooltip v-if="isAgentRunning && toolStartedAt" :for="viewAgentButtonId">
+                            Agent running for <ProcessDuration :state-changed-at="toolStartedAt" />
+                        </AppTooltip>
+                        <wa-button
+                            :id="viewAgentButtonId"
+                            size="small"
+                            variant="brand"
+                            appearance="outlined"
+                            @click.stop="navigateToSubagent"
+                        >
+                            <wa-icon v-if="isAgentRunning" slot="start" name="robot" class="agent-running-icon" :style="{ color: PROCESS_STATE_COLORS[PROCESS_STATE.ASSISTANT_TURN] }"></wa-icon>
+                            View Agent
+                            <CodeCommentsIndicator slot="end" :count="agentCommentsCount" :show-tooltip="false" class="agent-comments-indicator" />
+                        </wa-button>
+                        <wa-button
+                            v-if="isAgentRunning && agentLink?.isBackground && canStopAgent"
+                            :id="`stop-agent-${props.toolId}`"
+                            size="small"
+                            variant="danger"
+                            appearance="filled"
+                            class="stop-agent-button"
+                            :loading="stoppingAgent"
+                            :disabled="stoppingAgent"
+                            @click.stop="handleStopAgent"
+                        >
+                            <wa-icon name="ban" label="Stop Agent"></wa-icon>
+                        </wa-button>
+                        <AppTooltip v-if="isAgentRunning && agentLink?.isBackground && canStopAgent" :for="`stop-agent-${props.toolId}`">Stop this agent</AppTooltip>
+                    </template>
+                </template>
+                <!-- View Workflow indicator for the Workflow tool_use (regular sessions only) -->
+                <template v-if="isWorkflow && !parentSessionId && workflowRunId">
                     <wa-button
-                        :id="viewAgentButtonId"
+                        :id="viewWorkflowButtonId"
                         size="small"
                         variant="brand"
                         appearance="outlined"
-                        @click.stop="navigateToSubagent"
+                        @click.stop="navigateToWorkflow"
                     >
-                        <wa-icon v-if="isAgentRunning" slot="start" name="robot" class="agent-running-icon" :style="{ color: PROCESS_STATE_COLORS[PROCESS_STATE.ASSISTANT_TURN] }"></wa-icon>
-                        View Agent
-                        <CodeCommentsIndicator slot="end" :count="agentCommentsCount" :show-tooltip="false" class="agent-comments-indicator" />
+                        <wa-icon slot="start" name="sitemap"></wa-icon>
+                        View Workflow
                     </wa-button>
-                    <wa-button
-                        v-if="isAgentRunning && agentLink?.isBackground && canStopAgent"
-                        :id="`stop-agent-${props.toolId}`"
-                        size="small"
-                        variant="danger"
-                        appearance="filled"
-                        class="stop-agent-button"
-                        :loading="stoppingAgent"
-                        :disabled="stoppingAgent"
-                        @click.stop="handleStopAgent"
-                    >
-                        <wa-icon name="ban" label="Stop Agent"></wa-icon>
-                    </wa-button>
-                    <AppTooltip v-if="isAgentRunning && agentLink?.isBackground && canStopAgent" :for="`stop-agent-${props.toolId}`">Stop this agent</AppTooltip>
+                    <AppTooltip :for="viewWorkflowButtonId">Open this workflow run</AppTooltip>
                 </template>
-            </template>
-            <!-- View Workflow indicator for the Workflow tool_use (regular sessions only) -->
-            <template v-if="isWorkflow && !parentSessionId && workflowRunId">
-                <wa-button
-                    :id="viewWorkflowButtonId"
-                    size="small"
-                    variant="brand"
-                    appearance="outlined"
-                    @click.stop="navigateToWorkflow"
-                >
-                    <wa-icon slot="start" name="sitemap"></wa-icon>
-                    View Workflow
-                </wa-button>
-                <AppTooltip :for="viewWorkflowButtonId">Open this workflow run</AppTooltip>
-            </template>
-            <!-- Tool running spinner (Bash, WebFetch, MCP, etc.) -->
-            <template v-if="isToolRunning">
-                <AppTooltip v-if="toolStartedAt" :for="toolSpinnerId">
-                    Running for <ProcessDuration :state-changed-at="toolStartedAt" />
-                </AppTooltip>
-                <wa-spinner :id="toolSpinnerId" class="tool-running-spinner"></wa-spinner>
-            </template>
-            <!-- File change stats (Edit / Write) -->
-            <span v-if="fileChangeStats" class="file-change-stats">
-                <span class="diff-added">+{{ fileChangeStats.lines_added }}</span>
-                <span v-if="fileChangeStats.lines_removed != null" class="diff-removed">-{{ fileChangeStats.lines_removed }}</span>
-            </span>
-            <!-- Tool error indicator -->
-            <wa-icon v-if="isToolError" name="xmark" class="tool-error-icon"></wa-icon>
-            <!-- View in Files tab button (Read / Write / Edit) — last in the row -->
-            <template v-if="canViewInFilesTab">
-                <wa-button
-                    :id="viewInFilesButtonId"
-                    size="small"
-                    variant="neutral"
-                    appearance="outlined"
-                    class="view-in-files-button"
-                    @click.stop="openInFilesTab"
-                >
-                    <wa-icon name="folder-open"></wa-icon>
-                </wa-button>
-                <AppTooltip :for="viewInFilesButtonId">View in Files tab</AppTooltip>
-            </template>
-        </span>
+                <!-- Tool running spinner (Bash, WebFetch, MCP, etc.) -->
+                <template v-if="isToolRunning">
+                    <AppTooltip v-if="toolStartedAt" :for="toolSpinnerId">
+                        Running for <ProcessDuration :state-changed-at="toolStartedAt" />
+                    </AppTooltip>
+                    <wa-spinner :id="toolSpinnerId" class="tool-running-spinner"></wa-spinner>
+                </template>
+                <!-- File change stats (Edit / Write) -->
+                <span v-if="fileChangeStats" class="file-change-stats">
+                    <span class="diff-added">+{{ fileChangeStats.lines_added }}</span>
+                    <span v-if="fileChangeStats.lines_removed != null" class="diff-removed">-{{ fileChangeStats.lines_removed }}</span>
+                </span>
+                <!-- Tool error indicator -->
+                <wa-icon v-if="isToolError" name="xmark" class="tool-error-icon"></wa-icon>
+                <!-- View in Files tab button (Read / Write / Edit) — last in the row -->
+                <template v-if="canViewInFilesTab">
+                    <wa-button
+                        :id="viewInFilesButtonId"
+                        size="small"
+                        variant="neutral"
+                        appearance="outlined"
+                        class="view-in-files-button"
+                        @click.stop="openInFilesTab"
+                    >
+                        <wa-icon name="folder-open"></wa-icon>
+                    </wa-button>
+                    <AppTooltip :for="viewInFilesButtonId">View in Files tab</AppTooltip>
+                </template>
+            </div>
+        </div>
         <template v-if="isOpen">
             <component
                 v-if="inputRendering"
@@ -1064,26 +1066,8 @@ wa-details::part(content) {
     padding-top: 0;
 }
 
-wa-details.with-right-part {
-    /* Summary layout with something  on the right */
-    &::part(header) {
-        padding-right: 6px
-    }
-
+wa-details.item-details {
     .items-details-summary {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: var(--wa-space-m);
-        width: 100%;
-
-        wa-button {
-            margin-block: -1rem;
-            margin-left: auto; /* Stay right-aligned when wrapped */
-        }
-        .view-in-files-button {
-            font-size: var(--wa-font-size-s);
-        }
         .agent-starting-spinner, .tool-running-spinner {
             font-size: 1.2em;
         }
@@ -1096,14 +1080,6 @@ wa-details.with-right-part {
         .agent-comments-indicator, .tool-comments-indicator {
             font-size: var(--wa-font-size-xs);
         }
-        & > :not(wa-button):last-child {
-            margin-right: var(--spacing);
-        }
-    }
-
-    .items-details-summary-left {
-        flex: 1;
-        min-width: 60%; /* Force right-side elements to wrap before text gets too narrow */
     }
 
     .tool-error-icon {
@@ -1127,15 +1103,6 @@ wa-details.with-right-part {
     }
 }
 
-wa-details {
-    .items-details-summary-left {
-        display: inline-flex;
-        align-items: center;
-        gap: var(--wa-space-xs);
-        max-width: 100%; /* Constrain to parent width so text can wrap */
-    }
-}
-
 /* Hide the "BASH" language label for tool inputs (used for bash tools, so it's always bash) */
 .tool-input > .jhv-node :deep(pre.shiki[data-language="bash"]) {
     padding-top: 16px;
@@ -1145,7 +1112,7 @@ wa-details {
 }
 
 .tool-input {
-    padding: var(--wa-space-xs) 0;
+    padding: 0;
     overflow-x: auto;
 }
 

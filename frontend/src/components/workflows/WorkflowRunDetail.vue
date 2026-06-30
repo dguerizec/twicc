@@ -515,8 +515,7 @@ function agentsLabel(n) {
 .wf-info {
     display: flex;
     flex-wrap: wrap;
-    column-gap: var(--wa-space-l);
-    row-gap: var(--wa-space-xs);
+    column-gap: var(--wa-space-m);
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
 }
@@ -581,9 +580,11 @@ function agentsLabel(n) {
 .wf-row .items-details-summary-left {
     flex: 1;
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--wa-space-xs);
     max-width: 100%;
+    min-width: 8rem;
 }
 
 .wf-row .items-details-summary-name {

@@ -75,10 +75,6 @@ function onHide() {
 </template>
 
 <style scoped>
-wa-details::part(content) {
-    padding-top: 0;
-}
-
 .unknown-data {
     padding: var(--wa-space-xs) 0;
     overflow-x: auto;

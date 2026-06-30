@@ -857,6 +857,8 @@ body.sidebar-closed {
     --diff-insertedLineBackground: #C0FFD8;
     --diff-insertedTextBackground: #A7E9B8;
     --diff-selectionBackground: var(--selection-bg-color);
+
+    --wa-font-mono: var(--wa-font-family-code);
 }
 
 wa-split-panel {
