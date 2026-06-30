@@ -410,6 +410,11 @@ const helperOptions = computed(() => {
         toolId: props.toolId,
         sessionId: props.sessionId,
         toolState: dataStore.getToolState(props.sessionId, props.toolId),
+        // Live process state (reactive) so liveness-aware helpers can stop
+        // a spinner once the session is idle — e.g. Codex's exec chain,
+        // orphaned by a soft interrupt, has no closing chunk to flip
+        // ``extra.is_terminated`` (see ``CodexToolHelpers.isToolRunning``).
+        processState: dataStore.getProcessState(props.sessionId)?.state ?? null,
         agentSlug: agentLink?.slug || null,
         getSessionItem: (lineNum) => dataStore.getSessionItem(props.sessionId, lineNum),
         getToolState: (toolUseId) => dataStore.getToolState(props.sessionId, toolUseId),

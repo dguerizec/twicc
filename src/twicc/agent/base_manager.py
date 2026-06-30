@@ -190,6 +190,40 @@ class BaseAgentManager:
         """
         return False
 
+    async def interrupt_agent(self, session_id: str) -> bool:
+        """Interrupt an agent's current turn WITHOUT killing the session.
+
+        Sends the polite interrupt (see :meth:`BaseAgent.soft_interrupt`):
+        aborts the in-flight turn and drops the agent back to ``USER_TURN``
+        with its process kept alive, ready for the next message. Only
+        meaningful while the agent is actually working (``ASSISTANT_TURN``) —
+        a no-op in any other state. Generic across providers: agent runtimes
+        that can't interrupt a turn in place inherit ``BaseAgent``'s ``False``
+        no-op (Codex, hybrid Claude), so the request is silently dropped.
+
+        Unlike :meth:`kill_agent` this deliberately does NOT take ``self._lock``:
+        the soft interrupt is a fast, non-mutating control request, while a
+        concurrent soft stop holds that lock for up to ~30s. Blocking an
+        interrupt behind a teardown would be pointless — the kill wins anyway
+        (the message loop checks its ``_interrupting`` flag before the
+        soft-interrupt one).
+
+        Returns ``True`` if an interrupt was issued, ``False`` if the session
+        is unknown, not in ``ASSISTANT_TURN``, or its runtime can't interrupt.
+        """
+        with provider_log_context(self.provider):
+            agent = self._agents.get(session_id)
+            if agent is None:
+                logger.debug("interrupt_agent: session %s not found", session_id)
+                return False
+            if agent.state != AgentState.ASSISTANT_TURN:
+                logger.debug(
+                    "interrupt_agent: session %s not in ASSISTANT_TURN (state=%s)",
+                    session_id, agent.state.value,
+                )
+                return False
+            return await agent.soft_interrupt()
+
     async def resolve_pending_request(
         self,
         session_id: str,

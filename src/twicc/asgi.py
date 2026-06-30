@@ -631,6 +631,7 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         - send_message: send a message to an agent session (creates new or resumes existing)
         - kill_process: kill a running agent process
         - stop_subagent: gracefully stop a running subagent (Task)
+        - interrupt_session: interrupt the current turn, keeping the session alive
         - suggest_title: request a title suggestion for a session
         - update_synced_settings: update synced settings and broadcast to all clients
         - session_viewed: mark a session as viewed by the user (updates last_viewed_at)
@@ -667,6 +668,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "stop_subagent":
             await self._handle_stop_subagent(content)
+
+        elif msg_type == "interrupt_session":
+            await self._handle_interrupt_session(content)
 
         elif msg_type == "user_draft_updated":
             await self._handle_user_draft_updated(content)
@@ -1235,6 +1239,72 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             logger.error(
                 "stop_subagent: subagent %s in session %s not stopped (not found or parent process not active)",
                 subagent_id,
+                session_id,
+            )
+
+    async def _handle_interrupt_session(self, content: dict) -> None:
+        """Handle interrupt_session request from client.
+
+        Expected content format:
+        {
+            "type": "interrupt_session",
+            "session_id": "sess-xxx"
+        }
+
+        Interrupts the session's current turn while keeping the process alive
+        (back to USER_TURN), routed to the manager that owns ``session_id``.
+        Only meaningful in ASSISTANT_TURN; a no-op otherwise or for runtimes
+        that can't interrupt in place. The resulting state change is reported
+        via the normal ``process_state`` broadcast.
+        """
+        session_id = content.get("session_id")
+
+        if not session_id:
+            logger.warning("interrupt_session missing session_id")
+            await self.send_json(
+                {
+                    "type": "error",
+                    "message": "interrupt_session requires session_id",
+                }
+            )
+            return
+
+        provider_value = await get_session_provider(session_id)
+        if provider_value is not None:
+            try:
+                provider = Provider(provider_value)
+                ensure_provider_running(provider)
+            except ProviderDisabledError as e:
+                await self.send_json({
+                    "type": "error",
+                    "code": "provider_disabled",
+                    "provider": e.provider.value,
+                    "message": str(e),
+                })
+                return
+            except ValueError:
+                pass  # Unknown provider value — let the registry handle it
+
+        # Detached: the hybrid-Claude interrupt presses Escape and polls the TUI
+        # composer for up to ~15s, so awaiting it on this serial receive loop
+        # would stall the heartbeat pong (client drops + reconnects) and block
+        # broadcasts. The SDK/Codex paths are fast, but we detach uniformly. The
+        # outcome surfaces via the normal ``process_state`` broadcast (USER_TURN),
+        # not a return value, so nothing here needs to await it.
+        _spawn_detached(
+            self._run_interrupt_session(session_id),
+            label=f"interrupt_session({session_id})",
+        )
+
+    async def _run_interrupt_session(self, session_id: str) -> None:
+        """Interrupt a session's turn off the receive loop. See ``_handle_interrupt_session``."""
+        interrupted = await get_agent_manager_registry().interrupt_agent(session_id)
+        if not interrupted:
+            # Not found, not in ASSISTANT_TURN, or the runtime can't interrupt —
+            # not an error, just log.
+            logger.debug(
+                "interrupt_session: session %s not interrupted (no active "
+                "manager, not in ASSISTANT_TURN, or runtime can't interrupt)",
                 session_id,
             )
 

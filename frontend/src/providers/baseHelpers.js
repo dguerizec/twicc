@@ -37,6 +37,20 @@ export class BaseProviderHelpers {
     }
 
     /**
+     * Whether the host can ask the backend to interrupt this provider's
+     * current turn WITHOUT killing the session — gates the interrupt button
+     * shown next to the Stop button in the session header during
+     * ``assistant_turn``. A provider opts in (returning ``true``) only once
+     * it has wired the matching ``BaseAgent.soft_interrupt`` hook, so the UI
+     * doesn't dispatch an ``interrupt_session`` request the backend would
+     * silently drop. Default: ``false`` (only the Claude Code SDK runtime
+     * ships a working soft-interrupt today).
+     */
+    canInterruptTurn() {
+        return false
+    }
+
+    /**
      * Activation prefixes this provider supports, in the order the snippets
      * bar should render their buttons. Each char drives one ``open-command``
      * button and one ``/api/projects/<id>/commands/?activation_char=<char>``

@@ -177,6 +177,13 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         return useClaudeCodeStore().authenticated !== false
     }
 
+    canInterruptTurn() {
+        // The SDK runtime supports a soft interrupt (ESC-equivalent control
+        // request). Hybrid (tmux-driven) sessions are excluded at the call
+        // site — they have no SDK client to interrupt in place.
+        return true
+    }
+
     getCommandActivationChars() {
         return ['/']
     }

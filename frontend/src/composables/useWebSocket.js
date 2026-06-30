@@ -200,6 +200,21 @@ export function stopSubagent(sessionId, subagentId) {
 }
 
 /**
+ * Interrupt a session's current turn WITHOUT killing the process.
+ * Aborts whatever the agent is doing now and drops it back to USER_TURN,
+ * ready for the next message. Only meaningful while in ASSISTANT_TURN; the
+ * backend no-ops otherwise. The resulting state arrives via process_state.
+ * @param {string} sessionId - The session whose current turn to interrupt
+ * @returns {boolean} - True if message was sent, false if not connected
+ */
+export function interruptSession(sessionId) {
+    return sendWsMessage({
+        type: 'interrupt_session',
+        session_id: sessionId,
+    })
+}
+
+/**
  * Request a title suggestion for a session.
  * The result will arrive via WebSocket as title_suggested message.
  * @param {string} sessionId - The session ID (draft or canonical)

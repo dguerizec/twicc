@@ -229,18 +229,22 @@ class CodexAgent(BaseAgent):
         # Populated on ``item/started``, popped on ``item/completed``,
         # cleared on ``interrupt_or_kill``.
         self._items_by_id: dict[str, dict] = {}
-        # Map of itemId → human-readable reason for tools that the user
-        # refused (Deny, Cancel turn, empty permissions grant). Codex's
+        # Map of itemId → human-readable reason for tools the user ended
+        # out of band: an approval refusal (Deny, Cancel turn, empty
+        # permissions grant) recorded by ``_record_decision_outcome``, or a
+        # turn interruption recorded by ``soft_interrupt``. Codex's
         # ``function_call_output`` JSONL line has no ``is_error`` flag —
         # only an output string like "exec_command failed for ...
-        # Rejected(...)" — so the Codex compute path
-        # (``CodexSessionCompute.extract_tool_result_info``) consults this
-        # side-table to know whether to mark the resulting
-        # ``ToolResultLink`` as errored. See spec §1.1 + PR2c plan.
-        # Lifetime: agent lifetime. Cleared by ``interrupt_or_kill`` (with
-        # the rest of the side-tables) or by re-creating the agent on a
-        # fresh session.
-        self._denied_tool_ids: dict[str, str] = {}
+        # Rejected(...)" or "aborted by user after X.Xs" — and no
+        # ``Process exited`` trailer, so the Codex compute path
+        # (``CodexSessionCompute.extract_tool_result_info`` and
+        # ``compute_link_extra``) consults this side-table both to mark the
+        # resulting ``ToolResultLink`` as errored and to flag
+        # ``extra.is_terminated`` so the spinner stops. See spec §1.1 +
+        # PR2c plan. Lifetime: agent lifetime. Cleared by
+        # ``interrupt_or_kill`` (with the rest of the side-tables) or by
+        # re-creating the agent on a fresh session.
+        self._user_terminated_tool_ids: dict[str, str] = {}
 
         # This session's work dirs (own artifacts/scratch + the orchestration
         # root's shared scratch), resolved + pre-created once on the first turn
@@ -725,6 +729,81 @@ class CodexAgent(BaseAgent):
         if task is not None and task is not asyncio.current_task():
             task.cancel()
 
+    async def soft_interrupt(self) -> bool:
+        """Interrupt the current turn but keep the thread alive (→ USER_TURN).
+
+        Fires ``turn/interrupt`` on the active turn WITHOUT closing the
+        transport. The running ``_run_turn`` consumes the rest of the turn
+        stream, which ends on an interrupted ``turn/completed`` (not an
+        ``error``, not ``TransportClosedError``), so ``_run_turn`` falls
+        through to its normal ``USER_TURN`` transition — thread alive, ready
+        for the next message. Contrast with :meth:`interrupt_or_kill`, which
+        fires the same interrupt then closes the transport (→ DEAD).
+
+        Any tool in flight when we interrupt gets aborted by Codex with an
+        "aborted by user after X.Xs" ``function_call_output`` that carries
+        no ``is_error`` flag and no ``Process exited`` trailer — the same
+        shape an approval Cancel produces. Unlike a full stop, a soft
+        interrupt keeps the session alive, so the frontend's lifecycle
+        ``isStaleToolUse`` gate never fires; without an explicit signal the
+        tool's spinner would spin forever. So we mark every in-flight tool
+        in :attr:`_user_terminated_tool_ids` (exactly like the cancel branch
+        of :meth:`_record_decision_outcome`) for the Codex compute to turn
+        into ``ToolResultLink.error`` + ``extra.is_terminated``.
+
+        Returns ``True`` if an interrupt was issued, ``False`` if no turn is
+        active (best-effort, e.g. the turn just ended).
+        """
+        turn_handle = self._current_turn
+        if turn_handle is None:
+            return False
+        # Mark in-flight tools BEFORE firing the interrupt: the "aborted by
+        # user" outputs may be written and picked up by the watcher during
+        # the interrupt round-trip's await, so the termination signal must
+        # already be in place. Rolled back below if the interrupt fails.
+        marked = self._mark_inflight_tools_user_terminated("User interrupted the turn")
+        try:
+            await turn_handle.interrupt()
+        except Exception as e:
+            # Interrupt failed → the turn keeps running and those tools may
+            # still complete normally; undo the marks so a later genuine
+            # completion isn't mislabelled as interrupted.
+            for item_id in marked:
+                self._user_terminated_tool_ids.pop(item_id, None)
+            logger.warning(
+                "Codex soft interrupt failed for session %s: %s", self.session_id, e,
+            )
+            return False
+        logger.info(
+            "Soft-interrupting Codex session %s (marked %d in-flight tool(s))",
+            self.session_id, len(marked),
+        )
+        return True
+
+    def _mark_inflight_tools_user_terminated(self, reason: str) -> list[str]:
+        """Mark every in-flight cancellable tool as user-terminated.
+
+        Records each in-flight item of a :attr:`_CANCELLABLE_ITEM_TYPES`
+        type (held in ``_items_by_id`` between ``item/started`` and
+        ``item/completed``) into :attr:`_user_terminated_tool_ids` with
+        ``reason``. The Codex compute then surfaces it as the tool result's
+        ``error`` + ``extra.is_terminated`` when the matching "aborted by
+        user" ``function_call_output`` lands — stopping the orphaned spinner
+        the same way an approval Cancel does. Returns the marked item ids
+        (used by the caller to roll back on failure).
+        """
+        marked: list[str] = []
+        for item_id, payload in self._items_by_id.items():
+            if payload.get("type") in self._CANCELLABLE_ITEM_TYPES:
+                self._user_terminated_tool_ids[item_id] = reason
+                marked.append(item_id)
+                logger.debug(
+                    "Codex interrupt: marking in-flight tool session=%s "
+                    "itemId=%r type=%r",
+                    self.session_id, item_id, payload.get("type"),
+                )
+        return marked
+
     async def interrupt_or_kill(self, reason: str) -> None:
         """Stop the agent: interrupt the turn, let it unwind, then close.
 
@@ -853,7 +932,7 @@ class CodexAgent(BaseAgent):
         get_streamed_item_registry().clear_session(self.session_id)
         # Drop the side-table — no more turns will read it on this agent.
         self._items_by_id.clear()
-        self._denied_tool_ids.clear()
+        self._user_terminated_tool_ids.clear()
         # Drop any captured pre-patch contents that won't be consumed
         # (the matching ``patch_apply_end`` won't be emitted on a torn-down
         # transport). The TTL would clean them up eventually; this just
@@ -1087,7 +1166,7 @@ class CodexAgent(BaseAgent):
             # the same id starts clean (same cleanup as ``interrupt_or_kill``).
             get_streamed_item_registry().clear_session(self.session_id)
             self._items_by_id.clear()
-            self._denied_tool_ids.clear()
+            self._user_terminated_tool_ids.clear()
             clear_original_files_for_session(self.session_id)
 
             # Tear the transport down. The stream loop in ``_run_turn``
@@ -1385,8 +1464,8 @@ class CodexAgent(BaseAgent):
             return auto_approve_response_for(method)
         request = make_pending_request(method, enriched_params)
         response = await self._await_pending_request(request)
-        # Record refusals in _denied_tool_ids so the Codex compute can
-        # surface them as ToolResultLink.error when the matching
+        # Record refusals in _user_terminated_tool_ids so the Codex compute
+        # can surface them as ToolResultLink.error when the matching
         # function_call_output lands in the JSONL.
         self._record_decision_outcome(method, params, response)
         return response
@@ -1434,7 +1513,7 @@ class CodexAgent(BaseAgent):
         return not await sync_to_async(project_is_untrusted)(self.project_id)
 
     # Item types from ``_items_by_id`` that produce a ``function_call_output``
-    # in the JSONL (and therefore can be matched by ``_denied_tool_ids``).
+    # in the JSONL (and therefore can be matched by ``_user_terminated_tool_ids``).
     # We keep this set tight to avoid marking dead entries on cancel turn —
     # the lookup is harmless if we over-include, but the explicit list
     # documents which kinds we expect to surface as ``ToolResultLink``.
@@ -1481,7 +1560,7 @@ class CodexAgent(BaseAgent):
             granted = response.get("permissions")
             if not granted:
                 # Empty granted profile = user refused permissions.
-                self._denied_tool_ids[item_id] = "User refused permissions"
+                self._user_terminated_tool_ids[item_id] = "User refused permissions"
                 logger.debug(
                     "Codex decision recorded: session=%s itemId=%s "
                     "outcome=permissions_denied reason=%r",
@@ -1498,7 +1577,7 @@ class CodexAgent(BaseAgent):
         # command / file
         decision = response.get("decision")
         if decision == "decline":
-            self._denied_tool_ids[item_id] = "User denied this action"
+            self._user_terminated_tool_ids[item_id] = "User denied this action"
             logger.debug(
                 "Codex decision recorded: session=%s itemId=%s "
                 "outcome=decline reason=%r",
@@ -1506,7 +1585,7 @@ class CodexAgent(BaseAgent):
             )
             return
         if decision == "cancel":
-            self._denied_tool_ids[item_id] = "User cancelled this turn"
+            self._user_terminated_tool_ids[item_id] = "User cancelled this turn"
             # Also mark every other in-flight function-call item. The user
             # asked for "tous les tools qui n'ont pas été terminés doivent
             # être marqués" — we iterate _items_by_id which holds every
@@ -1516,7 +1595,7 @@ class CodexAgent(BaseAgent):
                 if other_id == item_id:
                     continue
                 if payload.get("type") in self._CANCELLABLE_ITEM_TYPES:
-                    self._denied_tool_ids[other_id] = "User cancelled this turn"
+                    self._user_terminated_tool_ids[other_id] = "User cancelled this turn"
                     siblings_marked.append(other_id)
                     logger.debug(
                         "Codex cancel: marking sibling session=%s itemId=%r type=%r",

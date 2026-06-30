@@ -135,6 +135,10 @@ class ClaudeCodeAgent(BaseAgent):
         # the bypassPermissions opt-in flag is withheld.
         self._untrusted = False
         self._interrupting = False  # Set when interrupt() is called, suppresses error toast
+        # Set when soft_interrupt() is called: the loop treats the resulting
+        # error ResultMessage as a clean turn end (→ USER_TURN, session kept
+        # alive) instead of tearing down to DEAD like ``_interrupting`` does.
+        self._soft_interrupting = False
         self._message_loop_task: asyncio.Task[None] | None = None
         self._active_tools: dict[str, dict[str, Any]] = {}
         self._last_started_tool_id: str | None = None
@@ -1048,6 +1052,28 @@ class ClaudeCodeAgent(BaseAgent):
         logger.info("Interrupting session %s", self.session_id)
         await self._client.interrupt()
 
+    async def soft_interrupt(self) -> bool:
+        """Interrupt the current turn but keep the session alive.
+
+        Sends the SDK's interrupt control-request (the same signal ESC fires in
+        the interactive CLI) and flags the message loop to treat the resulting
+        error ``ResultMessage`` as a clean turn end — dropping back to
+        ``USER_TURN`` with the SDK client kept connected, ready for the next
+        message. Contrast with :meth:`interrupt` (used by
+        :meth:`interrupt_or_kill`), which flags the loop to tear the session
+        down to DEAD.
+
+        Raises:
+            RuntimeError: If the process is not started.
+        """
+        if self._client is None:
+            raise RuntimeError("Process not started")
+
+        self._soft_interrupting = True
+        logger.info("Soft-interrupting session %s", self.session_id)
+        await self._client.interrupt()
+        return True
+
     async def interrupt_or_kill(self, reason: str) -> None:
         """Try to interrupt the process gracefully, fall back to kill.
 
@@ -1500,20 +1526,37 @@ class ClaudeCodeAgent(BaseAgent):
                             await self._shutdown_sdk_client()
                             return
 
-                        # Log full ResultMessage details for debugging
-                        logger.error(
-                            "Claude Code error for session %s: result=%r, subtype=%s, "
-                            "num_turns=%s, duration_ms=%s",
-                            self.session_id,
-                            msg.result,
-                            msg.subtype,
-                            msg.num_turns,
-                            msg.duration_ms,
-                        )
-                        await self._handle_error(
-                            f"Claude reported error: {msg.result or 'Unknown error'}"
-                        )
-                        return
+                        if self._soft_interrupting:
+                            # User interrupted the current turn but asked to keep
+                            # the session alive. Treat this expected error result
+                            # as a clean turn end: reset the flag, drop any
+                            # pending permission asks from the aborted turn, and
+                            # fall through to the normal USER_TURN handling below
+                            # — no shutdown, the loop keeps running for the next
+                            # message. ``_interrupting`` (kill) is checked first,
+                            # so an interrupt-to-kill still wins over a soft one.
+                            self._soft_interrupting = False
+                            logger.info(
+                                "Session %s soft-interrupted; back to USER_TURN (subtype=%s)",
+                                self.session_id,
+                                msg.subtype,
+                            )
+                            self._cancel_all_pending_futures()
+                        else:
+                            # Log full ResultMessage details for debugging
+                            logger.error(
+                                "Claude Code error for session %s: result=%r, subtype=%s, "
+                                "num_turns=%s, duration_ms=%s",
+                                self.session_id,
+                                msg.result,
+                                msg.subtype,
+                                msg.num_turns,
+                                msg.duration_ms,
+                            )
+                            await self._handle_error(
+                                f"Claude reported error: {msg.result or 'Unknown error'}"
+                            )
+                            return
 
                     # Signal first USER_TURN for ProcessRun lifecycle
                     if not self._first_user_turn_reached:

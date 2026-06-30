@@ -869,6 +869,21 @@ class BaseAgent:
         """
         raise NotImplementedError
 
+    async def soft_interrupt(self) -> bool:
+        """Interrupt the current turn WITHOUT killing the session.
+
+        Aborts whatever the agent is doing right now (generation, a tool run)
+        and drops back to ``USER_TURN`` with the process kept alive, ready for
+        the next message — the polite counterpart to :meth:`interrupt_or_kill`,
+        which tears the session down to DEAD.
+
+        The base implementation is a no-op returning ``False`` so generic
+        callers (the WS handler, :meth:`BaseAgentManager.interrupt_agent`) can
+        invoke it without provider/mode-specific dispatch. Agent runtimes that
+        can interrupt a turn in place override and return ``True``.
+        """
+        return False
+
     async def _kill_system_process(self, pid: int) -> None:
         """Force-kill an OS process and all its children (SIGTERM → SIGKILL).
 

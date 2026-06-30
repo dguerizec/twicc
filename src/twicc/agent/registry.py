@@ -112,6 +112,13 @@ class AgentManagerRegistry:
             return False
         return await mgr.hard_kill_agent(session_id, reason=reason)
 
+    async def interrupt_agent(self, session_id: str) -> bool:
+        """Interrupt an agent's current turn (keep it alive) regardless of provider."""
+        mgr = self.find_manager_for_session(session_id)
+        if mgr is None:
+            return False
+        return await mgr.interrupt_agent(session_id)
+
     def touch_agent_activity(self, session_id: str) -> bool:
         """Refresh ``last_activity`` regardless of which provider owns the session."""
         mgr = self.find_manager_for_session(session_id)

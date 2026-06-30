@@ -6,7 +6,7 @@ import { formatDate } from '../../../utils/date'
 import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES } from '../../../constants'
 import { getProviderHelpers, getProviderLabel, getProviderIcon } from '../../../providers'
 import { getAgentDisplayLabel } from '../../../utils/agentLabel'
-import { stopSubagent } from '../../../composables/useWebSocket'
+import { stopSubagent, interruptSession } from '../../../composables/useWebSocket'
 import { stopSessionProcess, hardKillSessionProcess } from '../../../composables/useStopSessionProcess'
 import ProjectBadge from '../../project/ProjectBadge.vue'
 import WorktreeBadge from '../../project/WorktreeBadge.vue'
@@ -264,6 +264,39 @@ function handleStopAgent() {
         stoppingAgent.value = true
         stopSubagent(parentId, props.sessionId)
     }
+}
+
+// Whether the current turn can be interrupted in place (without killing the
+// session). Only while a real process is actively working (ASSISTANT_TURN), on
+// a provider whose runtime wired the soft-interrupt hook (Claude Code SDK +
+// hybrid, Codex). The button auto-hides as soon as the turn ends (state leaves
+// ASSISTANT_TURN).
+const canInterruptTurn = computed(() => {
+    const ps = processState.value
+    if (!ps || ps.synthetic || ps.state !== PROCESS_STATE.ASSISTANT_TURN) return false
+    return !!getProviderHelpers(session.value?.provider)?.canInterruptTurn()
+})
+
+// Transient "interrupt sent, awaiting the turn to wind down" feedback. Resets
+// itself once the turn ends (the button hides), so a stale flag can't linger.
+const interrupting = ref(false)
+watch(canInterruptTurn, (can) => {
+    if (!can) interrupting.value = false
+})
+
+/**
+ * Interrupt the current turn while keeping the session alive (back to
+ * USER_TURN). No confirmation: it is non-destructive and recoverable.
+ */
+function handleInterrupt() {
+    if (!canInterruptTurn.value || interrupting.value) return
+    interrupting.value = true
+    interruptSession(props.sessionId)
+    // Safety net: the watch above clears the spinner on the normal USER_TURN
+    // transition. But a hybrid interrupt can fail (a TUI dialog stays up past
+    // its ~15s backend cap), leaving the turn running — clear the transient
+    // feedback anyway so the button doesn't spin forever.
+    setTimeout(() => { interrupting.value = false }, 17000)
 }
 
 
@@ -651,44 +684,61 @@ defineExpose({
                     />
                     <AppTooltip :for="`session-header-${sessionId}-process-indicator`">{{ providerLabel }} state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
 
-                    <wa-button
-                        v-if="canStopProcess"
-                        :id="`session-header-${sessionId}-stop-button`"
-                        variant="danger"
-                        appearance="filled"
-                        size="small"
-                        class="stop-button reduced-height"
-                        :class="{ forcing: stoppingProcess }"
-                        @click="handleStopProcess($event)"
-                    >
-                        <span class="stop-icon-wrap">
-                            <wa-icon
-                                :name="stoppingProcess ? 'skull-crossbones' : 'ban'"
-                                :variant="stoppingProcess ? 'solid' : undefined"
-                                :label="stoppingProcess ? 'Force kill' : 'Stop'"
-                            ></wa-icon>
-                            <wa-spinner
-                                v-if="stoppingProcess"
-                                class="stop-overlay-spinner"
-                            ></wa-spinner>
-                        </span>
-                    </wa-button>
-                    <AppTooltip :for="`session-header-${sessionId}-stop-button`">{{ stoppingProcess ? 'Force kill' : `Stop the ${providerLabel} process` }}</AppTooltip>
+                    <div class="meta-actions">
+                        <wa-button
+                            v-if="canInterruptTurn"
+                            :id="`session-header-${sessionId}-interrupt-button`"
+                            variant="neutral"
+                            appearance="filled"
+                            size="small"
+                            class="stop-button reduced-height"
+                            :loading="interrupting"
+                            :disabled="interrupting"
+                            @click="handleInterrupt"
+                        >
+                            <wa-icon name="circle-pause" label="Interrupt"></wa-icon>
+                        </wa-button>
+                        <AppTooltip :for="`session-header-${sessionId}-interrupt-button`">Interrupt the current turn (keeps the session alive)</AppTooltip>
 
-                    <wa-button
-                        v-if="canStopAgent"
-                        :id="`session-header-${sessionId}-stop-agent-button`"
-                        variant="danger"
-                        appearance="filled"
-                        size="small"
-                        class="stop-button reduced-height"
-                        :loading="stoppingAgent"
-                        :disabled="stoppingAgent"
-                        @click="handleStopAgent"
-                    >
-                        <wa-icon name="ban" label="Stop Agent"></wa-icon>
-                    </wa-button>
-                    <AppTooltip :for="`session-header-${sessionId}-stop-agent-button`">Stop this agent</AppTooltip>
+                        <wa-button
+                            v-if="canStopProcess"
+                            :id="`session-header-${sessionId}-stop-button`"
+                            variant="danger"
+                            appearance="filled"
+                            size="small"
+                            class="stop-button reduced-height"
+                            :class="{ forcing: stoppingProcess }"
+                            @click="handleStopProcess($event)"
+                        >
+                            <span class="stop-icon-wrap">
+                                <wa-icon
+                                    :name="stoppingProcess ? 'skull-crossbones' : 'ban'"
+                                    :variant="stoppingProcess ? 'solid' : undefined"
+                                    :label="stoppingProcess ? 'Force kill' : 'Stop'"
+                                ></wa-icon>
+                                <wa-spinner
+                                    v-if="stoppingProcess"
+                                    class="stop-overlay-spinner"
+                                ></wa-spinner>
+                            </span>
+                        </wa-button>
+                        <AppTooltip :for="`session-header-${sessionId}-stop-button`">{{ stoppingProcess ? 'Force kill' : `Stop the ${providerLabel} process` }}</AppTooltip>
+
+                        <wa-button
+                            v-if="canStopAgent"
+                            :id="`session-header-${sessionId}-stop-agent-button`"
+                            variant="danger"
+                            appearance="filled"
+                            size="small"
+                            class="stop-button reduced-height"
+                            :loading="stoppingAgent"
+                            :disabled="stoppingAgent"
+                            @click="handleStopAgent"
+                        >
+                            <wa-icon name="ban" label="Stop Agent"></wa-icon>
+                        </wa-button>
+                        <AppTooltip :for="`session-header-${sessionId}-stop-agent-button`">Stop this agent</AppTooltip>
+                    </div>
                 </template>
             </div>
 
@@ -911,6 +961,16 @@ body:not([data-display-mode="debug"]) .cost-breakdown-item {
 wa-divider {
     --width: var(--divider-size);
     --spacing: 0;
+}
+
+/* Trailing process-control buttons (interrupt, stop, stop-agent) cluster as a
+   single flex child of .session-meta so they sit tight together, decoupled
+   from the meta row's large inter-item gap. */
+.meta-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    flex-shrink: 0;
 }
 
 .stop-button {

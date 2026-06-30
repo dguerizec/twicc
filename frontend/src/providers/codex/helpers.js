@@ -139,6 +139,12 @@ export class CodexHelpers extends BaseProviderHelpers {
         return false
     }
 
+    canInterruptTurn() {
+        // Codex's ``turn/interrupt`` aborts the active turn and leaves the
+        // thread alive (back to USER_TURN) — wired via CodexAgent.soft_interrupt.
+        return true
+    }
+
     getCommandActivationChars() {
         // Two prefixes for Codex: ``/`` for TwiCC's hardcoded commands
         // (captured + executed on the backend — the Codex CLI has no native

@@ -1340,8 +1340,9 @@ class BaseSessionCompute:
         data applies.
 
         ``session_id`` is forwarded so providers can cross-reference
-        per-session side-state (e.g. Codex's in-memory ``_denied_tool_ids``
-        map, which the spinner logic needs to flag a refused tool as
+        per-session side-state (e.g. Codex's in-memory
+        ``_user_terminated_tool_ids`` map, which the spinner logic needs to
+        flag a user-ended tool — denied, cancelled, or interrupted — as
         terminated when the JSONL trailer says nothing of the sort).
         Providers that don't need it ignore the kwarg.
 
@@ -2477,11 +2478,11 @@ class BaseSessionCompute:
                 trl_to_create.append(serialized)
             else:
                 # Preserve previously-recorded error / extra if the re-compute
-                # produced None — happens when the live path's _denied_tool_ids
-                # signal is no longer available after a backend restart (the agent
-                # is gone so _denied_tool_reason returns None). The live-path
-                # value is the authoritative one; a stale re-compute must not
-                # erase it.
+                # produced None — happens when the live path's
+                # _user_terminated_tool_ids signal is no longer available after a
+                # backend restart (the agent is gone so
+                # _user_terminated_tool_reason returns None). The live-path value
+                # is the authoritative one; a stale re-compute must not erase it.
                 if serialized['error'] is None and original['error'] is not None:
                     serialized['error'] = original['error']
                 if serialized['extra'] is None and original['extra'] is not None:

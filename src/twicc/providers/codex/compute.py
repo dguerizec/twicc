@@ -934,8 +934,16 @@ def _event_msg_text(parsed_json: dict, expected_subtype: str) -> str | None:
     return None
 
 
-def _denied_tool_reason(session_id: str, call_id: str) -> str | None:
-    """Lookup the live agent's ``_denied_tool_ids`` map for a refusal record.
+def _user_terminated_tool_reason(session_id: str, call_id: str) -> str | None:
+    """Lookup the live agent's ``_user_terminated_tool_ids`` map for a record.
+
+    A "user-terminated" tool is one the agent knows the user ended out of
+    band — an approval Deny / Cancel / refused permissions, or a turn
+    interruption (:meth:`CodexAgent.soft_interrupt`). In every case Codex
+    emits a ``function_call_output`` carrying only rejection / "aborted by
+    user" text with no ``is_error`` flag and no ``Process exited`` trailer,
+    so the signal recorded here is the only way the compute can tell the
+    tool is finished.
 
     ``Provider`` is already imported at module top (used elsewhere in
     this file). Only ``get_agent_manager_registry`` is lazily imported
@@ -957,7 +965,7 @@ def _denied_tool_reason(session_id: str, call_id: str) -> str | None:
     if manager is None:
         return None
     # The accessor is defensive: returns None if no live agent for the session.
-    return manager.get_denied_tool_reason(session_id, call_id)
+    return manager.get_user_terminated_tool_reason(session_id, call_id)
 
 
 class CodexSessionCompute(BaseSessionCompute):
@@ -1885,13 +1893,15 @@ class CodexSessionCompute(BaseSessionCompute):
         if not isinstance(call_id, str) or not call_id:
             return None
 
-        # 4th error source: the live agent's _denied_tool_ids map.
+        # 4th error source: the live agent's _user_terminated_tool_ids map.
         # Codex's function_call_output line carries the rejection text in
         # ``output`` ("exec_command failed for ... Rejected(...)" /
         # "aborted by user after X.Xs") but no is_error flag. We don't
         # pattern-match the text — we consult the agent-side map populated
-        # at WS-response time by ``CodexAgent._record_decision_outcome``.
-        # If the user refused, the recorded reason supersedes any
+        # when the user ends the tool out of band: at WS-response time by
+        # ``CodexAgent._record_decision_outcome`` (Deny / Cancel / refused
+        # permissions) or on a turn interruption by
+        # ``CodexAgent.soft_interrupt``. The recorded reason supersedes any
         # exit-code text that ``_*_error`` helpers might have produced.
         # Caveat: this map is in-memory only; a backend restart followed
         # by a background re-compute on the same JSONL has no way to
@@ -1900,14 +1910,14 @@ class CodexSessionCompute(BaseSessionCompute):
         # path's already-persisted ``ToolResultLink.error`` is the
         # authoritative source — verify in PR4 that background re-compute
         # doesn't overwrite it.
-        denied_reason = _denied_tool_reason(session_id, call_id)
-        if denied_reason is not None:
+        termination_reason = _user_terminated_tool_reason(session_id, call_id)
+        if termination_reason is not None:
             logger.debug(
-                "Codex compute: marking tool result as denied: "
+                "Codex compute: marking tool result as user-terminated: "
                 "session=%s call_id=%s reason=%r (overriding error_text=%r)",
-                session_id, call_id, denied_reason, error_text,
+                session_id, call_id, termination_reason, error_text,
             )
-            error_text = denied_reason
+            error_text = termination_reason
 
         return ToolResultInfo(
             tool_use_id=call_id,
@@ -2176,13 +2186,14 @@ class CodexSessionCompute(BaseSessionCompute):
                 # chunk to flip ``extra.is_terminated``. Two termination
                 # signals, checked in priority order:
                 #
-                #   1. User refusal (Deny / Cancel turn). Recorded by
-                #      ``CodexAgent._record_decision_outcome`` at WS-
-                #      resolve time; signal-based, no text pattern-match.
-                #      If we see the call_id in the map, the tool is over
-                #      — Codex never sends a closing chunk in this case
-                #      so without this check the spinner would spin
-                #      forever.
+                #   1. User termination (Deny / Cancel turn, or a turn
+                #      interruption via ``CodexAgent.soft_interrupt``).
+                #      Recorded in the agent-side map; signal-based, no
+                #      text pattern-match. If we see the call_id in the
+                #      map, the tool is over — Codex never sends a closing
+                #      ``Process exited`` chunk in this case (just an
+                #      "aborted by user" output), so without this check
+                #      the spinner would spin forever.
                 #   2. Natural completion. The unified-exec status
                 #      trailer reports ``Process exited with code N``
                 #      on the closing chunk.
@@ -2191,15 +2202,15 @@ class CodexSessionCompute(BaseSessionCompute):
                 # so the ``Max``-aggregated extra stays unset and the
                 # spinner keeps spinning.
                 call_id = payload.get("call_id")
-                refused = (
+                user_terminated = (
                     isinstance(call_id, str)
                     and session_id is not None
-                    and _denied_tool_reason(session_id, call_id) is not None
+                    and _user_terminated_tool_reason(session_id, call_id) is not None
                 )
-                if refused:
+                if user_terminated:
                     logger.debug(
-                        "Codex compute: terminating refused exec_command "
-                        "via denied-tool signal: session=%s call_id=%s",
+                        "Codex compute: terminating user-ended exec_command "
+                        "via user-terminated signal: session=%s call_id=%s",
                         session_id, call_id,
                     )
                 else:
@@ -2209,7 +2220,7 @@ class CodexSessionCompute(BaseSessionCompute):
                     if not parse_exec_command_status(output).is_terminated:
                         return None
             # Atomic result row, the closing chunk of a chained sequence,
-            # or a refused chained call — flag it so the card stops spinning.
+            # or a user-terminated chained call — flag it so the card stops spinning.
             return orjson.dumps({"is_terminated": True}).decode()
 
         if tool_name != "apply_patch":

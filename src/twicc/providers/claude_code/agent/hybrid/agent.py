@@ -895,10 +895,66 @@ class HybridClaudeAgent(BaseAgent):
     async def interrupt_or_kill(self, reason: str) -> None:
         # Timeouts, manual stops and TwiCC shutdown all kill: the tmux session
         # must go away to free claude's memory (shutdown best-effort, see
-        # ``kill``). Mid-turn interruption without killing stays possible by
-        # pressing Escape inside the embedded terminal (V1 decision — no
-        # dedicated TwiCC affordance).
+        # ``kill``). A non-destructive mid-turn interrupt (keep the session
+        # alive) is a separate affordance — see :meth:`soft_interrupt`.
         await self.kill(reason)
+
+    # Soft-interrupt key cadence: when a TUI dialog blocks the composer, press
+    # Escape, wait, and re-check on this interval until it frees up, bounded by
+    # the timeout so a wedged dialog can't spin forever.
+    HYBRID_INTERRUPT_POLL_INTERVAL = 1.0
+    HYBRID_INTERRUPT_TIMEOUT = 15.0
+
+    async def soft_interrupt(self) -> bool:
+        """Interrupt the current turn but keep the session alive (→ USER_TURN).
+
+        Presses Escape in the TUI — the Claude CLI treats it as "stop the
+        current turn" and returns to an empty composer, then writes the
+        "[Request interrupted by user…]" marker. The watcher surfaces that as a
+        ``turn_end`` signal which flips the agent back to USER_TURN, so this
+        method only ever sends keys; it never touches state itself.
+
+        Two cases (see :func:`tmux.composer_ready`):
+        - Composer active — the normal in-turn state (spinner + empty composer):
+          a single Escape interrupts the turn.
+        - Composer blocked — a TUI dialog is up (permission prompt, plan
+          approval, a bare ``/effort``/``/fast`` picker…): Escape to dismiss it,
+          then poll until the composer frees up and send a final Escape to
+          interrupt the turn. Bounded by ``HYBRID_INTERRUPT_TIMEOUT``.
+
+        Returns ``True`` once an interrupt Escape reached an active composer,
+        ``False`` if the agent is dead or the composer never freed up in time.
+        """
+        if self.state == AgentState.DEAD:
+            return False
+
+        sid = self.session_id
+
+        # Fast path: composer already active → one Escape stops the turn.
+        if await asyncio.to_thread(hybrid_tmux.composer_ready, sid):
+            await asyncio.to_thread(hybrid_tmux.interrupt_turn, sid)
+            logger.info("Soft-interrupting hybrid session %s (composer active)", sid)
+            return True
+
+        # A dialog is blocking the composer: Escape to dismiss, poll until it
+        # frees up, then a final Escape interrupts the turn.
+        logger.info(
+            "Soft-interrupting hybrid session %s: composer busy, escaping until free", sid,
+        )
+        deadline = time.monotonic() + self.HYBRID_INTERRUPT_TIMEOUT
+        while time.monotonic() < deadline and self.state != AgentState.DEAD:
+            await asyncio.to_thread(hybrid_tmux.interrupt_turn, sid)
+            await asyncio.sleep(self.HYBRID_INTERRUPT_POLL_INTERVAL)
+            if await asyncio.to_thread(hybrid_tmux.composer_ready, sid):
+                await asyncio.to_thread(hybrid_tmux.interrupt_turn, sid)
+                logger.info("Hybrid session %s composer freed — interrupt sent", sid)
+                return True
+
+        logger.warning(
+            "Hybrid soft interrupt gave up for session %s: composer never freed within %.0fs",
+            sid, self.HYBRID_INTERRUPT_TIMEOUT,
+        )
+        return False
 
     # ------------------------------------------------------------------
     # Settings / title application

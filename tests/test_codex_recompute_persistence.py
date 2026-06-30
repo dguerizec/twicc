@@ -5,9 +5,9 @@ Scenario
 1. The live path (watcher) processes a Codex JSONL line where the user denied
    a tool. It creates a ``ToolResultLink`` row with
    ``error="User denied this action"`` by consulting
-   ``CodexAgent._denied_tool_ids`` (in-memory map).
-2. The backend restarts. ``_denied_tool_ids`` is gone; ``_denied_tool_reason``
-   returns ``None`` for every call_id.
+   ``CodexAgent._user_terminated_tool_ids`` (in-memory map).
+2. The backend restarts. ``_user_terminated_tool_ids`` is gone;
+   ``_user_terminated_tool_reason`` returns ``None`` for every call_id.
 3. Background re-compute reprocesses the same JSONL. ``analysis.tool_result_error``
    is ``None`` (no live agent). The old diff loop would detect a difference
    (original.error="User denied this action" vs new.error=None) and call
@@ -119,7 +119,8 @@ class TestRecomputePreservesToolResultLinkError:
     def test_existing_error_not_erased_on_recompute(self, codex_session):
         """
         Pre-seed a ToolResultLink with error="User denied this action".
-        Run batch compute without a live agent (error=None from _denied_tool_reason).
+        Run batch compute without a live agent (error=None from
+        _user_terminated_tool_reason).
         Verify the error is preserved after apply_session_complete.
         """
         session = codex_session
@@ -147,7 +148,8 @@ class TestRecomputePreservesToolResultLinkError:
         )
 
         # 2. Pre-seed the ToolResultLink as the live path would have created it,
-        #    with error="User denied this action" (recorded by _denied_tool_ids).
+        #    with error="User denied this action" (recorded by
+        #    _user_terminated_tool_ids).
         ToolResultLink.objects.create(
             session=session,
             tool_use_line_num=tool_use_item.line_num,
@@ -159,7 +161,7 @@ class TestRecomputePreservesToolResultLinkError:
             extra=json.dumps({"is_terminated": True}),
         )
 
-        # 3. Run background re-compute (no live agent → _denied_tool_reason
+        # 3. Run background re-compute (no live agent → _user_terminated_tool_reason
         #    returns None → error=None in computed result).
         compute = get_compute()
         result_q = queue.Queue()
