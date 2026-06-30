@@ -63,6 +63,13 @@ The facility is generic across providers, in four parts:
 
 The block carries arbitrary ``key: value`` lines, so a new context field is a
 one-line change at the injection site and needs no change here.
+
+A second, simpler block shares part 3's strip: :func:`apply_goal_instruction`
+*appends* a static ``<twicc:instruction>`` block to a ``/goal <args>`` slash
+command (Claude Code only today) telling the agent that a later goal
+complements/overrides the earlier one(s). It folds in at the same send-time
+chokepoint and is scrubbed by the same ingestion strip — but, being appended
+inside the command's args rather than prepended, it is matched unanchored.
 """
 
 from __future__ import annotations
@@ -74,18 +81,30 @@ from collections.abc import Mapping
 logger = logging.getLogger(__name__)
 
 CONTEXT_TAG_NAME = "twicc:context"
+INSTRUCTION_TAG_NAME = "twicc:instruction"
 
-# Cheap membership pre-check callers run before the (rarely-needed) strip, so
+# Cheap membership pre-checks callers run before the (rarely-needed) strip, so
 # the common case — an item without the tag — never pays for a regex or a walk.
 CONTEXT_BLOCK_MARKER = f"<{CONTEXT_TAG_NAME}>"
+INSTRUCTION_BLOCK_MARKER = f"<{INSTRUCTION_TAG_NAME}>"
 
 # Matches a leading ``<twicc:context> ... </twicc:context>`` block plus the
 # whitespace that separates it from the real message. Anchored at the start so
 # a tag the user happens to type mid-message is never touched; DOTALL so a
 # multi-line block (one ``key: value`` per line) is captured whole; non-greedy
 # so back-to-back blocks are removed one at a time rather than as one span.
-_BLOCK_RE = re.compile(
+_CONTEXT_BLOCK_RE = re.compile(
     rf"^\s*<{re.escape(CONTEXT_TAG_NAME)}>.*?</{re.escape(CONTEXT_TAG_NAME)}>\s*",
+    re.DOTALL,
+)
+
+# Matches the ``<twicc:instruction> ... </twicc:instruction>`` block appended to
+# a ``/goal`` command, plus the whitespace that joins it to the command. Unlike
+# the context block this one is *not* anchored: the CLI folds it into the
+# command's ``<command-args>``, so by ingestion time it sits mid-string, not at
+# the start. DOTALL + non-greedy for the same reasons as above.
+_INSTRUCTION_BLOCK_RE = re.compile(
+    rf"\s*<{re.escape(INSTRUCTION_TAG_NAME)}>.*?</{re.escape(INSTRUCTION_TAG_NAME)}>\s*",
     re.DOTALL,
 )
 
@@ -105,21 +124,29 @@ def build_context_block(fields: Mapping[str, str]) -> str:
 
 
 def strip_context_blocks(text: str) -> str:
-    """Remove a leading ``<twicc:context>`` block from ``text`` (no-op if absent)."""
-    if CONTEXT_BLOCK_MARKER not in text:
-        return text
-    return _BLOCK_RE.sub("", text)
+    """Remove the internal TwiCC blocks from ``text`` (no-op when absent).
+
+    Two blocks are scrubbed so neither reaches the UI, full-text search, session
+    title or message browser: the leading ``<twicc:context>`` block, and the
+    ``<twicc:instruction>`` block appended to ``/goal`` commands (which, riding
+    inside the command args, can sit anywhere in the string — hence unanchored).
+    """
+    if CONTEXT_BLOCK_MARKER in text:
+        text = _CONTEXT_BLOCK_RE.sub("", text)
+    if INSTRUCTION_BLOCK_MARKER in text:
+        text = _INSTRUCTION_BLOCK_RE.sub("", text)
+    return text
 
 
 def strip_context_blocks_in_place(parsed: object) -> bool:
-    """Strip context blocks from every string within a parsed JSONL item.
+    """Strip the internal TwiCC blocks from every string within a parsed JSONL item.
 
     Walks ``parsed`` (the dict/list decoded from one JSONL line) and rewrites
-    any string value that starts with a context block. Provider-agnostic: it
-    does not need to know which field carries the user text — the anchored
-    regex only bites the value that actually starts with the block. Returns
-    ``True`` when anything changed, so the caller re-serialises
-    ``SessionItem.content``.
+    any string value carrying a ``<twicc:context>`` (leading) or
+    ``<twicc:instruction>`` (anywhere) block. Provider-agnostic: it does not
+    need to know which field carries the user text — the regexes only bite the
+    blocks themselves. Returns ``True`` when anything changed, so the caller
+    re-serialises ``SessionItem.content``.
     """
     changed = False
 
@@ -229,6 +256,53 @@ def apply_pending_context(session_id: str, text: str) -> str:
         return text
     block = build_context_block(fields)
     return f"{block}\n\n{text}" if text else block
+
+
+# --------------------------------------------------------------------------
+# /goal instruction postfix
+# --------------------------------------------------------------------------
+
+# Appended verbatim to a ``/goal <args>`` slash command so the agent (1) reads
+# successive goals as cumulative — a later ``/goal xxxx`` (or ``/goal clear``)
+# complements or overrides the earlier one(s) — and (2) prominently warns the
+# user when they try to change or stop the goal in a regular message instead of
+# via ``/goal`` / ``/goal clear``, since the evaluator only ever sees what
+# ``/goal`` set. Scrubbed from the stored copy by the ingestion strip, like
+# ``<twicc:context>``.
+_GOAL_INSTRUCTION = (
+    "If the user later ask for another goal via /goal xxxx, or to clear it via "
+    "/goal clear, the last instruction complement/override the previous one(s). "
+    "A goal can ONLY be set or changed through the /goal command. So if the user "
+    "tells you in a regular message to change or adjust the goal (for example "
+    "'instead of counting to 10, count to 8') without using /goal, that change is "
+    "NOT part of the goal: the evaluator will ignore it and keep the original goal. "
+    "Whenever this happens, you MUST warn the user prominently and visibly that "
+    "they have to use `/goal <new instruction>` for the change to be taken into "
+    "account when the goal is evaluated. Likewise, if the user asks to stop or "
+    "abandon the goal without using `/goal clear`, you MUST warn them the same way "
+    "that they have to use /goal clear for the goal to actually be cleared"
+)
+
+# A ``/goal`` invocation that actually carries an argument: the command token is
+# exactly ``/goal`` (not e.g. ``/goalkeeper``), followed by whitespace and at
+# least one non-whitespace character. A bare ``/goal`` — or ``/goal`` trailed by
+# only whitespace — gets no instruction. Leading whitespace is tolerated to
+# mirror :func:`apply_pending_context`'s slash-command check.
+_GOAL_COMMAND_RE = re.compile(r"\s*/goal\s+\S")
+
+
+def apply_goal_instruction(text: str) -> str:
+    """Append the ``<twicc:instruction>`` block when ``text`` is ``/goal <args>``.
+
+    Returns ``text`` unchanged for anything that is not a ``/goal`` command with
+    a non-empty argument (see :data:`_GOAL_COMMAND_RE`). Provider-agnostic; the
+    caller folds it in at the same send-time chokepoint as
+    :func:`apply_pending_context`. The block rides this single message only; the
+    ingestion strip keeps it out of the stored copy. See the module docstring.
+    """
+    if not _GOAL_COMMAND_RE.match(text):
+        return text
+    return f"{text}\n<{INSTRUCTION_TAG_NAME}>{_GOAL_INSTRUCTION}</{INSTRUCTION_TAG_NAME}>"
 
 
 # --------------------------------------------------------------------------

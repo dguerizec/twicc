@@ -31,7 +31,7 @@ import orjson
 
 from twicc.agent import AgentInfo, AgentState, BaseAgent, PendingRequest, StateChangeCallback
 from twicc.agent.plugin import get_plugin_dir
-from twicc.context_injection import apply_pending_context
+from twicc.context_injection import apply_goal_instruction, apply_pending_context
 from twicc.core.enums import Provider
 from twicc.core.models import Session
 from twicc.pending_session_attributes import get_pending_session_attributes
@@ -668,6 +668,10 @@ class ClaudeCodeAgent(BaseAgent):
         # scrubs the block from the stored copy. See twicc.context_injection.
         await self._reconcile_context()
         text = apply_pending_context(self.session_id, text)
+        # And, when this message is a ``/goal <args>`` command, append the static
+        # <twicc:instruction> block (a no-op otherwise). Same chokepoint, same
+        # ingestion strip. See twicc.context_injection.apply_goal_instruction.
+        text = apply_goal_instruction(text)
 
         content_blocks: list[dict] = []
 

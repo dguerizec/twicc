@@ -797,19 +797,19 @@ class BaseSessionCompute:
         """Rewrite a parsed item in place before metadata computation.
 
         Template method shared by every provider. It first scrubs any injected
-        ``<twicc:context>`` block from the user text (a generic, cross-provider
-        step — see :mod:`twicc.context_injection`), then runs the provider's
-        own rewrites (:meth:`_transform_inline_provider`). Stripping first means
-        the provider logic and the stored ``SessionItem.content`` only ever see
-        the clean text, regardless of what the provider does. Both steps mutate
-        ``parsed_json`` in place, so the downstream computation
-        (``analyze_content``, title extraction, ...) operates on the cleaned,
-        rewritten item.
+        TwiCC blocks (``<twicc:context>``, ``<twicc:instruction>``) from the user
+        text (a generic, cross-provider step — see :mod:`twicc.context_injection`),
+        then runs the provider's own rewrites (:meth:`_transform_inline_provider`).
+        Stripping first means the provider logic and the stored
+        ``SessionItem.content`` only ever see the clean text, regardless of what
+        the provider does. Both steps mutate ``parsed_json`` in place, so the
+        downstream computation (``analyze_content``, title extraction, ...)
+        operates on the cleaned, rewritten item.
 
-        The strip keeps the ``<twicc:context>`` block out of the stored
-        content — and therefore out of the UI, full-text search, session title
-        and message browser. The agent still saw the block in its turn input
-        and replayed rollout; only the persisted copy is cleaned.
+        The strip keeps those blocks out of the stored content — and therefore
+        out of the UI, full-text search, session title and message browser. The
+        agent still saw the block in its turn input and replayed rollout; only
+        the persisted copy is cleaned.
 
         Returns the new serialised JSON string when anything changed (the
         caller updates ``SessionItem.content``), or ``None`` when the item was
