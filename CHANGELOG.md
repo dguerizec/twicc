@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Stopping sessions** — more reliable stop handling, plus a new force-stop (hard kill) for a session that won't stop in time (+CLI/skill/API).
 - **Image preview** — small images now open in a roomier view, making them more practical to zoom into.
 - **Git diff → Files** — opening a Git diff in the Files tab now lands on the line you were looking at.
+- **Tips** — automatically shown tips now appear at most once a day.
 - **Dockable layouts** — several small improvements.
 
 ### Fixed

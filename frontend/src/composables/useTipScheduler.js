@@ -14,7 +14,7 @@ import { isTipToastItem } from '../components/tips/showTipToast'
 // Cooldown measured from the moment the user voluntarily dismisses the
 // previous tip (Close, Escape, or "Next tip" returning no further
 // candidate). Bump as needed — this is the variable to tune first.
-export const TIP_COOLDOWN_MS = 2 * 60 * 60_000   // 2 hours
+export const TIP_COOLDOWN_MS = 24 * 60 * 60_000   // 24 hours (≈ one tip per day)
 
 // Delay between app mount and the first tip attempt.
 export const FIRST_TIP_DELAY_MS = 60_000          // 60 seconds
