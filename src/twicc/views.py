@@ -756,7 +756,7 @@ async def commands(request, project_id):
         Command.objects
         .filter(provider=provider.value, activation_char=activation_char)
         .order_by("name")
-        .values("name", "plugin_name", "description", "argument_hint", "is_builtin", "project_id")
+        .values("name", "plugin_name", "description", "argument_hint", "is_builtin", "is_workflow", "project_id")
     )
     # Untrusted (or unknown-trust) projects only get the global (user/managed)
     # commands — project-scoped ones are repo-controlled (trust design §13.4).
@@ -774,6 +774,7 @@ async def commands(request, project_id):
                 "description": cmd["description"],
                 "argument_hint": cmd["argument_hint"],
                 "is_builtin": cmd["is_builtin"],
+                "is_workflow": cmd["is_workflow"],
                 "is_global": cmd["project_id"] is None,
             }
             for cmd in cmds

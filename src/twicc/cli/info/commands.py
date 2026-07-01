@@ -53,6 +53,7 @@ def build(
                 "description": cmd.description,
                 "argument_hint": cmd.argument_hint,
                 "is_builtin": cmd.is_builtin,
+                "is_workflow": cmd.is_workflow,
                 "scope": "global" if cmd.project_id is None else f"project:{cmd.project_id}",
             })
         output[prov.value] = entries

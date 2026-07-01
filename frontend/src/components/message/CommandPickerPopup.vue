@@ -83,10 +83,16 @@ const PAGE_SIZE = 10
 // ─── Display tag ──────────────────────────────────────────────────────────
 // Builds the parenthesized tag shown next to the command name.
 // Examples: (built-in) — (superpowers plugin, project) — (global) — (project)
+//           (built-in workflow) — (workflow, project) — (superpowers plugin workflow, global)
 
 function commandTag(cmd) {
-    if (cmd.is_builtin) return 'built-in'
     const scope = cmd.is_global ? 'global' : 'project'
+    if (cmd.is_workflow) {
+        if (cmd.is_builtin) return 'built-in workflow'
+        if (cmd.plugin_name) return `${cmd.plugin_name} plugin workflow, ${scope}`
+        return `workflow, ${scope}`
+    }
+    if (cmd.is_builtin) return 'built-in'
     if (cmd.plugin_name) return `${cmd.plugin_name} plugin, ${scope}`
     return scope
 }

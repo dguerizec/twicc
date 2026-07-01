@@ -127,6 +127,7 @@ Each provider's list carries the slash / dollar commands available, ordered by `
       "description": "Create a git commit",
       "argument_hint": null,
       "is_builtin": false,
+      "is_workflow": false,
       "scope": "global"
     }
   ]
@@ -135,6 +136,7 @@ Each provider's list carries the slash / dollar commands available, ordered by `
 
 - `command` — the literal invocation: `activation_char + name` (e.g. `/commit`, `$skill-name`).
 - `plugin_name` — `null` for commands that aren't shipped by a plugin.
+- `is_workflow` — `true` for saved workflows (`.claude/workflows/*.js`); Claude Code only.
 - `scope` — `"global"` or `"project:<id>"`.
 
 ### `models`

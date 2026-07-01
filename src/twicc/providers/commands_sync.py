@@ -22,7 +22,7 @@ from twicc.core.models import Command
 # ``activation_char``, ``project_id`` and ``name`` form the natural key
 # (caller has already split them into the ``desired`` dict's key
 # tuple), so they're not in this list.
-_COMPARE_FIELDS = ("plugin_name", "description", "argument_hint", "is_builtin")
+_COMPARE_FIELDS = ("plugin_name", "description", "argument_hint", "is_builtin", "is_workflow")
 
 
 def apply_desired_commands(
@@ -44,7 +44,8 @@ def apply_desired_commands(
         desired: Map ``(project_id_or_None, name) -> fields`` where
             ``fields`` carries every column outside the natural key:
             ``plugin_name``, ``description``, ``argument_hint``,
-            ``is_builtin``. Missing keys land as ``None`` / ``False``.
+            ``is_builtin``, ``is_workflow``. Missing keys land as
+            ``None`` / ``False``.
 
     Returns:
         ``{"created": int, "updated": int, "deleted": int, "unchanged": int}``.

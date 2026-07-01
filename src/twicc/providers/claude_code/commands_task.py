@@ -102,6 +102,7 @@ def _build_desired_commands() -> dict[tuple[str | None, str], dict]:
                 "description": cmd.description,
                 "argument_hint": cmd.argument_hint,
                 "is_builtin": False,
+                "is_workflow": cmd.is_workflow,
             }
 
     for project_id, cmds in project_commands.items():
@@ -113,6 +114,7 @@ def _build_desired_commands() -> dict[tuple[str | None, str], dict]:
                     "description": cmd.description,
                     "argument_hint": cmd.argument_hint,
                     "is_builtin": False,
+                    "is_workflow": cmd.is_workflow,
                 }
 
     return desired

@@ -13,6 +13,8 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
+from .workflow_meta import WorkflowMetaError, extract_workflow_meta
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -122,6 +124,9 @@ class DiscoveredCommand(NamedTuple):
     plugin_name: str | None
     description: str
     argument_hint: str | None
+    # True for saved workflows (``.claude/workflows/*.js``); False for legacy
+    # commands and skills. Preserved across ``_replace(plugin_name=...)``.
+    is_workflow: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +218,58 @@ def _scan_skills_dir(directory: Path) -> list[DiscoveredCommand]:
             plugin_name=None,
             description=description,
             argument_hint=argument_hint,
+        ))
+
+    return results
+
+
+def _scan_workflows_dir(directory: Path) -> list[DiscoveredCommand]:
+    """Scan a ``workflows`` directory for saved workflow ``*.js`` files.
+
+    Each file's ``export const meta = {...}`` block is parsed in pure Python
+    (no Node). Resilience: a file whose meta can't be extracted — or that
+    yields no usable name — is skipped silently, exactly like an unreadable
+    command file. The command name is ``meta.name`` when present, else the
+    filename stem (mirroring how skills fall back from the frontmatter
+    ``name`` to the directory name); the description falls back to
+    ``"Workflow"``. Scanned flat (no recursion) — saved workflows live
+    directly under ``workflows/``.
+    """
+    results: list[DiscoveredCommand] = []
+    if not directory.is_dir():
+        return results
+
+    for js_file in sorted(directory.glob("*.js")):
+        if not js_file.is_file():
+            continue
+
+        try:
+            content = js_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        try:
+            meta = extract_workflow_meta(content)
+        except WorkflowMetaError:
+            continue  # not a parseable workflow — ignore
+
+        name = meta.get("name")
+        name = name.strip() if isinstance(name, str) else ""
+        if not name:  # absent, non-string, or blank → fall back to the filename
+            name = js_file.stem.strip()
+        if not name:
+            continue  # nothing usable to invoke
+
+        description = meta.get("description")
+        if not description or not isinstance(description, str):
+            description = "Workflow"
+
+        results.append(DiscoveredCommand(
+            name=name,
+            plugin_name=None,
+            description=description,
+            argument_hint=None,
+            is_workflow=True,
         ))
 
     return results
@@ -345,6 +402,25 @@ def _scan_plugin(plugin_name: str, install_path: Path) -> list[DiscoveredCommand
             for cmd in _scan_commands_dir(commands_dir):
                 results.append(cmd._replace(plugin_name=plugin_name))
 
+    # Determine which directories to scan for workflows (plugins may ship
+    # saved workflows too). Same shape as commands: honour a manifest
+    # ``workflows`` array of directory paths, else fall back to a
+    # ``workflows/`` directory at the plugin root.
+    manifest_workflows = manifest.get("workflows") if manifest else None
+    if isinstance(manifest_workflows, list) and manifest_workflows:
+        for wf_path_str in manifest_workflows:
+            if not isinstance(wf_path_str, str):
+                continue
+            wf_dir = (install_path / wf_path_str).resolve()
+            if wf_dir.is_dir():
+                for wf in _scan_workflows_dir(wf_dir):
+                    results.append(wf._replace(plugin_name=plugin_name))
+    else:
+        workflows_dir = install_path / "workflows"
+        if workflows_dir.is_dir():
+            for wf in _scan_workflows_dir(workflows_dir):
+                results.append(wf._replace(plugin_name=plugin_name))
+
     return results
 
 
@@ -443,6 +519,7 @@ def discover_global_commands(plugin_entries: list[PluginEntry] | None = None) ->
 
     commands.extend(_scan_commands_dir(home / ".claude" / "commands"))
     commands.extend(_scan_skills_dir(home / ".claude" / "skills"))
+    commands.extend(_scan_workflows_dir(home / ".claude" / "workflows"))
 
     if plugin_entries is None:
         plugin_entries = read_plugin_entries()
@@ -490,6 +567,7 @@ def discover_project_commands(
 
         commands.extend(_scan_commands_dir(d / ".claude" / "commands"))
         commands.extend(_scan_skills_dir(d / ".claude" / "skills"))
+        commands.extend(_scan_workflows_dir(d / ".claude" / "workflows"))
 
     # Plugin commands for this project (project/local scoped)
     if plugin_entries is None:

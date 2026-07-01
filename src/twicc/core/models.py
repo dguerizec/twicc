@@ -1440,6 +1440,11 @@ class Command(models.Model):
     # live in a frontend constant and never reach this table, so every
     # existing Claude row stays at the default ``False``.
     is_builtin = models.BooleanField(default=False)
+    # Whether this row is a saved workflow (a Claude Code ``.js`` under a
+    # ``.claude/workflows/`` directory — user, project, or plugin) rather
+    # than a legacy command / skill. Drives the ``(workflow)`` tag in the
+    # picker. Claude-Code-only for now; Codex rows always stay ``False``.
+    is_workflow = models.BooleanField(default=False)
 
     class Meta:
         indexes = [

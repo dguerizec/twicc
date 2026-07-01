@@ -26,7 +26,10 @@ function formatRetirementDate(isoDate) {
 //
 // ``is_builtin`` is a frontend-only sentinel the picker tag uses to render
 // the ``(built-in)`` label — these rows never reach the backend, so it
-// doesn't need a matching column on ``Command``.
+// doesn't need a matching column on ``Command``. ``is_workflow`` is the same
+// kind of sentinel: set on ``deep-research`` (a workflow shipped with Claude)
+// so the picker tags it ``built-in workflow``. The flag also exists as a real
+// ``Command`` column for workflows discovered on disk.
 const BUILTIN_COMMANDS = [
     { name: 'compact', plugin_name: null, is_builtin: true, is_global: true, description: 'Clear conversation history but keep a summary in context', argument_hint: '[instructions for summarization]' },
     { name: 'cost', plugin_name: null, is_builtin: true, is_global: true, description: 'Show the cost of the current session', argument_hint: null },
@@ -34,7 +37,7 @@ const BUILTIN_COMMANDS = [
     { name: 'init', plugin_name: null, is_builtin: true, is_global: true, description: 'Initialize a new CLAUDE.md file with codebase documentation', argument_hint: null },
     { name: 'loop', plugin_name: null, is_builtin: true, is_global: true, description: "Run a prompt or slash command on a recurring interval until the session ends (e.g. /loop 5m /foo, defaults to 10m)", argument_hint: '[interval] [command or prompt]' },
     { name: 'goal', plugin_name: null, is_builtin: true, is_global: true, description: "Set a completion condition Claude keeps working toward across turns until an evaluator agent confirms it's met; run with no argument to show status, or 'clear' to cancel", argument_hint: '[condition | clear]' },
-    { name: 'deep-research', plugin_name: null, is_builtin: true, is_global: true, description: 'Research a question across many web sources, cross-verify claims, and return a cited report', argument_hint: '<question>' },
+    { name: 'deep-research', plugin_name: null, is_builtin: true, is_workflow: true, is_global: true, description: 'Research a question across many web sources, cross-verify claims, and return a cited report', argument_hint: '<question>' },
 ]
 
 // Map of usage-file field names (cross-provider) → Claude Code store

@@ -117,6 +117,7 @@ def _skill_to_desired_entry(skill, project_id_for_repo: str | None) -> tuple[tup
         "description": description,
         "argument_hint": None,  # Codex skills don't carry argument hints
         "is_builtin": is_builtin,
+        "is_workflow": False,  # workflows are a Claude-Code-only concept
     }
     return (project_id, name), fields
 
