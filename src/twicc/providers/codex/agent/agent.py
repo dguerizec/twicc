@@ -669,6 +669,21 @@ class CodexAgent(BaseAgent):
         self.last_activity = time.time()
         await self._notify_state_change()
         await self._broadcast_process_label("compacting")
+        # Give the manual /compact a persistent transcript line. The compaction
+        # RPC writes only the ``compacted`` summary (the divider), never a "the
+        # user asked to compact" line, so without this the command survives only
+        # as the transient optimistic bubble (retired on completion). Inject it
+        # BEFORE the RPC so it lands ahead of the summary on disk; best-effort —
+        # a failed injection must never block the compaction itself. The compute
+        # relabels the injected line into a real user_message (see the Codex
+        # compute's ``_injected_command_text``).
+        try:
+            await self._thread.inject_user_message("/compact")
+        except Exception:
+            logger.warning(
+                "Codex /compact: failed to inject the transcript line for session %s",
+                self.session_id, exc_info=True,
+            )
         try:
             await self._thread.compact()
         except Exception as e:

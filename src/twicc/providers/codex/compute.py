@@ -17,10 +17,10 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   it classifies as ``USER_MESSAGE`` (above), counts toward ``user_message_count``
   and renders as the command the user effectively issued. The original payload
   is kept under ``twiccOriginalContent``.
-- A ``response_item.message`` (role=user) that is a TwiCC-injected ``/goal``
-  command (via ``thread/inject_items`` — today only ``/goal clear``, which Codex
-  writes no rollout line for) is likewise rewritten into an
-  ``event_msg.user_message`` carrying that command. Same
+- A ``response_item.message`` (role=user) that is a TwiCC-injected command
+  (via ``thread/inject_items`` — ``/goal clear`` and ``/compact``, for which
+  Codex writes no "the user asked" rollout line of its own) is likewise
+  rewritten into an ``event_msg.user_message`` carrying that command. Same
   ``twiccOriginalContent`` preservation.
 - ``event_msg.*`` whose sub-type is in :data:`_PERSISTED_END_EVENT_TYPES`
   (``patch_apply_end``, ``mcp_tool_call_end``) → kind stays ``None``;
@@ -796,20 +796,25 @@ def _goal_context_objective(parsed_json: dict) -> str | None:
     return objective or None
 
 
-# TwiCC-injected ``/goal`` commands (via ``thread/inject_items``) that Codex
-# writes no rollout line for on its own — today only ``/goal clear`` (its RPC
-# emits a wire-only notification). They land as a ``response_item.message``
-# (role=user) carrying the literal command; the transform relabels them as real
-# user messages. Real user input never takes this shape (it is an
-# ``event_msg.user_message``), so an exact match is unambiguous.
-_INJECTED_GOAL_COMMANDS = frozenset({"/goal clear"})
+# TwiCC-injected commands (via ``thread/inject_items``) for which Codex writes
+# no rollout line for on its own, so TwiCC injects one to keep the command
+# visible in the transcript:
+#   - ``/goal clear`` — its RPC emits a wire-only notification, nothing to disk.
+#   - ``/compact`` — its RPC writes only the ``compacted`` summary (the divider),
+#     never a "the user asked to compact" line, so without this the command
+#     survives only as a transient optimistic bubble (retired on completion).
+# They land as a ``response_item.message`` (role=user) carrying the literal
+# command; the transform relabels them as real user messages. Real user input
+# never takes this shape (it is an ``event_msg.user_message``), so an exact
+# match is unambiguous.
+_INJECTED_COMMANDS = frozenset({"/goal clear", "/compact"})
 
 
-def _injected_goal_command_text(parsed_json: dict) -> str | None:
-    """Return the command of a TwiCC-injected ``/goal`` message, or ``None``.
+def _injected_command_text(parsed_json: dict) -> str | None:
+    """Return the command of a TwiCC-injected message, or ``None``.
 
     Matches a ``response_item.message`` (role=user) whose sole ``input_text`` is
-    exactly one of :data:`_INJECTED_GOAL_COMMANDS`. Used to rewrite the injected
+    exactly one of :data:`_INJECTED_COMMANDS`. Used to rewrite the injected
     line into a real ``user_message`` — see :meth:`_transform_inline_provider`.
     """
     if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
@@ -827,7 +832,7 @@ def _injected_goal_command_text(parsed_json: dict) -> str | None:
     if not isinstance(text, str):
         return None
     stripped = text.strip()
-    return stripped if stripped in _INJECTED_GOAL_COMMANDS else None
+    return stripped if stripped in _INJECTED_COMMANDS else None
 
 
 def _parse_subagent_notification(parsed_json: dict) -> tuple[str, dict] | None:
@@ -1467,12 +1472,12 @@ class CodexSessionCompute(BaseSessionCompute):
             }
             return orjson.dumps(parsed_json).decode("utf-8")
 
-        # TwiCC-injected ``/goal`` command (e.g. ``/goal clear``) → user message.
+        # TwiCC-injected command (``/goal clear``, ``/compact``) → user message.
         # Injected via ``thread/inject_items`` for commands Codex writes no
         # rollout line for; relabel the injected ``response_item.message`` as the
         # canonical ``event_msg.user_message`` so it counts + renders like the
         # command the user issued. Original kept under ``twiccOriginalContent``.
-        injected_command = _injected_goal_command_text(parsed_json)
+        injected_command = _injected_command_text(parsed_json)
         if injected_command is not None:
             parsed_json["twiccOriginalContent"] = parsed_json.get("payload")
             parsed_json["type"] = _TYPE_EVENT_MSG
