@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Tasks tab** — a session with a task list now shows its latest state in a dedicated tab; the tasks list is also accessible via CLI (+skill/API) with other session info.
 - **Workflows tab** — a Claude session that ran workflows now shows them in a dedicated tab, live as they run; workflows are also accessible via CLI (+skill/API).
 - **Interrupting the assistant** — stop it mid-task without ending the session, ready for your next message.
+- **`/goal` command** — give a Claude or Codex session a standing objective to work toward, and refine or clear it as you go.
 - **Codex `view_image` tool** — dedicated display that shows the viewed image instead of a raw tool result.
 - **Search safeguard** — TwiCC now catches a common Claude search mistake (`rg -r`, mistaken for "recursive" when it actually means "replace") and has it retry, instead of letting it return silently garbled results.
 
