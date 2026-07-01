@@ -1106,6 +1106,16 @@ export function useWebSocket() {
                 store.clearOptimisticMessage(msg.session_id)
                 break
             }
+            case 'goal_command_done': {
+                // Codex applied a user /goal command (set or clear) via the
+                // app-server goal RPCs. Like /compact, no user_message JSONL
+                // line is written for it, so the optimistic "/goal …" bubble
+                // would otherwise stay stuck — drop it. (A cold-woken session's
+                // STARTING placeholder clears via the paired process_state →
+                // USER_TURN.)
+                store.clearOptimisticMessage(msg.session_id)
+                break
+            }
             case 'process_tools': {
                 // Active-tool list for the WorkingAssistantMessage status line.
                 const ps = store.processStates[msg.session_id]

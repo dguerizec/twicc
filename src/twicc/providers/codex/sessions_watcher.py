@@ -25,7 +25,10 @@ import logging
 from pathlib import Path
 from typing import ClassVar
 
-from twicc.core.models import SessionType
+import orjson
+from asgiref.sync import sync_to_async
+
+from twicc.core.models import SessionItem, SessionType
 from twicc.paths import path_to_project_id
 from twicc.providers.compute_base import BaseSessionCompute
 from twicc.providers.sessions_watcher import (
@@ -113,6 +116,59 @@ class CodexSessionsWatcher(BaseSessionsWatcher):
         except KeyError:
             return
         await manager.notify_compacted(session_id)
+
+    async def _after_new_lines_synced(self, session, new_line_nums, tool_result_updates) -> None:
+        # When a live agent is parked in a ``/goal`` continuation (a synthetic
+        # ASSISTANT_TURN it does NOT drive), watch the freshly-synced lines for
+        # the goal leaving ``active`` — the app-server's signal that the
+        # continuation ended — so the agent can settle back to USER_TURN. Cheap
+        # gate first (no DB read unless such an agent is live); fire-and-forget
+        # so the ingest path never blocks on the agent lock.
+        if not new_line_nums:
+            return
+        from .agent.manager import get_codex_agent_manager
+        try:
+            manager = get_codex_agent_manager()
+        except KeyError:
+            return
+        if not manager.has_goal_continuation(session.id):
+            return
+        asyncio.create_task(
+            self._check_goal_continuation_end(manager, session.id, list(new_line_nums)),
+            name=f"goal-continuation-check-{session.id}",
+        )
+
+    async def _check_goal_continuation_end(self, manager, session_id: str, new_line_nums: list[int]) -> None:
+        """Settle a parked ``/goal`` continuation if any fresh line is a goal stop.
+
+        Reads only the just-synced lines and applies the compute's
+        :meth:`~twicc.providers.codex.compute.CodexSessionCompute.is_goal_continuation_stopped`
+        predicate; on a hit, relays to the agent manager (the live agent's flag
+        decides whether to act).
+        """
+        def _stopped() -> bool:
+            compute = _get_compute()
+            rows = SessionItem.objects.filter(
+                session_id=session_id, line_num__in=new_line_nums,
+            ).values_list("content", flat=True)
+            for content in rows:
+                if not content:
+                    continue
+                try:
+                    parsed = orjson.loads(content)
+                except orjson.JSONDecodeError:
+                    continue
+                if compute.is_goal_continuation_stopped(parsed):
+                    return True
+            return False
+
+        try:
+            if await sync_to_async(_stopped)():
+                await manager.notify_goal_continuation_stopped(session_id)
+        except Exception:
+            logger.exception(
+                "Goal-continuation end check failed for session %s", session_id,
+            )
 
 
 # ---- Singleton accessor ----

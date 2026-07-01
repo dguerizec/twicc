@@ -19,9 +19,13 @@ parameter-build step is replaced.
 
 PRIVATE SDK API: the implementation reaches into
 ``openai_codex._inputs._normalize_run_input`` / ``_to_wire_input`` and
-into ``AsyncCodex._ensure_initialized`` / ``AsyncCodex._client``. See
-the memory ``reference_codex_sdk_update_procedure.md`` for the upgrade
-checklist (these attribute paths must hold).
+into ``AsyncCodex._ensure_initialized`` / ``AsyncCodex._client``. The
+goal helpers and ``inject_user_message`` additionally call
+``AsyncCodex._client.request`` with raw ``thread/goal/*`` /
+``thread/inject_items`` method strings — these app-server RPCs have no
+generated SDK wrapper (only the goal notifications are generated). See the
+memory ``reference_codex_sdk_update_procedure.md`` for the upgrade checklist
+(these attribute paths must hold).
 """
 
 from __future__ import annotations
@@ -35,10 +39,32 @@ from openai_codex.generated.v2_all import (
     ReasoningEffort,
     SandboxMode,
     SandboxPolicy,
+    ThreadGoal,
     ThreadResumeParams,
     ThreadStartParams,
     TurnStartParams,
 )
+from pydantic import BaseModel, ConfigDict
+
+
+class _ThreadGoalEnvelope(BaseModel):
+    """``thread/goal/{get,set}`` response — the thread's goal, or ``None``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    goal: ThreadGoal | None = None
+
+
+class _ThreadGoalClearResponse(BaseModel):
+    """``thread/goal/clear`` response — whether a goal was actually removed."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    cleared: bool = False
+
+
+class _ThreadInjectItemsResponse(BaseModel):
+    """``thread/inject_items`` response — an empty envelope."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class TwiccAsyncThread(AsyncThread):
@@ -75,6 +101,85 @@ class TwiccAsyncThread(AsyncThread):
             self.id, wire_input, params=params,
         )
         return AsyncTurnHandle(self._codex, self.id, turn.turn.id)
+
+    # ------------------------------------------------------------------
+    # Goal RPCs (``thread/goal/{get,set,clear}``)
+    #
+    # Not part of the generated SDK surface — only the goal *notifications*
+    # are generated. TwiCC drives the app-server RPCs directly through the
+    # private client, mirroring how the SDK's own ``compact()`` reaches
+    # ``thread/compact/start``. These are thin single-RPC helpers; the
+    # set-vs-clear-vs-replace orchestration lives on ``CodexAgent``.
+    # ------------------------------------------------------------------
+
+    async def goal_get(self) -> ThreadGoal | None:
+        """Read this thread's goal via ``thread/goal/get`` (``None`` when unset)."""
+        await self._codex._ensure_initialized()
+        response = await self._codex._client.request(
+            "thread/goal/get",
+            {"threadId": self.id},
+            response_model=_ThreadGoalEnvelope,
+        )
+        return response.goal
+
+    async def goal_set(self, objective: str) -> ThreadGoal | None:
+        """Create or edit this thread's goal via ``thread/goal/set``.
+
+        Sends only ``objective`` (+ ``threadId``): on a thread with no goal
+        this creates one (``status=active``, no budget, counters at 0); on an
+        existing goal it edits the objective in place, keeping status, budget
+        and counters. Budget and status are deliberately never sent — TwiCC's
+        ``/goal`` surface is objective-only.
+        """
+        await self._codex._ensure_initialized()
+        response = await self._codex._client.request(
+            "thread/goal/set",
+            {"threadId": self.id, "objective": objective},
+            response_model=_ThreadGoalEnvelope,
+        )
+        return response.goal
+
+    async def goal_clear(self) -> bool:
+        """Delete this thread's goal via ``thread/goal/clear``.
+
+        Returns the server's ``cleared`` flag (``False`` when there was no
+        goal to remove).
+        """
+        await self._codex._ensure_initialized()
+        response = await self._codex._client.request(
+            "thread/goal/clear",
+            {"threadId": self.id},
+            response_model=_ThreadGoalClearResponse,
+        )
+        return response.cleared
+
+    async def inject_user_message(self, text: str) -> None:
+        """Append a synthetic user message to the thread via ``thread/inject_items``.
+
+        Records a ``message`` (role=user) item in the thread's rollout AND
+        model-visible history WITHOUT starting or steering a turn (Codex
+        ``inject_no_new_turn`` + ``flush_rollout``), so it is safe even while a
+        turn runs. TwiCC uses this to give ``/goal clear`` a persistent
+        transcript line — the clear RPC itself writes nothing to the rollout
+        (wire-only notification); the compute then relabels the injected line as
+        a real ``user_message`` (see ``_injected_goal_command_text``). Like the
+        goal RPCs, ``thread/inject_items`` has no generated SDK wrapper.
+        """
+        await self._codex._ensure_initialized()
+        await self._codex._client.request(
+            "thread/inject_items",
+            {
+                "threadId": self.id,
+                "items": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": text}],
+                    }
+                ],
+            },
+            response_model=_ThreadInjectItemsResponse,
+        )
 
 
 class TwiccAsyncCodex(AsyncCodex):

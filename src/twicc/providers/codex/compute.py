@@ -10,6 +10,18 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
 
 - ``event_msg.user_message`` → ``USER_MESSAGE``
 - ``event_msg.agent_message`` → ``ASSISTANT_MESSAGE``
+- A ``response_item.message`` (role=user) carrying a
+  ``<codex_internal_context source="goal">`` block — the prompt Codex injects to
+  drive a goal continuation — is rewritten by :meth:`_transform_inline_provider`
+  into a synthetic ``event_msg.user_message`` of text ``/goal <objective>``, so
+  it classifies as ``USER_MESSAGE`` (above), counts toward ``user_message_count``
+  and renders as the command the user effectively issued. The original payload
+  is kept under ``twiccOriginalContent``.
+- A ``response_item.message`` (role=user) that is a TwiCC-injected ``/goal``
+  command (via ``thread/inject_items`` — today only ``/goal clear``, which Codex
+  writes no rollout line for) is likewise rewritten into an
+  ``event_msg.user_message`` carrying that command. Same
+  ``twiccOriginalContent`` preservation.
 - ``event_msg.*`` whose sub-type is in :data:`_PERSISTED_END_EVENT_TYPES`
   (``patch_apply_end``, ``mcp_tool_call_end``) → kind stays ``None``;
   routed to ``DEBUG_ONLY`` via :meth:`is_tool_result_item`. Pairs with the
@@ -126,6 +138,7 @@ compute, title extraction) still runs cleanly.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from datetime import datetime
@@ -179,6 +192,11 @@ _TYPE_TURN_CONTEXT = "turn_context"
 _TYPE_COMPACTED = "compacted"
 _PAYLOAD_USER_MESSAGE = "user_message"
 _PAYLOAD_AGENT_MESSAGE = "agent_message"
+# ``event_msg.thread_goal_updated`` carries the current goal snapshot
+# (``payload.goal.status``). Used as the live signal that a goal continuation
+# stopped — see :meth:`CodexSessionCompute.is_goal_continuation_stopped`.
+_PAYLOAD_THREAD_GOAL_UPDATED = "thread_goal_updated"
+_GOAL_STATUS_ACTIVE = "active"
 # Codex emits ``event_msg.image_generation_end`` once an image generation
 # call has produced its file. The payload carries the base64 PNG, the
 # revised prompt and the on-disk path — see the header docstring's
@@ -720,6 +738,96 @@ def _subagent_notification_text(parsed_json: dict) -> str | None:
     if _SUBAGENT_NOTIFICATION_START not in text:
         return None
     return text
+
+
+# Opening tag of the synthetic context message Codex injects to drive a goal
+# continuation. It is a ``response_item.message`` (role=user) whose first
+# ``input_text`` block wraps the objective in an ``<objective>`` tag. Matching
+# this exact opening tag identifies the line (other ``codex_internal_context``
+# sources, if any, are left untouched).
+_GOAL_CONTEXT_MARKER = '<codex_internal_context source="goal">'
+# The continuation prompt wraps the objective in ``<objective>``; the mid-run
+# objective-edit steer (a ``/goal`` set on an already-active goal) uses
+# ``<untrusted_objective>``. Match either (back-reference keeps open/close tags
+# paired) so both render as ``/goal <objective>``.
+_GOAL_OBJECTIVE_RE = re.compile(
+    r"<(untrusted_objective|objective)>\s*(.*?)\s*</\1>", re.DOTALL,
+)
+
+
+def _goal_context_objective(parsed_json: dict) -> str | None:
+    """Return the objective of a Codex goal-continuation context message.
+
+    When a thread has an active goal, Codex injects a ``response_item.message``
+    (role=user) whose first ``input_text`` block is a
+    ``<codex_internal_context source="goal">`` block wrapping the objective —
+    the continuation prompt uses an ``<objective>`` tag, the mid-run
+    objective-edit steer (a ``/goal`` set on an already-active goal) uses
+    ``<untrusted_objective>``::
+
+        {"type": "response_item", "payload": {"type": "message", "role": "user",
+          "content": [{"type": "input_text",
+            "text": "<codex_internal_context source=\\"goal\\">…<objective>\\nDo X\\n</objective>…"}]}}
+
+    Returns the objective body (XML-entity-unescaped) when the line matches that
+    shape, else ``None``. Used to rewrite the line into a human-looking ``/goal
+    <objective>`` user message — see :meth:`_transform_inline_provider`. (Codex
+    budget/usage-limit steers reuse the same ``source="goal"`` + ``<objective>``
+    shape; for TwiCC's budget-free ``/goal`` that case never arises.)
+    """
+    if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+        return None
+    payload = _payload(parsed_json)
+    if payload is None or payload.get("type") != "message" or payload.get("role") != "user":
+        return None
+    content = payload.get("content")
+    if not isinstance(content, list) or not content:
+        return None
+    first = content[0]
+    if not isinstance(first, dict) or first.get("type") != "input_text":
+        return None
+    text = first.get("text")
+    if not isinstance(text, str) or not text.lstrip().startswith(_GOAL_CONTEXT_MARKER):
+        return None
+    match = _GOAL_OBJECTIVE_RE.search(text)
+    if match is None:
+        return None
+    objective = html.unescape(match.group(2)).strip()
+    return objective or None
+
+
+# TwiCC-injected ``/goal`` commands (via ``thread/inject_items``) that Codex
+# writes no rollout line for on its own — today only ``/goal clear`` (its RPC
+# emits a wire-only notification). They land as a ``response_item.message``
+# (role=user) carrying the literal command; the transform relabels them as real
+# user messages. Real user input never takes this shape (it is an
+# ``event_msg.user_message``), so an exact match is unambiguous.
+_INJECTED_GOAL_COMMANDS = frozenset({"/goal clear"})
+
+
+def _injected_goal_command_text(parsed_json: dict) -> str | None:
+    """Return the command of a TwiCC-injected ``/goal`` message, or ``None``.
+
+    Matches a ``response_item.message`` (role=user) whose sole ``input_text`` is
+    exactly one of :data:`_INJECTED_GOAL_COMMANDS`. Used to rewrite the injected
+    line into a real ``user_message`` — see :meth:`_transform_inline_provider`.
+    """
+    if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+        return None
+    payload = _payload(parsed_json)
+    if payload is None or payload.get("type") != "message" or payload.get("role") != "user":
+        return None
+    content = payload.get("content")
+    if not isinstance(content, list) or len(content) != 1:
+        return None
+    first = content[0]
+    if not isinstance(first, dict) or first.get("type") != "input_text":
+        return None
+    text = first.get("text")
+    if not isinstance(text, str):
+        return None
+    stripped = text.strip()
+    return stripped if stripped in _INJECTED_GOAL_COMMANDS else None
 
 
 def _parse_subagent_notification(parsed_json: dict) -> tuple[str, dict] | None:
@@ -1336,7 +1444,45 @@ class CodexSessionCompute(BaseSessionCompute):
         line_num: int,
         in_memory_items: list[tuple[int, datetime | None, dict]] | None = None,
     ) -> str | None:
-        # The only Codex rewrite is the cross-provider screenshot tag
+        # Goal-continuation context → synthetic ``/goal <objective>`` user
+        # message. Codex drives an active goal by injecting a
+        # ``response_item.message`` (role=user) wrapping the objective in a
+        # ``<codex_internal_context source="goal">`` block. It is not human
+        # input, so it would classify as SYSTEM/DEBUG_ONLY and never count as a
+        # user message — which (a) keeps ``user_message_count`` at 0 so the live
+        # watcher broadcast (gated on ``user_message_count > 0``) stays silent
+        # for a goal session, and (b) drops the natural "the user set this goal"
+        # framing. Rewrite the line in place into the canonical
+        # ``event_msg.user_message`` shape carrying the command the user
+        # effectively issued (``/goal <objective>``), keeping the original
+        # payload under ``twiccOriginalContent``. Fires for ANY such message
+        # (first message of a new session, or a continuation in an existing one).
+        objective = _goal_context_objective(parsed_json)
+        if objective is not None:
+            parsed_json["twiccOriginalContent"] = parsed_json.get("payload")
+            parsed_json["type"] = _TYPE_EVENT_MSG
+            parsed_json["payload"] = {
+                "type": _PAYLOAD_USER_MESSAGE,
+                "message": f"/goal {objective}",
+            }
+            return orjson.dumps(parsed_json).decode("utf-8")
+
+        # TwiCC-injected ``/goal`` command (e.g. ``/goal clear``) → user message.
+        # Injected via ``thread/inject_items`` for commands Codex writes no
+        # rollout line for; relabel the injected ``response_item.message`` as the
+        # canonical ``event_msg.user_message`` so it counts + renders like the
+        # command the user issued. Original kept under ``twiccOriginalContent``.
+        injected_command = _injected_goal_command_text(parsed_json)
+        if injected_command is not None:
+            parsed_json["twiccOriginalContent"] = parsed_json.get("payload")
+            parsed_json["type"] = _TYPE_EVENT_MSG
+            parsed_json["payload"] = {
+                "type": _PAYLOAD_USER_MESSAGE,
+                "message": injected_command,
+            }
+            return orjson.dumps(parsed_json).decode("utf-8")
+
+        # The other Codex rewrite is the cross-provider screenshot tag
         # substitution: ``<twicc:insert-screenshot />`` markers placed
         # by the agent in an ``event_msg.agent_message`` payload are
         # replaced inline with a markdown image link, or with the
@@ -1407,6 +1553,29 @@ class CodexSessionCompute(BaseSessionCompute):
             "items": items,
             "explanation": explanation if isinstance(explanation, str) else None,
         }
+
+    def is_goal_continuation_stopped(self, parsed_json: dict) -> bool:
+        """True for an ``event_msg.thread_goal_updated`` whose status left ``active``.
+
+        Codex emits this when a goal continuation ends — the agent marked the
+        goal ``complete``/``blocked`` via ``update_goal``, or a usage/budget
+        limit moved it to ``usageLimited``/``budgetLimited``. The live watcher
+        relays it (only while a ``/goal`` continuation is parked — see
+        ``CodexSessionsWatcher``) so the agent settles its synthetic
+        ASSISTANT_TURN back to USER_TURN; TwiCC does not drive that turn itself.
+        A ``thread_goal_cleared`` event is intentionally NOT a stop signal: a
+        ``/goal`` replace clears the old goal mid-set before installing the new
+        one, which must not look like the continuation ending.
+        """
+        if parsed_json.get("type") != _TYPE_EVENT_MSG:
+            return False
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != _PAYLOAD_THREAD_GOAL_UPDATED:
+            return False
+        goal = payload.get("goal")
+        if not isinstance(goal, dict):
+            return False
+        return goal.get("status") != _GOAL_STATUS_ACTIVE
 
     def compute_item_kind(self, parsed_json: dict) -> ItemKind | None:
         # NOTE: any change to this classification MUST bump

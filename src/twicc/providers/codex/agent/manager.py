@@ -332,9 +332,14 @@ class CodexAgentManager(BaseAgentManager):
         Must be called while holding ``self._lock``.
 
         - Live, idle agent (``USER_TURN``): run the command on it directly.
-        - Live but busy (``ASSISTANT_TURN`` / ``STARTING``): refuse — a
-          compaction mid-turn is unsupported. The ``RuntimeError`` surfaces to
-          the caller (the WS handler turns it into an ``error`` frame).
+        - Live in a ``/goal`` continuation (synthetic ``ASSISTANT_TURN``, see
+          ``CodexAgent._goal_continuation_active``): let a ``/goal`` through —
+          TwiCC isn't driving that turn and the goal RPCs work mid-continuation
+          (set steers it in place per ``_set_goal``, clear stops it). ``/compact``
+          there, and anything during a real working turn, stays refused.
+        - Live but otherwise busy (real ``ASSISTANT_TURN`` / ``STARTING``):
+          refuse — the ``RuntimeError`` surfaces to the caller (the WS handler
+          turns it into an ``error`` frame).
         - No agent (or ``DEAD``): resume the thread WITHOUT scheduling a turn
           (``_start_agent`` with empty text + ``command=…``), then run it.
           Mirrors Claude Code, where ``/compact`` on a cold session wakes it.
@@ -346,10 +351,15 @@ class CodexAgentManager(BaseAgentManager):
         agent = self._agents.get(session_id)
 
         if agent is not None and agent.state != AgentState.DEAD:
-            if agent.state != AgentState.USER_TURN:
+            # A ``/goal`` continuation parks the agent in a synthetic
+            # ASSISTANT_TURN that TwiCC does NOT drive; the goal RPCs still work
+            # there (set steers the running turn in place, clear stops it), so a
+            # ``/goal`` is allowed. Everything else while busy — a real working
+            # turn, or ``/compact`` mid-continuation — is still refused.
+            busy = agent.state != AgentState.USER_TURN
+            if busy and not (command.name == "goal" and agent.in_goal_continuation()):
                 raise RuntimeError(
-                    f"Cannot run /{command.name} while the session is busy "
-                    f"(state={agent.state.value})",
+                    f"Cannot run /{command.name} while the assistant is working",
                 )
             await agent.run_hardcoded_command(command)
             return
@@ -380,6 +390,30 @@ class CodexAgentManager(BaseAgentManager):
             return
         await agent.notify_compacted()
 
+    def has_goal_continuation(self, session_id: str) -> bool:
+        """Whether a live agent for ``session_id`` is parked in a ``/goal``
+        continuation ASSISTANT_TURN.
+
+        Cheap gate for the watcher: it only reads goal-status lines from the DB
+        when this returns ``True`` (see ``CodexSessionsWatcher``).
+        """
+        agent = self._agents.get(session_id)
+        return agent is not None and agent.in_goal_continuation()
+
+    async def notify_goal_continuation_stopped(self, session_id: str) -> None:
+        """Relay "the goal continuation ended" from the watcher to a live agent.
+
+        Fired when a ``thread_goal_updated`` with a non-``active`` status lands.
+        Neutral relay — the agent decides, via its ``_goal_continuation_active``
+        flag, whether this concludes a ``/goal`` it armed (act: end the
+        synthetic ASSISTANT_TURN) or is unrelated (ignore). No live agent →
+        no-op.
+        """
+        agent = self._agents.get(session_id)
+        if agent is None:
+            return
+        await agent.notify_goal_continuation_stopped()
+
     async def create_session(
         self,
         session_id: str,
@@ -407,11 +441,29 @@ class CodexAgentManager(BaseAgentManager):
         """
         self._warn_about_documents(session_id, documents)
 
+        # A hardcoded command (e.g. ``/goal …``) as the FIRST message must be
+        # captured here too: ``create_session`` is the new-session entry point
+        # and never funnels through ``send_to_session`` (where existing-session
+        # capture lives), so without this a ``/goal`` first message would reach
+        # the model as ordinary turn text. Parsed before the lock (cheap pure
+        # check), same as ``send_to_session``.
+        command = parse_hardcoded_command(text)
+
         async with self._lock:
             # No "session already exists" guard: by construction the draft id
             # is fresh per attempt; even if the frontend reuses one, Codex
             # mints a new canonical id and the (now-orphan) draft-keyed entry
             # is harmless — it will be GCed by its own DEAD transition.
+            if command is not None:
+                # Mint the thread but run the command on it instead of opening
+                # a turn (empty text + ``command=…``), so the ``/command`` text
+                # never becomes a real ``user_message`` turn. Mirrors the
+                # cold-wake branch of ``_dispatch_hardcoded_command`` — only the
+                # resume flag differs (``False`` here: a brand-new thread).
+                return await self._start_agent(
+                    session_id, project_id, cwd, "", resume=False,
+                    settings=settings, command=command,
+                )
             return await self._start_agent(
                 session_id, project_id, cwd, text, resume=False,
                 settings=settings, images=images,

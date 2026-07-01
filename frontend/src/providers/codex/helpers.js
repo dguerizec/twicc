@@ -15,9 +15,12 @@ import { useCodexStore } from './store'
 // ``is_builtin`` is the frontend-only picker sentinel (renders ``(built-in)``);
 // no matching ``Command`` row exists, same as Claude Code. ``compact`` takes
 // no argument on Codex (``argument_hint: null``) — the SDK ``thread_compact``
-// accepts only the thread id.
+// accepts only the thread id. ``goal`` sets/clears the thread's Codex goal via
+// the ``thread/goal/*`` app-server RPCs: ``/goal <objective>`` to set, ``/goal
+// clear`` to remove it.
 const BUILTIN_COMMANDS = [
     { name: 'compact', plugin_name: null, is_builtin: true, is_global: true, description: 'Compact the conversation context into a summary', argument_hint: null },
+    { name: 'goal', plugin_name: null, is_builtin: true, is_global: true, description: "Set the session's goal (the objective Codex works toward), or 'clear' to remove it", argument_hint: '<objective> | clear' },
 ]
 
 // Per-file ceiling for Codex uploads (5 MB). Aligned with the Claude

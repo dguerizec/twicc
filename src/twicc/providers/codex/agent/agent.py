@@ -37,6 +37,7 @@ from openai_codex.generated.v2_all import (
     HttpConnectionFailedCodexErrorInfo,
     ReasoningEffort,
     ResponseStreamConnectionFailedCodexErrorInfo,
+    ThreadGoalStatus,
 )
 
 from asgiref.sync import sync_to_async
@@ -216,6 +217,16 @@ class CodexAgent(BaseAgent):
         # safety net that ends the turn if that line never arrives.
         self._manual_compaction: bool = False
         self._compaction_timeout_task: asyncio.Task[None] | None = None
+        # Goal-continuation tracking. ``/goal <objective>`` sets an active goal,
+        # which makes Codex autonomously run a continuation turn TwiCC does NOT
+        # drive; ``run_goal_command`` flips the agent into a synthetic
+        # ASSISTANT_TURN and sets this flag. When the goal later leaves
+        # ``active`` (the agent marks it complete/blocked, or a limit hits), the
+        # watcher → manager → ``notify_goal_continuation_stopped`` path uses the
+        # flag to settle us back to USER_TURN. There is no fixed safety timeout
+        # (a continuation's duration is unbounded); a missed signal just leaves
+        # the prior stuck-ASSISTANT_TURN behaviour, never worse.
+        self._goal_continuation_active: bool = False
         # ``reasoning`` items can fan out into several summary parts (each
         # with its own ``summaryIndex``). The SDK fires one
         # ``summaryPartAdded`` per part but a single ``item/completed`` for
@@ -311,11 +322,14 @@ class CodexAgent(BaseAgent):
         Codex has no protocol for them, the manager drops them upstream
         with a warning.
 
-        ``command`` is set only on the "wake a cold session to run a hardcoded
-        command" path (the manager resumes the thread with empty text and
-        ``command=…``): instead of opening a turn, the agent comes up idle
-        and runs the command on the already-resumed thread. See
-        :meth:`run_hardcoded_command`.
+        ``command`` is set on the "run a hardcoded command without opening a
+        turn" paths: the manager passes empty text + ``command=…`` either to
+        wake a cold EXISTING session (``resume=True``, the thread is resumed in
+        ``_create_agent``) or to seed a BRAND-NEW session whose first message
+        is a command (``resume=False``, the thread is freshly started) — e.g. a
+        ``/goal`` typed as the very first message. Either way the thread is
+        live by the time we get here; the agent comes up idle and runs the
+        command instead of scheduling a turn. See :meth:`run_hardcoded_command`.
         """
         self._state_change_callback = on_state_change
         # Whether this run is a (cold) resume of an existing thread rather than a
@@ -339,13 +353,15 @@ class CodexAgent(BaseAgent):
         self._work_dirs = await self._resolve_and_create_work_dirs()
 
         if command is not None:
-            # Woken purely to run a hardcoded command (e.g. ``/compact``) on a
-            # cold session: the thread was already resumed in
-            # ``_create_agent``, so there is no initial turn to schedule. Run
-            # the command — it drives its own state (``compact`` flips to a
-            # synthetic ASSISTANT_TURN and back to USER_TURN on completion).
-            # The agent is still STARTING here; the command's first
-            # ``_set_state`` moves it forward.
+            # Run a hardcoded command (e.g. ``/compact`` on a cold session, or
+            # ``/goal`` as a brand-new session's first message) with no initial
+            # turn to schedule: the thread is already live (resumed or freshly
+            # started in ``_create_agent``). The command drives its own state
+            # (``compact`` flips to a synthetic ASSISTANT_TURN then back to
+            # USER_TURN; ``/goal <objective>`` settles to ASSISTANT_TURN for the
+            # Codex goal continuation, ``/goal clear`` to USER_TURN). The agent
+            # is still STARTING here; the command's first ``_set_state`` moves
+            # it forward.
             await self.run_hardcoded_command(command)
             return
 
@@ -497,6 +513,10 @@ class CodexAgent(BaseAgent):
         clean shutdown when ``kill_reason`` is already set (i.e. the manager
         killed us on purpose) — no error toast in that case.
         """
+        # A real TwiCC-driven turn supersedes any parked ``/goal`` continuation:
+        # from here ``_run_turn`` owns the state, so drop the flag (the watcher
+        # signal must not flip us out of this turn).
+        self._goal_continuation_active = False
         # ``Thread.turn`` expects an ``Input`` (TextInput/ImageInput/...) — only
         # ``Thread.run`` accepts a bare str via internal normalization. We don't
         # use ``run`` because it consumes the turn stream and hides the
@@ -614,6 +634,8 @@ class CodexAgent(BaseAgent):
         """
         if command.name == "compact":
             await self.compact()
+        elif command.name == "goal":
+            await self.run_goal_command(command.args)
         else:
             raise RuntimeError(
                 f"No handler for hardcoded command {command.name!r}",
@@ -728,6 +750,153 @@ class CodexAgent(BaseAgent):
         self._compaction_timeout_task = None
         if task is not None and task is not asyncio.current_task():
             task.cancel()
+
+    # ------------------------------------------------------------------
+    # ``/goal`` — set / clear the thread's Codex goal
+    # ------------------------------------------------------------------
+
+    async def run_goal_command(self, args: str) -> None:
+        """Apply a user ``/goal`` command captured by the manager.
+
+        Two forms, mirroring the Codex CLI surface TwiCC ports:
+
+        - ``/goal clear`` (exact, case-insensitive) — delete the thread's goal.
+        - ``/goal <objective>`` — create or update the goal's objective.
+
+        A bare ``/goal`` (no argument) is a usage error: TwiCC's goal surface
+        is set/clear only — there is no status view to fall back on (a full
+        view is deliberately out of scope here). The CLI's ``/goal clear the
+        backlog`` ambiguity does not arise: only the exact token ``clear``
+        clears; ``clear <more text>`` is an objective.
+
+        The goal RPCs themselves are instant, but their *effect* on the session
+        state differs:
+
+        - ``/goal clear`` (and any failure) → ``USER_TURN``: nothing is left
+          running.
+        - ``/goal <objective>`` → ``ASSISTANT_TURN``: setting an active goal
+          makes Codex autonomously run a "continuation" turn to pursue it (the
+          app-server starts AND drives it; TwiCC does not). Marking the session
+          ASSISTANT_TURN lets the frontend show it working and stream the
+          continuation's messages live. KNOWN LIMITATION (intentional, for
+          now): TwiCC does not yet observe that turn, so it will NOT auto-flip
+          back to ``USER_TURN`` when the continuation ends — a follow-up to
+          drive/observe the app-server-driven goal turn.
+
+        Either way the optimistic ``/goal`` bubble is dropped (see
+        :meth:`_settle_after_goal`). On failure the agent is left usable and
+        the error surfaces as a ``RuntimeError`` for a clean, retry-able frame.
+        """
+        try:
+            objective = args.strip()
+            if not objective:
+                raise RuntimeError("Usage: /goal <objective>  or  /goal clear")
+            if objective.lower() == "clear":
+                await self._thread.goal_clear()
+                self._goal_continuation_active = False
+                settle_state = AgentState.USER_TURN
+                # ``/goal clear`` writes nothing to the rollout (the clear RPC
+                # only emits a wire-only notification), so — unlike a set, whose
+                # transcript line comes free from Codex's goal-context injection
+                # — inject a synthetic ``/goal clear`` user message ourselves so
+                # the command shows in the transcript. Best-effort: the clear
+                # already succeeded; a failed injection just loses the line. The
+                # compute relabels the injected line as a user_message.
+                try:
+                    await self._thread.inject_user_message("/goal clear")
+                except Exception as e:
+                    logger.warning(
+                        "Codex /goal clear: failed to inject transcript line "
+                        "for session %s: %s",
+                        self.session_id, e,
+                    )
+            else:
+                await self._set_goal(objective)
+                # An active goal makes Codex run a continuation turn we don't
+                # drive; arm the flag so the watcher's "goal left active" signal
+                # settles us back to USER_TURN (see
+                # :meth:`notify_goal_continuation_stopped`).
+                self._goal_continuation_active = True
+                settle_state = AgentState.ASSISTANT_TURN
+        except Exception as e:
+            logger.warning(
+                "Codex /goal failed for session %s: %s", self.session_id, e,
+            )
+            self._goal_continuation_active = False
+            await self._settle_after_goal(AgentState.USER_TURN)
+            if isinstance(e, RuntimeError):
+                raise
+            raise RuntimeError(f"/goal failed: {e}") from e
+        await self._settle_after_goal(settle_state)
+
+    async def _set_goal(self, objective: str) -> None:
+        """Create or update the thread's goal from ``/goal <objective>``.
+
+        Reproduces the Codex CLI's replacement semantics on top of the raw
+        app-server ``set`` (which only ever edits in place): read the current
+        goal; if one exists and is NOT ``active``, clear it first so a brand
+        new goal is created; an ``active`` goal is edited in place (objective
+        only — its status, budget and counters are preserved). No goal at all
+        → ``set`` creates one (``active``, no budget).
+        """
+        existing = await self._thread.goal_get()
+        if existing is not None and existing.status is not ThreadGoalStatus.active:
+            await self._thread.goal_clear()
+        await self._thread.goal_set(objective)
+
+    async def _settle_after_goal(self, state: AgentState) -> None:
+        """Move to ``state`` and drop the optimistic ``/goal`` bubble.
+
+        ``state`` is ``ASSISTANT_TURN`` after a set (a Codex goal continuation
+        is now running) or ``USER_TURN`` after a clear / failure (idle). The
+        transition also clears any optimistic STARTING placeholder from a
+        cold-woken session. Then emit ``goal_command_done`` so the frontend
+        retires the optimistic ``/goal`` bubble — no ``user_message`` JSONL
+        line is ever written for the command, so nothing else would. No-op once
+        ``DEAD`` (a teardown may race this).
+        """
+        if self.state == AgentState.DEAD:
+            return
+        self._set_state(state)
+        self.last_activity = time.time()
+        await self._notify_state_change()
+        await self._broadcast_stream_event({
+            "type": "goal_command_done",
+            "session_id": self.session_id,
+        })
+
+    def in_goal_continuation(self) -> bool:
+        """Whether the agent is parked in a ``/goal`` continuation ASSISTANT_TURN.
+
+        Read by the manager (``has_goal_continuation``) so the watcher only
+        pays for a goal-status DB read when it could actually matter.
+        """
+        return self._goal_continuation_active
+
+    async def notify_goal_continuation_stopped(self) -> None:
+        """Settle a ``/goal`` continuation back to USER_TURN (goal left ``active``).
+
+        Routed from the watcher via the manager when a ``thread_goal_updated``
+        with a non-``active`` status lands (the agent marked the goal
+        complete/blocked, or a usage/budget limit hit). Mirrors
+        :meth:`notify_compacted`'s flag guard: act only on a continuation WE
+        armed via ``/goal``, never once ``DEAD``, and never while we're driving
+        a real turn ourselves (then ``_run_turn`` owns the state — its own
+        ``thread_goal_updated`` lines, e.g. an agent ``update_goal`` mid-turn,
+        must not yank us out).
+        """
+        if not self._goal_continuation_active or self.state == AgentState.DEAD:
+            return
+        if self._current_turn is not None:
+            return
+        logger.info(
+            "Codex /goal: continuation ended for session %s — back to USER_TURN",
+            self.session_id,
+        )
+        self._goal_continuation_active = False
+        self._set_state(AgentState.USER_TURN)
+        self.last_activity = time.time()
+        await self._notify_state_change()
 
     async def soft_interrupt(self) -> bool:
         """Interrupt the current turn but keep the thread alive (→ USER_TURN).

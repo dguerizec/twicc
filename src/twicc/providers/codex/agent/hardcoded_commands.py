@@ -3,11 +3,16 @@
 Unlike Claude Code — whose ``/compact``, ``/init``, … are interpreted
 natively by the CLI once the raw text reaches it — the Codex CLI has no
 slash-command vocabulary of its own (it reserves ``$`` for skills). So TwiCC
-captures a small set of ``/`` commands itself: the manager parses them off
-the outgoing user text at the single convergence point every send path funnels
-through (:meth:`CodexAgentManager.send_to_session` — hit by the WebSocket, the
-CLI ``send-message`` drop-file, …) and routes them to a direct SDK action
-instead of letting them become a normal turn.
+captures a small set of ``/`` commands itself: the manager parses them off the
+outgoing user text and routes them to a direct SDK action instead of letting
+them become a normal turn. Capture happens at BOTH manager entry points, so a
+command is intercepted whether it targets an existing session or starts a new
+one:
+  - :meth:`CodexAgentManager.send_to_session` — existing sessions (WebSocket,
+    CLI ``send-message`` drop-file, …).
+  - :meth:`CodexAgentManager.create_session` — a command as the FIRST message
+    of a brand-new session (e.g. ``/goal`` typed in a fresh draft). Without
+    this the text would reach the model as ordinary turn text.
 
 This module owns the **capture** side: the command vocabulary
 (:data:`KNOWN_COMMANDS`) and the parser (:func:`parse_hardcoded_command`). The
@@ -21,6 +26,10 @@ Adding a command:
   1. add its name to :data:`KNOWN_COMMANDS`,
   2. add a branch + action method in ``CodexAgent.run_hardcoded_command``,
   3. add a display entry to ``BUILTIN_COMMANDS`` in the frontend helpers.
+
+A command meaningful as a first message (like ``/goal``) is already covered by
+the ``create_session`` capture; one that only makes sense on an existing
+session (like ``/compact``) is just a degenerate no-op there.
 """
 
 from __future__ import annotations
@@ -37,11 +46,15 @@ class HardcodedCommand(NamedTuple):
 
 # The ``/`` command vocabulary TwiCC handles for Codex. A flat set because the
 # only thing the parser needs is membership; the per-command action lives on
-# the agent. ``compact`` → server-side context compaction
-# (``thread/compact/start`` RPC); it takes no arguments — the SDK
-# ``thread_compact`` accepts only the thread id — so any trailing text is
-# parsed into ``args`` but ignored by the handler.
-KNOWN_COMMANDS: frozenset[str] = frozenset({"compact"})
+# the agent.
+#
+# - ``compact`` → server-side context compaction (``thread/compact/start``
+#   RPC); it takes no arguments — the SDK ``thread_compact`` accepts only the
+#   thread id — so any trailing text is parsed into ``args`` but ignored.
+# - ``goal`` → set/clear the thread's goal via the ``thread/goal/{get,set,clear}``
+#   app-server RPCs. It DOES use ``args``: ``/goal clear`` clears, any other
+#   non-empty text is the objective to set, a bare ``/goal`` is a usage error.
+KNOWN_COMMANDS: frozenset[str] = frozenset({"compact", "goal"})
 
 
 def parse_hardcoded_command(text: str) -> HardcodedCommand | None:
