@@ -167,6 +167,19 @@ Two optional attributes, any order:
 
 If no image is found at the offset, the tag becomes `*[no screenshot
 available]*` (or `*[no screenshot available: <title>]*` with a title).
+
+## Workflows
+
+The live progress of a `Workflow` you launch — phases, per-agent status, cost —
+shows in a dedicated **Workflows** tab, not in the conversation. Point the user
+there with a clickable in-app Markdown link; never tell them to type
+`/workflows` (no such command exists in TwiCC):
+
+- a single workflow: `[open](/project/{project_id}/session/{session_id}/workflows/{run_id})`
+- every workflow of this session: the same link without the trailing `{run_id}`.
+
+That tab has no resume control, so an interrupted workflow can only be resumed by
+you: when the user asks, re-invoke `Workflow` with `resumeFromRunId`.
 """
 
 
