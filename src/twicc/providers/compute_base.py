@@ -27,6 +27,7 @@ path needs to dispatch dynamically by ``Provider`` enum.
 from __future__ import annotations
 
 import base64
+import copy
 import logging
 import os
 import re
@@ -46,6 +47,7 @@ from twicc.context_injection import strip_context_blocks_in_place
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
 from twicc.git import is_git_root_related, read_head_branch, resolve_git_from_path
+from twicc.providers.goals import GoalEvent, apply_goal_event
 from twicc.projects import (
     ensure_project_directory,
     ensure_project_git_root,
@@ -939,6 +941,22 @@ class BaseSessionCompute:
             'updated_at': timestamp.isoformat() if timestamp else None,
             **payload,
         }
+
+    def extract_goal_event(self, parsed_json: dict) -> GoalEvent | None:
+        """Return the goal-lifecycle signal this JSONL line carries, or ``None``.
+
+        Unlike :meth:`extract_tasks_payload` (a last-wins full snapshot), goal
+        state is a stream of transitions folded into :attr:`Session.goals` by
+        :func:`~twicc.providers.goals.apply_goal_event`. Providers map their
+        native lines (Claude ``goal_status`` attachments / ``/goal clear``
+        command, Codex ``thread_goal_updated`` / injected ``/goal clear``) to a
+        :class:`~twicc.providers.goals.GoalEvent`. Called on every line in both
+        compute paths, after :meth:`transform_inline` (so Codex's injected
+        ``/goal`` user message is already materialised).
+
+        Default: the provider has no goal model — returns ``None``.
+        """
+        return None
 
     def compute_item_display_level(
         self, parsed_json: dict, kind: ItemKind | None
@@ -2241,6 +2259,9 @@ class BaseSessionCompute:
         # Latest task/todo/plan snapshot across the whole session (this full
         # recompute is authoritative — it resets stale state to {}).
         last_tasks_snapshot: dict | None = None
+        # Goal lifecycle history, folded from every goal line across the whole
+        # session (authoritative full rebuild — starts empty).
+        goals: list[dict] = []
         found_compact_summary = False
         agent_tool_result_counts: dict[str, tuple[int, datetime | None]] = {}
         agent_stopped_list: list[dict] = []
@@ -2316,6 +2337,11 @@ class BaseSessionCompute:
             )
             if tasks_snapshot is not None:
                 last_tasks_snapshot = tasks_snapshot
+
+            # Fold any goal-lifecycle transition into the running history.
+            goal_event = self.extract_goal_event(parsed)
+            if goal_event is not None:
+                apply_goal_event(goals, goal_event, timestamp=item.timestamp)
 
             # Extract runtime environment fields
             runtime = self.extract_runtime_fields(parsed)
@@ -2578,6 +2604,8 @@ class BaseSessionCompute:
                 # Full recompute is authoritative for the whole file: reset to
                 # {} when the session carries no task/plan state at all.
                 'tasks': last_tasks_snapshot if last_tasks_snapshot is not None else {},
+                # Authoritative for the whole file too — [] when no goal ever set.
+                'goals': goals,
                 'compacted': found_compact_summary,
                 'created_at': first_timestamp.isoformat() if first_timestamp else None,
                 'last_started_at': last_started_at.isoformat() if last_started_at else None,
@@ -2931,6 +2959,10 @@ class BaseSessionCompute:
         # Latest task/todo/plan snapshot seen in this batch of new lines
         # (None = no task line here, keep the stored Session.tasks untouched).
         last_tasks_snapshot: dict | None = None
+        # Goal history folded incrementally onto the persisted list: start from
+        # the stored state and apply only this batch's transitions.
+        goals = copy.deepcopy(session.goals) if session.goals else []
+        goals_changed = False
 
         # Updates to broadcast after processing
         agent_link_updates: list[AgentLinkUpdate] = []
@@ -3035,6 +3067,13 @@ class BaseSessionCompute:
             )
             if tasks_snapshot is not None:
                 last_tasks_snapshot = tasks_snapshot
+
+            # Fold any goal-lifecycle transition onto the running history.
+            goal_event = self.extract_goal_event(parsed)
+            if goal_event is not None and apply_goal_event(
+                goals, goal_event, timestamp=item.timestamp
+            ):
+                goals_changed = True
 
             # Track lifecycle timestamps
             if item.timestamp is not None:
@@ -3329,6 +3368,10 @@ class BaseSessionCompute:
         if last_tasks_snapshot is not None:
             session.tasks = last_tasks_snapshot
             session_update_fields.append("tasks")
+        # Persist the folded goal history only when this batch changed it.
+        if goals_changed:
+            session.goals = goals
+            session_update_fields.append("goals")
         session.save(update_fields=session_update_fields)
 
         # Recalculate activities after session.save (needs created_at in DB for session_count)

@@ -290,8 +290,8 @@ LOGGING = {
 # Bump the relevant constant when the corresponding provider's parsing/compute
 # rules change to trigger recomputation. ``None`` declares "no compute pipeline
 # yet" — sessions of that provider are reported up-to-date as-is.
-CLAUDE_CODE_COMPUTE_VERSION = 101  # 101: backfill Session.has_workflows (100 = tasks snapshot)
-CODEX_COMPUTE_VERSION = 32  # 32: goal-continuation context -> synthetic "/goal <objective>" user message (31: get_goal -> DEBUG_ONLY)
+CLAUDE_CODE_COMPUTE_VERSION = 103  # 103: Session.goals reads queued /goal (queued_command) (102 = goals lifecycle, 101 = backfill has_workflows, 100 = tasks snapshot)
+CODEX_COMPUTE_VERSION = 33  # 33: Session.goals lifecycle history (32: goal-continuation context -> synthetic "/goal <objective>" user message)
 
 # Search index version
 # Bumped when the schema or document layout changes — forces a full

@@ -477,6 +477,19 @@ class Session(models.Model):
     # and synced to the frontend in ``serialize_session`` like ``layout``.
     # Not consumed by the UI yet — stored for future use.
     tasks = models.JSONField(default=dict, blank=True)
+    # Goal lifecycle history for the session, in a cross-provider shape, folded
+    # from the JSONL by the compute pipeline (Claude Code ``goal_status``
+    # attachments / ``/goal clear``; Codex ``thread_goal_updated`` / injected
+    # ``/goal clear``). ``[]`` means no goal was ever set. One entry per goal,
+    # newest last; a goal stays open until completed or cleared, and an
+    # objective restated while it is open is appended to that entry's
+    # ``objectives`` array (a new entry opens only once the previous goal
+    # closed). Shape: ``[{objectives: [str], state: active|completed, cleared:
+    # bool, raw_state, created_at, updated_at}]``. Written by both compute paths
+    # (watcher live sync + background recompute) and synced to the frontend in
+    # ``serialize_session`` like ``tasks`` / ``layout``. Not consumed by the UI
+    # yet — stored for future use. Reduction logic in ``providers/goals.py``.
+    goals = models.JSONField(default=list, blank=True)
     # TwiCC system-prompt addendum frozen at session creation time. Composed by
     # ``core.services.session_creation`` and stashed via
     # ``pending_session_attributes``; the watcher copies it here when it

@@ -20,6 +20,7 @@ from typing import ClassVar, NamedTuple
 import xmltodict
 from django.db.models import Q
 
+from twicc.context_injection import INSTRUCTION_BLOCK_MARKER
 from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import Session, SessionItem, SessionType
 from twicc.paths import get_artifacts_dir
@@ -38,6 +39,7 @@ from twicc.providers.compute_base import (
     strip_markdown,
     substitute_insert_screenshot_tags,
 )
+from twicc.providers.goals import GOAL_STATE_ACTIVE, GOAL_STATE_COMPLETED, GoalEvent
 from .agent.original_file_cache import pop_original_file
 from .pricing import extract_model_info, to_token_usage
 
@@ -184,6 +186,28 @@ class ParsedCommand(NamedTuple):
 _RE_COMMAND_NAME = re.compile(r'<command-name>(.*?)</command-name>', re.DOTALL)
 _RE_COMMAND_MESSAGE = re.compile(r'<command-message>(.*?)</command-message>', re.DOTALL)
 _RE_COMMAND_ARGS = re.compile(r'<command-args>(.*?)</command-args>', re.DOTALL)
+
+# ``/goal`` arguments that clear the active goal (the CLI's clear aliases). A
+# clear emits no ``goal_status`` attachment, so it's detected from the command.
+_GOAL_CLEAR_ARGS = frozenset({"clear", "stop", "off", "reset", "none", "cancel"})
+
+
+def _goal_args_from_command_text(text: str) -> str | None:
+    """Args of a raw ``/goal <args>`` command as stored in a ``queued_command``.
+
+    Strips any ``<twicc:instruction>`` block TwiCC appended to the command.
+    Returns the argument string (``""`` for a bare ``/goal``), or ``None`` when
+    the text is not a ``/goal`` command.
+    """
+    stripped = text.strip()
+    marker = stripped.find(INSTRUCTION_BLOCK_MARKER)
+    if marker != -1:
+        stripped = stripped[:marker].rstrip()
+    if stripped == "/goal":
+        return ""
+    if stripped.startswith("/goal") and stripped[5:6].isspace():
+        return stripped[5:].strip()
+    return None
 
 
 def extract_command(text: str) -> ParsedCommand | None:
@@ -827,6 +851,70 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         if items is None:
             return None
         return {'source': source, 'items': items, 'explanation': None}
+
+    def extract_goal_event(self, parsed_json: dict) -> GoalEvent | None:
+        """Goal lifecycle from a ``goal_status`` / ``queued_command`` attachment
+        or a ``/goal clear`` command.
+
+        ``/goal`` is a native CLI Stop hook: after each turn the evaluator writes
+        an ``attachment`` of type ``goal_status`` carrying ``condition``, ``met``
+        (bool) and — on the first line of a (re)stated goal — ``sentinel: true``.
+        The sentinel line is the (re)definition signal (its ``condition`` is the
+        objective); later non-sentinel lines only report progress (``met`` flips
+        to ``true`` on completion).
+
+        A ``/goal`` sent while the agent is busy is parked as a ``queued_command``
+        attachment and does NOT emit a ``goal_status`` until it's dequeued and
+        run — which can be a long time on a running goal. Reading the objective
+        (or clear) straight from the queued command text reflects the change
+        right away; the dedup in :func:`~twicc.providers.goals.apply_goal_event`
+        absorbs the later ``goal_status`` re-statement, so no duplicate lands.
+
+        A manual ``/goal clear`` (when not queued) writes no ``goal_status``, so
+        it's read from the slash command instead.
+        """
+        if parsed_json.get('type') == 'attachment':
+            attachment = parsed_json.get('attachment')
+            if not isinstance(attachment, dict):
+                return None
+            atype = attachment.get('type')
+            if atype == 'goal_status':
+                met = bool(attachment.get('met'))
+                condition = attachment.get('condition')
+                restated = bool(attachment.get('sentinel')) and isinstance(condition, str) and bool(condition)
+                return GoalEvent(
+                    objective=condition if restated else None,
+                    state=GOAL_STATE_COMPLETED if met else GOAL_STATE_ACTIVE,
+                    raw_state='met' if met else 'unmet',
+                )
+            if atype == 'queued_command':
+                prompt = attachment.get('prompt')
+                if isinstance(prompt, list):
+                    cmd_text = ''.join(
+                        b.get('text', '') for b in prompt
+                        if isinstance(b, dict) and b.get('type') == 'text'
+                    )
+                elif isinstance(prompt, str):
+                    cmd_text = prompt
+                else:
+                    cmd_text = ''
+                args = _goal_args_from_command_text(cmd_text)
+                if args:
+                    if args.lower() in _GOAL_CLEAR_ARGS:
+                        return GoalEvent(cleared=True)
+                    return GoalEvent(objective=args, state=GOAL_STATE_ACTIVE, raw_state='unmet')
+            return None
+        if parsed_json.get('type') == 'user':
+            text = extract_text_from_content((parsed_json.get('message') or {}).get('content'))
+            if text:
+                command = extract_command(text)
+                if (
+                    command is not None
+                    and command.name.lstrip('/') == 'goal'
+                    and (command.args or '').strip().lower() in _GOAL_CLEAR_ARGS
+                ):
+                    return GoalEvent(cleared=True)
+        return None
 
     def _substitute_screenshots_in_content(
         self,

@@ -150,6 +150,7 @@ from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import SessionItem
 from twicc.paths import get_artifacts_dir
 from twicc.pricing import calculate_line_context_usage
+from twicc.providers.goals import GOAL_STATE_ACTIVE, GOAL_STATE_COMPLETED, GoalEvent
 from twicc.providers.compute_base import (
     _EMPTY_ANALYSIS,
     _EMPTY_FILE_PATHS,
@@ -197,6 +198,7 @@ _PAYLOAD_AGENT_MESSAGE = "agent_message"
 # stopped — see :meth:`CodexSessionCompute.is_goal_continuation_stopped`.
 _PAYLOAD_THREAD_GOAL_UPDATED = "thread_goal_updated"
 _GOAL_STATUS_ACTIVE = "active"
+_GOAL_STATUS_COMPLETE = "complete"
 # Codex emits ``event_msg.image_generation_end`` once an image generation
 # call has produced its file. The payload carries the base64 PNG, the
 # revised prompt and the on-disk path — see the header docstring's
@@ -1581,6 +1583,42 @@ class CodexSessionCompute(BaseSessionCompute):
         if not isinstance(goal, dict):
             return False
         return goal.get("status") != _GOAL_STATUS_ACTIVE
+
+    def extract_goal_event(self, parsed_json: dict) -> GoalEvent | None:
+        """Goal lifecycle from ``thread_goal_updated`` or an injected ``/goal clear``.
+
+        Codex emits ``event_msg.thread_goal_updated`` each turn with the goal's
+        ``objective`` and ``status`` (``active`` / ``complete`` / ``paused`` /
+        ``blocked`` / ``usage_limited`` / ``budget_limited``). The objective acts
+        as a (re)definition signal only while ``active``: that stops a repeated
+        ``complete`` tick from forking a new goal, and lets an in-place objective
+        edit (same goal, still active) land as an addendum. A ``/goal clear``
+        writes no goal event, so TwiCC's injected ``/goal clear`` user message
+        (already rewritten inline by :meth:`_transform_inline_provider`) is used.
+        """
+        if parsed_json.get("type") != _TYPE_EVENT_MSG:
+            return None
+        payload = _payload(parsed_json)
+        if payload is None:
+            return None
+        ptype = payload.get("type")
+        if ptype == _PAYLOAD_THREAD_GOAL_UPDATED:
+            goal = payload.get("goal")
+            if not isinstance(goal, dict):
+                return None
+            status = goal.get("status")
+            objective = goal.get("objective")
+            active = status == _GOAL_STATUS_ACTIVE
+            return GoalEvent(
+                objective=objective if (active and isinstance(objective, str) and objective) else None,
+                state=GOAL_STATE_COMPLETED if status == _GOAL_STATUS_COMPLETE else GOAL_STATE_ACTIVE,
+                raw_state=status if isinstance(status, str) else None,
+            )
+        if ptype == _PAYLOAD_USER_MESSAGE:
+            message = payload.get("message")
+            if isinstance(message, str) and message.strip().lower() == "/goal clear":
+                return GoalEvent(cleared=True)
+        return None
 
     def compute_item_kind(self, parsed_json: dict) -> ItemKind | None:
         # NOTE: any change to this classification MUST bump
