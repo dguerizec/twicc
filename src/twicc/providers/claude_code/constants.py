@@ -186,10 +186,7 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
     "selected_model": {
         "min": "sonnet", "fastest": "sonnet", "cheapest": "sonnet",
         "medium": "opus", "balanced": "opus",
-        # ``fable`` is the strongest family but currently disabled, so the
-        # "top" aliases point at the strongest *available* model (opus).
-        # Repoint to ``fable`` if it is ever re-enabled.
-        "max": "opus", "strongest": "opus",
+        "max": "fable", "strongest": "fable",
     },
     "effort": {
         "min": "low", "max": "max",
@@ -238,8 +235,6 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=True,
         weight=200,
-        enabled=False,
-        disable_reason="Anthropic has cut off access to this model following a request from the US government.",
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
             supports_fast=False, supports_permission_auto=True,

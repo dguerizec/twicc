@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Tips** — automatically shown tips now appear at most once a day.
 - **Dockable layouts** — several small improvements.
 - **Claude Agent SDK** — Upgrade from 0.2.106 to 0.2.110 (bundled Claude Code CLI: 2.1.185 → 2.1.191)
+- **Claude Fable 5** — available again (Anthropic restored access); it is once more the strongest selectable Claude model and the target of the `max` / `strongest` model aliases.
 
 ### Fixed
 

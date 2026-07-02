@@ -190,11 +190,12 @@ $TWICC info agent-settings [--provider <key>] [--include-disabled-providers]
   "claude_code": {
     "model": {
       "values": [
+        {"value": "fable",    "latest": true},
         {"value": "opus",     "latest": true},
         {"value": "sonnet",   "latest": true},
         {"value": "opus-4.7", "latest": false}
       ],
-      "aliases": {"max": "opus", "strongest": "opus", "medium": "opus", "balanced": "opus", "min": "sonnet", "fastest": "sonnet", "cheapest": "sonnet"}
+      "aliases": {"max": "fable", "strongest": "fable", "medium": "opus", "balanced": "opus", "min": "sonnet", "fastest": "sonnet", "cheapest": "sonnet"}
     },
     "effort": {
       "values": [
@@ -237,7 +238,7 @@ Field keys match the CLI flags / presets: the model is `model` (not the wire nam
 - `restricted_to: [...]` — value applies **only** to those model identifiers / aliases (same vocabulary as `models.identifier` / `models.alias`).
 - `description` — present only for values that have a documented note (today: every `permission_mode` value across providers, plus `fast_mode=true` on Claude Code). Silently absent otherwise.
 - `context_max_alias` — only on entries of the `context_max` field: compact human-friendly form of `value` (`200000` → `"200k"`, `1000000` → `"1m"`, `272000` → `"272k"`). The `value` (raw integer) remains the canonical form; the alias is a convenience for display and matches the syntax accepted by `--context-max` in `create-session` / `update-session settings`.
-- `aliases` — alias → concrete-value map for the field (`{"max": "opus", ...}`): pass the alias to the matching `--<field>` flag in `create-session` / `update-session settings` / `update-sessions settings` and it resolves to the value for the session's provider.
+- `aliases` — alias → concrete-value map for the field (`{"max": "fable", ...}`): pass the alias to the matching `--<field>` flag in `create-session` / `update-session settings` / `update-sessions settings` and it resolves to the value for the session's provider.
 - `permission_mode_if_untrusted` — the restricted permission-mode subset that applies in an **untrusted** (or unknown-trust) project: `bypassPermissions` / `yolo` are dropped, and its `max` alias lands on the most permissive *allowed* mode (Claude Code `acceptEdits`, Codex `autonomous`). You never pass this field directly — `create-session` / `update-session` resolve and clamp `permission_mode` against it automatically (with a note) when the target project is untrusted. Project trust is a human-only decision.
 - `model.values` — each accepted `--model` value with a `latest` flag (the current flagship of its family); richer per-model metadata (family, version, capabilities, retirement) lives in the `models` section.
 

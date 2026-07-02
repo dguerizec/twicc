@@ -79,7 +79,7 @@ uv tool upgrade twicc
 ### Claude Code and Codex, side by side
 
 - **Both providers in one UI**, using your existing credentials — nothing extra to set up, and TwiCC walks you through logging in if you haven't
-- **Per-session agent control**: model (Opus 4.8, Sonnet 4.6, …), context window (200K / 1M), effort, thinking, fast mode, permissions (including Claude Code's "auto" mode), with reusable presets and per-project defaults; stop a run at any time
+- **Per-session agent control**: model (Fable 5, Opus 4.8, Sonnet 4.6, …), context window (200K / 1M), effort, thinking, fast mode, permissions (including Claude Code's "auto" mode), with reusable presets and per-project defaults; stop a run at any time
 - **Interactive tool approvals and provider questions**, answered directly from the browser
 - **Persistent Claude Code cron jobs**: scheduled tasks survive restarts and auto-renew before their 7-day expiry
 - **Provider status monitoring** (Anthropic and OpenAI) with in-app outage notifications
