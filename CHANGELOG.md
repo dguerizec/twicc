@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Git diff → Files** — opening a Git diff in the Files tab now lands on the line you were looking at.
 - **Tips** — automatically shown tips now appear at most once a day.
 - **Dockable layouts** — several small improvements.
+- **Claude Agent SDK** — Upgrade from 0.2.106 to 0.2.110 (bundled Claude Code CLI: 2.1.185 → 2.1.191)
 
 ### Fixed
 
