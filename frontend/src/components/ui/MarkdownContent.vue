@@ -20,6 +20,12 @@ const props = defineProps({
     showToolbar: {
         type: Boolean,
         default: true
+    },
+    // Render a leading `/command` in the source as a styled tag (user messages
+    // only — set by TextContent when the message starts with a slash command).
+    tagSlashCommand: {
+        type: Boolean,
+        default: false
     }
 })
 
@@ -125,21 +131,24 @@ const MERMAID_FENCE_RE = /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[ \t]*mermaid\b/i
 // Cache key for a block's rendered HTML. Mermaid blocks render to theme-specific
 // SVG, so their key folds in the active theme; every other block renders
 // identically in light and dark (Shiki ships dual-theme CSS), so it keys on the
-// raw source alone and stays a cache hit across a theme toggle.
-function cacheKeyFor(src, theme) {
-    return MERMAID_FENCE_RE.test(src) ? `${theme} ${src}` : src
+// raw source alone and stays a cache hit across a theme toggle. A block rendered
+// with the slash-command tag gets a NUL-prefixed key (NUL can't appear in
+// source), so an identical block without the tag can never hit its cache entry.
+function cacheKeyFor(src, theme, slashTag = false) {
+    const key = MERMAID_FENCE_RE.test(src) ? `${theme} ${src}` : src
+    return slashTag ? `\x00${key}` : key
 }
 
 // Render one block to its final HTML (post-mermaid), memoized by source (plus the
 // active theme for mermaid blocks). The whole post-process runs on a DETACHED
 // node, so the Mermaid SVG is inlined into the cached string before it reaches
 // the DOM — no flash, even on first paint.
-async function renderOneBlock(src, env, theme) {
-    const key = cacheKeyFor(src, theme)
+async function renderOneBlock(src, env, theme, slashTag = false) {
+    const key = cacheKeyFor(src, theme, slashTag)
     const cached = renderCache.get(key)
     if (cached !== undefined) return cached
 
-    let html = await renderBlockToHtml(src, env)
+    let html = await renderBlockToHtml(src, slashTag ? { ...env, tagLeadingSlashCommand: true } : env)
     const tmp = document.createElement('div')
     tmp.innerHTML = html
     const mermaidOk = await renderMermaidIn(tmp, theme)
@@ -179,8 +188,10 @@ async function render() {
         // at a time sidesteps any concurrent mermaid.render concerns.
         const occurrences = new Map()
         const result = []
-        for (const block of raw) {
-            const html = await renderOneBlock(block.src, env, theme)
+        for (const [i, block] of raw.entries()) {
+            // The slash-command tag only ever applies to the very first block.
+            const slashTag = props.tagSlashCommand && i === 0
+            const html = await renderOneBlock(block.src, env, theme, slashTag)
             // Disambiguate identical blocks (e.g. two `---`) for a unique Vue key.
             const n = occurrences.get(block.hash) ?? 0
             occurrences.set(block.hash, n + 1)
@@ -194,7 +205,7 @@ async function render() {
         // block, which otherwise leaves one stale entry per intermediate version.
         // Keys are theme-aware for mermaid blocks, so a theme toggle also evicts
         // the previous theme's now-superseded mermaid renders here.
-        const liveKeys = new Set(raw.map((block) => cacheKeyFor(block.src, theme)))
+        const liveKeys = new Set(raw.map((block, i) => cacheKeyFor(block.src, theme, props.tagSlashCommand && i === 0)))
         for (const key of renderCache.keys()) {
             if (!liveKeys.has(key)) renderCache.delete(key)
         }

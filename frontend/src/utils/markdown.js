@@ -51,6 +51,42 @@ md.renderer.rules.softbreak = function (tokens, idx, options, env, self) {
     return defaultSoftbreakRender(tokens, idx, options, env, self)
 }
 
+// A leading slash command at the very start of a message: `/` followed by a
+// command name (namespaced names like `/twicc:twicc-info` included), ended by
+// whitespace or end of text. A path like `/home/...` doesn't match (the second
+// `/` is not a valid name character and doesn't qualify as a terminator).
+export const LEADING_SLASH_COMMAND_RE = /^\/[A-Za-z0-9_:-]+(?=\s|$)/
+
+// Render the leading `/command` of a user message as a tag. Opt-in per render
+// via `env.tagLeadingSlashCommand` (set only for the first block of a user
+// message). Runs after `text_join`, so inline children are in their final
+// shape: if the first block is a paragraph whose first inline child is a text
+// token starting with a slash command, the command is split off into a
+// dedicated token rendered as a styled <span>.
+md.core.ruler.push('slash_command_tag', (state) => {
+    if (!state.env.tagLeadingSlashCommand) return
+    const [open, inline] = state.tokens
+    if (open?.type !== 'paragraph_open' || inline?.type !== 'inline') return
+    const first = inline.children[0]
+    if (!first || first.type !== 'text') return
+    const match = first.content.match(LEADING_SLASH_COMMAND_RE)
+    if (!match) return
+
+    const tag = new state.Token('slash_command_tag', '', 0)
+    tag.content = match[0]
+    // Keep the whitespace after the command: selecting/copying the rendered
+    // text must yield "/goal fix", not "/goalfix".
+    first.content = first.content.slice(match[0].length)
+    if (first.content) {
+        inline.children.unshift(tag)
+    } else {
+        inline.children[0] = tag
+    }
+})
+
+md.renderer.rules.slash_command_tag = (tokens, idx) =>
+    `<span class="slash-command-tag">${md.utils.escapeHtml(tokens[idx].content)}</span>`
+
 // Wrapper around codeToHtml that falls back to 'text' (plain) for unknown languages.
 // Shiki throws an error when encountering unsupported languages (like 'env', 'dotenv', etc.)
 // which would crash the entire markdown render. This wrapper catches those errors.
