@@ -262,25 +262,36 @@ def apply_pending_context(session_id: str, text: str) -> str:
 # /goal instruction postfix
 # --------------------------------------------------------------------------
 
-# Appended verbatim to a ``/goal <args>`` slash command so the agent (1) reads
-# successive goals as cumulative — a later ``/goal xxxx`` (or ``/goal clear``)
-# complements or overrides the earlier one(s) — and (2) prominently warns the
-# user when they try to change or stop the goal in a regular message instead of
-# via ``/goal`` / ``/goal clear``, since the evaluator only ever sees what
-# ``/goal`` set. Scrubbed from the stored copy by the ingestion strip, like
+# Appended verbatim to a ``/goal <args>`` slash command. Both the main agent and
+# the goal evaluator (the Stop-hook model that decides met/not) read it, but the
+# evaluator is the real target: it tells the evaluator to treat successive
+# ``/goal`` as cumulative and to check the MOST RECENT ``/goal`` seen in the
+# transcript, NOT the wording the goal was first set with. This closes a real
+# loophole: an evaluator was observed acknowledging a later ``/goal finalement
+# arrête toi a 90`` yet still evaluating the original "count to 100" condition
+# (its reason literally said "the stop condition being evaluated here is the
+# original one"), so we spell out that the latest ``/goal`` IS the condition,
+# with a worked example. It also keeps the agent-facing rule: prominently warn
+# the user when they try to change/stop the goal without ``/goal`` / ``/goal
+# clear``. Scrubbed from the stored copy by the ingestion strip, like
 # ``<twicc:context>``.
 _GOAL_INSTRUCTION = (
-    "If the user later ask for another goal via /goal xxxx, or to clear it via "
-    "/goal clear, the last instruction complement/override the previous one(s). "
-    "A goal can ONLY be set or changed through the /goal command. So if the user "
-    "tells you in a regular message to change or adjust the goal (for example "
-    "'instead of counting to 10, count to 8') without using /goal, that change is "
-    "NOT part of the goal: the evaluator will ignore it and keep the original goal. "
-    "Whenever this happens, you MUST warn the user prominently and visibly that "
-    "they have to use `/goal <new instruction>` for the change to be taken into "
-    "account when the goal is evaluated. Likewise, if the user asks to stop or "
-    "abandon the goal without using `/goal clear`, you MUST warn them the same way "
-    "that they have to use /goal clear for the goal to actually be cleared"
+    "Successive /goal commands are CUMULATIVE: a later /goal (or /goal clear) "
+    "COMPLEMENTS or OVERRIDES the previous one(s), and the MOST RECENT /goal is "
+    "the authoritative objective. When the goal is evaluated, the condition to "
+    "check is that MOST RECENT /goal — NOT the objective as it was first worded. "
+    "If the conversation contains a more recent /goal, judge the goal met-or-not "
+    "against it, and NEVER keep evaluating an earlier objective that a later "
+    "/goal has changed: e.g. if a later /goal says 'stop at 90', the goal is MET "
+    "at 90 even though it was first set to 100. A goal can ONLY be set, changed "
+    "or cleared through the /goal command. So if the user tells you in a regular "
+    "message to change or adjust the goal (for example 'instead of counting to "
+    "10, count to 8') without using /goal, that change is NOT part of the goal: "
+    "it MUST be ignored when the goal is evaluated, and you MUST warn the user "
+    "prominently and visibly that they have to use `/goal <new instruction>` for "
+    "the change to be taken into account. Likewise, if the user asks to stop or "
+    "abandon the goal without using `/goal clear`, you MUST warn them the same "
+    "way that they have to use /goal clear for the goal to actually be cleared"
 )
 
 # A ``/goal`` invocation that actually carries an argument: the command token is
