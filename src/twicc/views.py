@@ -998,6 +998,21 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
             await apply_session_layout_change(session, layout)
             needs_broadcast = True
 
+        # Handle goal dismissal: hide the footer goal bar for the session's
+        # latest goal. The value is the target goal's ``created_at`` (guards
+        # against a newer goal having taken the last slot); only a closed
+        # (completed or cleared) goal can be dismissed. One-way — there is no
+        # un-dismiss. Shares the combined broadcast below.
+        if "dismiss_goal" in data:
+            created_at = data["dismiss_goal"]
+            if not isinstance(created_at, str) or not created_at:
+                return JsonResponse({"error": "dismiss_goal must be the goal's created_at"}, status=400)
+            from twicc.core.services.session_update import apply_session_goal_dismissed_change
+            error = await apply_session_goal_dismissed_change(session, created_at)
+            if error:
+                return JsonResponse({"error": error}, status=409)
+            needs_broadcast = True
+
         # Broadcast session_updated for archived/pinned changes.
         # Title changes don't need this: writing to JSONL triggers the
         # file watcher which broadcasts session_updated automatically.

@@ -561,6 +561,50 @@ async def apply_session_layout_change(session, layout: dict) -> None:
     )
 
 
+async def apply_session_goal_dismissed_change(session, created_at: str) -> str | None:
+    """Mark the session's latest goal as dismissed (hide its footer bar).
+
+    ``created_at`` identifies the goal the user actually clicked, guarding
+    against a new goal having taken the last slot between render and click.
+    Only a **closed** goal (completed or cleared) can be dismissed — an active
+    goal keeps its bar (the UI never offers the cross on it, this re-validates
+    server-side). Dismissal is one-way; there is no un-dismiss.
+
+    The whole read-modify-write runs on a fresh row under the DB write lock:
+    ``Session.goals`` is compute-owned and rewritten by the watcher / the
+    recompute, so mutating a possibly stale in-memory copy could resurrect old
+    entries (both compute paths re-port the flag itself, see
+    ``preserve_dismissed_flags``). The passed ``session`` instance is updated
+    in place so the caller's ``session_updated`` broadcast carries the change.
+
+    Returns ``None`` on success (including the already-dismissed no-op), or an
+    error string for the caller to surface.
+    """
+    from twicc.core.models import Session
+    from twicc.providers.goals import GOAL_STATE_COMPLETED
+
+    def _dismiss() -> tuple[str | None, list | None]:
+        goals = (
+            Session.objects.filter(id=session.id)
+            .values_list("goals", flat=True)
+            .first()
+        )
+        last = goals[-1] if goals else None
+        if not last or last.get("created_at") != created_at:
+            return "goal not found (it may have been superseded)", None
+        if last.get("state") != GOAL_STATE_COMPLETED and not last.get("cleared"):
+            return "an active goal cannot be dismissed", None
+        if not last.get("dismissed"):
+            last["dismissed"] = True
+            Session.objects.filter(id=session.id).update(goals=goals)
+        return None, goals
+
+    error, goals = await run_under_db_write_lock(lambda: sync_to_async(_dismiss)())
+    if goals is not None:
+        session.goals = goals
+    return error
+
+
 async def update_session_pinned_from_payload(payload: dict) -> UpdateSessionResult:
     """Pin or unpin an existing session.
 

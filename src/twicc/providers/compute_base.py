@@ -47,7 +47,7 @@ from twicc.context_injection import strip_context_blocks_in_place
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
 from twicc.git import is_git_root_related, read_head_branch, resolve_git_from_path
-from twicc.providers.goals import GoalEvent, apply_goal_event
+from twicc.providers.goals import GoalEvent, apply_goal_event, preserve_dismissed_flags
 from twicc.projects import (
     ensure_project_directory,
     ensure_project_git_root,
@@ -2785,6 +2785,16 @@ class BaseSessionCompute:
             for dt_field in ('created_at', 'last_started_at', 'last_updated_at', 'last_stopped_at'):
                 if dt_field in session_fields and session_fields[dt_field] is not None:
                     session_fields[dt_field] = datetime.fromisoformat(session_fields[dt_field])
+            # The recompute folded ``goals`` from scratch, so a UI-set
+            # ``dismissed`` flag (the one non-compute-owned key in that JSON)
+            # would be dropped — re-port it from the stored row. Safe read:
+            # this apply runs serialized through the DB writer under the shared
+            # write lock (and inside ``transaction.atomic``), the same lock the
+            # dismiss PATCH takes, so the stored value can't move under us.
+            if session_fields.get('goals'):
+                db_goals = Session.objects.filter(id=session_id).values_list('goals', flat=True).first()
+                if db_goals:
+                    preserve_dismissed_flags(db_goals, session_fields['goals'])
             rows = Session.objects.filter(id=session_id).update(**session_fields)
             if rows == 0:
                 logger.debug(f"apply_session_complete: session {session_id} not found for update (0 rows affected)")
@@ -3368,8 +3378,15 @@ class BaseSessionCompute:
         if last_tasks_snapshot is not None:
             session.tasks = last_tasks_snapshot
             session_update_fields.append("tasks")
-        # Persist the folded goal history only when this batch changed it.
+        # Persist the folded goal history only when this batch changed it. The
+        # fold started from a copy of the row taken at batch start, so a
+        # ``dismissed`` flag PATCHed by the user while this batch was being
+        # processed would be silently dropped — re-port it from a fresh read
+        # just before writing.
         if goals_changed:
+            db_goals = Session.objects.filter(id=session.id).values_list("goals", flat=True).first()
+            if db_goals:
+                preserve_dismissed_flags(db_goals, goals)
             session.goals = goals
             session_update_fields.append("goals")
         session.save(update_fields=session_update_fields)

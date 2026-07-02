@@ -58,11 +58,12 @@ const props = defineProps({
         type: Boolean,
         default: false
     },
-    // When true, another panel (a pending request and/or the hybrid terminal block)
-    // is rendered directly above the composer in the footer — regardless of that
-    // panel's own expanded/collapsed state. Drives the top separator hairline so the
-    // composer always reads as distinct from whatever sits above it. A superset of
-    // ``sendingLocked`` (which only tracks the pending request).
+    // When true, another panel (a pending request, the hybrid terminal block
+    // and/or the goal bar) is rendered above the composer in the footer —
+    // regardless of that panel's own expanded/collapsed state. Drives the top
+    // separator hairline so the composer always reads as distinct from whatever
+    // sits above it. A superset of ``sendingLocked`` (which only tracks the
+    // pending request).
     hasPanelAbove: {
         type: Boolean,
         default: false
@@ -2170,8 +2171,8 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
     display: none;
 }
 
-/* When another panel sits above the composer in the footer — a pending request
-   and/or the hybrid terminal block — a hairline separates the composer from it
+/* When another panel sits above the composer in the footer — a pending request,
+   the hybrid terminal block and/or the goal bar — a hairline separates the composer from it
    (each of those panels itself sits under its own wa-divider). Mirrors the
    collapsed-state border so the separator is present whether the composer is a
    bar or expanded. */

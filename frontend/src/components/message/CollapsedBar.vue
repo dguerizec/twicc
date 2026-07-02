@@ -14,6 +14,13 @@ defineProps({
     label: { type: String, default: '' },
     // Tooltip on the expand (chevron) button.
     expandTooltip: { type: String, default: 'Expand' },
+    // Icon + label color family. The historical bars (pending request, message
+    // input) are warning-tinted; the goal bar picks per goal state.
+    variant: {
+        type: String,
+        default: 'warning',
+        validator: (v) => ['warning', 'brand', 'success', 'neutral'].includes(v),
+    },
     // Add left padding so the content clears the floating sidebar-toggle button
     // that overlaps the bottom-left of the chat surface (mobile always; desktop
     // when the sidebar is collapsed). Only the bottom-most bar needs this.
@@ -26,7 +33,7 @@ const restoreButtonId = useId()
 <template>
     <div
         class="collapsed-bar"
-        :class="{ 'collapsed-bar--sidebar-clearance': sidebarToggleClearance }"
+        :class="[`collapsed-bar--${variant}`, { 'collapsed-bar--sidebar-clearance': sidebarToggleClearance }]"
         @click="emit('expand')"
     >
         <wa-icon :name="icon" class="collapsed-bar-icon"></wa-icon>
@@ -57,6 +64,11 @@ const restoreButtonId = useId()
     color: var(--wa-color-text-quiet);
     cursor: pointer;
 }
+/* Icon + label tint, per variant (see the `variant` prop). */
+.collapsed-bar--warning { --collapsed-bar-color: var(--wa-color-warning-60); }
+.collapsed-bar--brand { --collapsed-bar-color: var(--wa-color-brand-60); }
+.collapsed-bar--success { --collapsed-bar-color: var(--wa-color-success-60); }
+.collapsed-bar--neutral { --collapsed-bar-color: var(--wa-color-text-quiet); }
 .collapsed-bar:hover {
     background: var(--wa-color-neutral-fill-quiet);
 }
@@ -89,14 +101,14 @@ body.sidebar-closed :is(.session-layout.has-bottom-region, .session-layout.has-l
 .collapsed-bar-icon {
     flex-shrink: 0;
     font-size: var(--wa-font-size-s);
-    color: var(--wa-color-warning-60);
+    color: var(--collapsed-bar-color);
 }
 .collapsed-bar-label {
     flex: 1;
     min-width: 0;
     font-size: var(--wa-font-size-s);
     font-weight: var(--wa-font-weight-bold);
-    color: var(--wa-color-warning-60);
+    color: var(--collapsed-bar-color);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

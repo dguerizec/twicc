@@ -816,6 +816,20 @@ export const useDataStore = defineStore('data', {
             const tasks = state.sessions[sessionId]?.tasks
             return tasks && tasks.items ? tasks : null
         },
+        /**
+         * The session's current goal — the last entry of the goal lifecycle
+         * history (``Session.goals``, see the backend ``providers/goals.py``
+         * docstring for the shape), or ``null`` when the session never had a
+         * goal or the user dismissed the latest one. Shape: ``{objectives:
+         * [str], state: 'active'|'completed', cleared, raw_state, created_at,
+         * updated_at, dismissed?}``. Carried on the serialized Session, so it
+         * stays reactive through ``session_updated``.
+         */
+        getSessionCurrentGoal: (state) => (sessionId) => {
+            const goals = state.sessions[sessionId]?.goals
+            const last = goals?.length ? goals[goals.length - 1] : null
+            return last && !last.dismissed ? last : null
+        },
 
         /**
          * What recovery (if any) to offer on a terminal API-error item — returns
@@ -4517,6 +4531,54 @@ export const useDataStore = defineStore('data', {
                 // Rollback on error
                 if (session && oldTitle !== undefined) {
                     session.title = oldTitle
+                }
+                throw error
+            }
+        },
+
+        /**
+         * Dismiss the session's current goal (hide its footer bar). One-way:
+         * there is no un-dismiss; a new goal reopens the bar naturally. The
+         * target's `created_at` pins the exact goal (the backend rejects a
+         * stale target if a newer goal took the last slot meanwhile, and an
+         * active goal — the UI only offers the cross on a closed one).
+         * @param {string} projectId - The project ID
+         * @param {string} sessionId - The session ID
+         * @param {string} createdAt - `created_at` of the goal being dismissed
+         * @throws {Error} If the update fails
+         */
+        async dismissSessionGoal(projectId, sessionId, createdAt) {
+            // Optimistic update: hide the bar immediately.
+            const session = this.sessions[sessionId]
+            const goals = session?.goals
+            const target = goals?.length ? goals[goals.length - 1] : null
+            const applied = target && target.created_at === createdAt && !target.dismissed
+            if (applied) {
+                target.dismissed = true
+            }
+
+            try {
+                const response = await apiFetch(
+                    `/api/projects/${projectId}/sessions/${sessionId}/`,
+                    {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ dismiss_goal: createdAt })
+                    }
+                )
+
+                if (!response.ok) {
+                    const data = await response.json()
+                    throw new Error(data.error || 'Failed to dismiss the goal')
+                }
+
+                const updatedSession = await response.json()
+                this.sessions[sessionId] = { ...this.sessions[sessionId], ...updatedSession }
+
+            } catch (error) {
+                // Rollback on error
+                if (applied) {
+                    target.dismissed = false
                 }
                 throw error
             }

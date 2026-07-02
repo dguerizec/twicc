@@ -485,10 +485,14 @@ class Session(models.Model):
     # objective restated while it is open is appended to that entry's
     # ``objectives`` array (a new entry opens only once the previous goal
     # closed). Shape: ``[{objectives: [str], state: active|completed, cleared:
-    # bool, raw_state, created_at, updated_at}]``. Written by both compute paths
-    # (watcher live sync + background recompute) and synced to the frontend in
-    # ``serialize_session`` like ``tasks`` / ``layout``. Not consumed by the UI
-    # yet — stored for future use. Reduction logic in ``providers/goals.py``.
+    # bool, raw_state, created_at, updated_at, dismissed?: bool}]``. Written by
+    # both compute paths (watcher live sync + background recompute) and synced
+    # to the frontend in ``serialize_session`` like ``tasks`` / ``layout``.
+    # Rendered by the footer goal bar (``GoalBlock.vue``); ``dismissed`` is the
+    # one UI-owned key — set by the PATCH endpoint when the user dismisses a
+    # closed goal's bar, re-ported by both compute paths when they rewrite the
+    # list (``preserve_dismissed_flags``). Reduction logic in
+    # ``providers/goals.py``.
     goals = models.JSONField(default=list, blank=True)
     # TwiCC system-prompt addendum frozen at session creation time. Composed by
     # ``core.services.session_creation`` and stashed via

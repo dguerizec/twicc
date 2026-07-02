@@ -21,6 +21,7 @@ import { useCodeCommentsStore } from '../../../stores/codeComments'
 import MessageInput from '../../message/MessageInput.vue'
 import PendingRequestForm from '../../message/PendingRequestForm.vue'
 import HybridTerminalBlock from '../../message/HybridTerminalBlock.vue'
+import GoalBlock from '../../message/GoalBlock.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import TextSelectionComment from './TextSelectionComment.vue'
 import { useTextSelectionComment } from '../../../composables/useTextSelectionComment'
@@ -129,6 +130,7 @@ let dragCounter = 0  // Track enter/leave events for nested elements
 const messageInputRef = ref(null)
 const pendingFormRef = ref(null)
 const hybridTerminalRef = ref(null)
+const goalBlockRef = ref(null)
 // Visibility + attention reported by the hybrid terminal block: drive the
 // composer's top separator (visible = open OR the warning callout is up) and
 // the composer hybrid-icon tint (attention = the callout is up).
@@ -201,33 +203,48 @@ const hasAnswerablePendingRequest = computed(() =>
     hasPendingRequest.value && pendingRequest.value.request_type !== 'hybrid_terminal'
 )
 
+// The session's current goal (last entry of the /goal lifecycle history, null
+// when none or when the user dismissed it) — drives the goal bar at the very
+// top of the footer stack.
+const currentGoal = computed(() => store.getSessionCurrentGoal(props.sessionId))
+
 // ── Footer accordion ─────────────────────────────────────────────────────────
-// At most one of the three footer panels is open: the message input, the hybrid
-// terminal, or the pending-request form. ``openBlock`` is the single source of
-// truth — opening one reduces the others. Collapsing the composer or the
-// pending-request form reaches the all-minimized 'none' state (their minimize
-// button opens nothing else); closing the terminal returns to the composer (it
-// displaced it). Each panel is driven through emit-free imperative setters
-// (expand/collapse, open/close, restore/minimize), so applying the state never
-// loops back into a request.
-const openBlock = ref('message-input') // 'message-input' | 'terminal' | 'pending' | 'none'
+// At most one of the four footer panels is open: the message input, the hybrid
+// terminal, the pending-request form, or the goal panel. ``openBlock`` is the
+// single source of truth — opening one reduces the others. Collapsing the
+// composer or the pending-request form reaches the all-minimized 'none' state
+// (their minimize button opens nothing else); closing the terminal or the goal
+// panel returns to the composer (they displaced it). Each panel is driven
+// through emit-free imperative setters (expand/collapse, open/close,
+// restore/minimize), so applying the state never loops back into a request.
+const openBlock = ref('message-input') // 'message-input' | 'terminal' | 'pending' | 'goal' | 'none'
 
 function applyOpenBlock() {
     const id = openBlock.value
     if (messageInputRef.value) id === 'message-input' ? messageInputRef.value.expand() : messageInputRef.value.collapse()
     if (hybridTerminalRef.value) id === 'terminal' ? hybridTerminalRef.value.open() : hybridTerminalRef.value.close()
     if (pendingFormRef.value) id === 'pending' ? pendingFormRef.value.restoreIfMinimized() : pendingFormRef.value.minimize()
+    if (goalBlockRef.value) id === 'goal' ? goalBlockRef.value.open() : goalBlockRef.value.collapse()
 }
 watch(openBlock, () => nextTick(applyOpenBlock))
 
+// The open goal panel vanishing under the accordion (dismissed — possibly from
+// another tab — or superseded state hiding the bar entirely): return home to
+// the composer, like the last pending request resolving. No focus steal.
+watch(currentGoal, (goal) => {
+    if (!goal && openBlock.value === 'goal') goToComposer()
+})
+
 // Move keyboard focus into a block's natural target: the composer textarea, the
-// embedded terminal, or the pending form's primary control. Each child's
+// embedded terminal, the pending form's primary control, or the goal panel's
+// scrollable body. Each child's
 // requestFocus is order-independent (focuses now if shown, else once the
 // accordion opens it), so this can fire right after flipping ``openBlock``.
 function focusBlock(id) {
     if (id === 'message-input') messageInputRef.value?.requestFocus?.()
     else if (id === 'terminal') hybridTerminalRef.value?.requestFocus?.()
     else if (id === 'pending') pendingFormRef.value?.requestFocus?.()
+    else if (id === 'goal') goalBlockRef.value?.requestFocus?.()
 }
 
 // Open a block (the accordion reduces the others). ``focus`` only when a caller
@@ -1756,6 +1773,20 @@ defineExpose({
                 </wa-callout>
             </div>
             <template v-else>
+                <!-- Current goal bar (topmost of the footer stack). Collapsed to a
+                     single-line bar by default; opening it (read-only objectives
+                     panel) goes through the accordion like the other panels.
+                     Hidden once the user dismisses a closed goal; a new goal
+                     brings it back. -->
+                <GoalBlock
+                    v-if="currentGoal"
+                    ref="goalBlockRef"
+                    :session-id="sessionId"
+                    :project-id="projectId"
+                    :sending-locked="hasAnswerablePendingRequest"
+                    @request-open="setOpenBlock('goal', { focus: true })"
+                    @request-collapse="goToComposer(true)"
+                />
                 <!-- Pending request form. When multiple parallel requests are pending, the
                      oldest is shown and a counter is displayed for the others. On a main
                      session it stacks above the composer; the two coordinate so at most one
@@ -1816,7 +1847,7 @@ defineExpose({
                     :session-id="sessionId"
                     :project-id="projectId"
                     :sending-locked="hasAnswerablePendingRequest"
-                    :has-panel-above="hasAnswerablePendingRequest || hybridTerminalVisible"
+                    :has-panel-above="hasAnswerablePendingRequest || hybridTerminalVisible || !!currentGoal"
                     :terminal-visible="hybridTerminalVisible"
                     :terminal-attention="hybridTerminalAttention"
                     @needs-title="emit('needs-title')"
@@ -1929,7 +1960,8 @@ defineExpose({
     }
 }
 .session-footer:has(.pending-request-form.maximized),
-.session-footer:has(.hybrid-terminal-block.maximized) {
+.session-footer:has(.hybrid-terminal-block.maximized),
+.session-footer:has(.goal-block.maximized) {
     position: static;
 }
 

@@ -140,7 +140,7 @@ def serialize_session(session):
         "pinned": session.pinned,  # Whether the session is pinned
         "layout": session.layout,  # Per-session dockable-layout intention (UI state; {} = single pane)
         "tasks": session.tasks,  # Latest task/todo/plan snapshot (common shape; {} = none). Not consumed by the UI yet
-        "goals": session.goals,  # Goal lifecycle history (list; [] = none). Not consumed by the UI yet
+        "goals": session.goals,  # Goal lifecycle history (list; [] = none). Last entry drives the footer goal bar
 
         "hybrid": session.hybrid,  # Hybrid CLI mode (one-way, see models.Session.hybrid)
         # Closed AgentSettings bundle (cross-provider). Fields listed in

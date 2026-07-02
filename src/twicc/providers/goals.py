@@ -33,7 +33,15 @@ Stored shape — ``Session.goals`` is a chronological list of::
      "cleared": bool,            # True once a manual /goal clear closed it
      "raw_state": str | None,    # provider-native status, kept verbatim
      "created_at": iso | None,
-     "updated_at": iso | None}
+     "updated_at": iso | None,
+     "dismissed": bool}          # UI-owned, optional (absent = False) — see below
+
+``dismissed`` is the one exception to "the compute owns this JSON": it is set
+by the user dismissing the goal bar in the UI (PATCH endpoint), never by the
+reducer. Both compute paths must therefore re-port it when they rewrite the
+list — the full recompute folds from an empty list and would otherwise drop
+it, and the watcher folds from a possibly stale in-memory copy — via
+:func:`preserve_dismissed_flags` just before saving.
 """
 
 from __future__ import annotations
@@ -125,6 +133,28 @@ def apply_goal_event(
         last["updated_at"] = ts
         return True
     return False
+
+
+def preserve_dismissed_flags(db_goals: list[dict], computed_goals: list[dict]) -> None:
+    """Re-port UI-set ``dismissed`` flags from ``db_goals`` onto ``computed_goals``.
+
+    ``computed_goals`` (mutated in place) is a freshly folded list about to be
+    saved; ``db_goals`` is the list currently stored in the DB, which may carry
+    ``dismissed: true`` set by the user through the PATCH endpoint. Entries are
+    matched by ``created_at`` — the fold is deterministic, so the same goal
+    always re-emerges with the same creation timestamp. Dismissal is one-way
+    (there is no un-dismiss), so this only ever adds flags.
+    """
+    dismissed_keys = {
+        entry["created_at"]
+        for entry in db_goals
+        if entry.get("dismissed") and entry.get("created_at")
+    }
+    if not dismissed_keys:
+        return
+    for entry in computed_goals:
+        if entry.get("created_at") in dismissed_keys:
+            entry["dismissed"] = True
 
 
 def _apply_state(entry: dict, event: GoalEvent) -> bool:
