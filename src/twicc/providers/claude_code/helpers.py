@@ -432,7 +432,11 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
             base = selected_model
             supports_1m = True
         elif mv.latest:
-            base = mv.model
+            # TEMPORARY — revert when the bundled Claude CLI/SDK knows Sonnet 5.
+            # The CLI still resolves the bare "sonnet" alias to the previous
+            # latest (4.6), so pass the explicit id for the latest Sonnet only.
+            # Other latest aliases (opus, …) resolve correctly and stay bare.
+            base = mv.full_name if mv.full_name == "claude-sonnet-5" else mv.model
             supports_1m = mv.provider_extra.supports_1m
         else:
             base = mv.full_name
