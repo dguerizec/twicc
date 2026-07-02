@@ -79,7 +79,7 @@ uv tool upgrade twicc
 ### Claude Code and Codex, side by side
 
 - **Both providers in one UI**, using your existing credentials — nothing extra to set up, and TwiCC walks you through logging in if you haven't
-- **Per-session agent control**: model (Fable 5, Opus 4.8, Sonnet 4.6, …), context window (200K / 1M), effort, thinking, fast mode, permissions (including Claude Code's "auto" mode), with reusable presets and per-project defaults; stop a run at any time
+- **Per-session agent control**: model (Fable 5, Opus 4.8, Sonnet 5, …), context window (200K / 1M), effort, thinking, fast mode, permissions (including Claude Code's "auto" mode), with reusable presets and per-project defaults; stop a run at any time
 - **Interactive tool approvals and provider questions**, answered directly from the browser
 - **Persistent Claude Code cron jobs**: scheduled tasks survive restarts and auto-renew before their 7-day expiry
 - **Provider status monitoring** (Anthropic and OpenAI) with in-app outage notifications
@@ -96,6 +96,8 @@ uv tool upgrade twicc
 ### The conversation
 
 - **Live conversation**: full tool-use details, real-time streaming of text and thinking, rich rendering (markdown, code, Mermaid, images with pan/zoom), and image/file attachments
+- **Plan, Tasks and Workflows tabs**: dedicated panels for a session's plan (read-only), its task/todo list, and — for Claude — its workflow runs, live as they execute
+- **Session goal**: set a standing objective a Claude or Codex session keeps working toward, and refine or clear it anytime
 - **Display modes**: collapse tool-call groups, switch between a simplified and a full view, and optionally show message timestamps and day dividers
 - **Slash commands and file references**: `/` for Claude Code, `$` for Codex, `@` for files — from the message input
 - **Snippets and history**: reusable text snippets with placeholders (global or per-project), plus a picker to reuse earlier messages

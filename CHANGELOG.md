@@ -6,31 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Summary
+
+- **Fable 5, Sonnet 5 & New Session Tabs** — Fable 5 is back, Sonnet 5 arrives, three new session tabs (Plan, Tasks, Workflows), plus session goals, mid-run interruption, and a round of fixes.
+
 ### Added
 
+- **Claude Sonnet 5** — support for Anthropic's new Sonnet model, now the latest Sonnet (Sonnet 4.6 remains selectable).
 - **Plan tab** — a Claude session with a plan now shows it in a dedicated, read-only tab; the plan is also retrievable from the CLI (+skill/API).
 - **Tasks tab** — a session with a task list now shows its latest state in a dedicated tab; the tasks list is also accessible via CLI (+skill/API) with other session info.
 - **Workflows tab** — a Claude session that ran workflows now shows them in a dedicated tab, live as they run; workflows are also accessible via CLI (+skill/API).
-- **Interrupting the assistant** — stop it mid-task without ending the session, ready for your next message.
 - **`/goal` command** — give a Claude or Codex session a standing objective to work toward, and refine or clear it as you go.
-- **Claude Sonnet 5** — support for Anthropic's new Sonnet model, now the latest Sonnet (Sonnet 4.6 remains selectable).
 - **Codex `view_image` tool** — dedicated display that shows the viewed image instead of a raw tool result.
+- **Interrupting the assistant** — stop it mid-task without ending the session, ready for your next message.
 - **Search safeguard** — TwiCC now catches a common Claude search mistake (`rg -r`, mistaken for "recursive" when it actually means "replace") and has it retry, instead of letting it return silently garbled results.
 
 ### Changed
 
+- **Claude Fable 5** — available again (Anthropic restored access); it is once more the strongest selectable Claude model and the target of the `max` / `strongest` model aliases.
 - **Stopping sessions** — more reliable stop handling, plus a new force-stop (hard kill) for a session that won't stop in time (+CLI/skill/API).
-- **Image preview** — small images now open in a roomier view, making them more practical to zoom into.
 - **Git diff → Files** — opening a Git diff in the Files tab now lands on the line you were looking at.
+- **Image preview** — small images now open in a roomier view, making them more practical to zoom into.
 - **Tips** — automatically shown tips now appear at most once a day.
 - **Dockable layouts** — several small improvements.
 - **Claude Agent SDK** — Upgrade from 0.2.106 to 0.2.110 (bundled Claude Code CLI: 2.1.185 → 2.1.191)
-- **Claude Fable 5** — available again (Anthropic restored access); it is once more the strongest selectable Claude model and the target of the `max` / `strongest` model aliases.
 
 ### Fixed
 
-- **Terminals** — several fixes to the multi-terminal setup and to attaching tabs from higher scopes.
 - **Reconnect** — after a WebSocket reconnect (common on mobile), the open session no longer stays frozen on a "thinking" block.
+- **Terminals** — several fixes to the multi-terminal setup and to attaching tabs from higher scopes.
 - **Worktree sessions** — filtering a project on a fresh page load now correctly includes its git worktrees' sessions.
 - **Artifacts** — returning to an artifact preview no longer breaks its approved network calls.
 - **Archived sessions** — an archived session is no longer marked as unread.
