@@ -296,9 +296,21 @@ MODEL_VERSIONS: list[ModelVersion] = [
     ),
     ModelVersion(
         provider=Provider.CLAUDE_CODE,
-        model="sonnet", version="4.6", full_name="claude-sonnet-4-6",
-        retirement_date=None,  # to set when sonnet 4.7 is released (retire 2027-02-17)
+        model="sonnet", version="5", full_name="claude-sonnet-5",
+        retirement_date=None,
         latest=True,
+        weight=30,
+        provider_extra=ClaudeCodeModelExtra(
+            supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
+            supports_fast=False, supports_permission_auto=True,
+            supports_highres_images=True, supports_thinking_disabled=True,
+        ),
+    ),
+    ModelVersion(
+        provider=Provider.CLAUDE_CODE,
+        model="sonnet", version="4.6", full_name="claude-sonnet-4-6",
+        retirement_date=date(2027, 2, 17),
+        latest=False,
         weight=20,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=False, supports_effort_max=True,
