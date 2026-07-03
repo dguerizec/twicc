@@ -2139,13 +2139,15 @@ class CodexSessionCompute(BaseSessionCompute):
 
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
-    ) -> tuple[str, str] | None:
-        """Return ``(call_id, agent_id)`` for a successful ``spawn_agent`` output.
+    ) -> tuple[str, str, bool] | None:
+        """Return ``(call_id, agent_id, is_async)`` for a successful ``spawn_agent`` output.
 
         The ``function_call_output`` of a ``spawn_agent`` carries a JSON
         string ``{"agent_id": "...", "nickname": "..."}`` on success.
         Returns ``None`` for any other shape (different tool, freeform
-        rejection text, missing fields, malformed JSON…).
+        rejection text, missing fields, malformed JSON…). ``is_async`` is
+        always True: Codex's ``spawn_agent`` runs the subagent
+        asynchronously (see :meth:`extract_task_tool_uses`).
         """
         if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
             return None
@@ -2167,7 +2169,7 @@ class CodexSessionCompute(BaseSessionCompute):
         agent_id = decoded.get("agent_id")
         if not isinstance(agent_id, str) or not agent_id:
             return None
-        return call_id, agent_id
+        return call_id, agent_id, True
 
     def extract_task_tool_uses(self, parsed_json: dict) -> list[tuple[str, bool]]:
         """Return ``[(call_id, is_background)]`` for ``spawn_agent`` calls.
@@ -2777,7 +2779,7 @@ class CodexSessionCompute(BaseSessionCompute):
                 # message to the same ToolResultLink chain. The live
                 # path skips this and queries ``AgentLink`` instead.
                 if tool_result_agent_info is not None:
-                    spawn_call_id, agent_id = tool_result_agent_info
+                    spawn_call_id, agent_id, _is_async = tool_result_agent_info
                     self._agent_id_map(session_id)[agent_id] = spawn_call_id
                 return ContentAnalysis(
                     has_visible_content=False,

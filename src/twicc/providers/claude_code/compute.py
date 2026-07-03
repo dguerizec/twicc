@@ -273,6 +273,102 @@ def _extract_task_notification_fields(xml_str: str) -> tuple[str | None, str | N
     return tool_use_id, task_id, result_text
 
 
+class ParsedTaskNotification(NamedTuple):
+    """A ``<task-notification>`` parsed and routed.
+
+    ``is_task_result`` is the routing decision shared by the user-message
+    and attachment rewrite branches: True means "completion of a spawned
+    task (agent, workflow, …) whose payload belongs on the launching
+    tool_use as a regular tool_result row"; False leaves the notification
+    to the Monitor/background-command terminal handling.
+    """
+    tool_use_id: str | None
+    task_id: str | None
+    result_text: str
+    status: str | None
+    event: str | None
+    is_task_result: bool
+
+
+def _parse_task_notification(xml_str: str) -> ParsedTaskNotification:
+    """Parse a ``<task-notification>`` XML string and decide its routing.
+
+    The notification format changed over CLI versions:
+
+    - old agent/workflow completions: ``<tool-use-id>`` + ``<result>``/
+      ``<summary>``, no ``<status>``;
+    - newer CLIs (async-by-default agents, ~2.1.18x+): agent/workflow
+      completions carry ``<status>`` too, plus ``<result>`` and ``<usage>``;
+    - Monitor terminals and background-command (Bash) completions:
+      ``<tool-use-id>`` + ``<status>`` + ``<summary>``, but never a
+      ``<result>``/``<usage>`` payload.
+
+    So "has a ``<result>`` or ``<usage>`` payload, or predates ``<status>``"
+    is the discriminator for task completions; the presence of ``<status>``
+    alone is NOT (that was the old discriminator, and it misrouted the new
+    agent/workflow completions to the Monitor-terminal rewrite).
+    """
+    try:
+        notification = xmltodict.parse(xml_str)['task-notification']
+        tool_use_id = notification.get('tool-use-id')
+        task_id = notification.get('task-id')
+        result_text = (
+            notification.get('result', '')
+            or notification.get('summary', '')
+        )
+        event_text = notification.get('event')
+        status_text = notification.get('status')
+        has_payload = 'result' in notification or 'usage' in notification
+    except Exception:
+        logger.info(
+            "xmltodict failed for task-notification, "
+            "falling back to manual extraction"
+        )
+        # Manual fallback covers only tool_use_id/task_id/result; <event>
+        # and <status> stay None so malformed XML keeps routing to the
+        # task-result rewrite (the historical behaviour).
+        tool_use_id, task_id, result_text = _extract_task_notification_fields(xml_str)
+        return ParsedTaskNotification(
+            tool_use_id=tool_use_id,
+            task_id=task_id,
+            result_text=result_text,
+            status=None,
+            event=None,
+            is_task_result=bool(tool_use_id),
+        )
+
+    # Validate types BEFORE the routing decision: a malformed notification
+    # (e.g. a repeated tag makes xmltodict return a list) must not route to
+    # the task-result rewrite with a non-string tool_use_id.
+    tool_use_id = tool_use_id if isinstance(tool_use_id, str) else None
+    task_id = task_id if isinstance(task_id, str) else None
+    status_text = status_text if isinstance(status_text, str) else None
+    event_text = event_text if isinstance(event_text, str) else None
+    return ParsedTaskNotification(
+        tool_use_id=tool_use_id,
+        task_id=task_id,
+        result_text=result_text,
+        status=status_text,
+        event=event_text,
+        is_task_result=bool(tool_use_id) and (has_payload or not status_text),
+    )
+
+
+def _is_misrouted_task_result(stripped_xml: str) -> bool:
+    """True when a notification stored as a Monitor terminal re-routes to a task result.
+
+    Used by the repair pass in ``_transform_inline_provider``: ``stripped_xml``
+    is a preserved original (already ``lstrip``-ped, starts with the
+    ``<task-notification>`` tag) of an item previously rewritten as a Monitor
+    terminal; re-run the routing to decide whether it must be restored.
+    """
+    close_idx = stripped_xml.rfind(_TASK_NOTIFICATION_CLOSE_TAG)
+    if close_idx == -1:
+        return False
+    xml_str = stripped_xml[:close_idx + len(_TASK_NOTIFICATION_CLOSE_TAG)]
+    return _parse_task_notification(xml_str).is_task_result
+
+
 # Regex to strip ANSI escape codes from local command output
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
@@ -990,22 +1086,69 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         #   3. populate the session-scoped Monitor task→tool_use_id map
         #      from each Monitor tool_result's ``toolUseResult.taskId``
         #      (side-effect only, no content rewrite);
-        #   4. ``<task-notification>`` XML user messages — three flavours:
-        #      background-agent result (XML carries ``<tool-use-id>`` +
-        #      ``<result>``/``<summary>`` but no ``<status>``), Monitor
-        #      terminal user_message variant (XML carries
-        #      ``<tool-use-id>`` + ``<status>``, SDK ≥ 2.1.142), and
-        #      Monitor task notification fragment (XML carries only
-        #      ``<task-id>`` + ``<event>``, ``tool_use_id`` resolved via
-        #      the session-scoped map);
-        #   5. Monitor terminal ``attachment`` (queued_command /
-        #      task-notification, SDK ≤ 2.1.123) rewritten into a
-        #      synthetic tool_result carrying ``twiccMonitorTerminal=True``;
+        #   4. ``<task-notification>`` XML user messages — three flavours,
+        #      routed by :func:`_parse_task_notification` (see its
+        #      docstring for the format history): task result
+        #      (agent/workflow completion), Monitor terminal /
+        #      background-command completion (user_message variant,
+        #      SDK ≥ 2.1.142), and Monitor task notification fragment
+        #      (XML carries only ``<task-id>`` + ``<event>``,
+        #      ``tool_use_id`` resolved via the session-scoped map);
+        #   5. ``attachment`` (queued_command / task-notification)
+        #      variants of the same notifications — task results rewritten
+        #      like step 4, terminals into a synthetic tool_result
+        #      carrying ``twiccMonitorTerminal=True``;
         #   6. CLI local command outputs wrapped in
         #      ``<local-command-stdout/stderr>`` tags.
         # Steps 4, 5, and 6 are normalised in place into the regular
         # tool_result / assistant message formats so the rest of the
         # pipeline doesn't need to care.
+
+        # --- Repair pass ---
+        # Task-notifications misrouted to the Monitor-terminal rewrite
+        # before _parse_task_notification learned the new agent/workflow
+        # completion shape (newer completions carry <status> too, which was
+        # the old discriminator). The stored row is a
+        # twiccMonitorTerminal tool_result whose content is just the status
+        # string, but the original notification survives
+        # (twiccOriginalContent for the user variant, twiccOriginalEntry
+        # for the attachment variant): when it is a task result under the
+        # current routing, restore the original in place and fall through
+        # so the normal branches re-run. Live lines never carry these keys,
+        # so this only fires on recompute.
+        if parsed_json.get('twiccMonitorTerminal'):
+            original_content = parsed_json.get('twiccOriginalContent')
+            original_entry = parsed_json.get('twiccOriginalEntry')
+            if isinstance(original_content, str):
+                orig_stripped = original_content.lstrip()
+                if (
+                    orig_stripped.startswith(_TASK_NOTIFICATION_TAG)
+                    and _is_misrouted_task_result(orig_stripped)
+                ):
+                    message = parsed_json.get('message')
+                    if isinstance(message, dict):
+                        message['content'] = original_content
+                        parsed_json.pop('twiccOriginalContent', None)
+                        parsed_json.pop('twiccMonitorTerminal', None)
+            elif isinstance(original_entry, str):
+                try:
+                    restored = orjson.loads(original_entry)
+                except orjson.JSONDecodeError:
+                    restored = None
+                restored_attachment = (
+                    restored.get('attachment') if isinstance(restored, dict) else None
+                )
+                restored_prompt = (
+                    restored_attachment.get('prompt')
+                    if isinstance(restored_attachment, dict) else None
+                )
+                if (
+                    isinstance(restored_prompt, str)
+                    and restored_prompt.lstrip().startswith(_TASK_NOTIFICATION_TAG)
+                    and _is_misrouted_task_result(restored_prompt.lstrip())
+                ):
+                    parsed_json.clear()
+                    parsed_json.update(restored)
 
         entry_type = parsed_json.get('type')
 
@@ -1053,16 +1196,17 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
                                     )[task_id] = block['tool_use_id']
                                     break
 
-        # --- task-notification XML (three flavours, all dispatched on the
-        # fields present in the XML):
-        #   - background agent result: <tool-use-id> + <result>/<summary>
-        #     (no <status>) → rewrite as a normal tool_result row, surface
-        #     <task-id> as agentId so the subagent UI pairs up.
-        #   - Monitor terminal (user_message variant, SDK ≥ 2.1.142):
-        #     <tool-use-id> + <status> → rewrite as a synthetic terminal
-        #     tool_result with twiccMonitorTerminal flag, mirroring the
-        #     legacy attachment-format terminal further below. The presence
-        #     of <status> is the discriminator vs. the subagent case above.
+        # --- task-notification XML (three flavours, dispatched by
+        # _parse_task_notification — see its docstring for the format
+        # history and the routing rules):
+        #   - task result (agent/workflow completion): rewrite as a normal
+        #     tool_result row on the launching tool_use, surface <task-id>
+        #     as agentId (+ isAsync) so the subagent UI pairs up.
+        #   - Monitor terminal / background-command completion
+        #     (user_message variant, SDK ≥ 2.1.142): <tool-use-id> +
+        #     <status> without a result payload → rewrite as a synthetic
+        #     terminal tool_result with twiccMonitorTerminal flag,
+        #     mirroring the legacy attachment-format terminal further below.
         #   - Monitor fragment: only <task-id> + <event> (no <tool-use-id>)
         #     → look up tool_use_id via the session-scoped map and rewrite
         #     as a regular tool_result row.
@@ -1076,102 +1220,88 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
                         close_idx = stripped.rfind(_TASK_NOTIFICATION_CLOSE_TAG)
                         if close_idx != -1:
                             xml_str = stripped[:close_idx + len(_TASK_NOTIFICATION_CLOSE_TAG)]
-                            event_text: str | None = None
-                            status_text: str | None = None
-                            try:
-                                notification = xmltodict.parse(xml_str)['task-notification']
-                                tool_use_id = notification.get('tool-use-id')
-                                task_id = notification.get('task-id')
-                                result_text = (
-                                    notification.get('result', '')
-                                    or notification.get('summary', '')
-                                )
-                                event_text = notification.get('event')
-                                status_text = notification.get('status')
-                            except Exception:
-                                logger.info(
-                                    "xmltodict failed for task-notification, "
-                                    "falling back to manual extraction"
-                                )
-                                tool_use_id, task_id, result_text = (
-                                    _extract_task_notification_fields(xml_str)
-                                )
-                                # Manual fallback covers only tool_use_id/task_id/result;
-                                # <event> and <status> fields stay None, so the Monitor
-                                # branches below are skipped and we fall back to the
-                                # subagent rewrite for any malformed XML.
+                            note = _parse_task_notification(xml_str)
 
-                            # --- Monitor terminal (user_message variant) ---
-                            # SDK ≥ 2.1.142 ships the stream-end marker as a
-                            # user_message carrying both <tool-use-id> and <status>.
-                            # The legacy attachment-format terminal further below
-                            # stays in place for SDK ≤ 2.1.123.
-                            if (
-                                isinstance(tool_use_id, str)
-                                and isinstance(status_text, str)
-                                and status_text
-                            ):
-                                is_error = status_text != 'completed'
+                            # --- Task result (agent/workflow completion) ---
+                            if note.is_task_result:
+                                parsed_json['twiccOriginalContent'] = content
+                                block = {
+                                    'type': 'tool_result',
+                                    'tool_use_id': note.tool_use_id,
+                                    'content': note.result_text,
+                                }
+                                # New-format notifications carry a status; a
+                                # non-completed one (killed/failed agent) is
+                                # an error result.
+                                if note.status and note.status != 'completed':
+                                    block['is_error'] = True
+                                message['content'] = [block]
+                                if note.task_id:
+                                    # A notification only ever closes an
+                                    # asynchronous launch, so isAsync here
+                                    # backfills backgroundness when the ack
+                                    # line didn't (older CLIs).
+                                    parsed_json['toolUseResult'] = {
+                                        'agentId': note.task_id,
+                                        'isAsync': True,
+                                    }
+                                return orjson.dumps(parsed_json).decode('utf-8')
+
+                            # --- Monitor terminal / background-command ---
+                            if note.tool_use_id and note.status:
+                                is_error = note.status != 'completed'
                                 parsed_json['twiccOriginalContent'] = content
                                 message['content'] = [{
                                     'type': 'tool_result',
-                                    'tool_use_id': tool_use_id,
-                                    'content': status_text,
+                                    'tool_use_id': note.tool_use_id,
+                                    'content': note.status,
                                     'is_error': is_error,
                                     'twiccMonitorTerminal': True,
                                 }]
                                 parsed_json['twiccMonitorTerminal'] = True
                                 session_id = parsed_json.get('sessionId')
-                                if isinstance(session_id, str) and isinstance(task_id, str):
+                                if isinstance(session_id, str) and note.task_id:
                                     self._monitor_task_to_tool_use_id.get(
                                         session_id, {}
-                                    ).pop(task_id, None)
+                                    ).pop(note.task_id, None)
                                 return orjson.dumps(parsed_json).decode('utf-8')
 
-                            # --- Branch A: background agent result (existing behaviour) ---
-                            if tool_use_id:
-                                parsed_json['twiccOriginalContent'] = content
-                                message['content'] = [{
-                                    'type': 'tool_result',
-                                    'tool_use_id': tool_use_id,
-                                    'content': result_text,
-                                }]
-                                if task_id:
-                                    parsed_json['toolUseResult'] = {'agentId': task_id}
-                                return orjson.dumps(parsed_json).decode('utf-8')
-
-                            # --- Branch B: Monitor task notification fragment ---
+                            # --- Monitor task notification fragment ---
                             # No <tool-use-id> in the XML, but <task-id> resolvable
                             # via the session-scoped map and <event> present.
                             session_id = parsed_json.get('sessionId')
                             if (
                                 isinstance(session_id, str)
-                                and isinstance(task_id, str)
-                                and isinstance(event_text, str)
-                                and event_text
+                                and note.task_id
+                                and note.event
                             ):
                                 mapped = (
                                     self._monitor_task_to_tool_use_id
                                     .get(session_id, {})
-                                    .get(task_id)
+                                    .get(note.task_id)
                                 )
                                 if mapped:
                                     parsed_json['twiccOriginalContent'] = content
                                     message['content'] = [{
                                         'type': 'tool_result',
                                         'tool_use_id': mapped,
-                                        'content': event_text,
+                                        'content': note.event,
                                     }]
                                     return orjson.dumps(parsed_json).decode('utf-8')
 
                             # Fall through — no rewrite applied.
 
-        # --- attachment queued_command terminal task-notification ---
-        # Monitor stream end signalled by an attachment carrying both
-        # <task-id> and <tool-use-id> + <status>. Rewrite as a synthetic
-        # terminal tool_result that compute_link_extra will flag with
-        # is_terminated:true; non-"completed" statuses surface as
-        # ToolResultLink.error through extract_tool_result_info.
+        # --- attachment queued_command task-notification ---
+        # Same notifications as the user_message variant above (a given
+        # notification lands as exactly one of the two shapes, depending on
+        # when it arrives), so the same two rewrites apply:
+        #   - task result (agent/workflow completion) → synthetic
+        #     user/tool_result row on the launching tool_use, with
+        #     agentId/isAsync surfaced in toolUseResult;
+        #   - Monitor / background-command terminal → synthetic terminal
+        #     tool_result that compute_link_extra will flag with
+        #     is_terminated:true; non-"completed" statuses surface as
+        #     ToolResultLink.error through extract_tool_result_info.
         if entry_type == 'attachment':
             attachment = parsed_json.get('attachment')
             if (
@@ -1186,26 +1316,39 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
                         close_idx = stripped.rfind(_TASK_NOTIFICATION_CLOSE_TAG)
                         if close_idx != -1:
                             xml_str = stripped[:close_idx + len(_TASK_NOTIFICATION_CLOSE_TAG)]
-                            terminal_status: str | None = None
-                            try:
-                                notification = xmltodict.parse(xml_str)['task-notification']
-                                terminal_tool_use_id = notification.get('tool-use-id')
-                                terminal_task_id = notification.get('task-id')
-                                terminal_status = notification.get('status')
-                            except Exception:
-                                logger.info(
-                                    "xmltodict failed for terminal task-notification "
-                                    "attachment, falling back to manual extraction"
-                                )
-                                terminal_tool_use_id, terminal_task_id, _ = (
-                                    _extract_task_notification_fields(xml_str)
-                                )
-                                # Manual fallback doesn't carry status — terminal_status stays None.
+                            note = _parse_task_notification(xml_str)
 
-                            if (
-                                isinstance(terminal_tool_use_id, str)
-                                and isinstance(terminal_status, str)
-                            ):
+                            # --- Task result (agent/workflow completion) ---
+                            if note.is_task_result:
+                                original_entry = orjson.dumps(parsed_json).decode('utf-8')
+                                block = {
+                                    'type': 'tool_result',
+                                    'tool_use_id': note.tool_use_id,
+                                    'content': note.result_text,
+                                }
+                                if note.status and note.status != 'completed':
+                                    block['is_error'] = True
+                                parsed_json['type'] = 'user'
+                                parsed_json['message'] = {
+                                    'role': 'user',
+                                    'content': [block],
+                                }
+                                if note.task_id:
+                                    parsed_json['toolUseResult'] = {
+                                        'agentId': note.task_id,
+                                        'isAsync': True,
+                                    }
+                                # Whole-entry snapshot — same rationale as the
+                                # terminal rewrite below.
+                                parsed_json['twiccOriginalEntry'] = original_entry
+                                parsed_json.pop('attachment', None)
+                                return orjson.dumps(parsed_json).decode('utf-8')
+
+                            # --- Monitor / background-command terminal ---
+                            if note.tool_use_id and note.status:
+                                terminal_tool_use_id = note.tool_use_id
+                                terminal_task_id = note.task_id
+                                terminal_status = note.status
                                 original_entry = orjson.dumps(parsed_json).decode('utf-8')
                                 is_error = terminal_status != 'completed'
                                 # Rewrite top-level shape into a synthetic user/tool_result
@@ -1611,9 +1754,13 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
 
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, bool] | None:
         # Need both a tool_result block in the content (for tool_use_id) and
-        # an agentId in the root-level toolUseResult.
+        # an agentId in the root-level toolUseResult. ``isAsync`` is set by
+        # the async launch ack (async-by-default CLIs no longer put a
+        # ``run_in_background`` flag in the tool_use input, so this ack is
+        # the only reliable backgroundness signal) and re-set by our own
+        # task-notification rewrite.
         content = get_message_content_list(parsed_json, "user")
         if content is None:
             return None
@@ -1632,7 +1779,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         agent_id = tool_use_result.get('agentId')
         if not agent_id:
             return None
-        return tool_use_id, agent_id
+        return tool_use_id, agent_id, bool(tool_use_result.get('isAsync'))
 
     def extract_workflow_info_from_tool_result(
         self, parsed_json: dict
@@ -2107,14 +2254,20 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             # Resolve error sentinel
             tool_result_error = None if first_tool_result_error is ... else first_tool_result_error
 
-            # Agent info: requires both tool_result_id and root-level toolUseResult.agentId
+            # Agent info: requires both tool_result_id and root-level
+            # toolUseResult.agentId (isAsync flags an async launch ack — see
+            # extract_agent_info_from_tool_result).
             agent_info = None
             if first_tool_result_id:
                 tool_use_result = parsed_json.get('toolUseResult')
                 if isinstance(tool_use_result, dict):
                     agent_id = tool_use_result.get('agentId')
                     if agent_id:
-                        agent_info = (first_tool_result_id, agent_id)
+                        agent_info = (
+                            first_tool_result_id,
+                            agent_id,
+                            bool(tool_use_result.get('isAsync')),
+                        )
 
             return ContentAnalysis(
                 has_visible_content=has_visible,

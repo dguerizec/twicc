@@ -170,8 +170,12 @@ class ContentAnalysis(NamedTuple):
     # Raw prefix/suffix detection (caller filters by kind)
     has_prefix: bool
     has_suffix: bool
-    # (tool_use_id, agent_id) when the tool_result references a spawned agent
-    tool_result_agent_info: tuple[str, str] | None
+    # (tool_use_id, agent_id, is_async) when the tool_result references a
+    # spawned agent. ``is_async`` is True when the result itself signals an
+    # asynchronous launch (e.g. Claude Code's ``toolUseResult.isAsync`` ack):
+    # since the async-by-default CLI dropped the ``run_in_background`` input
+    # flag, the ack is the only reliable backgroundness signal.
+    tool_result_agent_info: tuple[str, str, bool] | None
 
 
 # Shared empty constants used by every provider's ``analyze_content`` to
@@ -1297,8 +1301,12 @@ class BaseSessionCompute:
 
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
-    ) -> tuple[str, str] | None:
-        """Return ``(tool_use_id, agent_id)`` when the tool_result links to a subagent."""
+    ) -> tuple[str, str, bool] | None:
+        """Return ``(tool_use_id, agent_id, is_async)`` when the tool_result links to a subagent.
+
+        ``is_async`` is True when the tool_result itself signals an
+        asynchronous launch (see :attr:`ContentAnalysis.tool_result_agent_info`).
+        """
         raise NotImplementedError
 
     def extract_task_tool_uses(self, parsed_json: dict) -> list[tuple[str, bool]]:
@@ -1853,26 +1861,47 @@ class BaseSessionCompute:
         Create an :class:`~twicc.core.models.AgentLink` from a tool_result with agentId.
 
         When a tool_result arrives carrying an ``agent_id`` reference, the
-        provider supplies the ``(tool_use_id, agent_id)`` pair via
+        provider supplies the ``(tool_use_id, agent_id, is_async)`` triple via
         :meth:`extract_agent_info_from_tool_result`. This method then
         backfills the matching tool_use in the parent session and creates
-        the link, broadcasting an :class:`AgentLinkUpdate` on success.
+        the link, broadcasting an :class:`AgentLinkUpdate` on success. When
+        the link already exists but an async ack proves it should be
+        background, the flag is upgraded (and re-broadcast) instead.
         """
         agent_info = self.extract_agent_info_from_tool_result(parsed_json)
         if not agent_info:
             return None
 
-        tool_use_id, agent_id = agent_info
+        tool_use_id, agent_id, is_async = agent_info
 
-        if is_agent_link_done(session_id, agent_id):
-            return None
-
-        # Check if we already have this agent link
-        if AgentLink.objects.filter(
+        if is_agent_link_done(session_id, agent_id) or AgentLink.objects.filter(
             session_id=session_id,
             agent_id=agent_id,
         ).exists():
             mark_agent_link_done(session_id, agent_id)
+            # The link may pre-exist via the prompt-matching paths, which
+            # only see the tool_use input — and the async-by-default CLI
+            # dropped the ``run_in_background`` flag there. An async launch
+            # ack must upgrade such a link to background, otherwise
+            # ``check_agent_naturally_stopped`` counts this very ack as the
+            # single result of a foreground agent and stops it immediately.
+            if is_async:
+                link = AgentLink.objects.filter(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    is_background=False,
+                ).first()
+                if link is not None:
+                    link.is_background = True
+                    link.save(update_fields=['is_background'])
+                    return AgentLinkUpdate(
+                        parent_session_id=session_id,
+                        agent_id=agent_id,
+                        tool_use_id=link.tool_use_id,
+                        tool_use_line_num=link.tool_use_line_num,
+                        is_background=True,
+                        started_at=link.started_at,
+                    )
             return None
 
         # Find the agent-spawning tool_use by searching for the tool_use_id
@@ -1888,9 +1917,10 @@ class BaseSessionCompute:
             except orjson.JSONDecodeError:
                 continue
 
-            for tu_id, is_background in self.extract_task_tool_uses(candidate_parsed):
+            for tu_id, input_is_background in self.extract_task_tool_uses(candidate_parsed):
                 if tu_id != tool_use_id:
                     continue
+                is_background = input_is_background or is_async
                 try:
                     obj, created = AgentLink.objects.get_or_create(
                         session_id=session_id,
@@ -2447,7 +2477,7 @@ class BaseSessionCompute:
                     prev_count, _ = agent_tool_result_counts.get(tool_result_ref, (0, None))
                     agent_tool_result_counts[tool_result_ref] = (prev_count + 1, item.timestamp)
             if analysis.tool_result_agent_info:
-                tu_id, agent_id = analysis.tool_result_agent_info
+                tu_id, agent_id, is_async = analysis.tool_result_agent_info
                 if tu_id in task_tool_use_map:
                     line_num, is_background, started_at = task_tool_use_map[tu_id]
                     all_agent_links[(agent_id, tu_id)] = serialize_agent_link(AgentLink(
@@ -2455,7 +2485,7 @@ class BaseSessionCompute:
                         tool_use_line_num=line_num,
                         tool_use_id=tu_id,
                         agent_id=agent_id,
-                        is_background=is_background,
+                        is_background=is_background or is_async,
                         started_at=started_at,
                     ))
                     del task_tool_use_map[tu_id]
@@ -3212,13 +3242,19 @@ class BaseSessionCompute:
 
             # Tool result links (tool_result items are DEBUG_ONLY)
             if self.is_tool_result_item(parsed):
+                # Create/upgrade the agent link BEFORE the naturally-stopped
+                # check: on an async launch ack both fire on the same line,
+                # and the check must see the link's final ``is_background``
+                # (an ack upgrading a prompt-matched link would otherwise be
+                # counted as the single result of a foreground agent and
+                # stop it immediately).
+                if update := self.create_agent_link_from_tool_result(session.id, item, parsed):
+                    agent_link_updates.append(update)
                 tool_result_update = self.create_tool_result_link_live(session.id, item, parsed)
                 if tool_result_update:
                     tool_result_updates.append(tool_result_update)
                     if stopped := self.check_agent_naturally_stopped(session.id, tool_result_update):
                         agent_stopped_updates.append(stopped)
-                if update := self.create_agent_link_from_tool_result(session.id, item, parsed):
-                    agent_link_updates.append(update)
                 if wf_update := self.create_workflow_link_from_tool_result(session.id, item, parsed):
                     workflow_link_updates.append(wf_update)
 
