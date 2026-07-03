@@ -203,7 +203,8 @@ def test_subdirectory_url_does_not_serve_spa(client, artifacts_root):
 def test_artifact_urls_match_protected_non_api_prefixes():
     from twicc.auth.middleware import PROTECTED_NON_API_PREFIXES
 
-    matches = lambda path: any(path.startswith(p) for p in PROTECTED_NON_API_PREFIXES)
+    def matches(path):
+        return any(path.startswith(p) for p in PROTECTED_NON_API_PREFIXES)
 
     assert matches("/artifacts/foo/shot.png")
     assert matches("/artifacts/")

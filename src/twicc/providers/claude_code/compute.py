@@ -666,7 +666,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         # ``has_workflows`` is emitted ONLY when found, so a later recompute
         # never resets an already-True flag (one-way latch). The watcher latches
         # the same flag live when a ``wf_*.json`` first appears.
-        if session.type != SessionType.SESSION:
+        if session.type != SessionType.SESSION or not session.file_path:
             return {}
         # ``file_path`` is ``<project_id>/<session_id>.jsonl`` relative to
         # PROJECTS_DIR; dropping the ``.jsonl`` suffix yields the session's

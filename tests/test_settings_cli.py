@@ -187,7 +187,7 @@ def test_provider_patch_model_alias_resolves(temp_settings):
     cc_patch, cc_errors = build_provider_patch(
         "claude_code", _empty_provider_flags(model="max"))
     assert cc_errors == []
-    assert cc_patch == {"claudeCodeDefaultModel": "opus"}
+    assert cc_patch == {"claudeCodeDefaultModel": "fable"}
 
     cx_patch, cx_errors = build_provider_patch(
         "codex", _empty_provider_flags(model="max"))

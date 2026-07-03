@@ -131,7 +131,9 @@ def apply_compute_results(result_queue) -> None:
 def test_session(db):
     """Create a test project and session."""
     project = Project.objects.create(id="test-project")
-    session = Session.objects.create(id="test-session", project=project)
+    session = Session.objects.create(
+        id="test-session", project=project, file_path="test-project/test-session.jsonl",
+    )
     return session
 
 

@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
+from django.utils import timezone
 
 from twicc.cli._annotation_filters import (
     AnnotationFilter,
     AnnotationOp,
+    apply_annotation_filters,
     parse_annotation_filter,
 )
+from twicc.core.models import Project, Session, SessionType
 
 
 # --- parse_annotation_filter ---------------------------------------------
@@ -104,12 +109,6 @@ def test_parse_rejects_invalid_key_characters():
 
 
 # --- apply_annotation_filters --------------------------------------------
-
-from datetime import timedelta
-from django.utils import timezone
-
-from twicc.cli._annotation_filters import apply_annotation_filters
-from twicc.core.models import Project, Session, SessionType
 
 
 @pytest.fixture
