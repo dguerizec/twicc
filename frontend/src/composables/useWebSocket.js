@@ -14,6 +14,7 @@ import { playNotificationSound, sendBrowserNotification, isPageActive } from '..
 import { installPresenceHeartbeat, isLocallyPresent } from '../utils/presence'
 import { truncateTitle } from '../utils/truncate'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
+import { compareVersions } from '../utils/version'
 
 // WebSocket close code sent by backend when authentication fails
 const WS_CLOSE_AUTH_FAILURE = 4001
@@ -717,9 +718,11 @@ function handleUpdateAvailable(msg) {
     const { latest_version, release_url } = msg
     if (!latest_version) return
 
-    // Check localStorage: skip if already notified for this version (or newer)
+    // Check localStorage: skip if already notified for this version (or newer).
+    // Compare numerically — a string comparison gets "1.9.2" >= "1.10.0" wrong
+    // (true), which would silence the toast for any double-digit minor/patch bump.
     const lastNotified = localStorage.getItem(UPDATE_NOTIFIED_VERSION_KEY)
-    if (lastNotified && lastNotified >= latest_version) return
+    if (lastNotified && compareVersions(lastNotified, latest_version) >= 0) return
 
     // Store the version so we don't notify again
     localStorage.setItem(UPDATE_NOTIFIED_VERSION_KEY, latest_version)
