@@ -460,6 +460,15 @@ onDeactivated(() => {
 // This must also be deferred if the container is not yet visible.
 onActivated(() => {
     handlePostResume()
+    // Coming back to an already-loaded session: verify its items still cover
+    // everything the server has. Broadcasts lost during a disconnect can leave
+    // holes that neither the reconciliation nor the live gap-fill caught (e.g.
+    // an unrelated broadcast refreshed the session's mtime during the
+    // reconciliation window, hiding it from the changed-set). Cheap local
+    // scan; only fetches when lines are actually missing.
+    if (store.areSessionItemsFetched(props.sessionId)) {
+        store.ensureSessionItemsCoverage(props.sessionId).catch(() => {})
+    }
 })
 
 // Watch for deferred resume completion: when the scroller's suspended state
@@ -622,8 +631,9 @@ async function loadSessionData(lastLine) {
 }
 
 // Load session data when session changes
-watch([() => props.sessionId, session], async ([newSessionId, newSession]) => {
+watch([() => props.sessionId, session], async ([newSessionId, newSession], [oldSessionId] = []) => {
     if (!newSessionId) return
+    const sessionChanged = newSessionId !== oldSessionId
 
     // If session is not in store and this is a subagent, load it first
     // (handles direct URL access before WebSocket delivers the session)
@@ -670,6 +680,13 @@ watch([() => props.sessionId, session], async ([newSessionId, newSession]) => {
                 store.fetchWorkflowLinks(props.projectId, newSessionId)
             }
         }
+    } else if (sessionChanged) {
+        // Navigating (back) to an already-loaded session: verify its items
+        // still cover everything the server has — see the same call in
+        // onActivated. Gated on sessionChanged because this watch also fires
+        // on every mutation of the session object (each session_updated),
+        // where a coverage scan would race the in-flight items_added stream.
+        store.ensureSessionItemsCoverage(newSessionId).catch(() => {})
     }
 
     // Skip DOM-manipulating scroll when inactive (KeepAlive deactivated)

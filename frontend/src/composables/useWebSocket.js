@@ -62,6 +62,70 @@ if (!('currentRouteSessionId' in __hmrState)) __hmrState.currentRouteSessionId =
 // visibility listener. Initialised to the current state on first module load.
 if (!('lastVisibilityActive' in __hmrState)) __hmrState.lastVisibilityActive = isPageActive()
 
+// Timestamp of the last message received on the WebSocket, plus the live
+// status ref / open function of the current useWebSocket() instance. Used by
+// the visibility probe below to detect a zombie socket. Kept on __hmrState so
+// the module-level listener keeps working across HMR reloads.
+if (!('lastWsMessageAt' in __hmrState)) __hmrState.lastWsMessageAt = 0
+if (!('wsStatusRef' in __hmrState)) __hmrState.wsStatusRef = null
+if (!('wsOpenFn' in __hmrState)) __hmrState.wsOpenFn = null
+if (!('wsCloseFn' in __hmrState)) __hmrState.wsCloseFn = null
+if (!('wsProbeInFlight' in __hmrState)) __hmrState.wsProbeInFlight = false
+
+// How long the visibility probe waits for ANY inbound traffic before declaring
+// the socket dead. Matches the heartbeat's pongTimeout.
+const WS_PROBE_TIMEOUT_MS = 5000
+
+// After closing a zombie socket, how long to wait for its onclose to land
+// before force-reopening anyway.
+const WS_PROBE_REOPEN_DEADLINE_MS = 2000
+
+/**
+ * Liveness probe, fired when the page becomes visible/focused again.
+ *
+ * On mobile, a socket silently killed during sleep can still read as OPEN
+ * after wake-up: without this probe the connection dot stays green with NO
+ * data flowing until the 30s heartbeat finally times out (~35s of stale UI
+ * and no reconciliation). Send an immediate ping; if nothing at all comes
+ * back within the timeout, force a reconnect cycle — which triggers the
+ * usual reconciliation on reopen.
+ */
+function probeConnectionAlive() {
+    if (__hmrState.wsProbeInFlight) return
+    if (__hmrState.wsStatusRef?.value !== 'OPEN' || !__hmrState.wsSendFn) return
+
+    __hmrState.wsProbeInFlight = true
+    const receivedBefore = __hmrState.lastWsMessageAt
+    try {
+        __hmrState.wsSendFn(JSON.stringify({ type: 'ping' }))
+    } catch {
+        // Sending may throw synchronously on a dead socket — the timeout
+        // below handles the reopen either way.
+    }
+    setTimeout(() => {
+        __hmrState.wsProbeInFlight = false
+        const gotTraffic = __hmrState.lastWsMessageAt > receivedBefore
+        if (gotTraffic || __hmrState.wsStatusRef?.value !== 'OPEN') return
+
+        console.warn('[ws] no traffic after visibility probe — recycling zombie socket')
+        // Close first, reopen only once the old socket's onclose has landed:
+        // calling open() right away would race that stale onclose, which sets
+        // the status to CLOSED unconditionally — it could land AFTER the new
+        // socket reports OPEN and leave the app believing it is disconnected
+        // while the fresh socket is alive.
+        __hmrState.wsCloseFn?.()
+        const deadline = Date.now() + WS_PROBE_REOPEN_DEADLINE_MS
+        const reopenWhenClosed = () => {
+            if (__hmrState.wsStatusRef?.value === 'CLOSED' || Date.now() > deadline) {
+                __hmrState.wsOpenFn?.()
+            } else {
+                setTimeout(reopenWhenClosed, 50)
+            }
+        }
+        reopenWhenClosed()
+    }, WS_PROBE_TIMEOUT_MS)
+}
+
 // Lazy-cached reference to the workspaces store factory. The static import is
 // avoided to prevent a useWebSocket.js ↔ workspaces.js circular dependency
 // (workspaces.js → data.js, and other modules in that subgraph end up needing
@@ -109,6 +173,10 @@ if (!__hmrState.visibilityListenerInstalled) {
         const wasActive = __hmrState.lastVisibilityActive
         __hmrState.lastVisibilityActive = nowActive
         if (nowActive === wasActive) return
+        // Coming back to the page: make sure the socket is actually alive
+        // (a zombie OPEN socket after mobile sleep would otherwise sit green
+        // and silent until the heartbeat times out).
+        if (nowActive) probeConnectionAlive()
         const sessionId = __hmrState.currentRouteSessionId
         if (!sessionId) return
         if (wasActive && !nowActive) {
@@ -814,6 +882,8 @@ export function useWebSocket() {
             }
         },
         onMessage(ws, event) {
+            // Any inbound traffic proves the socket is alive (visibility probe).
+            __hmrState.lastWsMessageAt = Date.now()
             let msg
             try {
                 msg = JSON.parse(event.data)
@@ -828,6 +898,13 @@ export function useWebSocket() {
             }
         }
     })
+
+    // Expose the live status ref and open/close functions to the module-level
+    // visibility probe (re-assigned on every useWebSocket() call so they stay
+    // fresh across HMR reloads of this module).
+    __hmrState.wsStatusRef = status
+    __hmrState.wsOpenFn = open
+    __hmrState.wsCloseFn = close
 
     /**
      * Handle WebSocket authentication failure.

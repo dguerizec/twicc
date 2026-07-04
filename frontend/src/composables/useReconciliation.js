@@ -1,7 +1,6 @@
 // frontend/src/composables/useReconciliation.js
 
 import { useDataStore } from '../stores/data'
-import { INITIAL_ITEMS_COUNT } from '../constants'
 
 const MAX_RETRIES = 5
 
@@ -188,10 +187,16 @@ export function useReconciliation() {
                 const changedSessionIds = await store.loadSessions(currentProjectId, { force: true })
                 remainingProjectIds.delete(currentProjectId)
 
-                // If current session changed OR has error, load its items immediately
-                const currentSessionNeedsUpdate = currentSessionId && (
-                    changedSessionIds.has(currentSessionId) || currentSessionHasError
-                )
+                // ALWAYS re-check the focused session's items, not only when its
+                // mtime differs. The mtime comparison races with the reconnected
+                // WebSocket stream: any session_updated received while this
+                // reconciliation was in flight (watcher broadcast for a working
+                // session, session_viewed echo from the wake-up presence ping…)
+                // already refreshed the local mtime to the server value — the
+                // session then reads as "unchanged" while the items written
+                // during the outage were never loaded. loadNewItems is cheap
+                // when there is nothing to do.
+                const currentSessionNeedsUpdate = !!currentSessionId
                 if (currentSessionNeedsUpdate) {
                     try {
                         console.log('Updating current session')
@@ -291,9 +296,16 @@ export function useReconciliation() {
     }
 
     /**
-     * Load new items for a session that has changed or had a loading error.
-     * Only loads the last INITIAL_ITEMS_COUNT items to avoid fetching too much.
-     * The virtual scroller will load more if the user scrolls.
+     * Bring a session's items up to date with the server after a disconnect.
+     *
+     * Delegates gap detection to store.ensureSessionItemsCoverage: it loads the
+     * missing tail-window lines (with content) and restores metadata over bare
+     * placeholders (holes left by broadcasts lost during the outage) so the
+     * scroller's gap-fill can take over. A plain "server last_line vs our last
+     * item" check is NOT enough — a live item received right after reconnect
+     * extends the items array over the gap, hiding the missing lines.
+     *
+     * Throws when a fetch failed, so the retry logic re-runs it.
      * Also re-fetches tool states and agent links that may have been missed
      * during the disconnect (these are normally delivered via WS messages).
      */
@@ -301,21 +313,10 @@ export function useReconciliation() {
         const session = store.getSession(sessionId)
         if (!session) return
 
-        const serverLastLine = session.last_line
-        const items = store.sessionItems[sessionId] || []
-        const hasError = store.didSessionItemsFailToLoad(sessionId)
-
-        // Items array is ordered by line_num, so last item has the highest line_num
-        const lastItem = items.length > 0 ? items[items.length - 1] : null
-        const localLastLine = lastItem?.line_num || 0
-
-        // Nothing new and no error to retry
-        if (serverLastLine <= localLastLine && !hasError) return
-
-        // Virtual scroller will load what's missing
-        const rangeStart = Math.max(localLastLine + 1, serverLastLine - INITIAL_ITEMS_COUNT + 1)
-
-        await store.loadSessionItemsRanges(projectId, sessionId, [[rangeStart, null]])
+        const ok = await store.ensureSessionItemsCoverage(sessionId)
+        if (!ok) {
+            throw new Error(`Failed to load missing items for session ${sessionId}`)
+        }
 
         // Re-fetch tool states and agent links that may have arrived while disconnected.
         // Order matters: fetchSubagentsState reads toolStates to determine if agents are done.

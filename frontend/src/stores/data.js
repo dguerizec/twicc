@@ -4,7 +4,7 @@ import { defineStore, acceptHMRUpdate } from 'pinia'
 import { toRaw } from 'vue'
 import { getPrefixSuffixBoundaries } from '../utils/contentVisibility'
 import { computeVisualItems, visualItemEqual, insertDaySeparators } from '../utils/visualItems'
-import { DISPLAY_LEVEL, DISPLAY_MODE, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
+import { DISPLAY_LEVEL, DISPLAY_MODE, INITIAL_ITEMS_COUNT, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
 import { getProviderHelpers, getProviderStore } from '../providers'
 import { getSessionCutoffMs, isSessionUnread } from '../utils/sessions'
 import { resolveProjectDefaultProvider, resolveProjectAgentDefaults } from '../utils/projectAgentDefaults'
@@ -44,6 +44,32 @@ import { initBuffer, feedDelta, flushBuffer, destroySessionBuffers, destroyAllBu
 
 // Map of debounced save functions per session (to avoid mixing debounces)
 const debouncedSaves = new Map()
+
+// In-flight loadSessions promise per projectId. Concurrent callers await the
+// in-flight load instead of getting a silently-empty changed set — the
+// reconciliation relies on the returned ids to know which sessions to reload.
+const sessionsLoadInFlight = new Map() // projectId -> Promise<Set<sessionId>>
+
+// Sessions with an ensureSessionItemsCoverage pass in flight (coalescing guard).
+const itemsCoverageInFlight = new Set() // sessionId
+
+/**
+ * Coalesce ascending 1-based line numbers into [min, max] ranges.
+ * @param {number[]} lineNums - Sorted ascending line numbers
+ * @returns {Array<[number, number]>}
+ */
+function lineNumsToRanges(lineNums) {
+    const ranges = []
+    for (const n of lineNums) {
+        const last = ranges[ranges.length - 1]
+        if (last && n === last[1] + 1) {
+            last[1] = n
+        } else {
+            ranges.push([n, n])
+        }
+    }
+    return ranges
+}
 
 // ---- Dockable-layout persistence (Session.layout) -------------------------------------------------
 // Per-session debounced PATCH of the layout intention to the backend; mirrors `debouncedSaves`. The
@@ -1763,8 +1789,15 @@ export const useDataStore = defineStore('data', {
                 )
             }
 
+            let extendedOverGap = false
             for (const item of newItems) {
                 const index = item.line_num - 1 // line_num is 1-based, array is 0-based
+
+                // Extending by MORE than the item's own slot means placeholders
+                // are created for intermediate lines this iteration won't fill.
+                if (targetArray.length < index) {
+                    extendedOverGap = true
+                }
 
                 // Extend array with placeholders if needed
                 while (targetArray.length <= index) {
@@ -1773,6 +1806,15 @@ export const useDataStore = defineStore('data', {
 
                 // Place item at correct index
                 targetArray[index] = item
+            }
+
+            // Extending jumped over lines this batch may not fill (typical after
+            // a reconnect: the broadcasts for those lines were lost during the
+            // outage). The bare placeholders created above carry no display_level,
+            // so the scroller's gap-fill can never see them — heal in the
+            // background (no-op if the batch itself filled every created slot).
+            if (extendedOverGap) {
+                this.ensureSessionItemsCoverage(sessionId).catch(() => {})
             }
 
             // Resolve in-flight send snapshots whose user_message line just
@@ -2023,13 +2065,28 @@ export const useDataStore = defineStore('data', {
          *          (sessions where itemsFetched=true AND mtime changed or new)
          */
         async loadSessions(projectId, { force = false, isInitialLoading = false } = {}) {
+            // Serialize concurrent loads of the same project. The previous
+            // "skip if already loading" guard returned an EMPTY set to the
+            // second caller — the reconciliation then believed nothing had
+            // changed and skipped sessions whose items DID change. Instead,
+            // await the in-flight load: a non-force caller is satisfied by its
+            // result; a force caller runs its own load once the line is free.
+            while (sessionsLoadInFlight.has(projectId)) {
+                const inflightResult = await sessionsLoadInFlight.get(projectId).catch(() => new Set())
+                if (!force) return inflightResult
+            }
+
+            const promise = this._doLoadSessions(projectId, { force, isInitialLoading })
+            sessionsLoadInFlight.set(projectId, promise)
+            try {
+                return await promise
+            } finally {
+                sessionsLoadInFlight.delete(projectId)
+            }
+        },
+        async _doLoadSessions(projectId, { force = false, isInitialLoading = false } = {}) {
             const changedIds = new Set()
             const state = this._ensureProjectLocalState(projectId)
-
-            // Skip if already loading
-            if (state.sessionsLoading) {
-                return changedIds
-            }
 
             // Skip if fully loaded (unless force)
             if (!force && state.sessionsFetched && !state.hasMoreSessions) {
@@ -2296,9 +2353,11 @@ export const useDataStore = defineStore('data', {
          *   - [min, null]: from min onwards (e.g., [10, null])
          *   - [null, max]: up to max (e.g., [null, 10])
          * @param {string|null} parentSessionId - If provided, this is a subagent request
+         * @returns {Promise<boolean>} true on success (or nothing to do), false if the fetch failed —
+         *   callers like the reconciliation need to know the lines are still missing.
          */
         async loadSessionItemsRanges(projectId, sessionId, ranges, parentSessionId = null) {
-            if (!ranges?.length) return
+            if (!ranges?.length) return true
 
             // Initialize localState for this session if needed
             if (!this.localState.sessions[sessionId]) {
@@ -2339,7 +2398,7 @@ export const useDataStore = defineStore('data', {
             // Refuse to call without any range — would fetch the entire session.
             if ([...params].length === 0) {
                 console.error('loadSessionItemsRanges: no valid range provided, aborting', ranges)
-                return
+                return false
             }
 
             // Build URL (handle subagent case)
@@ -2351,17 +2410,133 @@ export const useDataStore = defineStore('data', {
                 const res = await apiFetch(`${baseUrl}/items/?${params}`)
                 if (!res.ok) {
                     console.error('Failed to load session items ranges:', res.status, res.statusText)
-                    if (isInitialLoading) {
-                        this.localState.sessions[sessionId].itemsLoadingError = true
-                    }
-                    return
+                    return false
                 }
                 const items = await res.json()
                 this.addSessionItems(sessionId, items)
                 // Success: clear any previous error
                 this.localState.sessions[sessionId].itemsLoadingError = false
+                return true
             } catch (error) {
                 console.error('Failed to load session items ranges:', error)
+                return false
+            }
+        },
+
+        /**
+         * Ensure the loaded items of a session cover everything the server has,
+         * healing the holes left by WebSocket broadcasts lost while disconnected.
+         *
+         * Two kinds of missing coverage are handled:
+         * - Missing lines in the tail window (the last INITIAL_ITEMS_COUNT lines
+         *   up to session.last_line): fetched WITH content — that is what the
+         *   user is looking at.
+         * - Bare placeholders before the tail window ({ line_num } only, created
+         *   when a live item extended the array over a gap): they carry no
+         *   display_level, so computeVisualItems drops them and the scroller's
+         *   gap-fill can never see them. Healed by re-fetching the metadata and
+         *   merging it in; the scroller then loads their content on demand like
+         *   any other metadata-only item.
+         *
+         * Deliberately NOT based on "server last_line vs our last item": a live
+         * item received right after a reconnect extends the array over the gap,
+         * making that comparison read as up-to-date while the outage lines are
+         * still missing.
+         *
+         * Concurrent calls per session coalesce: the second call returns true
+         * immediately, the in-flight one is doing the work.
+         *
+         * @param {string} sessionId
+         * @returns {Promise<boolean>} false if a needed fetch failed (lines are still missing).
+         */
+        async ensureSessionItemsCoverage(sessionId) {
+            const session = this.sessions[sessionId]
+            // Only meaningful for sessions whose items are (supposedly) loaded.
+            if (!session || !this.localState.sessions[sessionId]?.itemsFetched) return true
+            const serverLastLine = session.last_line || 0
+            if (!serverLastLine) return true
+
+            if (itemsCoverageInFlight.has(sessionId)) return true
+            itemsCoverageInFlight.add(sessionId)
+            try {
+                const projectId = session.project_id
+                const parentSessionId = session.parent_session_id || null
+                const items = this.sessionItems[sessionId] || []
+                // "Bare" = neither content nor metadata (placeholder or absent).
+                const isBare = (item) => !item || (item.display_level == null && !hasContent(item))
+
+                // Tail window: collect missing lines, to fetch with content.
+                const windowStart = Math.max(1, serverLastLine - INITIAL_ITEMS_COUNT + 1)
+                const missingTail = []
+                for (let line = windowStart; line <= serverLastLine; line++) {
+                    if (isBare(items[line - 1])) missingTail.push(line)
+                }
+
+                // Before the window: bare placeholders only need their metadata back.
+                let hasBareBeforeWindow = false
+                const beforeEnd = Math.min(items.length, windowStart - 1)
+                for (let idx = 0; idx < beforeEnd; idx++) {
+                    if (isBare(items[idx])) {
+                        hasBareBeforeWindow = true
+                        break
+                    }
+                }
+
+                let ok = true
+                if (missingTail.length) {
+                    const loaded = await this.loadSessionItemsRanges(
+                        projectId, sessionId, lineNumsToRanges(missingTail), parentSessionId,
+                    )
+                    ok = loaded && ok
+                }
+                if (hasBareBeforeWindow) {
+                    const metadata = await this.loadSessionMetadata(projectId, sessionId, parentSessionId)
+                    if (metadata) {
+                        this.mergeSessionItemsMetadata(sessionId, metadata)
+                    } else {
+                        ok = false
+                    }
+                }
+                return ok
+            } finally {
+                itemsCoverageInFlight.delete(sessionId)
+            }
+        },
+
+        /**
+         * Merge freshly-fetched metadata into the items array without touching
+         * loaded content. Fills bare placeholders (no display_level, no content)
+         * so they become visible to the scroller's gap-fill; items that already
+         * have metadata or content are left alone (live updates keep them fresher
+         * than this snapshot).
+         * @param {string} sessionId
+         * @param {Array} metadata - Same shape as initSessionItemsFromMetadata's input
+         */
+        mergeSessionItemsMetadata(sessionId, metadata) {
+            const targetArray = this.sessionItems[sessionId]
+            if (!targetArray) return
+
+            let changed = false
+            for (const m of metadata) {
+                const index = m.line_num - 1
+                while (targetArray.length <= index) {
+                    targetArray.push({ line_num: targetArray.length + 1 })
+                }
+                const existing = targetArray[index]
+                if (existing.display_level != null || hasContent(existing)) continue
+                targetArray[index] = {
+                    line_num: m.line_num,
+                    display_level: m.display_level,
+                    group_head: m.group_head,
+                    group_tail: m.group_tail,
+                    kind: m.kind,
+                    timestamp: m.timestamp ?? null,
+                    content: null,
+                }
+                changed = true
+            }
+            if (changed) {
+                this.recomputeVisualItems(sessionId)
             }
         },
 
