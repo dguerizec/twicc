@@ -68,6 +68,7 @@ function showFrame(url) {
     inputUrl.value = url
     frameKey.value++
     loading.value = true
+    probeCurrentUrl()
 }
 
 function navigate(rawInput) {
@@ -114,6 +115,27 @@ function onFrameLoad() {
     // Fires even for framing-refused pages (the error document loads) — it
     // only means "network settled", not "content visible".
     loading.value = false
+}
+
+// ── Advisory probe: the two silent-blank-frame cases (server down, framing
+// refused) are invisible client-side; ask the backend. Failures are ignored —
+// the endpoint is advisory.
+const probeResult = ref(null)
+
+async function probeCurrentUrl() {
+    probeResult.value = null
+    const url = currentUrl.value
+    if (!url) return
+    const key = frameKey.value
+    try {
+        const response = await apiFetch(`/api/browser-frame-check/?url=${encodeURIComponent(url)}`)
+        if (!response.ok) return
+        const data = await response.json()
+        if (frameKey.value !== key) return // user navigated meanwhile
+        if (data.reachable === false || data.embeddable === false) probeResult.value = data
+    } catch {
+        // advisory only
+    }
 }
 
 // ── Lazy init: on first activation, auto-load the resolved default.
@@ -274,6 +296,17 @@ function onSaveSelect(event) {
         <wa-callout v-if="saveError" variant="danger" size="small" class="browser-banner">
             <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
             {{ saveError }}
+        </wa-callout>
+
+        <wa-callout v-if="probeResult" variant="warning" size="small" class="browser-banner">
+            <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
+            <template v-if="probeResult.reachable === false">
+                The server did not respond ({{ probeResult.reason }}) — is it running?
+            </template>
+            <template v-else>
+                This site refuses to be embedded ({{ probeResult.reason }}) — the frame
+                below will likely stay blank. Use "Open in a new browser tab" instead.
+            </template>
         </wa-callout>
 
         <wa-callout v-if="mixedContentBlocked" variant="warning" size="small" class="browser-banner">
