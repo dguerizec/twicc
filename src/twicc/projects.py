@@ -663,16 +663,20 @@ async def update_project_atomic(
     unset_default_provider: bool = False,
     worktree_directory: str | None = None,
     unset_worktree_directory: bool = False,
+    default_browser_url: str | None = None,
+    unset_default_browser_url: bool = False,
 ) -> ProjectMutationResult:
     """Atomically apply a patch to an existing project.
 
     Mutually-exclusive flags (``new_name`` vs ``unset_name``, ``color`` vs
     ``unset_color``, ``default_provider`` vs ``unset_default_provider``,
-    ``worktree_directory`` vs ``unset_worktree_directory``) must be enforced
+    ``worktree_directory`` vs ``unset_worktree_directory``,
+    ``default_browser_url`` vs ``unset_default_browser_url``) must be enforced
     by the caller before invocation — this function trusts its inputs (the
     ``unset`` wins if both are set). ``default_provider`` is assumed already
     validated as a registered provider value; ``worktree_directory`` already
-    trimmed and non-empty.
+    trimmed and non-empty; ``default_browser_url`` already validated as a
+    trimmed, non-empty http(s) URL.
 
     Runs under :func:`run_under_db_write_lock` and broadcasts
     ``project_updated`` out of the lock on success. On
@@ -736,6 +740,15 @@ async def update_project_atomic(
                 if project.worktree_directory != worktree_directory:
                     project.worktree_directory = worktree_directory
                     update_fields.append("worktree_directory")
+
+            if unset_default_browser_url:
+                if project.default_browser_url is not None:
+                    project.default_browser_url = None
+                    update_fields.append("default_browser_url")
+            elif default_browser_url is not None:
+                if project.default_browser_url != default_browser_url:
+                    project.default_browser_url = default_browser_url
+                    update_fields.append("default_browser_url")
 
             if not update_fields:
                 # No-op write: the row already matches the patch. Treat as

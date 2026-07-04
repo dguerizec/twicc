@@ -47,7 +47,7 @@ from twicc.projects import (
     update_project_atomic,
     validate_project_name_format,
 )
-from twicc.workspaces import validate_color
+from twicc.workspaces import normalize_browser_url, validate_browser_url, validate_color
 
 
 logger = logging.getLogger(__name__)
@@ -282,13 +282,16 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
             "unset_default_provider": bool, # optional, back to inherit
             "worktree_directory": str | None,  # optional, base dir for new worktrees
             "unset_worktree_directory": bool,  # optional, back to the global default
+            "default_browser_url": str | None,  # optional, Browser-pane default URL
+            "unset_default_browser_url": bool,  # optional, back to inherit
         }
 
     The CLI ensures at least one patch field is present (``no_op``
     enforced locally) and that mutually-exclusive flags (``name`` vs
     ``unset_name``, ``color`` vs ``unset_color``, ``default_provider`` vs
     ``unset_default_provider``, ``worktree_directory`` vs
-    ``unset_worktree_directory``) are not combined.
+    ``unset_worktree_directory``, ``default_browser_url`` vs
+    ``unset_default_browser_url``) are not combined.
     """
     project_id = payload.get("project_id")
     if not isinstance(project_id, str) or not project_id:
@@ -362,6 +365,32 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
         if worktree_directory is None:
             unset_worktree_directory = True
 
+    default_browser_url = payload.get("default_browser_url")
+    unset_default_browser_url = payload.get("unset_default_browser_url", False)
+    if not isinstance(unset_default_browser_url, bool):
+        return _invalid_payload_result("unset_default_browser_url",
+                                       "unset_default_browser_url must be a boolean.")
+    if default_browser_url is not None:
+        if not isinstance(default_browser_url, str):
+            return _invalid_payload_result("default_browser_url",
+                                           "default_browser_url must be a string or null.")
+        if unset_default_browser_url:
+            return ProjectMutationResult(False, project_id, None, [
+                ProjectMutationError("--default-browser-url", "conflicting_flags",
+                                      "--default-browser-url and --unset-default-browser-url "
+                                      "cannot be used together."),
+            ])
+        # Same normalization as the HTTP PUT: trimmed, empty means clear.
+        default_browser_url = normalize_browser_url(default_browser_url)
+        if default_browser_url is None:
+            unset_default_browser_url = True
+        else:
+            url_errors = validate_browser_url(default_browser_url, field="--default-browser-url")
+            if url_errors:
+                return ProjectMutationResult(False, project_id, None, [
+                    ProjectMutationError(e.field, e.code, e.message) for e in url_errors
+                ])
+
     # Format checks.
     errors: list[ProjectMutationError] = []
     if not unset_name and new_name is not None:
@@ -400,6 +429,8 @@ async def update_project_from_payload(payload: dict) -> ProjectMutationResult:
         unset_default_provider=unset_default_provider,
         worktree_directory=worktree_directory,
         unset_worktree_directory=unset_worktree_directory,
+        default_browser_url=default_browser_url,
+        unset_default_browser_url=unset_default_browser_url,
     )
 
 

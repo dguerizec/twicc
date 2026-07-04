@@ -1,14 +1,14 @@
 ---
 name: twicc-update-project
-description: Update an existing TwiCC project — rename, change color, archive/unarchive, set its default provider or worktree directory, or edit per-provider agent-settings defaults. The directory is immutable; projects are archived, never deleted.
-argument-hint: <project> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive] [--default-provider X|--unset-default-provider] [--worktree-directory X|--unset-worktree-directory] | <project> settings --provider P [field flags]
+description: Update an existing TwiCC project — rename, change color, archive/unarchive, set its default provider, worktree directory or browser URL, or edit per-provider agent-settings defaults. The directory is immutable; projects are archived, never deleted.
+argument-hint: <project> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive] [--default-provider X|--unset-default-provider] [--worktree-directory X|--unset-worktree-directory] [--default-browser-url X|--unset-default-browser-url] | <project> settings --provider P [field flags]
 ---
 
 # TwiCC Update Project
 
 Patch an existing project. Two forms:
 
-- **Flat patch** — `name`, `color`, `archived`, `default_provider`, `worktree_directory` are mutable; all flags applied atomically. The directory (and therefore the id) is immutable. There is no delete: use `--archive` to hide a project from default listings instead.
+- **Flat patch** — `name`, `color`, `archived`, `default_provider`, `worktree_directory`, `default_browser_url` are mutable; all flags applied atomically. The directory (and therefore the id) is immutable. There is no delete: use `--archive` to hide a project from default listings instead.
 - **`settings` sub-command** — edit one provider's bundle inside the project's `default_agent_settings` (the defaults that seed NEW sessions created in this project; never affects existing sessions).
 
 ## When to use
@@ -52,6 +52,8 @@ All patch flags are optional but at least one is required. They cannot be combin
 - `--unset-default-provider` — Back to inherit (parent chain, then the global default). Mutually exclusive with `--default-provider`.
 - `--worktree-directory PATH` — Absolute base directory under which new git worktrees of this project are created from the UI (free-form, not required to live under the git root). Mutually exclusive with `--unset-worktree-directory`.
 - `--unset-worktree-directory` — Back to the global default (composed against the git root). Mutually exclusive with `--worktree-directory`.
+- `--default-browser-url URL` — Default URL the session Browser tab opens for this project (http(s) only, e.g. the dev server). Inherited by sub-projects and git worktrees. Mutually exclusive with `--unset-default-browser-url`.
+- `--unset-default-browser-url` — Back to inherit (parent chain, then a containing workspace's browser URL). Mutually exclusive with `--default-browser-url`.
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
 
 ## Usage — agent settings defaults
@@ -89,7 +91,7 @@ Fields the provider doesn't support are silently ignored (`{"status":"noop"}` if
 - `duplicate_name`
 - `invalid_color`
 - `invalid_provider` — unknown `--default-provider` value.
-- `invalid_value` — empty `--worktree-directory` (use `--unset-worktree-directory` to clear).
+- `invalid_value` — empty `--worktree-directory`, or empty/non-http(s) `--default-browser-url` (use the matching `--unset-*` flag to clear).
 - `unknown_provider` / `invalid_choice` / `unknown_unset_field` / `unset_conflict` / `invalid_format` — settings sub-command validation.
 
 ### Server (exit 3)
@@ -131,6 +133,8 @@ $TWICC update-project . --default-provider codex
 $TWICC update-project . --unset-default-provider
 $TWICC update-project . --worktree-directory /home/me/dev/myproj/.worktrees
 $TWICC update-project . --unset-worktree-directory
+$TWICC update-project . --default-browser-url http://localhost:3000
+$TWICC update-project . --unset-default-browser-url
 
 # Agent settings defaults (seed NEW sessions only)
 $TWICC update-project . settings --provider claude_code --model opus --effort high

@@ -14,9 +14,10 @@ The flat patch drops a ``kind="project:update"`` payload in
 ``project_updated`` broadcast.
 
 Mirrors the HTTP ``PUT /api/projects/<id>/`` endpoint: ``name``, ``color``,
-``archived``, ``default_provider``, and ``worktree_directory`` are mutable;
-the ``directory`` is immutable (the project id is derived from it). There is no
-``delete-project`` counterpart by design.
+``archived``, ``default_provider``, ``worktree_directory``, and
+``default_browser_url`` are mutable; the ``directory`` is immutable (the
+project id is derived from it). There is no ``delete-project`` counterpart by
+design.
 
 The ``--trust`` / ``--untrust`` / ``--reset-trust`` flags are a separate,
 **human-only** decision routed through a ``kind="project:trust"`` drop-file to
@@ -60,8 +61,8 @@ update_project_app = typer.Typer(
     cls=_FlatBackcompatGroup,
     help=(
         "Update an existing project: name, color, archived state, default "
-        "provider (flat flags), or its per-provider agent-settings defaults "
-        "(`settings` sub-command)."
+        "provider, worktree directory, browser URL (flat flags), or its "
+        "per-provider agent-settings defaults (`settings` sub-command)."
     ),
     invoke_without_command=True,
 )
@@ -165,6 +166,25 @@ def update_project_main(
             "git root). Mutually exclusive with `--worktree-directory`."
         ),
     ),
+    default_browser_url: str | None = typer.Option(
+        None,
+        "--default-browser-url",
+        help=(
+            "Default URL the session Browser pane opens for this project "
+            "(http(s) only — e.g. the project's dev server). Inherited by "
+            "sub-projects and git worktrees; unset = inherit, then a "
+            "containing workspace's browser URL. Mutually exclusive with "
+            "`--unset-default-browser-url`."
+        ),
+    ),
+    unset_default_browser_url: bool = typer.Option(
+        False,
+        "--unset-default-browser-url",
+        help=(
+            "Clear the project's Browser-pane URL (back to inherit). "
+            "Mutually exclusive with `--default-browser-url`."
+        ),
+    ),
     trust: bool = typer.Option(
         False,
         "--trust",
@@ -210,7 +230,7 @@ def update_project_main(
         ),
     ),
 ) -> None:
-    """Update an existing project's name, color, archived state, default provider, or worktree directory."""
+    """Update an existing project's name, color, archived state, default provider, worktree directory, or browser URL."""
     from twicc.cli._drop_request.project import derive_project_id
     from twicc.cli._output import emit_error
 
@@ -232,6 +252,8 @@ def update_project_main(
             ("--unset-default-provider", unset_default_provider),
             ("--worktree-directory", worktree_directory is not None),
             ("--unset-worktree-directory", unset_worktree_directory),
+            ("--default-browser-url", default_browser_url is not None),
+            ("--unset-default-browser-url", unset_default_browser_url),
             ("--trust", trust), ("--untrust", untrust),
             ("--reset-trust", reset_trust),
             ("--propagate/--no-propagate", propagate is not None),
@@ -258,7 +280,7 @@ def update_project_main(
     from twicc.core.enums import Provider
     from twicc.core.models import Project
     from twicc.projects import validate_project_name_format
-    from twicc.workspaces import validate_color
+    from twicc.workspaces import validate_browser_url, validate_color
 
     try:
         check_heartbeat()
@@ -300,6 +322,8 @@ def update_project_main(
             ("--unset-default-provider", unset_default_provider),
             ("--worktree-directory", worktree_directory is not None),
             ("--unset-worktree-directory", unset_worktree_directory),
+            ("--default-browser-url", default_browser_url is not None),
+            ("--unset-default-browser-url", unset_default_browser_url),
         ) if on]
         if field_flags:
             trust_errors.append(ValidationError(
@@ -338,6 +362,10 @@ def update_project_main(
         errors.append(ValidationError("--worktree-directory", "conflicting_flags",
                                        "--worktree-directory and --unset-worktree-directory "
                                        "cannot be used together."))
+    if default_browser_url is not None and unset_default_browser_url:
+        errors.append(ValidationError("--default-browser-url", "conflicting_flags",
+                                       "--default-browser-url and --unset-default-browser-url "
+                                       "cannot be used together."))
 
     # No-op check.
     has_patch = (
@@ -351,13 +379,16 @@ def update_project_main(
         or unset_default_provider
         or worktree_directory is not None
         or unset_worktree_directory
+        or default_browser_url is not None
+        or unset_default_browser_url
     )
     if not has_patch:
         errors.append(ValidationError("update-project", "no_op",
                                        "Nothing to update — pass at least one --name / --unset-name / "
                                        "--color / --unset-color / --archive / --unarchive / "
                                        "--default-provider / --unset-default-provider / "
-                                       "--worktree-directory / --unset-worktree-directory."))
+                                       "--worktree-directory / --unset-worktree-directory / "
+                                       "--default-browser-url / --unset-default-browser-url."))
 
     if errors:
         emit_validation_errors(errors)
@@ -394,6 +425,18 @@ def update_project_main(
             "--unset-worktree-directory to clear it.",
         ))
 
+    if default_browser_url is not None:
+        trimmed_url = default_browser_url.strip()
+        if not trimmed_url:
+            errors.append(ValidationError(
+                "--default-browser-url", "invalid_value",
+                "--default-browser-url cannot be empty; use "
+                "--unset-default-browser-url to clear it.",
+            ))
+        else:
+            for e in validate_browser_url(trimmed_url, field="--default-browser-url"):
+                errors.append(ValidationError(e.field, e.code, e.message))
+
     if not unset_name and new_name is not None and not errors:
         trimmed = new_name.strip()
         if trimmed:
@@ -426,6 +469,10 @@ def update_project_main(
             worktree_directory.strip() if worktree_directory is not None else None
         ),
         "unset_worktree_directory": unset_worktree_directory,
+        "default_browser_url": (
+            default_browser_url.strip() if default_browser_url is not None else None
+        ),
+        "unset_default_browser_url": unset_default_browser_url,
     }
 
     _submit_and_exit(payload, "project:update")
