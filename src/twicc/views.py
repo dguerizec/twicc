@@ -1010,6 +1010,23 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
             await apply_session_layout_change(session, layout)
             needs_broadcast = True
 
+        # Handle Browser-pane URL update: the last URL the session's Browser
+        # tab was pointed at (UI state, restored on the tab's first activation
+        # after a page reload). Persisted from the frontend via a debounced
+        # PATCH on each toolbar navigation; null clears. Shares the combined
+        # broadcast below.
+        if "browser_url" in data:
+            browser_url = data["browser_url"]
+            if browser_url is not None and not isinstance(browser_url, str):
+                return JsonResponse({"error": "browser_url must be a string or null"}, status=400)
+            browser_url = normalize_browser_url(browser_url)
+            url_errors = validate_browser_url(browser_url, field="browser_url")
+            if url_errors:
+                return JsonResponse({"error": url_errors[0].message}, status=400)
+            from twicc.core.services.session_update import apply_session_browser_url_change
+            await apply_session_browser_url_change(session, browser_url)
+            needs_broadcast = True
+
         # Handle goal dismissal: hide the footer goal bar for the session's
         # latest goal. The value is the target goal's ``created_at`` (guards
         # against a newer goal having taken the last slot); only a closed

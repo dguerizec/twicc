@@ -141,6 +141,7 @@ def serialize_session(session):
         "archived": session.archived,  # Whether the session is archived
         "pinned": session.pinned,  # Whether the session is pinned
         "layout": session.layout,  # Per-session dockable-layout intention (UI state; {} = single pane)
+        "browser_url": session.browser_url,  # Browser-pane last URL (UI state; None = use the resolved default)
         "tasks": session.tasks,  # Latest task/todo/plan snapshot (common shape; {} = none). Not consumed by the UI yet
         # Plan-like documents touched by the session (list; [] = none) —
         # emitted verbatim, honoring this serializer's query-free contract:

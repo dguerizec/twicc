@@ -471,6 +471,13 @@ class Session(models.Model):
     # frontend (debounced ``PATCH /api/projects/<id>/sessions/<id>/``). Excludes the
     # transient ``maximized`` view state, which is never persisted.
     layout = models.JSONField(default=dict, blank=True)
+    # Last URL the session's Browser pane was pointed at (user UI state, like
+    # ``layout``): read once when the tab is first activated after a page
+    # reload — it wins over the resolved project/workspace default. NULL =
+    # never navigated. Persisted from the frontend via a debounced
+    # ``PATCH /api/projects/<id>/sessions/<id>/``; http(s) only, enforced at
+    # the endpoint.
+    browser_url = models.CharField(max_length=2000, null=True, blank=True, default=None)
     # Latest complete task/todo/plan snapshot for the session, in the
     # cross-provider common shape, refreshed by the compute pipeline on every
     # task-bearing JSONL line (Claude Code ``TodoWrite`` / ``Task*``, Codex

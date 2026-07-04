@@ -561,6 +561,14 @@ async def apply_session_layout_change(session, layout: dict) -> None:
     )
 
 
+async def apply_session_browser_url_change(session, browser_url: str | None) -> None:
+    """Persist the Browser pane's last URL (validated by the PATCH endpoint)."""
+    session.browser_url = browser_url
+    await run_under_db_write_lock(
+        lambda: session.asave(update_fields=["browser_url"])
+    )
+
+
 async def apply_session_goal_dismissed_change(session, created_at: str) -> str | None:
     """Mark the session's latest goal as dismissed (hide its footer bar).
 

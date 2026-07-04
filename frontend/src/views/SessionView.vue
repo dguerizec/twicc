@@ -2353,6 +2353,7 @@ onBeforeUnmount(() => {
             <Teleport :to="toolTarget('browser')" :disabled="!toolTarget('browser')">
                 <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('browser')">
                     <BrowserPane
+                        :session-id="session.id"
                         :project-id="session?.project_id"
                         :active="isActive && isToolTabShown('browser')"
                         :focus-request="panelFocusRequests.browser"

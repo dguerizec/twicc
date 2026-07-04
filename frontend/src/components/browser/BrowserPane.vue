@@ -17,9 +17,11 @@ import { useWorkspacesStore } from '../../stores/workspaces'
 import { apiFetch } from '../../utils/api'
 import { resolveProjectBrowserUrl } from '../../utils/browserDefaults'
 import { normalizeBrowserUrl } from '../../utils/browserUrl'
+import { debounce } from '../../utils/debounce'
 import AppTooltip from '../ui/AppTooltip.vue'
 
 const props = defineProps({
+    sessionId: { type: String, default: null },
     projectId: { type: String, default: null },
     // True while the Browser tab is the shown tab in its region — drives the
     // lazy first load (never fetch a dev server for a tab that was never opened).
@@ -57,6 +59,30 @@ const everActivated = ref(false)
 const canGoBack = computed(() => historyIndex.value > 0)
 const canGoForward = computed(() => historyIndex.value < urlHistory.value.length - 1)
 
+// ── Per-session persistence: restore the last URL across page reloads.
+// Read once at first activation (it wins over the defaults); written back
+// debounced on each toolbar navigation. Drafts have no backend row — their
+// URL stays transient. The pane state lives in the refs above, never on the
+// store's session object, so the session_updated echo can't clobber it.
+const BROWSER_URL_PERSIST_DEBOUNCE_MS = 1000
+let lastPersistedUrl = null
+const persistUrlDebounced = debounce(async () => {
+    const sessionRow = store.getSession(props.sessionId)
+    if (!sessionRow || sessionRow.draft) return
+    const url = currentUrl.value
+    if (url === lastPersistedUrl) return
+    try {
+        const response = await apiFetch(`/api/projects/${props.projectId}/sessions/${props.sessionId}/`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ browser_url: url }),
+        })
+        if (response.ok) lastPersistedUrl = url
+    } catch {
+        // Transient UI state — losing a write is acceptable.
+    }
+}, BROWSER_URL_PERSIST_DEBOUNCE_MS)
+
 // An https TwiCC page cannot embed an http iframe (the browser blocks it
 // silently as mixed content) — explain instead of showing a dead frame.
 const mixedContentBlocked = computed(
@@ -69,6 +95,7 @@ function showFrame(url) {
     frameKey.value++
     loading.value = true
     probeCurrentUrl()
+    persistUrlDebounced()
 }
 
 function navigate(rawInput) {
@@ -138,13 +165,17 @@ async function probeCurrentUrl() {
     }
 }
 
-// ── Lazy init: on first activation, auto-load the resolved default.
+// ── Lazy init: on first activation, auto-load the session's persisted URL
+// (survives page reloads) or, failing that, the resolved default.
 watch(
     () => props.active,
     (active) => {
         if (!active || everActivated.value) return
         everActivated.value = true
-        if (defaultUrl.value) navigate(defaultUrl.value)
+        const saved = store.getSession(props.sessionId)?.browser_url || null
+        lastPersistedUrl = saved
+        const initial = saved || defaultUrl.value
+        if (initial) navigate(initial)
     },
     { immediate: true }
 )
