@@ -43,6 +43,8 @@ def serialize_project(project):
         "default_agent_settings": project.default_agent_settings,
         # Per-project default layout id (named-layout id / "single-pane" / None=inherit).
         "default_layout_id": project.default_layout_id,
+        # Per-project Browser-pane default URL (None = inherit; see models.py).
+        "default_browser_url": project.default_browser_url,
         # Absolute base directory for new git worktrees of this project (None =
         # inherit the global worktreeDirectoryTemplate expanded against the project).
         "worktree_directory": project.worktree_directory,

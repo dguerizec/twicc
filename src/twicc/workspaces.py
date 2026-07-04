@@ -157,6 +157,31 @@ def validate_color(color: str | None, *, field: str = "color") -> list[Workspace
     return []
 
 
+def normalize_browser_url(value: str | None) -> str | None:
+    """Trim a Browser-pane URL; empty collapses to ``None`` (= clear/inherit)."""
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+def validate_browser_url(url: str | None, *, field: str = "browser_url") -> list[WorkspaceMutationError]:
+    """Validate an already-normalized Browser-pane URL: http(s) only, ≤ 2000 chars.
+
+    ``None`` is OK (= clear). One home for the rule — shared by the project
+    PUT, the session PATCH, the workspace/project mutation services, and the
+    CLI commands, like ``validate_color``.
+    """
+    if url is None:
+        return []
+    if not url.startswith(("http://", "https://")):
+        return [WorkspaceMutationError(field, "invalid_value",
+                                       f"{field} must be an http(s) URL.")]
+    if len(url) > 2000:
+        return [WorkspaceMutationError(field, "invalid_value",
+                                       f"{field} must be 2000 characters or less.")]
+    return []
+
+
 def validate_pattern(pattern: str, *, field: str = "pattern") -> list[WorkspaceMutationError]:
     """Validate an auto-add directory pattern: trimmed, non-empty."""
     trimmed = (pattern or "").strip()
