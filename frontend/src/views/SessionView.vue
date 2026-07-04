@@ -21,6 +21,7 @@ import OrchestrationPanel from '../components/orchestration/OrchestrationPanel.v
 import PlanPane from '../components/plan/PlanPane.vue'
 import TaskPane from '../components/tasks/TaskPane.vue'
 import WorkflowsPane from '../components/workflows/WorkflowsPane.vue'
+import BrowserPane from '../components/browser/BrowserPane.vue'
 import SessionLayout from '../components/session/layout/SessionLayout.vue'
 import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
@@ -502,6 +503,7 @@ const activeTabId = computed(() => {
     if (name === 'session-plan' || name === 'projects-session-plan') return 'plan'
     if (name === 'session-tasks' || name === 'projects-session-tasks') return 'tasks'
     if (name === 'session-workflows' || name === 'projects-session-workflows') return 'workflows'
+    if (name === 'session-browser' || name === 'projects-session-browser') return 'browser'
     return 'main'
 })
 
@@ -521,6 +523,7 @@ const TOOL_TABS = [
     { id: 'artifacts', label: 'Artifacts', icon: 'shapes', present: () => hasArtifacts.value, redirectReady: () => !!session.value },
     { id: 'orchestration', label: 'Orchestration', icon: 'diagram-project', present: () => hasSpawnRoot.value, redirectReady: () => !!session.value },
     { id: 'workflows', label: 'Workflows', icon: 'sitemap', present: () => hasWorkflows.value, redirectReady: () => !!session.value },
+    { id: 'browser', label: 'Browser', icon: 'globe', present: () => true },
 ]
 function toolTabById(tabId) { return TOOL_TABS.find((t) => t.id === tabId) || null }
 // Non-tool tabs (main, agent-*) are never gated → treated as present.
@@ -625,7 +628,7 @@ function onTerminalNavigate({ termIndex, replace }) {
     navigateInTab('terminal', params, replace ? 'replace' : 'push')
 }
 
-const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration', 'plan', 'tasks', 'workflows']
+const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration', 'plan', 'tasks', 'workflows', 'browser']
 
 // Keep the last granular URL visited for each tool tab so switching away and back
 // restores the previous state instead of resetting the panel to its base route.
@@ -634,12 +637,14 @@ const rememberedToolTabRoutes = {
     artifacts: null,
     git: null,
     terminal: null,
-    // Orchestration, Tasks and Workflows have no granular sub-route; kept
-    // here so the generic tool-tab navigation in switchToTab treats them uniformly.
+    // Orchestration, Tasks, Workflows and Browser have no granular sub-route;
+    // kept here so the generic tool-tab navigation in switchToTab treats them
+    // uniformly.
     orchestration: null,
     plan: null,
     tasks: null,
     workflows: null,
+    browser: null,
 }
 
 function getCurrentToolTabRouteParams(tabId) {
@@ -893,8 +898,8 @@ function onLayoutTabActivate(tabId) {
 // Deliberately NOT driven by onTabShow/onLayoutSelectTab (wa-tab-group emits wa-tab-show on initial
 // render too) nor by watching activeTabId (route claims from clicking inside a shown panel change it).
 // Distinct from requestPaneFocus, which only claims the URL for a pane. Orchestration has no focus target.
-const ACTIVATION_FOCUS_TABS = ['files', 'git', 'artifacts', 'terminal']
-const panelFocusRequests = reactive({ files: 0, git: 0, artifacts: 0, terminal: 0 })
+const ACTIVATION_FOCUS_TABS = ['files', 'git', 'artifacts', 'terminal', 'browser']
+const panelFocusRequests = reactive({ files: 0, git: 0, artifacts: 0, terminal: 0, browser: 0 })
 function requestPanelFocus(tabId) {
     if (tabId in panelFocusRequests) panelFocusRequests[tabId]++
 }
@@ -1253,10 +1258,11 @@ watch(activeTabId, (newTabId, oldTabId) => {
     if (oldTabId) pushTabHistory(oldTabId)
 })
 
-// Direct tab mapping: Alt+Shift+{1..9} → fixed tabs (subagents are skipped).
+// Direct tab mapping: Alt+Shift+{1..9, 0} → fixed tabs (subagents are skipped).
 // Tasks (5), Plan (6), Artifacts (7), Orchestration (8) and Workflows (9) are
-// conditional — the handler no-ops when the tab is absent.
-const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'tasks', 6: 'plan', 7: 'artifacts', 8: 'orchestration', 9: 'workflows' }
+// conditional — the handler no-ops when the tab is absent. 0 is Browser (the
+// last tab, always present).
+const DIRECT_TAB_MAP = { 1: 'main', 2: 'files', 3: 'git', 4: 'terminal', 5: 'tasks', 6: 'plan', 7: 'artifacts', 8: 'orchestration', 9: 'workflows', 0: 'browser' }
 
 /**
  * Handle keyboard tab shortcut events dispatched from App.vue.
@@ -2107,6 +2113,11 @@ onBeforeUnmount(() => {
                 Workflows
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="workflows" current="center" @place="(dest) => layout.place('workflows', dest)" />
             </wa-tab>
+            <wa-tab v-if="showInCenter('browser')" slot="nav" panel="browser" @click="onCenterTabClick('browser')">
+                <wa-icon :name="TAB_ICONS.browser"></wa-icon>
+                Browser
+                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="browser" current="center" @place="(dest) => layout.place('browser', dest)" />
+            </wa-tab>
 
             <!-- Right-aligned nav cluster: [Layout menu ▾] [Maximize]. A real-box wrapper carries the
                  auto-margin (a wa-dropdown host is display:contents, so a margin on it is ignored).
@@ -2178,6 +2189,9 @@ onBeforeUnmount(() => {
             </wa-tab-panel>
             <wa-tab-panel v-if="isToolTabPresent('workflows') && showInCenter('workflows')" name="workflows">
                 <div :ref="centerTargetSetters.workflows" class="layout-center-target"></div>
+            </wa-tab-panel>
+            <wa-tab-panel v-if="showInCenter('browser')" name="browser">
+                <div :ref="centerTargetSetters.browser" class="layout-center-target"></div>
             </wa-tab-panel>
         </TabBar>
         </SessionLayout>
@@ -2332,6 +2346,16 @@ onBeforeUnmount(() => {
                         :project-id="session.project_id"
                         :focus-run-id="workflowFocusRunId"
                         :active="isActive && isToolTabShown('workflows')"
+                    />
+                </div>
+            </Teleport>
+
+            <Teleport :to="toolTarget('browser')" :disabled="!toolTarget('browser')">
+                <div class="layout-tool-wrap" v-show="layout.isToolPanelVisible('browser')">
+                    <BrowserPane
+                        :project-id="session?.project_id"
+                        :active="isActive && isToolTabShown('browser')"
+                        :focus-request="panelFocusRequests.browser"
                     />
                 </div>
             </Teleport>
