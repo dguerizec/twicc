@@ -35,7 +35,9 @@ from twicc.workspaces import (
     WorkspaceMutationResult,
     create_workspace_atomic,
     delete_workspace_atomic,
+    normalize_browser_url,
     update_workspace_atomic,
+    validate_browser_url,
 )
 
 
@@ -99,6 +101,7 @@ async def create_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
             "project_ids": [str, ...],            # optional
             "auto_project_patterns": [str, ...],  # optional
             "archived": bool,                     # optional, default False
+            "browser_url": str | None,            # optional
         }
     """
     name = payload.get("name")
@@ -122,6 +125,14 @@ async def create_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
     if not isinstance(archived, bool):
         return _invalid_payload_result("archived", "archived must be a boolean.")
 
+    browser_url = payload.get("browser_url")
+    if browser_url is not None and not isinstance(browser_url, str):
+        return _invalid_payload_result("browser_url", "browser_url must be a string or null.")
+    browser_url = normalize_browser_url(browser_url)
+    url_errors = validate_browser_url(browser_url, field="--browser-url")
+    if url_errors:
+        return WorkspaceMutationResult(False, None, None, url_errors)
+
     project_errors = await _check_projects_exist(project_ids, field="--add-project")
     if project_errors:
         return WorkspaceMutationResult(False, None, None, project_errors)
@@ -132,6 +143,7 @@ async def create_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
         project_ids=project_ids,
         auto_project_patterns=patterns,
         archived=archived,
+        browser_url=browser_url,
     )
 
 
@@ -151,6 +163,8 @@ async def update_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
             "add_patterns": [str, ...],
             "remove_patterns": [str, ...],
             "archived": bool,                      # optional
+            "browser_url": str | null,             # optional (use unset_browser_url to clear)
+            "unset_browser_url": bool,             # optional
         }
 
     The CLI ensures at least one patch field is present (``no_op`` is
@@ -193,6 +207,27 @@ async def update_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
     if archived is not None and not isinstance(archived, bool):
         return _invalid_payload_result("archived", "archived must be a boolean.")
 
+    browser_url = payload.get("browser_url")
+    unset_browser_url = payload.get("unset_browser_url", False)
+    if not isinstance(unset_browser_url, bool):
+        return _invalid_payload_result("unset_browser_url", "unset_browser_url must be a boolean.")
+    if browser_url is not None:
+        if not isinstance(browser_url, str):
+            return _invalid_payload_result("browser_url", "browser_url must be a string or null.")
+        if unset_browser_url:
+            return WorkspaceMutationResult(False, workspace_id, None, [
+                WorkspaceMutationError("--browser-url", "conflicting_flags",
+                                       "--browser-url and --unset-browser-url cannot be used together."),
+            ])
+        # Trimmed, empty means clear, http(s) only — matches the UI dialogs.
+        browser_url = normalize_browser_url(browser_url)
+        if browser_url is None:
+            unset_browser_url = True
+        else:
+            url_errors = validate_browser_url(browser_url, field="--browser-url")
+            if url_errors:
+                return WorkspaceMutationResult(False, workspace_id, None, url_errors)
+
     project_errors = await _check_projects_exist(add_projects, field="--add-project")
     if project_errors:
         return WorkspaceMutationResult(False, workspace_id, None, project_errors)
@@ -207,6 +242,8 @@ async def update_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
         add_patterns=add_patterns,
         remove_patterns=remove_patterns,
         archived=archived,
+        browser_url=browser_url,
+        unset_browser_url=unset_browser_url,
     )
 
 

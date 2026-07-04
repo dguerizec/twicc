@@ -1,7 +1,7 @@
 ---
 name: twicc-update-workspace
-description: Update an existing TwiCC workspace — rename, change color, add/remove projects, add/remove auto-add patterns, archive/unarchive. Use when you or the user want to tweak a workspace.
-argument-hint: <workspace_id> [--name X] [--color X|--unset-color] [--add-project project]... [--remove-project project]... [--add-pattern P]... [--remove-pattern P]... [--archive|--unarchive]
+description: Update an existing TwiCC workspace — rename, change color, add/remove projects, add/remove auto-add patterns, set its browser URL, archive/unarchive. Use when you or the user want to tweak a workspace.
+argument-hint: <workspace_id> [--name X] [--color X|--unset-color] [--add-project project]... [--remove-project project]... [--add-pattern P]... [--remove-pattern P]... [--browser-url X|--unset-browser-url] [--archive|--unarchive]
 ---
 
 # TwiCC Update Workspace
@@ -45,6 +45,8 @@ All patch flags are optional but at least one is required. Reordering of project
 - `--remove-project PROJECT` (repeatable) — Remove a project. Same path-or-id resolution. Idempotent; no error if the project isn't in the workspace or doesn't exist.
 - `--add-pattern PATTERN` (repeatable) — Add an auto-add pattern (`*` wildcard). Idempotent.
 - `--remove-pattern PATTERN` (repeatable) — Remove a pattern. Idempotent.
+- `--browser-url URL` — Default URL the session Browser tab opens for projects of this workspace (http(s) only; a project's own Browser URL takes precedence). Mutually exclusive with `--unset-browser-url`.
+- `--unset-browser-url` — Clear the workspace's Browser-pane URL. Mutually exclusive with `--browser-url`.
 - `--archive` — Mark as archived. Mutually exclusive with `--unarchive`.
 - `--unarchive` — Mark as not archived. Mutually exclusive with `--archive`.
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
@@ -53,7 +55,7 @@ All patch flags are optional but at least one is required. Reordering of project
 
 ### Local (exit 1)
 
-- `conflicting_flags` — `--color` + `--unset-color`, or `--archive` + `--unarchive` together.
+- `conflicting_flags` — `--color` + `--unset-color`, `--browser-url` + `--unset-browser-url`, or `--archive` + `--unarchive` together.
 - `no_op` — no patch flag passed.
 - `workspace_not_found`
 - `invalid_name` — name empty after trim, or exceeds 20 characters.
@@ -61,6 +63,7 @@ All patch flags are optional but at least one is required. Reordering of project
 - `invalid_color`
 - `invalid_pattern` — an `--add-pattern` value is empty after trim.
 - `project_not_found` — an `--add-project` value doesn't resolve to an existing project.
+- `invalid_value` — empty or non-http(s) `--browser-url` (use `--unset-browser-url` to clear).
 
 ### Server (exit 3)
 
@@ -97,6 +100,8 @@ $TWICC update-workspace backend --add-project .
 $TWICC update-workspace backend --remove-project /home/twidi/dev/old-api --add-project /home/twidi/dev/new-api
 $TWICC update-workspace scratch --add-pattern '/home/twidi/scratch/*' --archive
 $TWICC update-workspace scratch --unarchive --color '#4a90d9'
+$TWICC update-workspace backend --browser-url http://localhost:3000
+$TWICC update-workspace backend --unset-browser-url
 $TWICC update-workspace backend --name 'BE'
 # → {"status":"updated","workspace_id":"backend","request_uuid":"..."}
 ```

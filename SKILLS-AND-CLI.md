@@ -215,13 +215,13 @@ Show a single workspace as JSON.
 
 ### `twicc create-workspace <NAME>`
 Create a workspace (name trimmed, ≤ 20 chars, unique; id slugified from the name).
-- `--color TEXT`, `--add-project TEXT` (repeatable; id or path, must already exist), `--add-pattern TEXT` (repeatable auto-add directory glob), `--archived`.
+- `--color TEXT`, `--add-project TEXT` (repeatable; id or path, must already exist), `--add-pattern TEXT` (repeatable auto-add directory glob), `--browser-url TEXT` (default URL the session Browser tab opens for the workspace's projects), `--archived`.
 - Plus `--timeout`.
 - Skill: [`twicc-create-workspace`](src/twicc/agent/plugin/twicc/skills/twicc-create-workspace/SKILL.md).
 
 ### `twicc update-workspace <WORKSPACE_ID>`
 Update a workspace. Flags combine into a single atomic edit.
-- `--name TEXT`, `--color TEXT` / `--unset-color`, `--add-project` / `--remove-project` (repeatable; id or path), `--add-pattern` / `--remove-pattern` (repeatable), `--archive` / `--unarchive`.
+- `--name TEXT`, `--color TEXT` / `--unset-color`, `--add-project` / `--remove-project` (repeatable; id or path), `--add-pattern` / `--remove-pattern` (repeatable), `--browser-url URL` / `--unset-browser-url` (default URL the session Browser tab opens for the workspace's projects; a project's own Browser URL wins), `--archive` / `--unarchive`.
 - Plus `--timeout`.
 - Skill: [`twicc-update-workspace`](src/twicc/agent/plugin/twicc/skills/twicc-update-workspace/SKILL.md).
 

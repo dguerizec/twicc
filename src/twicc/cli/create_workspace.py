@@ -65,6 +65,15 @@ def create_workspace_cmd(
         "--archived",
         help="Create the workspace in the archived state.",
     ),
+    browser_url: str | None = typer.Option(
+        None,
+        "--browser-url",
+        help=(
+            "Default URL the session Browser pane opens for projects of this "
+            "workspace (http(s) only; a project's own Browser URL takes "
+            "precedence)."
+        ),
+    ),
     timeout: int = typer.Option(
         30,
         "--timeout",
@@ -98,6 +107,7 @@ def create_workspace_cmd(
     from twicc.core.models import Project
     from twicc.workspaces import (
         read_workspaces,
+        validate_browser_url,
         validate_color,
         validate_pattern,
         validate_workspace_name,
@@ -119,8 +129,10 @@ def create_workspace_cmd(
     pattern_errs: list = []
     for p in add_patterns:
         pattern_errs.extend(validate_pattern(p, field="--add-pattern"))
+    browser_url = browser_url.strip() if browser_url is not None else None
+    url_errs = validate_browser_url(browser_url or None, field="--browser-url")
 
-    for e in (*name_errs, *color_errs, *pattern_errs):
+    for e in (*name_errs, *color_errs, *pattern_errs, *url_errs):
         errors.append(ValidationError(e.field, e.code, e.message))
 
     # Project existence — query in bulk so we report every missing id at once.
@@ -143,6 +155,7 @@ def create_workspace_cmd(
         "project_ids": list(add_projects),
         "auto_project_patterns": list(add_patterns),
         "archived": archived,
+        "browser_url": browser_url or None,
     }
 
     drop = write_drop_file(payload, kind="workspace:create")

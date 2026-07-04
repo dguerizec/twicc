@@ -317,6 +317,7 @@ async def create_workspace_atomic(
     project_ids: list[str] | None = None,
     auto_project_patterns: list[str] | None = None,
     archived: bool = False,
+    browser_url: str | None = None,
 ) -> WorkspaceMutationResult:
     """Atomically create a new workspace. Returns the new workspace dict.
 
@@ -371,6 +372,7 @@ async def create_workspace_atomic(
                 "projectIds": deduped_projects,
                 "color": color if color else None,
                 "autoProjectPatterns": deduped_patterns,
+                "browserUrl": browser_url if browser_url else None,
             }
             workspaces.append(ws)
             txn.write()
@@ -397,14 +399,17 @@ async def update_workspace_atomic(
     add_patterns: list[str] | None = None,
     remove_patterns: list[str] | None = None,
     archived: bool | None = None,
+    browser_url: str | None = None,
+    unset_browser_url: bool = False,
 ) -> WorkspaceMutationResult:
     """Atomically apply a patch to an existing workspace.
 
     A ``None`` (or empty list) for any keyword leaves the corresponding
     field untouched. ``unset_color=True`` and ``color=<value>`` are
-    mutually exclusive — the caller must enforce that constraint before
-    calling (this function trusts its arguments and would silently let the
-    unset win).
+    mutually exclusive (same for ``unset_browser_url`` / ``browser_url``) —
+    the caller must enforce that constraint before calling (this function
+    trusts its arguments and would silently let the unset win).
+    ``browser_url`` is assumed already validated as a trimmed http(s) URL.
 
     Add/remove on project_ids and patterns are idempotent (silently skip
     duplicates / absentees), matching the auto-add helper's semantics.
@@ -447,6 +452,10 @@ async def update_workspace_atomic(
                 ws["color"] = color
             if archived is not None:
                 ws["archived"] = bool(archived)
+            if unset_browser_url:
+                ws["browserUrl"] = None
+            elif browser_url is not None:
+                ws["browserUrl"] = browser_url
 
             if add_projects or remove_projects:
                 current_projects = list(ws.get("projectIds", []))

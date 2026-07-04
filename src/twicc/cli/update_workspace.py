@@ -9,7 +9,8 @@ so the live TwiCC server applies the patch via
 Flags are combinable: every operation specified is applied in the same
 atomic write. At least one effective patch must be supplied (no flag at
 all → ``no_op`` error). ``--color`` and ``--unset-color`` are mutually
-exclusive; ``--archive`` and ``--unarchive`` are mutually exclusive.
+exclusive; so are ``--browser-url`` and ``--unset-browser-url``, and
+``--archive`` and ``--unarchive``.
 
 Add/remove on projects and patterns are idempotent (silently skip
 already-present additions and already-absent removals), matching the
@@ -89,6 +90,23 @@ def update_workspace_cmd(
             "multiple patterns."
         ),
     ),
+    browser_url: str | None = typer.Option(
+        None,
+        "--browser-url",
+        help=(
+            "Default URL the session Browser pane opens for projects of this "
+            "workspace (http(s) only; a project's own Browser URL takes "
+            "precedence). Mutually exclusive with `--unset-browser-url`."
+        ),
+    ),
+    unset_browser_url: bool = typer.Option(
+        False,
+        "--unset-browser-url",
+        help=(
+            "Clear the workspace's Browser-pane URL. Mutually exclusive "
+            "with `--browser-url`."
+        ),
+    ),
     archive: bool = typer.Option(
         False,
         "--archive",
@@ -140,6 +158,7 @@ def update_workspace_cmd(
     from twicc.core.models import Project
     from twicc.workspaces import (
         read_workspaces,
+        validate_browser_url,
         validate_color,
         validate_pattern,
         validate_workspace_name,
@@ -155,6 +174,9 @@ def update_workspace_cmd(
     if color is not None and unset_color:
         errors.append(ValidationError("--color", "conflicting_flags",
                                        "--color and --unset-color cannot be used together."))
+    if browser_url is not None and unset_browser_url:
+        errors.append(ValidationError("--browser-url", "conflicting_flags",
+                                       "--browser-url and --unset-browser-url cannot be used together."))
     if archive and unarchive:
         errors.append(ValidationError("--archive", "conflicting_flags",
                                        "--archive and --unarchive cannot be used together."))
@@ -168,6 +190,8 @@ def update_workspace_cmd(
         or bool(remove_projects)
         or bool(add_patterns)
         or bool(remove_patterns)
+        or browser_url is not None
+        or unset_browser_url
         or archive
         or unarchive
     )
@@ -175,7 +199,8 @@ def update_workspace_cmd(
         errors.append(ValidationError("update-workspace", "no_op",
                                        "Nothing to update — pass at least one --name / --color / "
                                        "--unset-color / --add-project / --remove-project / "
-                                       "--add-pattern / --remove-pattern / --archive / --unarchive."))
+                                       "--add-pattern / --remove-pattern / --browser-url / "
+                                       "--unset-browser-url / --archive / --unarchive."))
 
     if errors:
         emit_validation_errors(errors)
@@ -207,6 +232,17 @@ def update_workspace_cmd(
     for p in add_patterns:
         for e in validate_pattern(p, field="--add-pattern"):
             errors.append(ValidationError(e.field, e.code, e.message))
+
+    if browser_url is not None:
+        trimmed_url = browser_url.strip()
+        if not trimmed_url:
+            errors.append(ValidationError(
+                "--browser-url", "invalid_value",
+                "--browser-url cannot be empty; use --unset-browser-url to clear it.",
+            ))
+        else:
+            for e in validate_browser_url(trimmed_url, field="--browser-url"):
+                errors.append(ValidationError(e.field, e.code, e.message))
 
     # Project existence — only check the additions; silent removals don't
     # need DB validation (they're idempotent against missing ids).
@@ -241,6 +277,8 @@ def update_workspace_cmd(
         "add_patterns": list(add_patterns),
         "remove_patterns": list(remove_patterns),
         "archived": archived_value,
+        "browser_url": browser_url.strip() if browser_url is not None else None,
+        "unset_browser_url": unset_browser_url,
     }
 
     drop = write_drop_file(payload, kind="workspace:update")

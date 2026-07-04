@@ -1,7 +1,7 @@
 ---
 name: twicc-create-workspace
-description: Create a new TwiCC workspace — a group of projects, optionally with a color, auto-add directory patterns, and an initial project list. Use when you or the user want to create a workspace.
-argument-hint: <name> [--color X] [--add-project project]... [--add-pattern pattern]...
+description: Create a new TwiCC workspace — a group of projects, optionally with a color, auto-add directory patterns, an initial project list, and a browser URL. Use when you or the user want to create a workspace.
+argument-hint: <name> [--color X] [--add-project project]... [--add-pattern pattern]... [--browser-url X]
 ---
 
 # TwiCC Create Workspace
@@ -39,6 +39,7 @@ $TWICC create-workspace '<NAME>' [OPTIONS]
 - `--color VALUE` — CSS hex color (`#rgb`, `#rrggbb`, or `#rrggbbaa`).
 - `--add-project PROJECT` (repeatable) — Add a project. Either a directory path or a project ID (**drop the leading dash** on ids — the CLI re-adds it). The project must already exist in TwiCC. Duplicates are silently deduplicated.
 - `--add-pattern PATTERN` (repeatable) — Add an auto-add pattern (`*` wildcard). Newly detected projects whose directory matches are added to the workspace automatically.
+- `--browser-url URL` — Default URL the session Browser tab opens for projects of this workspace (http(s) only; a project's own Browser URL takes precedence).
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
 
 ## Errors
@@ -50,6 +51,7 @@ $TWICC create-workspace '<NAME>' [OPTIONS]
 - `invalid_color`
 - `invalid_pattern` — an `--add-pattern` value is empty after trim.
 - `project_not_found` — an `--add-project` value doesn't resolve to an existing project.
+- `invalid_value` — non-http(s) `--browser-url`.
 
 ### Server (exit 3)
 
