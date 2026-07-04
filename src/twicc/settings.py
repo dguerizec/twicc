@@ -290,8 +290,8 @@ LOGGING = {
 # Bump the relevant constant when the corresponding provider's parsing/compute
 # rules change to trigger recomputation. ``None`` declares "no compute pipeline
 # yet" — sessions of that provider are reported up-to-date as-is.
-CLAUDE_CODE_COMPUTE_VERSION = 104  # 104: async-by-default agents (isAsync ack → is_background) + task-notification rerouting repair (103 = queued /goal, 102 = goals lifecycle, 101 = backfill has_workflows)
-CODEX_COMPUTE_VERSION = 33  # 33: Session.goals lifecycle history (32: goal-continuation context -> synthetic "/goal <objective>" user message)
+CLAUDE_CODE_COMPUTE_VERSION = 106  # 106: plan_paths from subagent writes too (105 = Session.plan_paths backfill, 104 = async-by-default agents + task-notification rerouting repair, 103 = queued /goal)
+CODEX_COMPUTE_VERSION = 35  # 35: plan_paths from subagent writes too (34: Session.plan_paths backfill, 33: Session.goals lifecycle history)
 
 # Search index version
 # Bumped when the schema or document layout changes — forces a full

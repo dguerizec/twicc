@@ -13,7 +13,7 @@ import re
 
 import orjson
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar, NamedTuple
 
@@ -40,6 +40,7 @@ from twicc.providers.compute_base import (
     substitute_insert_screenshot_tags,
 )
 from twicc.providers.goals import GOAL_STATE_ACTIVE, GOAL_STATE_COMPLETED, GoalEvent
+from twicc.providers.plan_docs import DocEditEvent, extract_shell_write_targets, is_plan_doc_path
 from .agent.original_file_cache import pop_original_file
 from .pricing import extract_model_info, to_token_usage
 
@@ -138,6 +139,11 @@ _TOOL_PATH_FIELDS: dict[str, str] = {
     'Grep': 'path',
     'Glob': 'path',
 }
+
+# File-editing tools inspected for plan-doc detection (``input.file_path``).
+# Includes MultiEdit (absent from _TOOL_PATH_FIELDS, which serves git
+# resolution only); NotebookEdit is deliberately out (.ipynb is not a doc).
+_DOC_EDIT_FILE_TOOLS = frozenset({'Write', 'Edit', 'MultiEdit'})
 
 
 # =============================================================================
@@ -678,6 +684,60 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         if session_folder_has_workflow_json(session_folder):
             return {"has_workflows": True}
         return {}
+
+    def extract_doc_edit_events(self, parsed_json: dict, *, cwd: str | None) -> list[DocEditEvent]:
+        # Plan-doc writes: ``Write``/``Edit``/``MultiEdit`` tool_use blocks
+        # (``input.file_path``, absolute by tool contract) and ``Bash``
+        # commands run through the shared shell heuristic. ``NotebookEdit``
+        # is ignored (.ipynb is not a document).
+        content = get_message_content_list(parsed_json, "assistant")
+        if not content:
+            return []
+        events: list[DocEditEvent] = []
+        for block in content:
+            if not isinstance(block, dict) or block.get('type') != 'tool_use':
+                continue
+            tool_input = block.get('input')
+            if not isinstance(tool_input, dict):
+                continue
+            tool_name = block.get('name')
+            if tool_name in _DOC_EDIT_FILE_TOOLS:
+                file_path = tool_input.get('file_path')
+                if isinstance(file_path, str) and file_path:
+                    if not os.path.isabs(file_path):
+                        if not cwd:
+                            continue
+                        file_path = os.path.join(cwd, file_path)
+                    if is_plan_doc_path(file_path):
+                        events.append(DocEditEvent(file_path, 'write'))
+            elif tool_name == 'Bash':
+                command = tool_input.get('command')
+                if command:
+                    for target, action in extract_shell_write_targets(command):
+                        path = target if os.path.isabs(target) else (os.path.join(cwd, target) if cwd else None)
+                        if path and is_plan_doc_path(path):
+                            events.append(DocEditEvent(path, action))
+        return events
+
+    def extra_doc_edit_events(
+        self, session: Session, *, last_slug: str | None,
+    ) -> list[tuple[DocEditEvent, datetime | str | None]]:
+        # The native plan-mode file is written by the Claude CLI itself (no
+        # tool call in the JSONL): probe ``~/.claude/plans/<slug>.md`` so the
+        # authoritative rebuild seeds/keeps its entry. The plans watcher
+        # latches the same entry live.
+        from .constants import PLANS_DIR
+
+        slug = last_slug or session.slug
+        if not slug:
+            return []
+        plan_path = PLANS_DIR / f"{slug}.md"
+        try:
+            mtime = plan_path.stat().st_mtime
+        except OSError:
+            return []
+        timestamp = datetime.fromtimestamp(mtime, tz=timezone.utc)
+        return [(DocEditEvent(str(plan_path), 'write', 'claude_plan'), timestamp)]
 
     # ------------------------------------------------------------------
     # In-memory task state machinery

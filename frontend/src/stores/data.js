@@ -843,6 +843,23 @@ export const useDataStore = defineStore('data', {
             return tasks && tasks.items ? tasks : null
         },
         /**
+         * Plan-like documents the session touched (``Session.plan_paths``),
+         * sorted newest-first by ``updated_at``. Entries: ``{path, exists,
+         * created_at, updated_at, source}`` — ``path`` is relative to the
+         * session's project directory when the doc lives under it (resolve
+         * with the ``worktree_of`` parent as fallback), absolute otherwise
+         * (e.g. the native Claude plan). ``[]`` when none. Carried on the
+         * serialized Session, so it stays reactive through ``session_updated``.
+         * Drives the Plan tab (``PlanPane.vue``).
+         */
+        getSessionPlanDocs: (state) => (sessionId) => {
+            const docs = state.sessions[sessionId]?.plan_paths
+            if (!Array.isArray(docs) || docs.length === 0) return []
+            return [...docs].sort(
+                (a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')),
+            )
+        },
+        /**
          * The session's current goal — the last entry of the goal lifecycle
          * history (``Session.goals``, see the backend ``providers/goals.py``
          * docstring for the shape), or ``null`` when the session never had a

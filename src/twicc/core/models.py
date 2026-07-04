@@ -477,6 +477,25 @@ class Session(models.Model):
     # and synced to the frontend in ``serialize_session`` like ``layout``.
     # Not consumed by the UI yet — stored for future use.
     tasks = models.JSONField(default=dict, blank=True)
+    # Plan-like documents this session touched (plans, specs, handoffs, design
+    # notes...), append-ordered — the frontend sorts by ``updated_at``. Each
+    # entry: ``{path, exists, created_at, updated_at, source}`` where ``path``
+    # is POSIX-relative to the session's project directory when the file lives
+    # under it (portable across worktree removal — resolution falls back to
+    # the ``worktree_of`` parent project), absolute otherwise (e.g. the native
+    # Claude plan under ~/.claude/plans/). ``exists`` is the last probed
+    # existence (refreshed by both compute paths and the plans watcher);
+    # ``created_at``/``updated_at`` are ISO timestamps of the first/last JSONL
+    # line that touched the file. ``source`` is ``"claude_plan"`` for the
+    # native plan-mode file, ``"detected"`` for pattern-matched writes
+    # (``providers/plan_docs.py``), or ``"subagent"`` for docs written by a
+    # subagent (folded into the top-level session's list by the subagent's
+    # own compute passes; subagent rows keep the default ``[]``). Fed by both
+    # compute paths like ``tasks`` (authoritative on full recompute — with
+    # ``claude_plan``/``subagent`` entries preserved via ``FOLDED_SOURCES`` —
+    # merged on live sync) and latched live by the Claude plans watcher for
+    # the native plan. ``[]`` = none.
+    plan_paths = models.JSONField(default=list, blank=True)
     # Goal lifecycle history for the session, in a cross-provider shape, folded
     # from the JSONL by the compute pipeline (Claude Code ``goal_status``
     # attachments / ``/goal clear``; Codex ``thread_goal_updated`` / injected

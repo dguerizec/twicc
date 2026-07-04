@@ -1986,8 +1986,13 @@ async def _process_compute_message(msg: dict) -> None:
 
     try:
         from twicc.providers.compute_base import BaseSessionCompute
-        await sync_to_async(BaseSessionCompute.apply_session_complete)(msg)
+        folded_ancestor_id = await sync_to_async(BaseSessionCompute.apply_session_complete)(msg)
         await _handle_compute_done(msg["session_id"])
+        # A subagent's compute may have folded plan-doc entries into its
+        # top-level ancestor — _handle_compute_done above skipped it (the
+        # completed session is the subagent), so push the ancestor too.
+        if folded_ancestor_id:
+            await _handle_compute_done(folded_ancestor_id)
     except Exception as e:
         logger.error(f"Error applying session_complete: {e}", exc_info=True)
         state.failed_count += 1

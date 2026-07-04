@@ -381,7 +381,11 @@ const hasSpawnRoot = computed(() => !!session.value?.spawn_root)
 // ~/.claude/plans/<slug>.md). Drives the read-only Plan tab's visibility.
 // Unlike artifacts, this is NOT monotonic — it flips back to false (and the tab
 // disappears) when the plan file is deleted, via the plan_gone WS message.
-const hasPlan = computed(() => !!session.value?.has_plan)
+// Plan tab presence: any tracked plan-like document (Session.plan_paths —
+// native Claude plan + pattern-detected docs, provider-agnostic). Entries are
+// never removed (deletion only flips their `exists` flag), so unlike the old
+// has_plan gating the tab never disappears once a doc was tracked.
+const hasPlan = computed(() => (session.value?.plan_paths?.length ?? 0) > 0)
 
 // Whether the session carries a task/todo/plan snapshot (Session.tasks, synced
 // like every other field). Drives the read-only Tasks tab's visibility. Like
@@ -2216,6 +2220,7 @@ onBeforeUnmount(() => {
                     <PlanPane
                         ref="planPaneRef"
                         :session-id="session.id"
+                        :project-id="session.project_id"
                         :active="isActive && isToolTabShown('plan')"
                     />
                 </div>

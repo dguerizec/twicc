@@ -1,10 +1,12 @@
 """Watcher for Claude Code plan files.
 
 Claude Code writes one markdown plan per session under
-``~/.claude/plans/<slug>.md`` (the slug is :attr:`Session.slug`). Their
-presence drives the session view's *Plan* tab. Unlike Artifacts, presence is
-**not** monotonic: deleting the plan file hides the tab again — by design (the
-frontend's absent-tab redirect handles an active Plan tab disappearing).
+``~/.claude/plans/<slug>.md`` (the slug is :attr:`Session.slug`). ``has_plan``
+presence is **not** monotonic: deleting the plan file flips it back — by
+design. The watcher additionally mirrors every transition into
+:attr:`Session.plan_paths` (the ``claude_plan``-sourced entry consumed by the
+Plan tab), where deletion only flips the entry's ``exists`` flag: the tab
+keeps listing the (gone) document alongside any detected plan docs.
 
 The watcher keeps an in-memory ``set`` of plan slugs (file stems) currently
 present in the directory. ``serialize_session`` reads it in O(1) via the
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from channels.layers import get_channel_layer
@@ -123,7 +126,12 @@ class ClaudeCodePlansWatcher:
                 if slug is not None:
                     touched.add(slug)
             for slug in touched:
-                await self._reconcile(slug)
+                # One bad tick (transient DB error in the plan_paths latch,
+                # channel-layer hiccup) must not kill live plan detection.
+                try:
+                    await self._reconcile(slug)
+                except Exception:
+                    logger.exception("[ClaudeCodePlansWatcher] reconcile failed for %s", slug)
 
     def _slug_for(self, raw_path: str) -> str | None:
         """Return the plan slug for a changed path, or ``None`` if irrelevant."""
@@ -146,15 +154,89 @@ class ClaudeCodePlansWatcher:
         if present and not was:
             self._slugs.add(slug)
             logger.info("[ClaudeCodePlansWatcher] plan appeared: %s", slug)
+            await self._latch_plan_paths(slug, "write")
             await self._broadcast(slug, "plan_available")
         elif not present and was:
             self._slugs.discard(slug)
             logger.info("[ClaudeCodePlansWatcher] plan removed: %s", slug)
+            await self._latch_plan_paths(slug, "delete")
             await self._broadcast(slug, "plan_gone")
         elif present and was:
+            await self._latch_plan_paths(slug, "write")
             await self._broadcast(slug, "plan_changed")
         # not present and not was: transient flicker (e.g. an editor's temp
         # file) — nothing to do.
+
+    # ------------------------------------------------------------------
+    # Session.plan_paths latch — mirror the native plan file into the
+    # session's plan-doc list, so the Plan tab appears/refreshes live
+    # without waiting for a JSONL line (the batch recompute seeds the same
+    # entry via ``extra_doc_edit_events``).
+    # ------------------------------------------------------------------
+    async def _latch_plan_paths(self, slug: str, action: str) -> None:
+        from asgiref.sync import sync_to_async
+
+        from twicc.providers.plan_docs import DocEditEvent, apply_doc_edit_events
+
+        plan_file = self.directory / f"{slug}{_PLAN_SUFFIX}"
+        if action == "write":
+            def _stat_mtime() -> float | None:
+                try:
+                    return plan_file.stat().st_mtime
+                except OSError:
+                    return None
+
+            mtime = await asyncio.to_thread(_stat_mtime)
+            if mtime is None:
+                # Deleted between the reconcile stat and now — the follow-up
+                # "gone" tick will flip ``exists``.
+                return
+            timestamp = datetime.fromtimestamp(mtime, tz=timezone.utc)
+        else:
+            timestamp = datetime.now(tz=timezone.utc)
+
+        event = DocEditEvent(str(plan_file), action, "claude_plan")
+
+        @sync_to_async
+        def _apply() -> list:
+            from twicc.core.enums import Provider
+            from twicc.core.models import Session, SessionType
+
+            # Fresh read-fold-write, one session at a time: the event only
+            # touches its own ``claude_plan`` entry, preserving ``detected``
+            # entries a concurrent JSONL sync batch may have written (the
+            # symmetric fold lives in the compute paths). The plans path is
+            # outside any project, so no project_root relativization.
+            updated = []
+            sessions = Session.objects.filter(
+                provider=Provider.CLAUDE_CODE.value, slug=slug, type=SessionType.SESSION,
+            )
+            for session in sessions:
+                new_entries, changed = apply_doc_edit_events(
+                    session.plan_paths, [(event, timestamp)], project_root=None,
+                )
+                if changed:
+                    session.plan_paths = new_entries
+                    session.save(update_fields=["plan_paths"])
+                    updated.append(session)
+            return updated
+
+        updated_sessions = await _apply()
+        if not updated_sessions:
+            return
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+        from twicc.core.serializers import serialize_session
+        from twicc.providers.sessions_watcher import broadcast_message
+
+        for session in updated_sessions:
+            if session.hidden:
+                continue
+            await broadcast_message(channel_layer, {
+                "type": "session_updated",
+                "session": serialize_session(session),
+            })
 
     # ------------------------------------------------------------------
     # Broadcasts — resolve the slug to its session(s) and notify each.

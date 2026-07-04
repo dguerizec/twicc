@@ -421,11 +421,16 @@ def agents(
 @session_app.command()
 def plan(
     ctx: typer.Context,
+    path: str = typer.Argument(
+        None,
+        help="A tracked document's path (project-relative or absolute, see --list). Default: the most recently updated one.",
+    ),
+    list_docs: bool = typer.Option(False, "--list", help="List every tracked plan-like document (plan_paths)."),
 ) -> None:
-    """Show the session's plan markdown as JSON (provider-specific; Claude Code only for now)."""
+    """Show a tracked plan document as JSON (most recently updated by default; --list to enumerate them)."""
     from twicc.cli.session import plan as session_plan
 
-    session_plan(ctx.obj)
+    session_plan(ctx.obj, list_docs=list_docs, doc_path=path)
 
 
 @session_app.command()

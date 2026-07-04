@@ -140,6 +140,12 @@ def serialize_session(session):
         "pinned": session.pinned,  # Whether the session is pinned
         "layout": session.layout,  # Per-session dockable-layout intention (UI state; {} = single pane)
         "tasks": session.tasks,  # Latest task/todo/plan snapshot (common shape; {} = none). Not consumed by the UI yet
+        # Plan-like documents touched by the session (list; [] = none) —
+        # emitted verbatim, honoring this serializer's query-free contract:
+        # relative entries are resolved client-side against the project
+        # directory (with the ``worktree_of`` parent as fallback). Drives the
+        # Plan tab; see ``Session.plan_paths``.
+        "plan_paths": session.plan_paths,
         "goals": session.goals,  # Goal lifecycle history (list; [] = none). Last entry drives the footer goal bar
 
         "hybrid": session.hybrid,  # Hybrid CLI mode (one-way, see models.Session.hybrid)

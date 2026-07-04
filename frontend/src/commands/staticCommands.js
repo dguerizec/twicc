@@ -706,12 +706,12 @@ export function initStaticCommands(router) {
             label: 'Switch to Plan Tab',
             icon: 'list-check',
             category: 'navigation',
-            // Only sessions whose provider has a plan file on disk expose the
-            // tab (mirrors SessionView's `hasPlan`).
+            // Only sessions with at least one tracked plan-like document
+            // expose the tab (mirrors SessionView's `hasPlan`).
             when: () => {
                 const sessionId = routeSessionId()
                 if (!sessionId) return false
-                return !!data.getSession(sessionId)?.has_plan
+                return (data.getSession(sessionId)?.plan_paths?.length ?? 0) > 0
             },
             action: () => {
                 const name = isAllProjectsMode() ? 'projects-session-plan' : 'session-plan'

@@ -225,37 +225,82 @@ def agents(session_id: str, *, limit: int = 20, offset: int = 0) -> None:
     emit_json(data)
 
 
-def plan(session_id: str) -> None:
-    """Fetch the session's plan markdown and print it as ``{"content": ...}`` to stdout.
+def plan(session_id: str, *, list_docs: bool = False, doc_path: str | None = None) -> None:
+    """Read the session's tracked plan documents (``Session.plan_paths``); print JSON to stdout.
 
-    Mirrors the ``/api/sessions/<id>/plan/`` endpoint: the plan file lives outside
-    the project tree (Claude Code stores it under ``~/.claude/plans/<slug>.md``),
-    so the path is resolved from the session's provider — never a caller-supplied
-    path — and read off disk, the same source the serializer's ``has_plan`` flag
-    reflects in the CLI.
+    Three modes:
 
-    Errors (exit 1) when the provider has no plan concept (e.g. Codex) or the
-    session never produced a plan (``resolve_plan_path`` → ``None``), or when the
-    resolved file is missing on disk.
+    - default (no argument): the content of the most recently updated tracked
+      document — not necessarily the native Claude plan.
+    - a positional path: the content of that document, matched against the
+      stored ``path`` (project-relative when the doc lives under the project)
+      or its resolved absolute path — never an arbitrary filesystem path.
+    - ``--list``: every tracked document, newest first, each entry enriched
+      with its resolved ``abs_path`` and fresh ``exists`` (the same entries
+      the default session view carries in ``plan_paths``, minus ``abs_path``).
     """
+    import os
+
     import django
 
     django.setup()
 
-    from twicc.providers.helpers import get_provider_helpers
+    if list_docs and doc_path:
+        emit_error("Error: --list and a positional path are mutually exclusive.", code=1)
+
+    from twicc.providers.plan_docs import resolve_stored_path
 
     session = _get_session(session_id)
 
-    plan_path = get_provider_helpers(session.provider).resolve_plan_path(session)
-    if plan_path is None:
-        emit_error(f"Error: no plan available for session '{session_id}'.", code=1)
+    # Same roots as the compute pipeline's relativization: the session's
+    # project directory, then the worktree_of parent's.
+    project = session.project
+    parent = project.worktree_of if project else None
+    roots = [project.directory if project else None, parent.directory if parent else None]
 
+    entries = sorted(
+        session.plan_paths or [],
+        key=lambda e: e.get("updated_at") or "",
+        reverse=True,
+    )
+    enriched = []
+    for entry in entries:
+        abs_path = resolve_stored_path(entry.get("path", ""), roots)
+        enriched.append({
+            **entry,
+            "abs_path": abs_path,
+            "exists": bool(abs_path and os.path.exists(abs_path)),
+        })
+
+    if list_docs:
+        emit_json({"plan_paths": enriched})
+        return
+
+    if not enriched:
+        emit_error(f"Error: no plan documents tracked for session '{session_id}'.", code=1)
+
+    if doc_path:
+        requested = os.path.normpath(doc_path)
+        entry = next(
+            (e for e in enriched if requested in (os.path.normpath(e["path"]), e["abs_path"])),
+            None,
+        )
+        if entry is None:
+            emit_error(
+                f"Error: no tracked plan document '{doc_path}' for session "
+                f"'{session_id}' (see --list for the tracked paths).",
+                code=1,
+            )
+    else:
+        entry = enriched[0]
+
+    if not entry["abs_path"]:
+        emit_error(f"Error: cannot resolve '{entry['path']}' to an absolute path.", code=1)
     try:
-        plan_content = plan_path.read_text(encoding="utf-8")
+        content = open(entry["abs_path"], encoding="utf-8").read()
     except OSError:
-        emit_error(f"Error: plan file not found for session '{session_id}'.", code=1)
-
-    emit_json({"content": plan_content})
+        emit_error(f"Error: plan document '{entry['path']}' is missing on disk.", code=1)
+    emit_json({"path": entry["path"], "abs_path": entry["abs_path"], "content": content})
 
 
 def _workflow_envelope(run, session_cutoff=None) -> dict:

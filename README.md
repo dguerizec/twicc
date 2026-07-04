@@ -96,7 +96,7 @@ uv tool upgrade twicc
 ### The conversation
 
 - **Live conversation**: full tool-use details, real-time streaming of text and thinking, rich rendering (markdown, code, Mermaid, images with pan/zoom), and image/file attachments
-- **Plan, Tasks and Workflows tabs**: dedicated panels for a session's plan (read-only), its task/todo list, and — for Claude — its workflow runs, live as they execute
+- **Plan, Tasks and Workflows tabs**: dedicated panels for the plan-like documents a session touched (plans, specs, handoffs…, read-only), its task/todo list, and — for Claude — its workflow runs, live as they execute
 - **Session goal**: set a standing objective a Claude or Codex session keeps working toward, and refine or clear it anytime
 - **Display modes**: collapse tool-call groups, switch between a simplified and a full view, and optionally show message timestamps and day dividers
 - **Slash commands and file references**: `/` for Claude Code, `$` for Codex, `@` for files — from the message input

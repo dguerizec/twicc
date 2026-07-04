@@ -12,7 +12,7 @@ Inspect a single session. Seven sub-commands:
 - `content [LINE_OR_RANGE] [--contains TEXT ...]` — raw JSONL items by line number and/or content substring(s) (provider-specific schema).
 - `messages [--contains TEXT ...]` — user/assistant messages only, uniform shape across providers.
 - `agents` — list subagents spawned by this session.
-- `plan` — the session's plan markdown (provider-specific; Claude Code only for now).
+- `plan [PATH] [--list]` — the session's tracked plan documents (both providers): most recently updated one by default, a specific one by path, `--list` to enumerate.
 - `workflows [--limit N] [--offset N]` — list this session's workflows (Claude Code only).
 - `workflow <ID>` — show one (Claude Code only).
 
@@ -181,19 +181,29 @@ $TWICC session <SESSION_ID> agents [--limit N] [--offset N]
 
 Only valid on parent sessions (errors on subagents). Returns provider-internal subagents, not sessions created via `create-session`; use `$TWICC topology <ID|self>` for the `spawned_by` tree (skill: `twicc-topology`). Ordered by most recently active.
 
-### Plan — the session's plan markdown
+### Plan — the session's tracked plan documents
 
 ```bash
 $TWICC session <SESSION_ID> plan
+$TWICC session <SESSION_ID> plan <PATH>
+$TWICC session <SESSION_ID> plan --list
 ```
 
-The session's plan document (what Claude Code's *plan mode* writes), as a single JSON object:
+The session's plan-like documents: the native Claude plan (what *plan mode* writes) plus detected plans/specs/handoffs/notes... written by the session or its subagents — **both providers**.
+
+Without argument: the content of the **most recently updated** tracked document (not necessarily the native plan), as `{path, abs_path, content}`. Errors (exit 1) when the session tracks none — the default view's `plan_paths` field tells you up front.
+
+With a `PATH` argument: the content of that document. Matched against the tracked entries only (never an arbitrary filesystem path): give the stored `path` exactly as shown by `--list` (project-relative when the doc lives under the project, absolute otherwise) or its resolved absolute path. Errors (exit 1) on unknown path or missing file.
+
+`--list`: every tracked document, newest first:
 
 ```json
-{"content": "# Plan\n\n## Context\n..."}
+{"plan_paths": [{"path": "docs/plans/feature-plan.md", "exists": true,
+                 "created_at": "...", "updated_at": "...", "source": "detected",
+                 "abs_path": "/abs/path/to/docs/plans/feature-plan.md"}, ...]}
 ```
 
-Provider-specific — a **Claude Code** concept; **Codex** has none. Errors (exit 1) when the session has no plan. The default view's `has_plan` boolean says whether one exists; check it first, or just call `plan` and handle the error.
+`source` is `detected`, `subagent` (written by a subagent), or `claude_plan` (the native plan); `abs_path` is always resolved (worktree-aware). The default view's `plan_paths` field carries the same entries (without `abs_path`), so you rarely need `--list` after fetching the session.
 
 ### Workflows — list runs
 
@@ -227,6 +237,8 @@ $TWICC session abc123 messages --role assistant --contains auth --tail 1
 $TWICC session abc123 agents
 $TWICC session abc123 agents --limit 50
 $TWICC session abc123 plan
+$TWICC session abc123 plan docs/plans/feature-plan.md
+$TWICC session abc123 plan --list
 $TWICC session abc123 workflows
 $TWICC session abc123 workflows --limit 5
 $TWICC session abc123 workflow wf_cd590ff1

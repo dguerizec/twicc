@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Plan tab** — now covers every plan-like document a session touched (plans, specs, handoffs…), for Claude and Codex alike (+CLI/skill/API).
+
 ### Fixed
 
 - **Reconnect** — messages arrived while disconnected (e.g. phone asleep) no longer stay missing until a page refresh.

@@ -48,6 +48,13 @@ from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
 from twicc.git import is_git_root_related, read_head_branch, resolve_git_from_path
 from twicc.providers.goals import GoalEvent, apply_goal_event, preserve_dismissed_flags
+from twicc.providers.plan_docs import (
+    FOLDED_SOURCES,
+    DocEditEvent,
+    apply_doc_edit_events,
+    fold_concurrent_entries,
+    refresh_entries_existence,
+)
 from twicc.projects import (
     ensure_project_directory,
     ensure_project_git_root,
@@ -945,6 +952,37 @@ class BaseSessionCompute:
             'updated_at': timestamp.isoformat() if timestamp else None,
             **payload,
         }
+
+    def extract_doc_edit_events(self, parsed_json: dict, *, cwd: str | None) -> list[DocEditEvent]:  # noqa: ARG002
+        """Return the plan-doc writes/deletes this JSONL line carries, if any.
+
+        Providers inspect their file-edit tool calls (Claude ``Write``/``Edit``,
+        Codex ``apply_patch``) and shell commands (via
+        :func:`~twicc.providers.plan_docs.extract_shell_write_targets`),
+        cwd-join relative targets (``cwd`` is the loop's freshest known value;
+        targets that stay relative because no cwd is known must be dropped)
+        and keep only paths passing
+        :func:`~twicc.providers.plan_docs.is_plan_doc_path`. Called on every
+        line in both compute paths, for main sessions and subagents alike —
+        subagent events are folded into the top-level ancestor's
+        ``plan_paths`` (source ``subagent``), never stored on the subagent's
+        own row. Default: none.
+        """
+        return []
+
+    def extra_doc_edit_events(
+        self, session: Session, *, last_slug: str | None,  # noqa: ARG002
+    ) -> list[tuple[DocEditEvent, datetime | str | None]]:
+        """Provider hook: end-of-compute filesystem-derived plan-doc events.
+
+        Runs in the background-compute worker only (it may stat the disk),
+        right before the authoritative ``plan_paths`` rebuild — Claude Code
+        probes the native plan file (``~/.claude/plans/<slug>.md``) here,
+        using ``last_slug`` accumulated from the replay (the row's ``slug``
+        may be stale at this point). Returns ``(event, timestamp)`` pairs.
+        Default: none.
+        """
+        return []
 
     def extract_goal_event(self, parsed_json: dict) -> GoalEvent | None:
         """Return the goal-lifecycle signal this JSONL line carries, or ``None``.
@@ -2166,6 +2204,57 @@ class BaseSessionCompute:
         """
         return {}
 
+    @staticmethod
+    def _plan_doc_roots(session: Session) -> list[str | None]:
+        """Roots for plan-doc relativization/existence probing: the session's
+        project directory first, then the ``worktree_of`` parent's (so a doc
+        written in a worktree stays resolvable after the worktree is removed).
+        Sync-only (lazy FK loads) — callable from the compute worker and the
+        watcher's sync section, never from async code."""
+        project = session.project
+        if project is None:
+            return []
+        parent = project.worktree_of
+        return [project.directory, parent.directory if parent else None]
+
+    @staticmethod
+    def _fold_plan_doc_events_into_ancestor(
+        session: Session,
+        timed_events: list[tuple[DocEditEvent, datetime | str | None]],
+    ) -> str | None:
+        """Fold a subagent's plan-doc events into its top-level ancestor's
+        ``plan_paths`` (additive, entries tagged ``source='subagent'`` by the
+        caller). The ancestor row is read fresh right before the write; its
+        own writers preserve these entries via ``FOLDED_SOURCES``. Sync-only.
+        Returns the ancestor's id when its list changed (the caller may need
+        to broadcast it), ``None`` otherwise.
+        """
+        # Bounded parent walk — subagents are direct children of a main
+        # session today, the loop is future-proofing against nesting.
+        ancestor: Session | None = session
+        for _ in range(5):
+            if ancestor is None or ancestor.type == SessionType.SESSION:
+                break
+            if not ancestor.parent_session_id:
+                ancestor = None
+                break
+            ancestor = Session.objects.filter(id=ancestor.parent_session_id).first()
+        else:
+            ancestor = None
+        if ancestor is None or ancestor.type != SessionType.SESSION or ancestor.id == session.id:
+            return None
+        roots = BaseSessionCompute._plan_doc_roots(ancestor)
+        entries, changed = apply_doc_edit_events(
+            ancestor.plan_paths, timed_events,
+            project_root=roots[0] if roots else None,
+        )
+        if not changed:
+            return None
+        refresh_entries_existence(entries, roots)
+        ancestor.plan_paths = entries
+        ancestor.save(update_fields=["plan_paths"])
+        return ancestor.id
+
     def compute_session_metadata(self, session_id: str, result_queue, run_id: int) -> None:
         """
         Compute metadata for every item in a session and push the result on ``result_queue``.
@@ -2289,6 +2378,12 @@ class BaseSessionCompute:
         # Latest task/todo/plan snapshot across the whole session (this full
         # recompute is authoritative — it resets stale state to {}).
         last_tasks_snapshot: dict | None = None
+        # Plan-doc write/delete events across the whole session, paired with
+        # their line timestamps (authoritative full rebuild — starts empty).
+        # Also accumulated for subagents, whose events are folded into the
+        # top-level ancestor's list at apply time (never their own row).
+        plan_doc_events: list[tuple[DocEditEvent, datetime | None]] = []
+        is_main_session = session.type == SessionType.SESSION
         # Goal lifecycle history, folded from every goal line across the whole
         # session (authoritative full rebuild — starts empty).
         goals: list[dict] = []
@@ -2387,6 +2482,11 @@ class BaseSessionCompute:
                 last_slug = runtime['slug']
             if runtime.get('context_max') is not None:
                 last_context_max = runtime['context_max']
+
+            # Detect plan-doc writes/deletes. After the runtime block so
+            # ``last_cwd`` already reflects a cwd carried by this very line.
+            for doc_event in self.extract_doc_edit_events(parsed, cwd=last_cwd):
+                plan_doc_events.append((doc_event, item.timestamp))
 
             # Compute cost and context usage with the running model state
             self.compute_item_cost_and_usage(
@@ -2591,6 +2691,31 @@ class BaseSessionCompute:
         # it written, so a recompute never clobbers a value they choose to omit.
         extra_session_fields = self.extra_session_fields(session)
 
+        # Main session: rebuild the plan-doc list authoritatively from the
+        # full replay, plus filesystem-derived events (Claude Code's native
+        # plan file). Subagent: its own row keeps the authoritative [] and
+        # the events ship in the message for apply_session_complete to fold
+        # into the top-level ancestor's list.
+        parent_plan_doc_events: list[dict] | None = None
+        plan_paths: list[dict] = []
+        if is_main_session:
+            plan_doc_events.extend(self.extra_doc_edit_events(session, last_slug=last_slug))
+            plan_doc_roots = self._plan_doc_roots(session)
+            plan_paths, _ = apply_doc_edit_events(
+                [], plan_doc_events,
+                project_root=plan_doc_roots[0] if plan_doc_roots else None,
+            )
+            refresh_entries_existence(plan_paths, plan_doc_roots)
+        elif plan_doc_events:
+            parent_plan_doc_events = [
+                {
+                    'path': event.path,
+                    'action': event.action,
+                    'timestamp': timestamp.isoformat() if timestamp else None,
+                }
+                for event, timestamp in plan_doc_events
+            ]
+
         result_queue.put(orjson.dumps({
             'type': 'session_complete',
             'provider': self.provider.value,
@@ -2634,6 +2759,8 @@ class BaseSessionCompute:
                 # Full recompute is authoritative for the whole file: reset to
                 # {} when the session carries no task/plan state at all.
                 'tasks': last_tasks_snapshot if last_tasks_snapshot is not None else {},
+                # Authoritative too — [] when no plan-doc was ever touched.
+                'plan_paths': plan_paths,
                 # Authoritative for the whole file too — [] when no goal ever set.
                 'goals': goals,
                 'compacted': found_compact_summary,
@@ -2657,20 +2784,27 @@ class BaseSessionCompute:
             'project_directory': project_directory,
             'affected_days': sorted(affected_days) if affected_days else None,
             'agent_stopped': agent_stopped_list or None,
+            # Subagent-detected plan-doc events, folded into the top-level
+            # ancestor's plan_paths by apply_session_complete (None for main
+            # sessions and event-less subagents).
+            'parent_plan_doc_events': parent_plan_doc_events,
         }))
 
         connection.close()
 
     @staticmethod
     @transaction.atomic
-    def apply_session_complete(msg: dict) -> None:
+    def apply_session_complete(msg: dict) -> str | None:
         """
         Apply a ``session_complete`` payload produced by :meth:`compute_session_metadata`.
 
         Pure DB plumbing — no provider hook involved. Performs item
         bulk_updates, link create/update/delete diffs, session field
         updates, cost recalculation, title persistence, and project
-        metadata refresh.
+        metadata refresh. Returns the id of the top-level ancestor whose
+        ``plan_paths`` a subagent's events were folded into (the caller
+        broadcasts it — the completed session's own broadcast skips
+        subagents), ``None`` otherwise.
 
         Wrapped in ``transaction.atomic`` so the dozen-ish SQL statements
         below run as a single transaction: one write-lock acquisition and
@@ -2825,6 +2959,17 @@ class BaseSessionCompute:
                 db_goals = Session.objects.filter(id=session_id).values_list('goals', flat=True).first()
                 if db_goals:
                     preserve_dismissed_flags(db_goals, session_fields['goals'])
+            # The plans watcher (native-plan latch) and subagent compute
+            # passes write plan_paths entries this rebuild can't reproduce
+            # from the session's own lines — and their writes don't advance
+            # last_offset, so the revision guard above can't catch them. Fold
+            # them back in before the authoritative overwrite (same
+            # just-before-write re-read as ``goals`` right above).
+            if 'plan_paths' in session_fields:
+                db_plan_paths = Session.objects.filter(id=session_id).values_list('plan_paths', flat=True).first()
+                session_fields['plan_paths'] = fold_concurrent_entries(
+                    session_fields['plan_paths'], db_plan_paths, sources=FOLDED_SOURCES,
+                )
             rows = Session.objects.filter(id=session_id).update(**session_fields)
             if rows == 0:
                 logger.debug(f"apply_session_complete: session {session_id} not found for update (0 rows affected)")
@@ -2844,6 +2989,18 @@ class BaseSessionCompute:
             parent = Session.objects.get(id=session.parent_session_id)
             parent.recalculate_costs()
             parent.save(update_fields=["self_cost", "subagents_cost", "total_cost"])
+
+        # 7bis. Fold subagent-detected plan docs into the top-level ancestor
+        folded_ancestor_id: str | None = None
+        parent_plan_doc_events = msg.get('parent_plan_doc_events')
+        if parent_plan_doc_events and session.parent_session_id:
+            folded_ancestor_id = BaseSessionCompute._fold_plan_doc_events_into_ancestor(
+                session,
+                [
+                    (DocEditEvent(d['path'], d['action'], 'subagent'), d.get('timestamp'))
+                    for d in parent_plan_doc_events
+                ],
+            )
 
         # 8. Update session titles
         titles = msg.get('titles', {})
@@ -2879,6 +3036,8 @@ class BaseSessionCompute:
         # 12. Update project metadata (sessions_count, mtime, total_cost)
         if project_id:
             update_project_metadata(project_id)
+
+        return folded_ancestor_id
 
     # ------------------------------------------------------------------
     # Watcher orchestration — concrete in later steps
@@ -2999,6 +3158,12 @@ class BaseSessionCompute:
         # Latest task/todo/plan snapshot seen in this batch of new lines
         # (None = no task line here, keep the stored Session.tasks untouched).
         last_tasks_snapshot: dict | None = None
+        # Plan-doc write/delete events carried by this batch (empty = leave
+        # the stored Session.plan_paths untouched). For subagent files the
+        # events are folded into the top-level ancestor's list after the
+        # save (the subagent's own row keeps its default []).
+        plan_doc_events: list[tuple[DocEditEvent, datetime | None]] = []
+        is_main_session = session.type == SessionType.SESSION
         # Goal history folded incrementally onto the persisted list: start from
         # the stored state and apply only this batch's transitions.
         goals = copy.deepcopy(session.goals) if session.goals else []
@@ -3137,6 +3302,13 @@ class BaseSessionCompute:
                 last_slug = runtime['slug']
             if runtime.get('context_max') is not None:
                 last_context_max = runtime['context_max']
+
+            # Detect plan-doc writes/deletes. After the runtime block so a
+            # cwd carried by this very line is already in ``last_cwd``; the
+            # live accumulator is batch-local (starts at None), so fall back
+            # to the persisted cwd — analogous to the model fallback below.
+            for doc_event in self.extract_doc_edit_events(parsed, cwd=last_cwd or session.cwd):
+                plan_doc_events.append((doc_event, item.timestamp))
 
             # Compute cost and context usage with the running model state.
             # Live mode only tracks ``last_model`` within the current batch,
@@ -3414,6 +3586,25 @@ class BaseSessionCompute:
         if last_tasks_snapshot is not None:
             session.tasks = last_tasks_snapshot
             session_update_fields.append("tasks")
+        # Merge this batch's plan-doc events into the stored list (additive —
+        # unlike the batch recompute, a live batch never resets entries it
+        # didn't see). The plans watcher and subagent folds write plan_paths
+        # concurrently: fold in their fresher entries from a just-before-write
+        # re-read, like the goals re-read below. Subagent files fold into the
+        # top-level ancestor after the save instead (see below).
+        if plan_doc_events and is_main_session:
+            plan_doc_roots = self._plan_doc_roots(session)
+            new_plan_paths, plan_paths_changed = apply_doc_edit_events(
+                session.plan_paths, plan_doc_events,
+                project_root=plan_doc_roots[0] if plan_doc_roots else None,
+            )
+            if plan_paths_changed:
+                refresh_entries_existence(new_plan_paths, plan_doc_roots)
+                db_plan_paths = Session.objects.filter(id=session.id).values_list("plan_paths", flat=True).first()
+                session.plan_paths = fold_concurrent_entries(
+                    new_plan_paths, db_plan_paths, sources=FOLDED_SOURCES,
+                )
+                session_update_fields.append("plan_paths")
         # Persist the folded goal history only when this batch changed it. The
         # fold started from a copy of the row taken at batch start, so a
         # ``dismissed`` flag PATCHed by the user while this batch was being
@@ -3442,6 +3633,15 @@ class BaseSessionCompute:
             else:
                 parent.recalculate_costs()
                 parent.save(update_fields=["self_cost", "subagents_cost", "total_cost"])
+
+        # Fold subagent-detected plan docs into the top-level ancestor's
+        # plan_paths. The watcher's post-sync parent broadcast (a refreshed
+        # session_updated) carries the updated list to the frontend.
+        if plan_doc_events and not is_main_session:
+            self._fold_plan_doc_events_into_ancestor(
+                session,
+                [(event._replace(source='subagent'), ts) for event, ts in plan_doc_events],
+            )
 
         # Exclude new items from modified_line_nums
         return (

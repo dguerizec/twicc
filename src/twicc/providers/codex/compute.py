@@ -140,6 +140,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 from datetime import datetime
 from typing import ClassVar, NamedTuple
@@ -151,6 +152,7 @@ from twicc.core.models import SessionItem
 from twicc.paths import get_artifacts_dir
 from twicc.pricing import calculate_line_context_usage
 from twicc.providers.goals import GOAL_STATE_ACTIVE, GOAL_STATE_COMPLETED, GoalEvent
+from twicc.providers.plan_docs import DocEditEvent, extract_shell_write_targets, is_plan_doc_path
 from twicc.providers.compute_base import (
     _EMPTY_ANALYSIS,
     _EMPTY_FILE_PATHS,
@@ -304,6 +306,18 @@ _SHELL_FAMILY_TOOLS = frozenset({
     # ``ContainerExecHandler`` (``codex-rs/core/src/tools/handlers/shell/container_exec.rs``).
     "container.exec",
 })
+
+# ``function_call`` shell tools inspected for plan-doc detection, mapped to
+# the ``arguments`` key carrying their command (``exec_command`` uses ``cmd``,
+# not ``command``). ``write_stdin`` is deliberately absent (stdin to a running
+# process, not a command); ``local_shell_call`` is handled separately (argv in
+# ``payload.action.command``, no ``arguments``).
+_DOC_EDIT_SHELL_COMMAND_KEYS = {
+    "exec_command": "cmd",
+    "shell": "command",
+    "container.exec": "command",
+    "shell_command": "command",
+}
 
 # Function-call ``name`` values whose tool_use is bucketed as SYSTEM (no
 # tool card rendered) because the relevant exchange is captured elsewhere.
@@ -2288,6 +2302,74 @@ class CodexSessionCompute(BaseSessionCompute):
         if not isinstance(changes, dict):
             return _EMPTY_FILE_PATHS
         return [p for p in changes if isinstance(p, str) and p.startswith("/")]
+
+    def extract_doc_edit_events(self, parsed_json: dict, *, cwd: str | None) -> list[DocEditEvent]:
+        # Two sources of plan-doc writes/deletes:
+        # 1. ``event_msg.patch_apply_end`` — the canonical apply_patch result
+        #    (absolute paths + per-file add/update/delete type), regardless of
+        #    how the patch was invoked (custom_tool_call or shell-wrapped).
+        #    Only successful applies count: the ``changes`` map is present on
+        #    failed/declined patches too.
+        # 2. Shell tool calls, through the shared shell-write heuristic. The
+        #    input shape diverges per tool: ``exec_command`` ships its script
+        #    under ``cmd``, ``shell``/``container.exec`` a ``command`` argv,
+        #    ``shell_command`` a ``command`` string, and ``local_shell_call``
+        #    has no ``arguments`` at all (argv in ``payload.action.command``).
+        line_type = parsed_json.get("type")
+        payload = _payload(parsed_json)
+        if payload is None:
+            return []
+
+        events: list[DocEditEvent] = []
+        if line_type == _TYPE_EVENT_MSG:
+            if payload.get("type") != "patch_apply_end":
+                return []
+            if _patch_apply_error(payload) is not None:
+                return []
+            changes = payload.get("changes")
+            if not isinstance(changes, dict):
+                return []
+            for path, entry in changes.items():
+                if not isinstance(path, str) or not os.path.isabs(path) or not is_plan_doc_path(path):
+                    continue
+                change_type = entry.get("type") if isinstance(entry, dict) else None
+                events.append(DocEditEvent(path, 'delete' if change_type == 'delete' else 'write'))
+            return events
+
+        if line_type != _TYPE_RESPONSE_ITEM:
+            return []
+        sub_type = payload.get("type")
+        command = None
+        workdir = None
+        if sub_type == "function_call":
+            command_key = _DOC_EDIT_SHELL_COMMAND_KEYS.get(payload.get("name"))
+            if command_key is None:
+                return []
+            try:
+                arguments = orjson.loads(payload.get("arguments") or "{}")
+            except orjson.JSONDecodeError:
+                return []
+            if not isinstance(arguments, dict):
+                return []
+            command = arguments.get(command_key)
+            workdir = arguments.get("workdir")
+        elif sub_type == "local_shell_call":
+            action = payload.get("action")
+            if not isinstance(action, dict):
+                return []
+            command = action.get("command")
+            workdir = action.get("working_directory")
+        else:
+            return []
+        if not command:
+            return []
+
+        base_dir = workdir if isinstance(workdir, str) and workdir else cwd
+        for target, target_action in extract_shell_write_targets(command):
+            path = target if os.path.isabs(target) else (os.path.join(base_dir, target) if base_dir else None)
+            if path and is_plan_doc_path(path):
+                events.append(DocEditEvent(path, target_action))
+        return events
 
     def compute_link_extra(
         self,
