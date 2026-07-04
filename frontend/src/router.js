@@ -58,6 +58,7 @@ const routes = [
                     { path: 'plan/:docPath?', name: 'session-plan', component: { render: () => null } },
                     { path: 'tasks', name: 'session-tasks', component: { render: () => null } },
                     { path: 'workflows/:runId?', name: 'session-workflows', component: { render: () => null } },
+                    { path: 'browser', name: 'session-browser', component: { render: () => null } },
                 ]
             }
         ]
@@ -90,6 +91,7 @@ const routes = [
                     { path: 'plan/:docPath?', name: 'projects-session-plan', component: { render: () => null } },
                     { path: 'tasks', name: 'projects-session-tasks', component: { render: () => null } },
                     { path: 'workflows/:runId?', name: 'projects-session-workflows', component: { render: () => null } },
+                    { path: 'browser', name: 'projects-session-browser', component: { render: () => null } },
                 ]
             }
         ]

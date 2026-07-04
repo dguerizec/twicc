@@ -773,6 +773,24 @@ export function initStaticCommands(router) {
                 })
             },
         },
+        {
+            id: 'nav.tab.browser',
+            label: 'Switch to Browser Tab',
+            icon: 'globe',
+            category: 'navigation',
+            when: () => !!routeSessionId(),
+            action: () => {
+                const name = isAllProjectsMode() ? 'projects-session-browser' : 'session-browser'
+                router.push({
+                    name,
+                    params: {
+                        projectId: route.params.projectId,
+                        sessionId: route.params.sessionId,
+                    },
+                    query: route.query,
+                })
+            },
+        },
 
         // Terminal / workflow tab navigation — palette twins of the Alt+Ctrl+Shift
         // shortcuts: gated to the matching route, hidden with < 2 tabs (no point
