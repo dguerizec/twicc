@@ -199,6 +199,11 @@ class ClaudeCodeAgent(BaseAgent):
         # agents are children of the CLI process, so they never outlive this
         # object.
         self._live_background_tasks: dict[str, str] = {}
+        # True while the "waiting for N subagents" process label is what the
+        # frontend shows (broadcast when a turn ends held in ASSISTANT_TURN);
+        # refreshed as agents finish, cleared as soon as the parent streams
+        # its own activity again. See _refresh_waiting_label.
+        self._waiting_label_active = False
         self._get_session_slug = get_session_slug
         self._on_cron_created = on_cron_created
         self._on_cron_deleted = on_cron_deleted
@@ -1112,7 +1117,8 @@ class ClaudeCodeAgent(BaseAgent):
         # The CLI's terminal task_notification also clears this entry; the
         # eager pop just makes sure a stopped agent can never keep the parent
         # pinned in ASSISTANT_TURN if that notification goes missing.
-        self._live_background_tasks.pop(subagent_id, None)
+        if self._live_background_tasks.pop(subagent_id, None) is not None and self._waiting_label_active:
+            await self._refresh_waiting_label()
 
     async def interrupt(self) -> None:
         """Send an interrupt signal to the CLI (equivalent to Ctrl+C).
@@ -1264,7 +1270,7 @@ class ClaudeCodeAgent(BaseAgent):
         """Check if a message is an ack from a settings control request (not real assistant activity)."""
         return ClaudeCodeAgent._is_permission_mode_change_ack(msg) or ClaudeCodeAgent._is_model_change_ack(msg)
 
-    def _update_live_background_tasks(self, msg: SystemMessage) -> None:
+    async def _update_live_background_tasks(self, msg: SystemMessage) -> None:
         """Track live background subagents from the CLI's task lifecycle events.
 
         The CLI streams ``task_started`` when a background task launches,
@@ -1303,6 +1309,32 @@ class ClaudeCodeAgent(BaseAgent):
                 "Session %s: background agent %s stopped (%d live)",
                 self.session_id, task_id, len(self._live_background_tasks),
             )
+            if self._waiting_label_active:
+                await self._refresh_waiting_label()
+
+    async def _refresh_waiting_label(self) -> None:
+        """Broadcast/refresh the "waiting for N subagents" process label.
+
+        Shown by ``WorkingAssistantMessage`` instead of the bare "thinking"
+        while a turn ended held in ASSISTANT_TURN (see the ResultMessage
+        handler). Falls back to clearing when no agent is left — the
+        wake-up that follows repaints the real status anyway.
+        """
+        count = len(self._live_background_tasks)
+        if count == 0:
+            await self._clear_waiting_label()
+            return
+        self._waiting_label_active = True
+        await self._broadcast_process_label(
+            f"waiting for {count} subagent{'s' if count > 1 else ''}"
+        )
+
+    async def _clear_waiting_label(self) -> None:
+        """Drop the waiting label if it is currently shown (no-op otherwise)."""
+        if not self._waiting_label_active:
+            return
+        self._waiting_label_active = False
+        await self._broadcast_process_label("")
 
     async def apply_live_settings(self, settings: AgentSettings) -> None:
         """Apply live and idle setting changes to the live SDK client.
@@ -1368,6 +1400,10 @@ class ClaudeCodeAgent(BaseAgent):
                 self._set_state(AgentState.ASSISTANT_TURN)
                 self.last_activity = time.time()
                 await self._notify_state_change()
+            # A user message starts a fresh turn: the "waiting for N
+            # subagents" label no longer describes what the agent is doing
+            # (the hold after that turn's result re-establishes it if needed).
+            await self._clear_waiting_label()
 
             # Build query prompt as async generator (streaming mode)
             query_prompt = await self._build_query_prompt(text, images, documents)
@@ -1457,9 +1493,14 @@ class ClaudeCodeAgent(BaseAgent):
                 # lifecycle event — consumed by the ResultMessage branch below
                 # to hold ASSISTANT_TURN while background agents still run.
                 if isinstance(msg, SystemMessage):
-                    self._update_live_background_tasks(msg)
+                    await self._update_live_background_tasks(msg)
 
                 if isinstance(msg, StreamEvent):
+                    # Stream events only carry the parent's own model output
+                    # (subagent traffic arrives as full messages), so the
+                    # parent is visibly active again: drop the waiting label.
+                    await self._clear_waiting_label()
+
                     event = msg.event
                     event_type = event.get("type")
                     match event_type:
@@ -1721,7 +1762,11 @@ class ClaudeCodeAgent(BaseAgent):
                         if self.state != AgentState.ASSISTANT_TURN:
                             self._set_state(AgentState.ASSISTANT_TURN)
                             await self._notify_state_change()
+                        await self._refresh_waiting_label()
                     else:
+                        # The process_state broadcast that follows drops any
+                        # label on the frontend; just reset the local flag.
+                        self._waiting_label_active = False
                         self._set_state(AgentState.USER_TURN)
                         await self._notify_state_change()
 
