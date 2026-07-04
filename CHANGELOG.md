@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Reconnect** — messages arrived while disconnected (e.g. phone asleep) no longer stay missing until a page refresh.
+- **"Finished working" notifications** — no longer sent while background agents are still running.
 
 ## [1.90.0] - 2026-07-03
 

@@ -189,6 +189,16 @@ class ClaudeCodeAgent(BaseAgent):
         self._message_loop_task: asyncio.Task[None] | None = None
         self._active_tools: dict[str, dict[str, Any]] = {}
         self._last_started_tool_id: str | None = None
+        # Live background subagents, task_id -> description. The CLI launches
+        # agents asynchronously by default and ends the parent's turn as soon
+        # as it stops talking, while the agents keep running; this set (fed by
+        # the ``task_started`` / ``task_updated`` / ``task_notification``
+        # system events in ``_update_live_background_tasks``) lets the
+        # ResultMessage handler hold ASSISTANT_TURN instead of dropping to
+        # USER_TURN while agents are still running. In-memory only: background
+        # agents are children of the CLI process, so they never outlive this
+        # object.
+        self._live_background_tasks: dict[str, str] = {}
         self._get_session_slug = get_session_slug
         self._on_cron_created = on_cron_created
         self._on_cron_deleted = on_cron_deleted
@@ -1099,6 +1109,10 @@ class ClaudeCodeAgent(BaseAgent):
             self.session_id,
         )
         await self._client.stop_task(subagent_id)
+        # The CLI's terminal task_notification also clears this entry; the
+        # eager pop just makes sure a stopped agent can never keep the parent
+        # pinned in ASSISTANT_TURN if that notification goes missing.
+        self._live_background_tasks.pop(subagent_id, None)
 
     async def interrupt(self) -> None:
         """Send an interrupt signal to the CLI (equivalent to Ctrl+C).
@@ -1250,6 +1264,46 @@ class ClaudeCodeAgent(BaseAgent):
         """Check if a message is an ack from a settings control request (not real assistant activity)."""
         return ClaudeCodeAgent._is_permission_mode_change_ack(msg) or ClaudeCodeAgent._is_model_change_ack(msg)
 
+    def _update_live_background_tasks(self, msg: SystemMessage) -> None:
+        """Track live background subagents from the CLI's task lifecycle events.
+
+        The CLI streams ``task_started`` when a background task launches,
+        ``task_updated`` patches (``{"status": "completed", ...}``) and a
+        terminal ``task_notification`` each time the task stops. Only
+        ``task_type == "local_agent"`` entries are tracked: agents are
+        conversations with a bounded lifetime and a guaranteed terminal
+        notification, whereas other task types (e.g. a ``run_in_background``
+        Bash command) may legitimately outlive the whole conversation (dev
+        servers, tails) and must not pin the session in ASSISTANT_TURN.
+        """
+        data = msg.data if isinstance(msg.data, dict) else {}
+        task_id = data.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            return
+
+        if msg.subtype == "task_started":
+            if data.get("task_type") == "local_agent":
+                self._live_background_tasks[task_id] = data.get("description") or ""
+                logger.debug(
+                    "Session %s: background agent %s started (%d live)",
+                    self.session_id, task_id, len(self._live_background_tasks),
+                )
+            return
+
+        # ``task_notification`` fires on every stop (completed, failed,
+        # killed); ``task_updated`` with a terminal status arrives slightly
+        # earlier — honour both, idempotently.
+        terminal = msg.subtype == "task_notification"
+        if not terminal and msg.subtype == "task_updated":
+            patch = data.get("patch")
+            status = patch.get("status") if isinstance(patch, dict) else None
+            terminal = isinstance(status, str) and status not in ("pending", "queued", "running", "in_progress")
+        if terminal and self._live_background_tasks.pop(task_id, None) is not None:
+            logger.debug(
+                "Session %s: background agent %s stopped (%d live)",
+                self.session_id, task_id, len(self._live_background_tasks),
+            )
+
     async def apply_live_settings(self, settings: AgentSettings) -> None:
         """Apply live and idle setting changes to the live SDK client.
 
@@ -1398,6 +1452,12 @@ class ClaudeCodeAgent(BaseAgent):
         try:
             async for msg in self._client.receive_messages():
                 self.last_activity = time.time()
+
+                # Keep the live-background-agents set current on every task
+                # lifecycle event — consumed by the ResultMessage branch below
+                # to hold ASSISTANT_TURN while background agents still run.
+                if isinstance(msg, SystemMessage):
+                    self._update_live_background_tasks(msg)
 
                 if isinstance(msg, StreamEvent):
                     event = msg.event
@@ -1573,6 +1633,7 @@ class ClaudeCodeAgent(BaseAgent):
 
                 if isinstance(msg, ResultMessage):
                     # Claude finished responding, ready for user input
+                    was_soft_interrupt = False
                     if msg.is_error:
                         if self._interrupting:
                             # Expected error after interrupt — clean shutdown.
@@ -1600,6 +1661,7 @@ class ClaudeCodeAgent(BaseAgent):
                             # message. ``_interrupting`` (kill) is checked first,
                             # so an interrupt-to-kill still wins over a soft one.
                             self._soft_interrupting = False
+                            was_soft_interrupt = True
                             logger.info(
                                 "Session %s soft-interrupted; back to USER_TURN (subtype=%s)",
                                 self.session_id,
@@ -1634,8 +1696,34 @@ class ClaudeCodeAgent(BaseAgent):
                         self._active_tools.clear()
                         await self._broadcast_process_tools()
 
-                    self._set_state(AgentState.USER_TURN)
-                    await self._notify_state_change()
+                    if self._live_background_tasks and not was_soft_interrupt:
+                        # The async-by-default CLI ends its turn as soon as
+                        # the parent stops talking, even while background
+                        # agents it spawned are still running; their terminal
+                        # task-notifications will wake it for follow-up turns.
+                        # Holding ASSISTANT_TURN here is the single choke
+                        # point that keeps every USER_TURN consumer quiet —
+                        # process-state broadcasts, external "finished
+                        # working" pushes, browser notifications — until a
+                        # turn ends with no live agent left. A deliberate
+                        # soft interrupt bypasses the hold: the user asked
+                        # for control, show the session as theirs.
+                        logger.info(
+                            "Session %s: turn ended with %d background agent(s) still "
+                            "running — holding ASSISTANT_TURN (%s)",
+                            self.session_id,
+                            len(self._live_background_tasks),
+                            ", ".join(
+                                f"{tid} ({desc})" if desc else tid
+                                for tid, desc in self._live_background_tasks.items()
+                            ),
+                        )
+                        if self.state != AgentState.ASSISTANT_TURN:
+                            self._set_state(AgentState.ASSISTANT_TURN)
+                            await self._notify_state_change()
+                    else:
+                        self._set_state(AgentState.USER_TURN)
+                        await self._notify_state_change()
 
                 elif self._is_compacting_status(msg):
                     # CLI is compacting context — notify frontend to show "compacting" label
