@@ -9,6 +9,7 @@ import ProjectBadge from '../project/ProjectBadge.vue'
 import ProjectSelectOptions from '../project/ProjectSelectOptions.vue'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import { matchPattern } from '../../utils/workspacePatterns'
+import { normalizeBrowserUrl } from '../../utils/browserUrl'
 
 const workspacesStore = useWorkspacesStore()
 const settingsStore = useSettingsStore()
@@ -39,6 +40,7 @@ const formData = ref({
     archived: false,
     projectIds: [],    // local copy, manipulated freely until save
     autoProjectPatterns: [],
+    browserUrl: '',
 })
 
 // -- Pattern input state -----------------------------------------------------
@@ -116,6 +118,7 @@ function openAddForm() {
         archived: false,
         projectIds: [],
         autoProjectPatterns: [],
+        browserUrl: '',
     }
     patternInput.value = ''
     scanFeedback.value = ''
@@ -133,6 +136,7 @@ function openEditForm(workspace) {
         archived: workspace.archived,
         projectIds: [...workspace.projectIds],
         autoProjectPatterns: [...(workspace.autoProjectPatterns || [])],
+        browserUrl: workspace.browserUrl || '',
     }
     patternInput.value = ''
     scanFeedback.value = ''
@@ -265,12 +269,23 @@ function handleSave() {
         return
     }
 
+    let browserUrl = null
+    const rawBrowserUrl = formData.value.browserUrl.trim()
+    if (rawBrowserUrl) {
+        browserUrl = normalizeBrowserUrl(rawBrowserUrl)
+        if (!browserUrl) {
+            errorMessage.value = 'Browser URL must be a valid http(s) URL.'
+            return
+        }
+    }
+
     const payload = {
         name: trimmedName,
         color: formData.value.color || null,
         projectIds: [...formData.value.projectIds],
         archived: formData.value.archived,
         autoProjectPatterns: [...formData.value.autoProjectPatterns],
+        browserUrl,
     }
 
     if (formData.value.id) {
@@ -647,6 +662,23 @@ defineExpose({ open, close, openForWorkspace, openNew })
                     </wa-button>
                     <span v-if="scanFeedback" class="scan-feedback">{{ scanFeedback }}</span>
                 </div>
+            </div>
+
+            <wa-divider></wa-divider>
+
+            <!-- Browser pane default URL -->
+            <div class="form-group">
+                <label class="form-label">Browser URL</label>
+                <p class="form-help-text">
+                    Default URL opened by the session Browser tab for projects of this
+                    workspace. A project's own Browser URL takes precedence.
+                </p>
+                <wa-input
+                    :value="formData.browserUrl"
+                    @input="formData.browserUrl = $event.target.value"
+                    placeholder="e.g. http://localhost:3000"
+                    size="small"
+                />
             </div>
 
             <!-- Error -->
