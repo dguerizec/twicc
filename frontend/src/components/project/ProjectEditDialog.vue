@@ -8,6 +8,7 @@ import { useHelpStore } from '../../stores/help'
 import { useLayoutsStore } from '../../stores/layouts'
 import { apiFetch } from '../../utils/api'
 import { matchPattern } from '../../utils/workspacePatterns'
+import { normalizeBrowserUrl } from '../../utils/browserUrl'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import { expandWorktreeTemplate } from '../../utils/worktreePath'
 import { resolveProjectTrust } from '../../utils/trust'
@@ -53,6 +54,8 @@ const localArchived = ref(false)
 const LAYOUT_INHERIT = '__inherit__'
 const localDefaultLayoutId = ref(LAYOUT_INHERIT)
 const selectableLayouts = computed(() => layoutsStore.selectableLayouts)
+// Per-project Browser-pane default URL (edit mode). Empty = inherit.
+const localDefaultBrowserUrl = ref('')
 // Absolute base directory for this project's git worktrees (edit mode, git
 // projects only). Empty = inherit the global worktreeDirectoryTemplate.
 const localWorktreeDirectory = ref('')
@@ -225,6 +228,7 @@ watch(
             localTrustChoice.value = trustChoiceFromValue(newProject.trust)
             localTrustPropagation.value = newProject.trust_propagation ?? false
             localDefaultLayoutId.value = newProject.default_layout_id || LAYOUT_INHERIT
+            localDefaultBrowserUrl.value = newProject.default_browser_url || ''
         } else {
             // Create mode: reset all fields
             localDirectory.value = ''
@@ -235,6 +239,7 @@ watch(
             localTrustChoice.value = 'inherit'
             localTrustPropagation.value = false
             localDefaultLayoutId.value = LAYOUT_INHERIT
+            localDefaultBrowserUrl.value = ''
         }
     },
     { immediate: true }
@@ -314,6 +319,7 @@ function open() {
         localTrustChoice.value = trustChoiceFromValue(props.project.trust)
         localTrustPropagation.value = props.project.trust_propagation ?? false
         localDefaultLayoutId.value = props.project.default_layout_id || LAYOUT_INHERIT
+        localDefaultBrowserUrl.value = props.project.default_browser_url || ''
         agentDefaultsRef.value?.reset()
     }
     resetWorkspaceState()
@@ -554,6 +560,22 @@ async function handleSave() {
                 ? null
                 : localDefaultLayoutId.value
         }
+        // Per-project Browser-pane URL: send only when changed; '' → null (inherit).
+        const originalBrowserUrl = props.project.default_browser_url || ''
+        const trimmedBrowserUrl = localDefaultBrowserUrl.value.trim()
+        if (trimmedBrowserUrl !== originalBrowserUrl) {
+            if (trimmedBrowserUrl) {
+                const normalizedBrowserUrl = normalizeBrowserUrl(trimmedBrowserUrl)
+                if (!normalizedBrowserUrl) {
+                    errorMessage.value = 'Browser URL must be a valid http(s) URL'
+                    isSaving.value = false
+                    return
+                }
+                body.default_browser_url = normalizedBrowserUrl
+            } else {
+                body.default_browser_url = null
+            }
+        }
         let response
         try {
             response = await apiFetch(`/api/projects/${props.project.id}/`, {
@@ -791,6 +813,24 @@ defineExpose({
                             <div class="form-hint">
                                 Layout new sessions in this project open with. Inherit = use the parent
                                 project's default (for a worktree), then the global default.
+                            </div>
+                        </div>
+
+                        <wa-divider v-if="!isCreateMode"></wa-divider>
+
+                        <!-- Browser pane URL (edit mode) -->
+                        <div v-if="!isCreateMode" class="form-group">
+                            <label class="form-label">Browser URL</label>
+                            <wa-input
+                                :value="localDefaultBrowserUrl"
+                                @input="localDefaultBrowserUrl = $event.target.value"
+                                placeholder="e.g. http://localhost:3000"
+                                size="small"
+                            />
+                            <div class="form-hint">
+                                Default URL opened by the session Browser tab. Empty = inherit —
+                                the parent project's URL (for a worktree), then a containing
+                                workspace's Browser URL.
                             </div>
                         </div>
 
