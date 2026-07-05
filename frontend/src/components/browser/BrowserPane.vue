@@ -486,18 +486,20 @@ function onSaveSelect(event) {
 <template>
     <div class="browser-pane">
         <div class="browser-toolbar">
-            <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!canGoBack" title="Back" @click="goBack">
-                <wa-icon name="arrow-left"></wa-icon>
-            </wa-button>
-            <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!canGoForward" title="Forward" @click="goForward">
-                <wa-icon name="arrow-right"></wa-icon>
-            </wa-button>
-            <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" title="Refresh" @click="refresh">
-                <wa-icon name="rotate-right"></wa-icon>
-            </wa-button>
-            <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!defaultUrl" :title="defaultUrl ? `Home — ${defaultUrl}` : 'Home (no saved URL for this project)'" @click="goHome">
-                <wa-icon name="house"></wa-icon>
-            </wa-button>
+            <div class="browser-toolbar-left">
+                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!canGoBack" title="Back" @click="goBack">
+                    <wa-icon name="arrow-left"></wa-icon>
+                </wa-button>
+                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!canGoForward" title="Forward" @click="goForward">
+                    <wa-icon name="arrow-right"></wa-icon>
+                </wa-button>
+                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" title="Refresh" @click="refresh">
+                    <wa-icon name="rotate-right"></wa-icon>
+                </wa-button>
+                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!defaultUrl" :title="defaultUrl ? `Home — ${defaultUrl}` : 'Home (no saved URL for this project)'" @click="goHome">
+                    <wa-icon name="house"></wa-icon>
+                </wa-button>
+            </div>
 
             <wa-input
                 ref="addressInputRef"
@@ -515,80 +517,77 @@ function onSaveSelect(event) {
                 <wa-icon v-else slot="start" name="globe"></wa-icon>
             </wa-input>
 
-            <!-- Save current URL as a project / workspace default. WA custom
-                 events are stopped from bubbling (a nested dropdown's wa-show /
-                 wa-hide would otherwise reach same-named ancestor handlers). -->
-            <wa-dropdown
-                placement="bottom-end"
-                @click.stop
-                @wa-select.stop="onSaveSelect"
-                @wa-show.stop
-                @wa-hide.stop
-                @wa-after-show.stop
-                @wa-after-hide.stop
-            >
-                <wa-button slot="trigger" appearance="plain" size="small" class="browser-btn" :disabled="!canSave" title="Save this URL as a default…">
-                    <wa-icon name="bookmark"></wa-icon>
-                </wa-button>
-                <wa-dropdown-item disabled class="save-menu-header">Save current URL as default for…</wa-dropdown-item>
-                <!-- Level markers mirror the badges used everywhere else: the
-                     current project shows as a WorktreeBadge (parent · branch ·
-                     folder) when it is a worktree, else a plain ProjectBadge;
-                     its main repository (worktree case) is a ProjectBadge; each
-                     member workspace keeps the layer-group badge. -->
-                <wa-dropdown-item value="project" :disabled="project?.default_browser_url === currentUrl">
-                    <WorktreeBadge v-if="mainRepoProject" :project-id="props.projectId" />
-                    <ProjectBadge v-else :project-id="props.projectId" />
-                    <span v-if="project?.default_browser_url === currentUrl" class="save-menu-saved">saved</span>
-                </wa-dropdown-item>
-                <wa-dropdown-item
-                    v-if="mainRepoProject"
-                    value="main-repo"
-                    :disabled="mainRepoProject.default_browser_url === currentUrl"
+            <div class="browser-toolbar-right">
+                <!-- Save current URL as a project / workspace default. WA custom
+                     events are stopped from bubbling (a nested dropdown's wa-show /
+                     wa-hide would otherwise reach same-named ancestor handlers). -->
+                <wa-dropdown
+                    placement="bottom-end"
+                    @click.stop
+                    @wa-select.stop="onSaveSelect"
+                    @wa-show.stop
+                    @wa-hide.stop
+                    @wa-after-show.stop
+                    @wa-after-hide.stop
                 >
-                    <ProjectBadge :project-id="mainRepoProject.id" />
-                    <span v-if="mainRepoProject.default_browser_url === currentUrl" class="save-menu-saved">saved</span>
-                </wa-dropdown-item>
-                <template v-if="memberWorkspaces.length">
-                    <wa-divider></wa-divider>
-                    <wa-dropdown-item
-                        v-for="ws in memberWorkspaces"
-                        :key="ws.id"
-                        :value="`ws:${ws.id}`"
-                        :disabled="ws.browserUrl === currentUrl"
-                    >
-                        <span class="save-menu-ws">
-                            <wa-icon name="layer-group" :style="ws.color ? { color: ws.color } : null"></wa-icon>
-                            {{ ws.name }}
-                        </span>
-                        <span v-if="ws.browserUrl === currentUrl" class="save-menu-saved">saved</span>
+                    <wa-button slot="trigger" appearance="plain" size="small" class="browser-btn" :disabled="!canSave" title="Save this URL as a default…">
+                        <wa-icon name="bookmark"></wa-icon>
+                    </wa-button>
+                    <wa-dropdown-item disabled class="save-menu-header">Save current URL as default for…</wa-dropdown-item>
+                    <!-- Level markers mirror the badges used everywhere else: the
+                         current project shows as a WorktreeBadge (parent · branch ·
+                         folder) when it is a worktree, else a plain ProjectBadge;
+                         its main repository (worktree case) is a ProjectBadge; each
+                         member workspace keeps the layer-group badge. -->
+                    <wa-dropdown-item value="project" :disabled="project?.default_browser_url === currentUrl">
+                        <WorktreeBadge v-if="mainRepoProject" :project-id="props.projectId" />
+                        <ProjectBadge v-else :project-id="props.projectId" />
+                        <span v-if="project?.default_browser_url === currentUrl" class="save-menu-saved">saved</span>
                     </wa-dropdown-item>
-                </template>
-            </wa-dropdown>
+                    <wa-dropdown-item
+                        v-if="mainRepoProject"
+                        value="main-repo"
+                        :disabled="mainRepoProject.default_browser_url === currentUrl"
+                    >
+                        <ProjectBadge :project-id="mainRepoProject.id" />
+                        <span v-if="mainRepoProject.default_browser_url === currentUrl" class="save-menu-saved">saved</span>
+                    </wa-dropdown-item>
+                    <template v-if="memberWorkspaces.length">
+                        <wa-divider></wa-divider>
+                        <wa-dropdown-item
+                            v-for="ws in memberWorkspaces"
+                            :key="ws.id"
+                            :value="`ws:${ws.id}`"
+                            :disabled="ws.browserUrl === currentUrl"
+                        >
+                            <span class="save-menu-ws">
+                                <wa-icon name="layer-group" :style="ws.color ? { color: ws.color } : null"></wa-icon>
+                                {{ ws.name }}
+                            </span>
+                            <span v-if="ws.browserUrl === currentUrl" class="save-menu-saved">saved</span>
+                        </wa-dropdown-item>
+                    </template>
+                </wa-dropdown>
 
-            <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" title="Open in a new browser tab" @click="openExternal">
-                <wa-icon name="arrow-up-right-from-square"></wa-icon>
-            </wa-button>
+                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" title="Open in a new browser tab" @click="openExternal">
+                    <wa-icon name="arrow-up-right-from-square"></wa-icon>
+                </wa-button>
 
-            <wa-icon
-                :id="`browser-companion-${instanceId}`"
-                name="plug"
-                class="companion-status"
-                :class="companionStatus"
-                @click="onCompanionIconClick"
-            ></wa-icon>
-            <AppTooltip :for="`browser-companion-${instanceId}`">{{ companionTooltip }}</AppTooltip>
-
-            <wa-icon :id="`browser-info-${instanceId}`" name="circle-info" class="browser-info"></wa-icon>
-            <AppTooltip :for="`browser-info-${instanceId}`">
-                Pages that include the TwiCC companion script report their real
-                navigation here — Back/Forward/Refresh drive the page's own
-                history. Without it, the toolbar only tracks URLs entered here
-                and links followed inside the page are invisible to it. Some
-                sites refuse to be embedded (X-Frame-Options) and stay blank;
-                logins may not persist inside a frame. Keyboard shortcuts pause
-                while the page has focus — click TwiCC's chrome to get them back.
-            </AppTooltip>
+                <wa-button
+                    :id="`browser-companion-${instanceId}`"
+                    appearance="plain"
+                    size="small"
+                    class="browser-btn companion-status"
+                    :class="companionStatus"
+                    @click="onCompanionIconClick"
+                >
+                    <wa-icon name="plug"></wa-icon>
+                </wa-button>
+                <!-- force + click trigger: the tooltip is hover-only and hidden
+                     on touch by default, but here a tap must reveal the companion
+                     status/help on mobile too (no hover there). -->
+                <AppTooltip :for="`browser-companion-${instanceId}`" force trigger="hover focus click">{{ companionTooltip }}</AppTooltip>
+            </div>
         </div>
 
         <wa-callout v-if="saveError" variant="danger" size="small" class="browser-banner">
@@ -667,10 +666,25 @@ function onSaveSelect(event) {
 .browser-toolbar {
     display: flex;
     align-items: center;
-    gap: var(--wa-space-2xs);
-    padding: var(--wa-space-2xs) var(--wa-space-xs);
+    flex-wrap: wrap;
+    padding: var(--wa-space-2xs);
     border-bottom: 1px solid var(--wa-color-border-quiet);
     flex-shrink: 0;
+}
+
+/* Nav buttons before the address, controls after it — grouped so the toolbar
+   has three flex children (left · address · right) that wrap as units. */
+.browser-toolbar-left,
+.browser-toolbar-right {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+/* Keep the controls flush right, even once the address has grown or the row
+   has wrapped them onto their own line. */
+.browser-toolbar-right {
+    margin-left: auto;
 }
 
 .browser-btn {
@@ -679,26 +693,25 @@ function onSaveSelect(event) {
 
 .browser-address {
     flex: 1;
-    min-width: 6rem;
+    min-width: min(10rem, 90%);
 }
 
-.browser-info {
-    flex-shrink: 0;
-    color: var(--wa-color-text-quiet);
-    margin-inline: var(--wa-space-2xs);
-}
-
+/* Companion status is a normal toolbar button now; the plug's colour + dim
+   reflect the connection state (icon targeted directly — currentColor glyph). */
 .companion-status {
-    flex-shrink: 0;
-    color: var(--wa-color-text-quiet);
     opacity: 0.55;
-    cursor: pointer;
+}
+
+.companion-status wa-icon {
+    color: var(--wa-color-text-quiet);
 }
 
 .companion-status.present {
-    color: var(--wa-color-success-fill-loud);
     opacity: 1;
-    cursor: default;
+}
+
+.companion-status.present wa-icon {
+    color: var(--wa-color-success-fill-loud);
 }
 
 .browser-banner {
