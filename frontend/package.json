@@ -50,6 +50,7 @@
     "markdown-it": "^14.1.0",
     "markdown-it-async": "^2.2.0",
     "mermaid": "^11.12.2",
+    "modern-screenshot": "^4.7.0",
     "notivue": "^2.4.5",
     "penpal": "^7.0.6",
     "pinia": "^3.0.4",

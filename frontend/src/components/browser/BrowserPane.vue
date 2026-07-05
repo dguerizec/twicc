@@ -21,6 +21,7 @@
 // refresh in fallback mode) re-creates it.
 import { computed, inject, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { hostMessage, isCompanionMessage } from '../../browser-companion/protocol'
+import { isOpen as mediaPreviewOpen } from '../../composables/useMediaPreview'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { useWorkspacesStore } from '../../stores/workspaces'
@@ -137,6 +138,7 @@ function onWindowMessage(event) {
         // the old one, so the host flag must not claim the mode is still on.
         selectAreaActive.value = false
         selectState.value = null
+        rejectPendingCapture('page reloaded')
         clearHelloGraceTimer()
         // A connected companion is definitive proof the page is reachable and
         // embeddable — drop any banner a slower/raced probe put up.
@@ -189,6 +191,18 @@ function onWindowMessage(event) {
             lines.push(`Path: ${data.chain}`)
             openSelectComment(lines.join('\n'))
         }
+    } else if (data.type === 'select-capture') {
+        // Answer to a capture request (see captureScreenshot): resolve/reject
+        // the in-flight promise; the comment widget renders the result. A late
+        // or duplicate reply with no pending request is ignored.
+        if (pendingCapture) {
+            const { resolve, reject, timer } = pendingCapture
+            pendingCapture = null
+            clearTimeout(timer)
+            if (typeof data.error === 'string') reject(new Error(data.error))
+            else if (typeof data.dataUrl === 'string' && data.dataUrl.startsWith('data:image/')) resolve(data.dataUrl)
+            else reject(new Error('no image returned'))
+        }
     } else if (data.type === 'focus') {
         // Real user input inside the embedded page — the cross-origin
         // equivalent of DockRegion's click-to-focus. A hidden frame can't
@@ -201,6 +215,7 @@ function onWindowMessage(event) {
         companionStatus.value = 'waiting'
         selectAreaActive.value = false
         selectState.value = null
+        rejectPendingCapture('page navigating away')
         // The frozen pre-companion stack becomes reachable the moment we
         // leave 'present' — and this waiting window is exactly when users
         // click Back ("page is taking too long"). Reset it NOW; clearing
@@ -234,10 +249,10 @@ function toggleFullscreen() {
 // before any ancestor Escape handler reacts.
 function onFullscreenKeydown(event) {
     if (event.key === 'Escape') {
-        // An open select-comment widget has priority: this capture-phase
-        // listener would otherwise exit fullscreen on the same keypress the
-        // widget uses to close itself.
-        if (selectCommentPosition.value) return
+        // An open select-comment widget or media preview has priority: this
+        // capture-phase listener would otherwise exit fullscreen on the same
+        // keypress those use to close themselves.
+        if (selectCommentPosition.value || mediaPreviewOpen.value) return
         event.stopPropagation()
         isFullscreen.value = false
     }
@@ -255,6 +270,7 @@ onBeforeUnmount(() => {
     window.removeEventListener('keydown', onFullscreenKeydown, true)
     if (isFullscreen.value) expandPreviewHost?.(false)
     clearHelloGraceTimer()
+    rejectPendingCapture('pane closed')
     persistUrlDebounced.cancel()
 })
 
@@ -517,10 +533,24 @@ function onCompanionIconClick() {
 const selectAreaActive = ref(false)
 const selectState = ref(null)
 
+// A single in-flight screenshot capture: { resolve, reject, timer }, or null.
+// The companion answers with a select-capture message (resolved in
+// onWindowMessage). Plain closure var — only the promise consumer cares, not
+// the template.
+let pendingCapture = null
+function rejectPendingCapture(reason) {
+    if (!pendingCapture) return
+    const { reject, timer } = pendingCapture
+    pendingCapture = null
+    clearTimeout(timer)
+    reject(new Error(reason))
+}
+
 function setSelectArea(enabled) {
     if (selectAreaActive.value === enabled) return
     selectAreaActive.value = enabled
     selectState.value = null
+    rejectPendingCapture('select mode changed')
     // Drop any open comment widget — its v-if also gates on selectAreaActive,
     // but resetting avoids a stale one flashing back on the next mode entry.
     selectCommentPosition.value = null
@@ -542,6 +572,31 @@ function selectClear() {
 
 function selectComment() {
     sendToCompanion(hostMessage('command', { action: 'select-describe' }))
+}
+
+// Passed to the comment widget's "Include screenshot" switch. Fires a capture
+// command and resolves with the PNG data URL when the companion answers (see
+// the select-capture handler); rejects on timeout / disconnection so the
+// switch can revert.
+const CAPTURE_TIMEOUT_MS = 15000
+function captureScreenshot() {
+    if (companionStatus.value !== 'present') {
+        return Promise.reject(new Error('companion not connected'))
+    }
+    if (pendingCapture) return Promise.reject(new Error('a capture is already in progress'))
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => rejectPendingCapture('capture timed out'), CAPTURE_TIMEOUT_MS)
+        pendingCapture = { resolve, reject, timer }
+        sendToCompanion(hostMessage('command', { action: 'select-capture' }))
+    })
+}
+
+// dataUrl → File → draft attachment (the same path a manual image upload
+// takes, so provider validation / resize / caps all apply).
+async function attachScreenshot(dataUrl) {
+    const blob = await (await fetch(dataUrl)).blob()
+    const file = new File([blob], `browser-capture-${Date.now()}.png`, { type: 'image/png' })
+    await store.addAttachment(props.sessionId, file)
 }
 
 // ── Select-area comment widget: reuses the text-selection comment window,
@@ -811,6 +866,8 @@ function onSaveSelect(event) {
                 subject="selected area"
                 auto-expand
                 :clear-source-selection="() => {}"
+                :capture-screenshot="captureScreenshot"
+                :attach-screenshot="attachScreenshot"
                 @close="selectCommentPosition = null"
             />
         </Teleport>

@@ -10,6 +10,8 @@
 // is payload-free and posted to '*'. The page URL only flows AFTER the host
 // acks, targeted at the acked origin; commands are only honoured from it.
 // Loaded outside a frame (or twice), the script does nothing.
+import { domToPng } from 'modern-screenshot'
+
 import { companionMessage, isHostMessage } from './protocol'
 
 if (window.parent !== window && !window.__twiccBrowserCompanion) {
@@ -76,6 +78,8 @@ function install() {
             selectClear()
         } else if (message.action === 'select-describe') {
             postSelectDescribe()
+        } else if (message.action === 'select-capture') {
+            postSelectCapture()
         }
     })
 
@@ -251,6 +255,21 @@ function install() {
             }),
             hostOrigin
         )
+    }
+
+    // Render the current element to a PNG data URL with modern-screenshot (a
+    // live-DOM-to-image renderer, foreignObject-based). Fidelity is best-effort
+    // by nature — webfont glyphs and cross-origin images may not survive the
+    // round-trip. Always answers (success or error), so the host's pending
+    // state can't get stuck.
+    async function postSelectCapture() {
+        if (!hostOrigin || !selectCurrent) return
+        try {
+            const dataUrl = await domToPng(selectCurrent)
+            post(companionMessage('select-capture', { dataUrl }), hostOrigin)
+        } catch (error) {
+            post(companionMessage('select-capture', { error: String(error?.message || error) }), hostOrigin)
+        }
     }
 
     function onSelectPointerMove(event) {

@@ -7,6 +7,7 @@
 import { ref, inject, nextTick, computed, onMounted, onBeforeUnmount } from 'vue'
 import { formatComment } from '../../../stores/codeComments'
 import { useSettingsStore } from '../../../stores/settings'
+import { isOpen as mediaPreviewOpen, openMediaPreview } from '../../../composables/useMediaPreview'
 import { toast } from '../../../composables/useToast'
 
 const props = defineProps({
@@ -28,6 +29,14 @@ const props = defineProps({
      *  enough for normal HTML; consumers (e.g. FilePane) override it to also clear
      *  the internal CodeMirror selection so the behavior is consistent there. */
     clearSourceSelection: { type: Function, default: () => window.getSelection()?.removeAllRanges() },
+    /** Optional async () => dataUrl. When provided, an "Include screenshot"
+     *  switch appears: toggling it on calls this to capture an image (the
+     *  BrowserPane wires it to the companion). Absent → no switch. */
+    captureScreenshot: { type: Function, default: null },
+    /** Optional async (dataUrl) => void, run on "Add to message" to persist the
+     *  captured screenshot as a draft attachment. Required alongside
+     *  captureScreenshot for the screenshot to actually reach the message. */
+    attachScreenshot: { type: Function, default: null },
 })
 
 const emit = defineEmits(['close'])
@@ -46,6 +55,12 @@ const commentText = ref('')
 const textareaRef = ref(null)
 const rootRef = ref(null)
 const isDragging = ref(false)
+
+// ── Screenshot capture (opt-in, only when captureScreenshot is provided) ──
+const includeScreenshot = ref(false)
+const screenshotLoading = ref(false)   // capture round-trip in flight
+const screenshotDataUrl = ref(null)    // the captured PNG, shown as a thumbnail
+const submitting = ref(false)          // attaching + inserting on "Add to message"
 
 // Combined pixel offset (drag + clamp corrections) from the base position.
 const panelOffset = ref({ dx: 0, dy: 0 })
@@ -117,9 +132,10 @@ let dragStart = null
 function onDragPointerDown(e) {
     // Only primary button / single touch
     if (e.button !== 0) return
-    // Don't drag when interacting with quote (scrollable), textareas, or buttons
+    // Don't drag when interacting with quote (scrollable), textareas, buttons,
+    // or the screenshot controls (switch + clickable thumbnail).
     const target = e.target
-    if (target.closest('.tsc-quote, wa-textarea, wa-button, textarea, button')) return
+    if (target.closest('.tsc-quote, wa-textarea, wa-button, textarea, button, .tsc-shot')) return
     e.preventDefault()
     isDragging.value = true
     dragStart = { x: e.clientX, y: e.clientY, ...panelOffset.value }
@@ -165,8 +181,55 @@ function close() {
     emit('close')
 }
 
-function addToMessage() {
-    if (!canAdd.value) return
+// Toggle the "Include screenshot" switch. Turning it on captures once (the
+// result is cached in screenshotDataUrl); turning it off drops the capture.
+async function onIncludeToggle(event) {
+    const wantOn = event.target.checked
+    includeScreenshot.value = wantOn
+    if (!wantOn) {
+        screenshotDataUrl.value = null
+        return
+    }
+    if (screenshotDataUrl.value || !props.captureScreenshot) return
+    screenshotLoading.value = true
+    try {
+        const dataUrl = await props.captureScreenshot()
+        if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+            throw new Error('no image returned')
+        }
+        screenshotDataUrl.value = dataUrl
+    } catch (e) {
+        includeScreenshot.value = false
+        toast.error(`Screenshot failed: ${e?.message || e}`)
+    } finally {
+        screenshotLoading.value = false
+    }
+}
+
+// Enlarge the captured screenshot in the shared media dialog. It mounts
+// outside this widget, so handleDocumentMousedown would otherwise treat the
+// click as "outside" and dismiss the whole comment — the mediaPreviewOpen
+// guard there keeps the widget alive while the preview is up.
+function openShotPreview() {
+    if (!screenshotDataUrl.value) return
+    openMediaPreview([{ type: 'image', src: screenshotDataUrl.value, name: 'Screenshot' }])
+}
+
+async function addToMessage() {
+    if (!canAdd.value || screenshotLoading.value) return
+
+    submitting.value = true
+    // Attach first: a rejected attachment (size cap, etc.) must not leave the
+    // text inserted with no image — keep the widget open so the user can react.
+    try {
+        if (screenshotDataUrl.value && props.attachScreenshot) {
+            await props.attachScreenshot(screenshotDataUrl.value)
+        }
+    } catch (e) {
+        submitting.value = false
+        toast.error(`Couldn't attach screenshot: ${e?.message || e}`)
+        return
+    }
 
     const formatted = formatComment(
         {
@@ -179,6 +242,7 @@ function addToMessage() {
         { isSelectedText: true, sourceLabel: props.sourceLabel, subject: props.subject },
     )
     insertTextAtCursor(formatted + '\n')
+    submitting.value = false
     close()
 }
 
@@ -201,9 +265,12 @@ function handleKeydown(e) {
     }
 }
 
-// Close on any mousedown outside the widget
+// Close on any mousedown outside the widget — unless the enlarged-screenshot
+// preview is open (it mounts elsewhere in the DOM, so a click inside it reads
+// as "outside" here; dismissing the comment then would be wrong).
 function handleDocumentMousedown(e) {
     if (rootRef.value?.contains(e.target)) return
+    if (mediaPreviewOpen.value) return
     close()
 }
 
@@ -273,19 +340,40 @@ defineExpose({ isExpanded: expanded })
                 rows="3"
             ></wa-textarea>
 
+            <!-- Optional screenshot capture (only when a capture handler is
+                 provided, i.e. the Browser pane). -->
+            <div v-if="captureScreenshot" class="tsc-shot">
+                <div class="tsc-shot-row">
+                    <wa-switch
+                        size="small"
+                        :checked="includeScreenshot"
+                        :disabled="screenshotLoading || submitting"
+                        @change="onIncludeToggle"
+                    >Include screenshot</wa-switch>
+                    <wa-spinner v-if="screenshotLoading"></wa-spinner>
+                </div>
+                <div
+                    v-if="screenshotDataUrl"
+                    class="tsc-shot-thumb"
+                    @click="openShotPreview"
+                >
+                    <img :src="screenshotDataUrl" alt="Screenshot" />
+                </div>
+            </div>
+
             <div class="tsc-help">
                 <strong>Note:</strong> Clicking outside this dialog will discard the selection and any comment entered. Drag here to move the dialog.
             </div>
 
             <div class="tsc-actions">
-                <wa-button size="small" variant="neutral" appearance="outlined" @click="close">
+                <wa-button size="small" variant="neutral" appearance="outlined" :disabled="submitting" @click="close">
                     Cancel
                 </wa-button>
                 <wa-button
                     size="small"
                     variant="brand"
                     appearance="outlined"
-                    :disabled="!canAdd"
+                    :disabled="!canAdd || screenshotLoading || submitting"
                     @click="addToMessage"
                 >
                     Add to message
@@ -345,6 +433,43 @@ defineExpose({ isExpanded: expanded })
     word-break: break-word;
     cursor: auto;
     touch-action: auto; /* allow native scroll within quote */
+}
+
+/* ── Screenshot capture ──────────────────────────────────────────── */
+
+.tsc-shot {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-xs);
+}
+
+.tsc-shot-row {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+}
+
+/* Thumbnail matches the composer's attachment thumbnails (see
+   MediaThumbnailGroup): square, rounded, cover-fit, click to enlarge. */
+.tsc-shot-thumb {
+    width: 96px;
+    height: 96px;
+    border-radius: var(--wa-border-radius-s);
+    border: 1px solid var(--wa-color-border-neutral-tertiary);
+    background: var(--wa-color-surface-secondary);
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.tsc-shot-thumb:hover {
+    border-color: var(--wa-color-border-primary);
+}
+
+.tsc-shot-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
 }
 
 /* ── Help text ───────────────────────────────────────────────────── */
