@@ -50,6 +50,10 @@ const filePath = computed(() =>
 )
 
 const filePaneRef = ref(null)
+// Cache up to this many rendered artifacts, each in its OWN FilePane instance
+// (keyed by bookmark id) — so its persistent-frame iframe survives a switch to
+// another artifact and back with no reload. Capped to bound the live iframes.
+const MAX_CACHED_ARTIFACTS = 5
 // HTML artifacts get a reload control in the header (reloads the rendered iframe).
 const isHtml = computed(() => /\.html?$/i.test(bookmark.value?.relative_path || ''))
 function reloadPreview() {
@@ -255,18 +259,28 @@ function openInSession() {
                 </wa-callout>
             </div>
 
-            <!-- Render the artifact (render-only FilePane) -->
-            <div v-else class="abv-content">
-                <FilePane
-                    ref="filePaneRef"
-                    :file-path="filePath"
-                    :root-restriction="bookmark.root"
-                    :preview-by-default="true"
-                    :render-only="true"
-                    :active="true"
-                    api-prefix="/api"
-                    :artifact-bookmark-session-id="bookmark.session_id"
-                />
+            <!-- Render the artifact. Each bookmark gets its OWN FilePane
+                 instance (keyed by id) inside a capped KeepAlive, so its
+                 persistent-frame iframe survives a switch to another artifact
+                 and back — no reload. The container stays mounted (v-show, not
+                 v-else) even during a missing-artifact detour so that detour
+                 doesn't evict the other cached previews; the FilePane itself is
+                 v-if'd out then (deactivated, kept in cache). -->
+            <div v-show="available !== false" class="abv-content">
+                <KeepAlive :max="MAX_CACHED_ARTIFACTS">
+                    <FilePane
+                        v-if="available !== false"
+                        :key="bookmark.id"
+                        ref="filePaneRef"
+                        :file-path="filePath"
+                        :root-restriction="bookmark.root"
+                        :preview-by-default="true"
+                        :render-only="true"
+                        :active="true"
+                        api-prefix="/api"
+                        :artifact-bookmark-session-id="bookmark.session_id"
+                    />
+                </KeepAlive>
             </div>
         </template>
 
