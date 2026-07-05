@@ -19,7 +19,7 @@
 // in the app-level FrameHost and is NOT reloaded by session switches (KeepAlive)
 // or dock moves — only an explicit remount (frameKey bump on hard navigation /
 // refresh in fallback mode) re-creates it.
-import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { hostMessage, isCompanionMessage } from '../../browser-companion/protocol'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
@@ -182,9 +182,43 @@ function onWindowMessage(event) {
     }
 }
 
+// ── Full-window: the WHOLE pane (toolbar + frame) expands in place via a
+// position:fixed class — the same mechanism as FilePane's preview fullscreen.
+// The toolbar stays on top and fully usable (Back/Forward, address, companion)
+// while the embedded page fills the window. Never teleported: moving the iframe
+// would reload it; the pooled frame just follows its placeholder's new rect and
+// switches to the 'fullscreen' z-tier so it layers above the fixed pane.
+const isFullscreen = ref(false)
+const fullscreenButtonId = `browser-fullscreen-${instanceId}`
+// Provided by ProjectView: drops .main-content's container-type and lifts it
+// above the sidebar/divider so the fixed overlay covers the whole window.
+// Absent outside a project view → graceful no-op (overlay clamps to the pane).
+const expandPreviewHost = inject('expandPreviewHost', null)
+
+function toggleFullscreen() {
+    isFullscreen.value = !isFullscreen.value
+}
+
+// Escape exits full-window. Capture phase + stopPropagation so it unwraps here
+// before any ancestor Escape handler reacts.
+function onFullscreenKeydown(event) {
+    if (event.key === 'Escape') {
+        event.stopPropagation()
+        isFullscreen.value = false
+    }
+}
+
+watch(isFullscreen, (on) => {
+    expandPreviewHost?.(on)
+    if (on) window.addEventListener('keydown', onFullscreenKeydown, true)
+    else window.removeEventListener('keydown', onFullscreenKeydown, true)
+})
+
 onMounted(() => window.addEventListener('message', onWindowMessage))
 onBeforeUnmount(() => {
     window.removeEventListener('message', onWindowMessage)
+    window.removeEventListener('keydown', onFullscreenKeydown, true)
+    if (isFullscreen.value) expandPreviewHost?.(false)
     clearHelloGraceTimer()
     persistUrlDebounced.cancel()
 })
@@ -484,7 +518,7 @@ function onSaveSelect(event) {
 </script>
 
 <template>
-    <div class="browser-pane">
+    <div class="browser-pane" :class="{ 'browser-pane--fullscreen': isFullscreen }">
         <div class="browser-toolbar">
             <div class="browser-toolbar-left">
                 <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!canGoBack" title="Back" @click="goBack">
@@ -574,6 +608,19 @@ function onSaveSelect(event) {
                 </wa-button>
 
                 <wa-button
+                    :id="fullscreenButtonId"
+                    appearance="plain"
+                    size="small"
+                    class="browser-btn"
+                    @click="toggleFullscreen"
+                >
+                    <wa-icon :name="isFullscreen ? 'compress' : 'expand'"></wa-icon>
+                </wa-button>
+                <AppTooltip :for="fullscreenButtonId">
+                    {{ isFullscreen ? 'Exit full screen' : 'Full screen' }}
+                </AppTooltip>
+
+                <wa-button
                     :id="`browser-companion-${instanceId}`"
                     appearance="plain"
                     size="small"
@@ -639,6 +686,7 @@ function onSaveSelect(event) {
                 :remount-key="frameKey"
                 :attrs="BROWSER_FRAME_ATTRS"
                 :elevated="props.frameElevated"
+                :fullscreen="isFullscreen"
                 class="browser-frame"
                 @load="onFrameLoad"
             />
@@ -661,6 +709,20 @@ function onSaveSelect(event) {
     height: 100%;
     min-height: 0;
     overflow: hidden;
+}
+
+/* Full-window: the whole pane expands IN PLACE (position:fixed) rather than
+   teleporting — moving the iframe would reload it. The toolbar stays on top; the
+   pooled frame follows its placeholder in the body and switches to the
+   fullscreen z-tier (layered above this fixed pane, geometrically only over the
+   body). ProjectView drops .main-content's containment and lifts it above the
+   sidebar/divider while expanded (via the injected setter), so this fixed
+   overlay covers the whole window. */
+.browser-pane--fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: var(--wa-color-surface-default);
 }
 
 .browser-toolbar {
