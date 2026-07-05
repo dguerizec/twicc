@@ -154,6 +154,7 @@ function selectSection(id) {
     mobileShowContent.value = true
     if (id === 'global') {
         worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
+        publicBaseUrlInput.value = store.getPublicBaseUrl || ''
     }
     if (id === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
@@ -591,6 +592,15 @@ const worktreeDirApplyIcon = computed(() => {
     return worktreeDirModified.value ? 'triangle-exclamation' : 'check'
 })
 
+// External URL (stored as `publicBaseUrl`) — local input, committed to the store
+// on Apply only (like the worktree template above). The store setter trims and
+// strips trailing slashes, so `modified` compares against that same normalization.
+const publicBaseUrlInput = ref('')
+const publicBaseUrlInputRef = ref(null)
+const publicBaseUrlNormalized = computed(() => publicBaseUrlInput.value.trim().replace(/\/+$/, ''))
+const publicBaseUrlModified = computed(() => publicBaseUrlNormalized.value !== (store.getPublicBaseUrl || ''))
+const publicBaseUrlApplyIcon = computed(() => (publicBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
+
 // Check if the current prompt is the default
 const isDefaultPrompt = computed(() => titleSystemPrompt.value === SETTINGS_SCHEMA.titleSystemPrompt)
 const isTitleSystemPromptModified = computed(() => titleSystemPromptInput.value !== titleSystemPrompt.value)
@@ -738,6 +748,24 @@ function onWaThemeChange(event) {
 
 function onWaBrandChange(event) {
     store.setWaBrand(event.target.value)
+}
+
+function onPublicBaseUrlInputChange(event) {
+    publicBaseUrlInput.value = event.target.value
+}
+
+function onPublicBaseUrlApply() {
+    store.setPublicBaseUrl(publicBaseUrlInput.value)
+    // Reflect the store's normalization (trim + trailing-slash strip) back into
+    // the field so the Apply icon settles to its "saved" state.
+    publicBaseUrlInput.value = store.getPublicBaseUrl || ''
+}
+
+// Called when the Notifications section's callout is clicked: jump to Global and
+// focus the External URL field.
+function goToPublicBaseUrl() {
+    selectSection('global')
+    nextTick(() => publicBaseUrlInputRef.value?.focus())
 }
 
 /**
@@ -1012,6 +1040,7 @@ function onPopoverShow() {
     // (Global is the default section, so selectSection('global') may not fire
     // on open).
     worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
+    publicBaseUrlInput.value = store.getPublicBaseUrl || ''
     if (activeSection.value === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
     }
@@ -1130,6 +1159,33 @@ function onChangelogClose() {
                 <section v-if="activeSection === 'global'" class="settings-section">
                     <h3 class="settings-section-title">Global</h3>
                     <div class="setting-group">
+                        <label class="setting-group-label">External URL <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                        <div class="setting-input-apply-row">
+                            <wa-input
+                                ref="publicBaseUrlInputRef"
+                                :value="publicBaseUrlInput"
+                                @input="onPublicBaseUrlInputChange"
+                                @keydown.enter="onPublicBaseUrlApply"
+                                placeholder="https://twicc.example.com"
+                                size="small"
+                            ></wa-input>
+                            <wa-button
+                                size="small"
+                                variant="neutral"
+                                @click="onPublicBaseUrlApply"
+                            >
+                                <wa-icon :name="publicBaseUrlApplyIcon" slot="start"></wa-icon>
+                                Apply
+                            </wa-button>
+                        </div>
+                        <span class="setting-group-hint">
+                            Where you reach TwiCC from your devices — used to build links back to
+                            your sessions (e.g. in notifications). Leave empty to omit those links.
+                            <HelpIconButton help-key="external-url" label="About tunnels &amp; remote access" />
+                        </span>
+                    </div>
+                    <wa-divider></wa-divider>
+                    <div class="setting-group">
                         <label class="setting-group-label">Color scheme</label>
                         <wa-select
                             :value.prop="colorScheme"
@@ -1209,7 +1265,7 @@ function onChangelogClose() {
                     <wa-divider></wa-divider>
                     <div class="setting-group">
                         <label class="setting-group-label">Worktree directory template <wa-icon name="cloud" class="synced-icon"></wa-icon><HelpIconButton help-key="worktrees" label="What's a worktree?" /></label>
-                        <div class="worktree-dir-input-row">
+                        <div class="setting-input-apply-row">
                             <wa-input
                                 :value="worktreeDirInput"
                                 @input="onWorktreeDirInputChange"
@@ -1324,7 +1380,7 @@ function onChangelogClose() {
                 </template>
 
                 <!-- Notifications Section -->
-                <NotificationSettings v-if="activeSection === 'notifications'" ref="notificationSettingsRef" />
+                <NotificationSettings v-if="activeSection === 'notifications'" ref="notificationSettingsRef" @go-to-public-base-url="goToPublicBaseUrl" />
 
                 <!-- Sessions Section -->
                 <section v-if="activeSection === 'sessions'" class="settings-section">
@@ -2374,6 +2430,12 @@ wa-popover > wa-divider {
     gap: var(--wa-space-m);
 }
 
+/* Horizontal dividers between groups within a section: drop their top margin
+   (the section's flex `gap` already provides the spacing above). */
+.settings-sections .settings-section wa-divider {
+    margin-top: 0;
+}
+
 .settings-sections .settings-section-title {
     font-size: var(--wa-font-size-s);
     font-weight: var(--wa-font-weight-bold);
@@ -2454,7 +2516,9 @@ wa-popover > wa-divider {
     color: var(--wa-color-text-quiet);
 }
 
-.worktree-dir-input-row {
+/* Row layout for a text setting paired with an Apply button (worktree template,
+   public base URL, …). */
+.setting-input-apply-row {
     display: flex;
     gap: var(--wa-space-2xs);
     align-items: center;

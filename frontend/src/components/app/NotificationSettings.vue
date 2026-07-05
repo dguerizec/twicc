@@ -11,6 +11,13 @@ import { playNotificationSound, getAvailableSoundOptions, NOTIFICATION_SOUNDS } 
 
 const store = useSettingsStore()
 
+const emit = defineEmits(['go-to-public-base-url'])
+
+// The External URL setting (stored as `publicBaseUrl`) lives in the Global
+// section; here we only surface a callout inviting the user to set it when it's
+// missing (so notification links aren't silently omitted).
+const hasPublicBaseUrl = computed(() => !!(store.getPublicBaseUrl || '').trim())
+
 // Sound options for selects
 const soundOptions = getAvailableSoundOptions()
 
@@ -32,7 +39,6 @@ const extraUsageStartBrowser = computed(() => store.isNotifExtraUsageStartBrowse
 // persisted: ``persistExternalRows()`` writes only the non-empty ones to the
 // store. Remote updates (another device) reset the working list.
 const externalRows = ref((store.getExternalNotificationTargets || []).map(t => ({ ...t })))
-const publicBaseUrl = computed(() => store.getPublicBaseUrl || '')
 
 // Transient per-row state (keyed by row index; cleared on list mutations):
 // in-flight tests, last test error, and the URL as currently typed.
@@ -158,10 +164,6 @@ function externalTestIcon(target) {
     if (target.tested === true) return 'check'
     if (target.tested === false) return 'xmark'
     return 'paper-plane'
-}
-
-function onPublicBaseUrlChange(event) {
-    store.setPublicBaseUrl(event.target.value)
 }
 
 // Browser notification permission state
@@ -358,17 +360,12 @@ defineExpose({ sync })
                 the <a href="https://appriseit.com/url-builder/" target="_blank" rel="noopener">URL builder</a>
                 can compose one for your service.
             </p>
-            <wa-input
-                size="small"
-                label="Public base URL"
-                placeholder="https://twicc.example.com"
-                :value.prop="publicBaseUrl"
-                @change="onPublicBaseUrlChange"
-            ></wa-input>
-            <p class="setting-group-hint">
-                Where you reach TwiCC from your devices — used to add a session link
-                in notifications. Leave empty to omit the link.
-            </p>
+            <wa-callout v-if="!hasPublicBaseUrl" variant="neutral" size="small" class="public-base-url-callout">
+                <wa-icon slot="icon" name="link"></wa-icon>
+                No <strong>External URL</strong> is set, so these notifications won't link back
+                to the session.
+                <a href="#" @click.prevent="emit('go-to-public-base-url')">Set it in Global settings</a>.
+            </wa-callout>
             <label class="setting-group-label">Targets</label>
             <div class="apprise-targets">
                 <div v-for="(target, index) in externalRows" :key="index" class="apprise-target">
