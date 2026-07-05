@@ -85,6 +85,24 @@ function install() {
     window.addEventListener('hashchange', scheduleState)
     window.navigation?.addEventListener('currententrychange', scheduleState)
 
+    // User interactions inside the page never reach the host document (the
+    // frame is cross-origin), so the host's click-to-focus rule — interacting
+    // with a pane claims it — can't see them. Report real input events
+    // instead. Deliberately NOT the window focus event: a page can focus
+    // itself with no user gesture (window.focus() on load), which would let a
+    // background pane steal the host's active tab. Throttled so a typing
+    // burst doesn't flood the channel — one claim a second is plenty.
+    let lastFocusPost = 0
+    function reportInteraction() {
+        if (!hostOrigin) return
+        const now = Date.now()
+        if (now - lastFocusPost < 1000) return
+        lastFocusPost = now
+        post(companionMessage('focus'), hostOrigin)
+    }
+    window.addEventListener('pointerdown', reportInteraction, true)
+    window.addEventListener('keydown', reportInteraction, true)
+
     // Distinguish "navigating away" from "companion never present": the host
     // flips to 'waiting' on bye and only declares absence after a post-load
     // grace period with no hello.

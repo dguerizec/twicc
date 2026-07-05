@@ -2382,6 +2382,7 @@ onBeforeUnmount(() => {
                         :active="isActive && isToolTabShown('browser')"
                         :focus-request="panelFocusRequests.browser"
                         :frame-elevated="browserFrameElevated"
+                        @interact="requestPaneFocus('browser')"
                     />
                 </div>
             </Teleport>

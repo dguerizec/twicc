@@ -49,6 +49,11 @@ const props = defineProps({
     frameElevated: { type: Boolean, default: false },
 })
 
+// 'interact': a real user interaction inside the embedded page (companion
+// 'focus' message) — SessionView treats it like a click in the pane body and
+// claims the route for the Browser tab.
+const emit = defineEmits(['interact'])
+
 const store = useDataStore()
 const settingsStore = useSettingsStore()
 const workspacesStore = useWorkspacesStore()
@@ -155,6 +160,12 @@ function onWindowMessage(event) {
             probeResult.value = null // a page just loaded — any diagnosis is stale
             persistUrlDebounced()
         }
+    } else if (data.type === 'focus') {
+        // Real user input inside the embedded page — the cross-origin
+        // equivalent of DockRegion's click-to-focus. A hidden frame can't
+        // receive input (visibility:hidden + pointer-events:none), but guard
+        // on `active` anyway against stale messages mid-teardown.
+        if (props.active) emit('interact')
     } else if (data.type === 'bye') {
         // Document going away (navigation / reload). Undetermined until the
         // next document says hello or the post-load grace period expires.
