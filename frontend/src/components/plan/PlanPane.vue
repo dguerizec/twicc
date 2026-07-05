@@ -15,7 +15,15 @@ const props = defineProps({
     projectId: { type: String, default: null },
     // True while the Plan tab is the shown tab in its region.
     active: { type: Boolean, default: false },
+    // Doc selection from the URL (.../plan/<encoded stored path>), decoded by
+    // SessionView. Bare /plan (null) means "newest document".
+    routeDocPath: { type: String, default: null },
+    // Whether this pane owns the URL (false for a docked, unfocused panel —
+    // then routeDocPath belongs to another tab and must not drive selection).
+    routeOwner: { type: Boolean, default: true },
 })
+
+const emit = defineEmits(['navigate'])
 
 const store = useDataStore()
 const filePaneRef = ref(null)
@@ -34,20 +42,47 @@ const selectedEntry = computed(
     () => entries.value.find((e) => e.path === selectedPath.value) || null,
 )
 
-watch(entries, (list) => {
-    // Default to the newest entry; keep the user's pick while it still exists.
+// Route → selection, gated on active + routeOwner like the Files/Git panels
+// (a cached KeepAlive instance or a docked, unfocused panel must not read a
+// URL that belongs to another session/tab). When the pane drives the URL: a
+// tracked doc path wins (deep links, back/forward); a bare /plan re-asserts
+// the newest entry (so Back from /plan/<doc> visibly resets); a doc path not
+// tracked yet (deep link while the backfill runs) keeps the current selection
+// silently — the watcher re-fires when the entry appears.
+function syncSelection() {
+    const list = entries.value
+    if (props.active && props.routeOwner) {
+        if (props.routeDocPath && list.some((e) => e.path === props.routeDocPath)) {
+            selectedPath.value = props.routeDocPath
+            return
+        }
+        if (!props.routeDocPath) {
+            selectedPath.value = list[0]?.path ?? null
+            return
+        }
+    }
     if (!list.some((e) => e.path === selectedPath.value)) {
         selectedPath.value = list[0]?.path ?? null
     }
-}, { immediate: true })
+}
+watch(
+    [entries, () => props.routeDocPath, () => props.routeOwner, () => props.active],
+    syncSelection,
+    { immediate: true },
+)
 
-watch(() => props.sessionId, () => { selectedPath.value = entries.value[0]?.path ?? null })
+watch(() => props.sessionId, () => { selectedPath.value = null; syncSelection() })
 
 // wa-select treats spaces in values as multi-value separators, and doc paths
 // may contain spaces: option values are URI-encoded, decoded back here.
+// A user pick lands in the URL (like the Files/Git tabs), so precise plan
+// links are bookmarkable; the route change loops back through syncSelection.
 function onSelectChange(event) {
     const value = event.target.value
-    selectedPath.value = value ? decodeURIComponent(value) : null
+    const path = value ? decodeURIComponent(value) : null
+    if (!path || path === selectedPath.value) return
+    selectedPath.value = path
+    emit('navigate', { docPath: path })
 }
 
 // --- Path resolution --------------------------------------------------------

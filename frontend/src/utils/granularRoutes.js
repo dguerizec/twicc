@@ -107,6 +107,12 @@ export function buildGitRouteParams({ rootKey, commitRef, filePath }) {
     })
 }
 
+export function buildPlanRouteParams({ docPath }) {
+    return pickDefined({
+        docPath: docPath ? encodePath(docPath) : undefined,
+    })
+}
+
 export function clearTabRouteParams(tab, params = {}) {
     // Artifacts shares the files route shape (rootKey + filePath); its root is
     // fixed ('artifacts') but it reuses the same FilesPanel routing plumbing.
@@ -130,6 +136,13 @@ export function clearTabRouteParams(tab, params = {}) {
     if (tab === 'terminal') {
         return {
             termIndex: null,
+            ...params,
+        }
+    }
+
+    if (tab === 'plan') {
+        return {
+            docPath: null,
             ...params,
         }
     }

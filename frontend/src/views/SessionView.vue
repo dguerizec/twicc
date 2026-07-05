@@ -38,6 +38,7 @@ import { useCodeCommentsStore } from '../stores/codeComments'
 import {
     buildFilesRouteParams,
     buildGitRouteParams,
+    buildPlanRouteParams,
     clearTabRouteParams,
     buildSessionBaseRouteName,
     buildSubagentRouteName,
@@ -295,6 +296,14 @@ const gitRouteFilePath = computed(() => {
     return decoded === null ? null : decoded
 })
 const terminalRouteTermIndex = computed(() => parseRouteTermIndex(route.params.termIndex))
+// Scoped to this instance's session (like workflowFocusRunId): route.params is
+// global under KeepAlive, and a cached instance must not read another
+// session's doc path.
+const planRouteDocPath = computed(() => {
+    if (route.params.sessionId !== sessionId.value) return null
+    const decoded = decodePath(parseRouteString(route.params.docPath))
+    return decoded === null ? null : decoded
+})
 
 // Session data
 const session = computed(() => store.getSession(sessionId.value))
@@ -559,6 +568,13 @@ function onGitNavigate({ rootKey, commitRef, filePath, replace }) {
     navigateInTab('git', params, replace ? 'replace' : 'push')
 }
 
+function onPlanNavigate({ docPath, replace }) {
+    cancelPaneFocus()
+    const params = buildPlanRouteParams({ docPath })
+    rememberToolTabRoute('plan', params)
+    navigateInTab('plan', params, replace ? 'replace' : 'push')
+}
+
 // No route-ownership gate here: the reactive re-grab that used to loop (applyRouteTermIndex →
 // replaceToTerm when visible-but-not-owner) is now stopped at the source by the panel's
 // `route-owner` prop, so the only navigate events reaching this handler are user/command-driven
@@ -579,7 +595,7 @@ const rememberedToolTabRoutes = {
     artifacts: null,
     git: null,
     terminal: null,
-    // Orchestration, Plan, Tasks and Workflows have no granular sub-route; kept
+    // Orchestration, Tasks and Workflows have no granular sub-route; kept
     // here so the generic tool-tab navigation in switchToTab treats them uniformly.
     orchestration: null,
     plan: null,
@@ -616,6 +632,12 @@ function getCurrentToolTabRouteParams(tabId) {
         })
     }
 
+    if (tabId === 'plan') {
+        return buildPlanRouteParams({
+            docPath: planRouteDocPath.value,
+        })
+    }
+
     return null
 }
 
@@ -636,6 +658,7 @@ watch(
         gitRouteCommitRef,
         gitRouteFilePath,
         terminalRouteTermIndex,
+        planRouteDocPath,
     ],
     ([active, tabId]) => {
         if (!active) return
@@ -2222,6 +2245,9 @@ onBeforeUnmount(() => {
                         :session-id="session.id"
                         :project-id="session.project_id"
                         :active="isActive && isToolTabShown('plan')"
+                        :route-doc-path="planRouteDocPath"
+                        :route-owner="ownsRoute('plan')"
+                        @navigate="onPlanNavigate"
                     />
                 </div>
             </Teleport>
