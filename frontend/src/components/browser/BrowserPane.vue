@@ -29,6 +29,8 @@ import { resolveProjectBrowserUrl } from '../../utils/browserDefaults'
 import { looksLocalUrl, normalizeBrowserUrl } from '../../utils/browserUrl'
 import { debounce } from '../../utils/debounce'
 import PersistentFrame from '../frames/PersistentFrame.vue'
+import ProjectBadge from '../project/ProjectBadge.vue'
+import WorktreeBadge from '../project/WorktreeBadge.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 
 // Stable identity — an inline literal would churn the frame descriptor watch.
@@ -518,9 +520,14 @@ function onSaveSelect(event) {
                     <wa-icon name="bookmark"></wa-icon>
                 </wa-button>
                 <wa-dropdown-item disabled class="save-menu-header">Save current URL as default for…</wa-dropdown-item>
+                <!-- Level markers mirror the badges used everywhere else: the
+                     current project shows as a WorktreeBadge (parent · branch ·
+                     folder) when it is a worktree, else a plain ProjectBadge;
+                     its main repository (worktree case) is a ProjectBadge; each
+                     member workspace keeps the layer-group badge. -->
                 <wa-dropdown-item value="project" :disabled="project?.default_browser_url === currentUrl">
-                    <wa-icon slot="icon" name="folder"></wa-icon>
-                    {{ store.getProjectDisplayName(props.projectId) }}
+                    <WorktreeBadge v-if="mainRepoProject" :project-id="props.projectId" />
+                    <ProjectBadge v-else :project-id="props.projectId" />
                     <span v-if="project?.default_browser_url === currentUrl" class="save-menu-saved">saved</span>
                 </wa-dropdown-item>
                 <wa-dropdown-item
@@ -528,8 +535,7 @@ function onSaveSelect(event) {
                     value="main-repo"
                     :disabled="mainRepoProject.default_browser_url === currentUrl"
                 >
-                    <wa-icon slot="icon" name="folder-tree"></wa-icon>
-                    {{ store.getProjectDisplayName(mainRepoProject.id) }} (main repository)
+                    <ProjectBadge :project-id="mainRepoProject.id" />
                     <span v-if="mainRepoProject.default_browser_url === currentUrl" class="save-menu-saved">saved</span>
                 </wa-dropdown-item>
                 <template v-if="memberWorkspaces.length">
@@ -540,8 +546,10 @@ function onSaveSelect(event) {
                         :value="`ws:${ws.id}`"
                         :disabled="ws.browserUrl === currentUrl"
                     >
-                        <wa-icon slot="icon" name="layer-group" :style="ws.color ? { color: ws.color } : null"></wa-icon>
-                        {{ ws.name }}
+                        <span class="save-menu-ws">
+                            <wa-icon name="layer-group" :style="ws.color ? { color: ws.color } : null"></wa-icon>
+                            {{ ws.name }}
+                        </span>
                         <span v-if="ws.browserUrl === currentUrl" class="save-menu-saved">saved</span>
                     </wa-dropdown-item>
                 </template>
@@ -717,6 +725,15 @@ function onSaveSelect(event) {
     margin-left: var(--wa-space-xs);
     font-size: var(--wa-font-size-2xs);
     color: var(--wa-color-text-quiet);
+}
+
+/* Workspace level marker: layer-group badge + name inline, so it lines up with
+   the color dot the project/worktree badges render at the same start position. */
+.save-menu-ws {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    min-width: 0;
 }
 
 .browser-body {
