@@ -1303,7 +1303,9 @@ async function openMarkdownFileLink(candidates, opts) {
     const target = candidates.length > 1
         ? ((await firstExistingPath(candidates)) ?? candidates[0])
         : candidates[0]
-    openFileInFilesTab(target, opts)
+    // Markdown links are the one caller that opts into the Plan-tab redirect
+    // for tracked plan documents; explicit Files-tab buttons stay literal.
+    openFileInFilesTab(target, { ...opts, preferPlanTab: true })
 }
 
 provide('markdownFileLinks', {

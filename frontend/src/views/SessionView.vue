@@ -198,13 +198,16 @@ provide('sessionActive', readonly(isActive))
 
 /**
  * Reveal a file in the right tab. A path inside the session's artifacts dir
- * opens in the Artifacts tab; everything else opens in the Files tab on the
- * matching root. Provided to descendant components (file links in tool uses,
- * markdown, patch entries, the Git diff "view in files" button).
+ * opens in the Artifacts tab; a markdown link (`preferPlanTab`) targeting a
+ * tracked plan document (Session.plan_paths) opens in the Plan tab's rendered
+ * view; everything else opens in the Files tab on the matching root. Provided
+ * to descendant components (file links in tool uses, markdown, patch entries,
+ * the Git diff "view in files" button — only markdown links opt into the Plan
+ * redirect, the explicit Files-tab buttons keep their literal behavior).
  *
  * @param {string} absolutePath — the absolute filesystem path to reveal
  */
-async function viewFileInFilesTab(absolutePath, { lineNum = null } = {}) {
+async function viewFileInFilesTab(absolutePath, { lineNum = null, preferPlanTab = false } = {}) {
     // Collapse any `.`/`..` segments up front: a caller may hand us a path with
     // literal traversal (e.g. a tool recorded `cwd + src/twicc/../../frontend/x`
     // without normalizing). Such a path is valid and resolves to a real file,
@@ -221,6 +224,17 @@ async function viewFileInFilesTab(absolutePath, { lineNum = null } = {}) {
         await nextTick()
         await artifactsPanelRef.value?.revealFile(absolutePath, { lineNum })
         return
+    }
+
+    // A markdown link to a tracked plan document opens in the Plan tab
+    // instead of Files. Line-targeted links keep going to Files — the plan
+    // tab's rendered preview cannot scroll to a line.
+    if (preferPlanTab && lineNum == null) {
+        const planDocPath = trackedPlanDocPathFor(absolutePath)
+        if (planDocPath) {
+            onPlanNavigate({ docPath: planDocPath })
+            return
+        }
     }
 
     const project = store.getProject(session.value?.project_id)
@@ -244,6 +258,31 @@ async function viewFileInFilesTab(absolutePath, { lineNum = null } = {}) {
 }
 
 provide('viewFileInFilesTab', viewFileInFilesTab)
+
+/**
+ * The stored plan_paths entry path matching an absolute file path, or null.
+ * Relative entries resolve against the project directory and the worktree_of
+ * parent's (same candidates as PlanPane); entries flagged missing on disk are
+ * skipped so their links keep the Files-tab behavior.
+ */
+function trackedPlanDocPathFor(absolutePath) {
+    const docs = session.value?.plan_paths
+    if (!Array.isArray(docs) || docs.length === 0) return null
+    const project = store.getProject(session.value?.project_id)
+    const parent = project?.worktree_of ? store.getProject(project.worktree_of) : null
+    const roots = [project?.directory, parent?.directory]
+        .filter(Boolean)
+        .map((root) => root.replace(/\/+$/, ''))
+    for (const entry of docs) {
+        if (!entry?.path || entry.exists === false) continue
+        if (entry.path.startsWith('/')) {
+            if (entry.path === absolutePath) return entry.path
+        } else if (roots.some((root) => `${root}/${entry.path}` === absolutePath)) {
+            return entry.path
+        }
+    }
+    return null
+}
 
 function insertTextAtCursor(text) {
     sessionItemsListRef.value?.insertTextAtCursor(text)
