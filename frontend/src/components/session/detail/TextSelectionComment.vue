@@ -18,6 +18,8 @@ const props = defineProps({
     autoExpand: { type: Boolean, default: false },
     /** Optional source suffix for the formatted output (e.g. "from terminal"). */
     sourceLabel: { type: String, default: '' },
+    /** What the quoted block is in the formatted output (e.g. "selected area"). */
+    subject: { type: String, default: 'selected text' },
     /** Optional source metadata used to enrich the formatted comment.
      *  Shape: { filePath: string, lineFrom: number, lineTo: number }. */
     metadata: { type: Object, default: null },
@@ -174,7 +176,7 @@ function addToMessage() {
             lineFrom: props.metadata?.lineFrom,
             lineTo: props.metadata?.lineTo,
         },
-        { isSelectedText: true, sourceLabel: props.sourceLabel },
+        { isSelectedText: true, sourceLabel: props.sourceLabel, subject: props.subject },
     )
     insertTextAtCursor(formatted + '\n')
     close()

@@ -329,8 +329,10 @@ function makeFence(text) {
  *   comment ("Comment on selected text:") instead of a file/line comment.
  * @param {string} [options.sourceLabel] - Optional source suffix (e.g. "from terminal").
  *   Only used when isSelectedText is true.
+ * @param {string} [options.subject='selected text'] - What the quoted block is (e.g.
+ *   "selected area" for the browser element picker). Only used when isSelectedText is true.
  */
-export function formatComment(comment, { isSelectedText = false, sourceLabel = '' } = {}) {
+export function formatComment(comment, { isSelectedText = false, sourceLabel = '', subject = 'selected text' } = {}) {
     const fence = makeFence(comment.lineText)
     const hasComment = !!comment.content?.trim()
     const quotedComment = hasComment
@@ -356,8 +358,8 @@ export function formatComment(comment, { isSelectedText = false, sourceLabel = '
             }
         }
         const header = hasComment
-            ? `Comment on selected text${location}${suffix}:`
-            : `Selected text${location}${suffix}:`
+            ? `Comment on ${subject}${location}${suffix}:`
+            : `${subject.charAt(0).toUpperCase()}${subject.slice(1)}${location}${suffix}:`
         const commentBlock = hasComment ? `\n\n${quotedComment}` : ''
         return `\n---\n${header}\n${fence}\n${comment.lineText}\n${fence}${commentBlock}`
     }

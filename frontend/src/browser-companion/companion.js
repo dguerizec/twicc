@@ -2,8 +2,9 @@
 // dev server) via a classic <script> tag served at /_twicc/browser-companion.js.
 // When that page is embedded in TwiCC's Browser pane, the companion bridges
 // the cross-origin gap over postMessage: it reports real navigation (URL
-// changes, history capabilities) and executes the pane's Back / Forward /
-// Reload / Navigate commands against the page's own history.
+// changes, history capabilities), executes the pane's Back / Forward /
+// Reload / Navigate commands against the page's own history, and runs
+// host-toggled in-page modes (select-area element outline).
 //
 // Trust model: the embedder is unknown at load time, so the initial `hello`
 // is payload-free and posted to '*'. The page URL only flows AFTER the host
@@ -67,8 +68,249 @@ function install() {
             window.location.reload()
         } else if (message.action === 'navigate' && typeof message.url === 'string' && /^https?:\/\//i.test(message.url)) {
             window.location.assign(message.url)
+        } else if (message.action === 'select-mode') {
+            setSelectMode(message.enabled === true)
+        } else if (message.action === 'select-nav') {
+            selectNav(message.direction)
+        } else if (message.action === 'select-clear') {
+            selectClear()
+        } else if (message.action === 'select-describe') {
+            postSelectDescribe()
         }
     })
+
+    // ── Select-area mode: a host-toggled element picker. A full-viewport
+    // overlay swallows every pointer interaction — the page must not react at
+    // all while the mode is on — and the element under the pointer gets a
+    // dashed outline. Two states: hovering (red outline follows the pointer)
+    // and locked (a click/tap turned it green; hover is ignored so the user
+    // can travel to the host's toolbar without losing the selection — toolbar
+    // navigation and clear both keep/lift the lock). The outline box is a
+    // separate pointer-events:none node, so hit-testing skips it;
+    // elementsFromPoint sees the page through the overlay by filtering our own
+    // two nodes out.
+    let selectOverlay = null
+    let selectOutline = null
+    let selectLastPoint = null
+    let selectCurrent = null
+    let selectLocked = false
+
+    function isOwnSelectNode(node) {
+        return node === selectOverlay || node === selectOutline
+    }
+
+    // One DOM step from `el`, skipping our own overlay/outline nodes (both are
+    // children of <body>, so a sibling walk there would land on them).
+    function selectStepFrom(el, direction) {
+        if (direction === 'parent') return el.parentElement
+        let node =
+            direction === 'first-child'
+                ? el.firstElementChild
+                : direction === 'prev-sibling'
+                  ? el.previousElementSibling
+                  : direction === 'next-sibling'
+                    ? el.nextElementSibling
+                    : null
+        while (node && isOwnSelectNode(node)) {
+            node = direction === 'prev-sibling' ? node.previousElementSibling : node.nextElementSibling
+        }
+        return node
+    }
+
+    // Where the host's toolbar buttons can go from the current element — sent
+    // on every element change so the buttons enable/disable live.
+    function postSelectState() {
+        if (!hostOrigin) return
+        const el = selectCurrent
+        post(
+            companionMessage('select-state', {
+                hasSelection: !!el,
+                locked: selectLocked,
+                canParent: !!(el && selectStepFrom(el, 'parent')),
+                canFirstChild: !!(el && selectStepFrom(el, 'first-child')),
+                canPrevSibling: !!(el && selectStepFrom(el, 'prev-sibling')),
+                canNextSibling: !!(el && selectStepFrom(el, 'next-sibling')),
+            }),
+            hostOrigin
+        )
+    }
+
+    function drawSelectOutline() {
+        if (!selectOutline) return
+        if (selectCurrent && !selectCurrent.isConnected) {
+            // The page re-rendered under us (SPA) — the selection is gone.
+            setSelectCurrent(null, false)
+            return
+        }
+        if (!selectCurrent) {
+            selectOutline.style.display = 'none'
+            return
+        }
+        const rect = selectCurrent.getBoundingClientRect()
+        selectOutline.style.outlineColor = selectLocked ? '#30a46c' : '#e5484d'
+        selectOutline.style.display = 'block'
+        selectOutline.style.left = `${rect.left}px`
+        selectOutline.style.top = `${rect.top}px`
+        selectOutline.style.width = `${rect.width}px`
+        selectOutline.style.height = `${rect.height}px`
+    }
+
+    function setSelectCurrent(el, locked) {
+        const changed = el !== selectCurrent || locked !== selectLocked
+        selectCurrent = el
+        selectLocked = locked
+        drawSelectOutline()
+        if (changed) postSelectState()
+    }
+
+    function selectNav(direction) {
+        if (!selectOverlay || !selectCurrent) return
+        const next = selectStepFrom(selectCurrent, direction)
+        if (!next) return
+        // An explicit choice locks the selection (green), whatever it started
+        // from, and drops the pointer anchor (the scrollIntoView below would
+        // otherwise immediately re-aim at the stale pointer position).
+        selectLastPoint = null
+        setSelectCurrent(next, true)
+        next.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+
+    function selectClear() {
+        selectLastPoint = null
+        setSelectCurrent(null, false)
+    }
+
+    function highlightAt(x, y) {
+        selectLastPoint = { x, y }
+        const el = document.elementsFromPoint(x, y).find((node) => !isOwnSelectNode(node))
+        setSelectCurrent(el || null, false)
+    }
+
+    // Human/agent-readable description of the current element: a CSS-selector
+    // style chain of ancestors plus the element's opening tag and visible
+    // text. Unlike an indexed XPath, this maps onto what the page's SOURCE
+    // looks like — ids, classes and text are what an agent can grep for.
+    const SELECT_MAX_CLASSES = 4
+    const SELECT_MAX_TEXT = 100
+    const SELECT_MAX_TAG = 300
+
+    // One chain segment: tag#id.classes, with :nth-of-type only when the
+    // segment alone would be ambiguous among same-tag siblings.
+    function selectSegmentFor(node) {
+        const signature = (el) =>
+            `${el.id}|${[...el.classList].slice(0, SELECT_MAX_CLASSES).join('.')}`
+        let segment = node.localName
+        if (node.id) segment += `#${node.id}`
+        const classes = [...node.classList].slice(0, SELECT_MAX_CLASSES)
+        if (classes.length) segment += `.${classes.join('.')}`
+        const sameTag = node.parentElement
+            ? [...node.parentElement.children].filter(
+                  (sib) => !isOwnSelectNode(sib) && sib.localName === node.localName
+              )
+            : []
+        if (sameTag.length > 1 && sameTag.filter((sib) => signature(sib) === signature(node)).length > 1) {
+            segment += `:nth-of-type(${sameTag.indexOf(node) + 1})`
+        }
+        return segment
+    }
+
+    function selectChainFor(el) {
+        const parts = []
+        for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+            parts.unshift(selectSegmentFor(node))
+        }
+        return parts.length ? parts.join(' > ') : el.localName
+    }
+
+    // The element's own opening tag — it carries every attribute (id, classes,
+    // data-*, aria-*) in the exact shape the source declares them. Vue's
+    // scoped-style data-v-* markers are compile-time noise and are dropped.
+    function selectOpeningTagFor(el) {
+        const clone = el.cloneNode(false)
+        for (const name of clone.getAttributeNames()) {
+            if (name.startsWith('data-v-')) clone.removeAttribute(name)
+        }
+        const html = clone.outerHTML
+        const end = html.indexOf('>')
+        const tag = end === -1 ? html : html.slice(0, end + 1)
+        return tag.length > SELECT_MAX_TAG ? `${tag.slice(0, SELECT_MAX_TAG)}…>` : tag
+    }
+
+    function selectTextFor(el) {
+        const text = (el.textContent || '').replace(/\s+/g, ' ').trim()
+        return text.length > SELECT_MAX_TEXT ? `${text.slice(0, SELECT_MAX_TEXT)}…` : text
+    }
+
+    function postSelectDescribe() {
+        if (!hostOrigin || !selectCurrent) return
+        post(
+            companionMessage('select-describe', {
+                chain: selectChainFor(selectCurrent),
+                openingTag: selectOpeningTagFor(selectCurrent),
+                text: selectTextFor(selectCurrent),
+            }),
+            hostOrigin
+        )
+    }
+
+    function onSelectPointerMove(event) {
+        // Hover only drives the outline while nothing is locked.
+        if (selectLocked) return
+        highlightAt(event.clientX, event.clientY)
+    }
+
+    function onSelectPointerDown(event) {
+        // A click/tap locks the element under the point (touch has no hover —
+        // the tap IS the pointing gesture). preventDefault also keeps it from
+        // focusing/activating anything underneath.
+        event.preventDefault()
+        const el = document.elementsFromPoint(event.clientX, event.clientY).find((node) => !isOwnSelectNode(node))
+        if (!el) return
+        selectLastPoint = null
+        setSelectCurrent(el, true)
+    }
+
+    function blockSelectEvent(event) {
+        event.preventDefault()
+    }
+
+    function onSelectScroll() {
+        // The page still scrolls under the overlay (wheel/touch chaining). A
+        // locked selection sticks to its element (redraw its rect); a hover
+        // one re-aims at the last pointer position so the outline tracks the
+        // element now under it.
+        if (!selectLocked && selectLastPoint) highlightAt(selectLastPoint.x, selectLastPoint.y)
+        else drawSelectOutline()
+    }
+
+    function setSelectMode(enabled) {
+        if (enabled === !!selectOverlay) return
+        if (!enabled) {
+            window.removeEventListener('scroll', onSelectScroll, true)
+            selectOverlay.remove()
+            selectOutline.remove()
+            selectOverlay = null
+            selectOutline = null
+            selectLastPoint = null
+            selectCurrent = null
+            selectLocked = false
+            return
+        }
+        selectOverlay = document.createElement('div')
+        selectOverlay.style.cssText = 'position:fixed;inset:0;z-index:2147483646;cursor:crosshair;background:transparent;'
+        selectOverlay.addEventListener('pointermove', onSelectPointerMove)
+        selectOverlay.addEventListener('pointerdown', onSelectPointerDown)
+        selectOverlay.addEventListener('click', blockSelectEvent)
+        selectOverlay.addEventListener('contextmenu', blockSelectEvent)
+        selectOutline = document.createElement('div')
+        selectOutline.style.cssText =
+            'position:fixed;z-index:2147483647;pointer-events:none;display:none;' +
+            'outline:2px dashed #e5484d;outline-offset:-2px;'
+        window.addEventListener('scroll', onSelectScroll, true)
+        const root = document.body || document.documentElement
+        root.appendChild(selectOverlay)
+        root.appendChild(selectOutline)
+    }
 
     // SPA URL changes. The History API has no event for pushState/replaceState
     // — patch them; popstate/hashchange cover traversals everywhere, and the

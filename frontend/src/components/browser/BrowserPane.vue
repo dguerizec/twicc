@@ -31,6 +31,7 @@ import { debounce } from '../../utils/debounce'
 import PersistentFrame from '../frames/PersistentFrame.vue'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import WorktreeBadge from '../project/WorktreeBadge.vue'
+import TextSelectionComment from '../session/detail/TextSelectionComment.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 
 // Stable identity — an inline literal would churn the frame descriptor watch.
@@ -132,6 +133,10 @@ function onWindowMessage(event) {
         hadCompanion = true
         companionCanGoBack.value = null
         companionCanGoForward.value = null
+        // A hello means a fresh document — any select-area overlay died with
+        // the old one, so the host flag must not claim the mode is still on.
+        selectAreaActive.value = false
+        selectState.value = null
         clearHelloGraceTimer()
         // A connected companion is definitive proof the page is reachable and
         // embeddable — drop any banner a slower/raced probe put up.
@@ -160,6 +165,30 @@ function onWindowMessage(event) {
             probeResult.value = null // a page just loaded — any diagnosis is stale
             persistUrlDebounced()
         }
+    } else if (data.type === 'select-state') {
+        // Capabilities of the currently highlighted element (select-area
+        // mode) — drives the select toolbar's navigation buttons. Ignored
+        // when the mode is off (a late message from a just-disabled overlay).
+        if (selectAreaActive.value) {
+            selectState.value = {
+                hasSelection: data.hasSelection === true,
+                locked: data.locked === true,
+                canParent: data.canParent === true,
+                canFirstChild: data.canFirstChild === true,
+                canPrevSibling: data.canPrevSibling === true,
+                canNextSibling: data.canNextSibling === true,
+            }
+        }
+    } else if (data.type === 'select-describe') {
+        // The companion described the highlighted element (opening tag + text
+        // + ancestor chain) — open the comment widget on it.
+        if (selectAreaActive.value && typeof data.chain === 'string') {
+            const lines = []
+            if (typeof data.openingTag === 'string' && data.openingTag) lines.push(`Element: ${data.openingTag}`)
+            if (typeof data.text === 'string' && data.text) lines.push(`Text: "${data.text}"`)
+            lines.push(`Path: ${data.chain}`)
+            openSelectComment(lines.join('\n'))
+        }
     } else if (data.type === 'focus') {
         // Real user input inside the embedded page — the cross-origin
         // equivalent of DockRegion's click-to-focus. A hidden frame can't
@@ -170,6 +199,8 @@ function onWindowMessage(event) {
         // Document going away (navigation / reload). Undetermined until the
         // next document says hello or the post-load grace period expires.
         companionStatus.value = 'waiting'
+        selectAreaActive.value = false
+        selectState.value = null
         // The frozen pre-companion stack becomes reachable the moment we
         // leave 'present' — and this waiting window is exactly when users
         // click Back ("page is taking too long"). Reset it NOW; clearing
@@ -203,6 +234,10 @@ function toggleFullscreen() {
 // before any ancestor Escape handler reacts.
 function onFullscreenKeydown(event) {
     if (event.key === 'Escape') {
+        // An open select-comment widget has priority: this capture-phase
+        // listener would otherwise exit fullscreen on the same keypress the
+        // widget uses to close itself.
+        if (selectCommentPosition.value) return
         event.stopPropagation()
         isFullscreen.value = false
     }
@@ -473,6 +508,60 @@ function onCompanionIconClick() {
     if (companionStatus.value === 'absent') snippetDismissed.value = false
 }
 
+// ── Select-area mode: toggled from the companion menu; the actual picking
+// (interaction-blocking overlay + outline on the hovered/tapped element)
+// happens inside the embedded page, driven by the companion. The flag only
+// mirrors what we asked for — it resets on hello/bye above, since the overlay
+// lives and dies with the page's document. `selectState` is the companion's
+// report on the highlighted element (null until one is highlighted).
+const selectAreaActive = ref(false)
+const selectState = ref(null)
+
+function setSelectArea(enabled) {
+    if (selectAreaActive.value === enabled) return
+    selectAreaActive.value = enabled
+    selectState.value = null
+    // Drop any open comment widget — its v-if also gates on selectAreaActive,
+    // but resetting avoids a stale one flashing back on the next mode entry.
+    selectCommentPosition.value = null
+    sendToCompanion(hostMessage('command', { action: 'select-mode', enabled }))
+}
+
+function onCompanionMenuSelect(event) {
+    if (event.detail?.item?.value !== 'select-area') return
+    setSelectArea(!selectAreaActive.value)
+}
+
+function selectNav(direction) {
+    sendToCompanion(hostMessage('command', { action: 'select-nav', direction }))
+}
+
+function selectClear() {
+    sendToCompanion(hostMessage('command', { action: 'select-clear' }))
+}
+
+function selectComment() {
+    sendToCompanion(hostMessage('command', { action: 'select-describe' }))
+}
+
+// ── Select-area comment widget: reuses the text-selection comment window,
+// quoting the companion's element description instead of a DOM selection.
+// Initial position: horizontally centered, top edge right below the select
+// toolbar — the user can drag it anywhere afterwards, as usual.
+const selectToolbarRef = ref(null)
+const selectCommentText = ref('')
+const selectCommentPosition = ref(null)
+// Rendered into the formatted message header ("Comment on selected text …:")
+// so the agent knows which page the element lives on.
+const selectCommentSourceLabel = computed(() => `from the browser page at ${currentUrl.value}`)
+
+function openSelectComment(description) {
+    const rect = selectToolbarRef.value?.getBoundingClientRect()
+    if (!rect) return
+    selectCommentText.value = description
+    selectCommentPosition.value = { top: rect.bottom, left: rect.left + rect.width / 2, above: false }
+}
+
 // ── Save-URL menu -------------------------------------------------------------
 const project = computed(() => store.getProject(props.projectId))
 const mainRepoProject = computed(() =>
@@ -629,6 +718,7 @@ function onSaveSelect(event) {
                     v-if="companionStatus === 'present'"
                     placement="bottom-end"
                     @click.stop
+                    @wa-select.stop="onCompanionMenuSelect"
                     @wa-show.stop
                     @wa-hide.stop
                     @wa-after-show.stop
@@ -644,7 +734,10 @@ function onSaveSelect(event) {
                     >
                         <wa-icon name="plug"></wa-icon>
                     </wa-button>
-                    <wa-dropdown-item>Dummy entry</wa-dropdown-item>
+                    <wa-dropdown-item value="select-area">
+                        <wa-icon slot="icon" name="arrow-pointer"></wa-icon>
+                        {{ selectAreaActive ? 'Stop selecting' : 'Select area' }}
+                    </wa-dropdown-item>
                 </wa-dropdown>
                 <wa-button
                     v-else
@@ -669,6 +762,58 @@ function onSaveSelect(event) {
                 >{{ companionTooltip }}</AppTooltip>
             </div>
         </div>
+
+        <!-- Select-area toolbar: shown while the picking mode is on. The
+             navigation buttons walk the page's DOM from the highlighted
+             element — every step is executed by the companion in the page. -->
+        <div v-if="selectAreaActive" ref="selectToolbarRef" class="select-toolbar">
+            <span class="select-toolbar-label">Select area</span>
+            <wa-button :id="`browser-select-clear-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.locked" @click="selectClear">
+                <wa-icon name="ban"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="`browser-select-clear-${instanceId}`">Clear the selection</AppTooltip>
+            <wa-button :id="`browser-select-parent-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.canParent" @click="selectNav('parent')">
+                <wa-icon name="arrow-up"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="`browser-select-parent-${instanceId}`">Select the parent</AppTooltip>
+            <wa-button :id="`browser-select-child-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.canFirstChild" @click="selectNav('first-child')">
+                <wa-icon name="arrow-down"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="`browser-select-child-${instanceId}`">Select the first child</AppTooltip>
+            <wa-button :id="`browser-select-prev-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.canPrevSibling" @click="selectNav('prev-sibling')">
+                <wa-icon name="arrow-left"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="`browser-select-prev-${instanceId}`">Select the previous sibling</AppTooltip>
+            <wa-button :id="`browser-select-next-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.canNextSibling" @click="selectNav('next-sibling')">
+                <wa-icon name="arrow-right"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="`browser-select-next-${instanceId}`">Select the next sibling</AppTooltip>
+            <wa-button :id="`browser-select-comment-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.hasSelection" @click="selectComment">
+                <wa-icon name="comment" variant="regular"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="`browser-select-comment-${instanceId}`">Comment on the selection</AppTooltip>
+            <wa-button :id="`browser-select-close-${instanceId}`" appearance="plain" size="small" class="browser-btn select-toolbar-close" @click="setSelectArea(false)">
+                <wa-icon name="xmark"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="`browser-select-close-${instanceId}`">Exit select mode</AppTooltip>
+        </div>
+
+        <!-- Select-area comment widget (teleported to body like every other
+             consumer — avoids overflow clipping and sits above fullscreen).
+             No source selection to clear: the "quote" is the companion's
+             element description. Hidden with the mode (v-if on both). -->
+        <Teleport to="body">
+            <TextSelectionComment
+                v-if="selectAreaActive && selectCommentPosition"
+                :selected-text="selectCommentText"
+                :position="selectCommentPosition"
+                :source-label="selectCommentSourceLabel"
+                subject="selected area"
+                auto-expand
+                :clear-source-selection="() => {}"
+                @close="selectCommentPosition = null"
+            />
+        </Teleport>
 
         <wa-callout v-if="saveError" variant="danger" size="small" class="browser-banner">
             <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
@@ -807,6 +952,26 @@ function onSaveSelect(event) {
 
 .companion-status.present wa-icon {
     color: var(--wa-color-success-fill-loud);
+}
+
+.select-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    padding: var(--wa-space-2xs);
+    border-bottom: 1px solid var(--wa-color-border-quiet);
+    flex-shrink: 0;
+}
+
+.select-toolbar-label {
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-text-quiet);
+    padding-inline: var(--wa-space-2xs);
+}
+
+/* Exit button pinned to the far right, away from the selection controls. */
+.select-toolbar-close {
+    margin-left: auto;
 }
 
 .browser-banner {
