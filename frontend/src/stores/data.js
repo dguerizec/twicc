@@ -4244,6 +4244,18 @@ export const useDataStore = defineStore('data', {
                 if (session?.archived && projectId && !this.processStates[sessionId].stopping) {
                     this.setSessionArchived(projectId, sessionId, false)
                 }
+
+                // A turn that ends without a clean stream end (soft interrupt,
+                // turn error) strands its in-flight blocks: the SDK cuts the
+                // stream mid-block, so neither stream_block_stop (the thinking
+                // spinner keeps spinning) nor stream_block_end (uuid stays
+                // null, so no real item can ever retire the block) will
+                // arrive. Drop those orphans when the session leaves
+                // assistant_turn. The recompute below always fires for this
+                // transition, repainting without the synthetic block.
+                if (wasAssistantTurn && state !== PROCESS_STATE.ASSISTANT_TURN) {
+                    this._dropOrphanedStreamingBlocks(sessionId)
+                }
             }
 
             // Recompute visual items when isAssistantTurn or isStarting changes
@@ -4681,6 +4693,59 @@ export const useDataStore = defineStore('data', {
                 streaming.blocks = remaining
             }
             this.recomputeVisualItems(sessionId)
+        },
+
+        /**
+         * Drop streaming blocks that never got their ``stream_block_end``
+         * (``uuid`` still null) — orphans of a turn cut mid-stream (soft
+         * interrupt, turn error). Nothing will ever stop or retire them.
+         *
+         * Blocks WITH a uuid are kept: stream events are ordered before the
+         * process_state broadcast on the WS, so at turn end a properly ended
+         * block already has its uuid and is awaiting normal retirement by
+         * the real item — dropping it would flash the content away on every
+         * turn end. (``clearEndedStreamingBlocks`` above handles the inverse
+         * selection, in a REST-reload context where retirement is moot.)
+         *
+         * Called from ``setProcessState`` when a session leaves
+         * assistant_turn; the caller's recompute repaints the visual items.
+         */
+        _dropOrphanedStreamingBlocks(sessionId) {
+            const streaming = this.localState.streamingBlocks[sessionId]
+            if (!streaming) return
+
+            const { baseLineNum } = SYNTHETIC_ITEM.STREAMING_BLOCK
+            const expanded = this.localState.sessionExpandedGroups[sessionId]
+            const remaining = []
+            for (const block of streaming.blocks) {
+                if (block.uuid === null) {
+                    clearBlockInactivityTimer(block)
+                    flushBuffer(sessionId, block.blockIndex)
+                    // Same thinking-block housekeeping as
+                    // clearEndedStreamingBlocks: close the streaming detail
+                    // key and drop the expandedGroups entry, so a stale
+                    // ``true`` doesn't auto-open the next block landing at
+                    // the same synthetic lineNum.
+                    if (block.blockType === 'thinking') {
+                        const streamingLineNum = baseLineNum - block.blockIndex
+                        this.setDetailOpen(sessionId, `line:${streamingLineNum}:0`, false)
+                        if (expanded && expanded.length > 0) {
+                            const idx = expanded.indexOf(streamingLineNum)
+                            if (idx !== -1) expanded.splice(idx, 1)
+                        }
+                    }
+                } else {
+                    remaining.push(block)
+                }
+            }
+            if (remaining.length === streaming.blocks.length) return
+
+            if (remaining.length === 0) {
+                destroySessionBuffers(sessionId)
+                delete this.localState.streamingBlocks[sessionId]
+            } else {
+                streaming.blocks = remaining
+            }
         },
 
         // Session rename action
