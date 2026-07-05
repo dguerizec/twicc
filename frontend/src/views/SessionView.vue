@@ -36,6 +36,7 @@ import TabBar from '../components/ui/TabBar.vue'
 import ProcessIndicator from '../components/ui/ProcessIndicator.vue'
 import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
 import { useCodeCommentsStore } from '../stores/codeComments'
+import { useFramePoolStore } from '../stores/framePool'
 import {
     buildFilesRouteParams,
     buildGitRouteParams,
@@ -776,6 +777,26 @@ const layout = useSessionLayout({
 })
 
 const LAYOUT_TOOL_IDS = TOOL_TABS.map((t) => t.id)
+
+// ── Persistent frames: keep pooled iframes (Browser pane, artifact/plan HTML
+// previews) aligned with their placeholders across layout changes that move a
+// pane WITHOUT resizing it (dock re-assignment, overlay open/close, maximize) —
+// ResizeObserver is blind to position-only moves, so bump the geometry epoch
+// once the DOM settles and let each frame re-measure.
+const framePool = useFramePoolStore()
+watch(
+    [() => layout.render.value, () => layout.openOverlayEdge.value, () => layout.maximizedRegion.value],
+    () => nextTick(() => framePool.bumpGeometry()),
+    { flush: 'post' }
+)
+// A tool pane whose frame is currently shown inside the docking overlay must
+// raise its frame above the overlay panel (its own z-index can't — DockRegion
+// isolates the stacking context). FilePane is rendered by the Files and
+// Artifacts panels AND by PlanPane in render-only mode.
+const browserFrameElevated = computed(() => layout.targetKeyForTab('browser') === 'overlay')
+const filesFrameElevated = computed(() => layout.targetKeyForTab('files') === 'overlay')
+const artifactsFrameElevated = computed(() => layout.targetKeyForTab('artifacts') === 'overlay')
+const planFrameElevated = computed(() => layout.targetKeyForTab('plan') === 'overlay')
 
 // Mobile fallback: below mobileMaxW the resolver folds everything into a plain tab strip and the
 // whole docking system is skipped (no docks possible). Hide the per-tab placement arrows there —
@@ -2243,6 +2264,7 @@ onBeforeUnmount(() => {
                         :active="isActive && isToolTabShown('files')"
                         :focus-request="panelFocusRequests.files"
                         :is-draft="session?.draft === true"
+                        :frame-elevated="filesFrameElevated"
                         @navigate="onFilesNavigate"
                     />
                 </div>
@@ -2300,6 +2322,7 @@ onBeforeUnmount(() => {
                         :active="isActive && isToolTabShown('plan')"
                         :route-doc-path="planRouteDocPath"
                         :route-owner="ownsRoute('plan')"
+                        :frame-elevated="planFrameElevated"
                         @navigate="onPlanNavigate"
                     />
                 </div>
@@ -2323,6 +2346,7 @@ onBeforeUnmount(() => {
                         :route-owner="ownsRoute('artifacts')"
                         :active="isActive && isToolTabShown('artifacts')"
                         :focus-request="panelFocusRequests.artifacts"
+                        :frame-elevated="artifactsFrameElevated"
                         @navigate="onArtifactsNavigate"
                     />
                 </div>
@@ -2357,6 +2381,7 @@ onBeforeUnmount(() => {
                         :project-id="session?.project_id"
                         :active="isActive && isToolTabShown('browser')"
                         :focus-request="panelFocusRequests.browser"
+                        :frame-elevated="browserFrameElevated"
                     />
                 </div>
             </Teleport>

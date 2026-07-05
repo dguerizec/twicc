@@ -14,8 +14,12 @@ import DiffEditor from '../editor/DiffEditor.vue'
 import TextSelectionComment from '../session/detail/TextSelectionComment.vue'
 import ArtifactBookmarkButton from '../artifacts/ArtifactBookmarkButton.vue'
 import ArtifactBrokerPrompt from '../artifacts/ArtifactBrokerPrompt.vue'
+import PersistentFrame from '../frames/PersistentFrame.vue'
 import { useDataStore } from '../../stores/data'
 import { useTextSelectionComment } from '../../composables/useTextSelectionComment'
+
+// Stable identity — an inline literal would churn the frame descriptor watch.
+const HTML_PREVIEW_FRAME_ATTRS = { sandbox: 'allow-scripts allow-same-origin allow-forms', title: 'HTML preview' }
 
 const props = defineProps({
     projectId: String,
@@ -78,9 +82,19 @@ const props = defineProps({
         type: String,
         default: null,
     },
+    // True while this pane's HTML preview frame is shown inside the docking
+    // overlay — raises the pooled iframe above the overlay panel.
+    frameElevated: {
+        type: Boolean,
+        default: false,
+    },
 })
 
 const emit = defineEmits(['revert'])
+
+// Stable identity for this pane's pooled HTML-preview frame (two cached panes
+// must not collide).
+const instanceId = useId()
 
 const filePathLabelId = useId()
 const prevChangeButtonId = useId()
@@ -297,7 +311,18 @@ const artifactBookmark = computed(() =>
 // behind the allowlist + a consent prompt, then sent to the server proxy. The
 // mount/prompt wiring lives in the shared `useArtifactBroker` composable so the
 // dedicated artifact page behaves identically (phase 5, design §9).
-const previewIframeRef = ref(null)
+//
+// The HTML preview iframe is rendered through PersistentFrame (frames/), so it
+// lives in the app-level FrameHost and survives KeepAlive session switches and
+// dock moves instead of reloading. previewIframeRef resolves to that live
+// element for the broker (which re-binds its own load listener).
+const persistentFrameRef = ref(null)
+const previewIframeRef = computed(() => persistentFrameRef.value?.frameEl ?? null)
+// The over-iframe overlay layer (in the host cell) to Teleport this pane's
+// preview chrome into — only while the HTML preview owns a pooled frame.
+const frameOverlayEl = computed(() =>
+    isHtmlPreviewActive.value ? (persistentFrameRef.value?.overlayEl ?? null) : null
+)
 
 // Persist "Forever" onto the bookmark's allowlist via the REST endpoint.
 async function persistBrokerAllow(url, kind) {
@@ -556,14 +581,16 @@ const showOverlay = computed(() => {
 // --- Full-window preview ("expand") ----------------------------------------
 // Any active preview can be blown up to a full-window overlay. It expands IN
 // PLACE (a position:fixed class on the wrapper) and is never moved in the DOM:
-// relocating an <iframe> reloads it, so a teleport would wipe a running HTML
-// page, the PDF scroll position, audio/video playback, etc. Staying put keeps
-// the same nodes, so all of that survives untouched. To let the fixed overlay
-// reach beyond the content pane (whose .main-content establishes a containing
-// block via container-type and sits under the split divider), we ask the host
-// (ProjectView) to drop that containment and lift the pane while expanded — see
-// expandPreviewHost. Available for every preview type, including render-only
-// mode (the Artifacts view, no header toolbar), via a floating toggle.
+// relocating an <iframe> reloads it, so a teleport would wipe the PDF scroll
+// position, audio/video playback, etc. Staying put keeps the same nodes, so all
+// of that survives untouched. (The HTML preview iframe now lives in the
+// app-level FrameHost via PersistentFrame; while fullscreen its `fullscreen`
+// tier makes the host position it over the expanded wrapper's box.) To let the
+// fixed overlay reach beyond the content pane (whose .main-content establishes a
+// containing block via container-type and sits under the split divider), we ask
+// the host (ProjectView) to drop that containment and lift the pane while
+// expanded — see expandPreviewHost. Available for every preview type, including
+// render-only mode (the Artifacts view, no header toolbar), via a floating toggle.
 const isPreviewFullscreen = ref(false)
 const previewFullscreenButtonId = `preview-fullscreen-${useId()}`
 const previewOpenTabButtonId = `preview-open-tab-${useId()}`
@@ -1011,7 +1038,7 @@ const isLoading = computed(() => loading.value || switching.value)
 // Expose dirty state, reload, scrollToLine, and loading state for parent components.
 // reloadHtmlPreview + isHtmlPreviewActive let the Artifacts tab live-reload a
 // rendered HTML page on disk changes.
-defineExpose({ isDirty, isLoading, reload, scrollToLine, reloadHtmlPreview, isHtmlPreviewActive, focusContent })
+defineExpose({ isDirty, isLoading, reload, scrollToLine, reloadHtmlPreview, isHtmlPreviewActive, focusContent, frameOverlayEl })
 
 function formatSize(bytes) {
     if (bytes < 1024) return `${bytes} B`
@@ -1265,14 +1292,17 @@ function goToNextDiff() {
         <!-- Content area: editor is always mounted once, overlays sit on top -->
         <div ref="editorAreaRef" class="editor-area">
             <!-- Preview overlays. To go full-window the wrapper expands IN PLACE
-                 (position:fixed) — it is never teleported, because moving an <iframe>
-                 in the DOM reloads it and we must keep running HTML pages, PDF scroll,
-                 audio/video playback and image/Mermaid pan-zoom intact. ProjectView
-                 drops .main-content's container-type and lifts its z-index while a
-                 preview is expanded (via the injected setter) so the fixed overlay
-                 covers the whole window, sidebar included. The floating toggle is
-                 pinned inside the wrapper, reachable in both states and in render-only
-                 mode (which has no header toolbar). -->
+                 (position:fixed) — it is never teleported, because moving a media
+                 element (PDF, audio, video, image/Mermaid pan-zoom) in the DOM
+                 reloads/resets it. The HTML preview iframe is the exception: it
+                 lives in the app-level FrameHost (via PersistentFrame) precisely
+                 so it survives detaches/moves, and its `fullscreen` tier tracks
+                 this expanded box. ProjectView drops .main-content's container-type
+                 and lifts its z-index while a preview is expanded (via the injected
+                 setter) so the fixed overlay covers the whole window, sidebar
+                 included. The floating toggle is pinned inside the wrapper,
+                 reachable in both states and in render-only mode (which has no
+                 header toolbar). -->
             <div
                 v-if="hasActivePreview"
                 ref="previewWrapRef"
@@ -1297,22 +1327,32 @@ function goToNextDiff() {
                     />
                 </div>
 
-                <!-- HTML preview (when toggled on for .html files). The iframe loads
-                     the file from the raw endpoint so the page's relative CSS/JS/asset
-                     references resolve to sibling raw URLs. Sandboxed: scripts run but
-                     top-level navigation, popups and modals are not allowed. -->
-                <iframe
+                <!-- HTML preview (when toggled on for .html files). Rendered
+                     through PersistentFrame so the iframe lives in the app-level
+                     FrameHost — session switches (KeepAlive) and dock moves no
+                     longer reload it. It loads the file from the raw endpoint so
+                     the page's relative CSS/JS/asset references resolve to
+                     sibling raw URLs. Sandboxed: scripts run but top-level
+                     navigation, popups and modals are not allowed. -->
+                <PersistentFrame
                     v-if="showHtmlPreview && isHtmlFile && htmlPreviewSrc && !diffMode"
-                    ref="previewIframeRef"
-                    :key="filePath"
+                    ref="persistentFrameRef"
+                    :frame-id="`artifact-html:${instanceId}`"
                     :src="htmlPreviewSrc"
+                    :remount-key="filePath"
+                    :attrs="HTML_PREVIEW_FRAME_ATTRS"
+                    :elevated="props.frameElevated"
+                    :fullscreen="isPreviewFullscreen"
                     class="html-preview"
-                    sandbox="allow-scripts allow-same-origin allow-forms"
-                    title="HTML preview"
-                ></iframe>
+                />
 
-                <!-- Network-broker consent prompt for the preview iframe (§9). -->
-                <ArtifactBrokerPrompt :prompt="brokerPrompt" @decision="onBrokerDecision" />
+                <!-- Network-broker consent prompt for the preview iframe (§9).
+                     Teleported over the pooled HTML frame when one exists (its
+                     own z-index can't beat the FrameHost layer); renders in
+                     place otherwise. It's a wa-dialog (top-layer) either way. -->
+                <Teleport :to="frameOverlayEl" :disabled="!frameOverlayEl">
+                    <ArtifactBrokerPrompt :prompt="brokerPrompt" @decision="onBrokerDecision" />
+                </Teleport>
 
                 <!-- Mermaid preview (when toggled on for .mmd files) — rendered to a
                      pan/zoomable SVG, same in-panel interaction as a rendered image. -->
@@ -1343,7 +1383,11 @@ function goToNextDiff() {
 
                 <!-- Floating actions, top-right of the preview: open the page in a new
                      tab (HTML only — there it runs as a real, unsandboxed page) and the
-                     expand / compress toggle (all preview types). -->
+                     expand / compress toggle (all preview types). Teleported over the
+                     pooled HTML frame when active (its z-index can't beat the FrameHost
+                     layer); for every other preview type frameOverlayEl is null so it
+                     renders in place, above the in-pane preview, as before. -->
+                <Teleport :to="frameOverlayEl" :disabled="!frameOverlayEl">
                 <div class="preview-actions">
                     <!-- A real link (wa-button renders an <a> when given href), so
                          middle-click / ctrl-click / "copy link" / "open in new tab"
@@ -1377,6 +1421,7 @@ function goToNextDiff() {
                         {{ isPreviewFullscreen ? 'Exit full screen' : 'Full screen' }}
                     </AppTooltip>
                 </div>
+                </Teleport>
             </div>
 
             <!-- CodeMirror diff editor (diff mode) -->
@@ -1570,8 +1615,11 @@ function goToNextDiff() {
     inset: 0;
 }
 
-/* Full-window: teleported to <body>, so fixed/inset cover the whole viewport
-   above the app chrome; the opaque background fills around letterboxed media. */
+/* Full-window: the wrapper expands IN PLACE via position:fixed (it is never
+   moved in the DOM — that would reload its media); fixed/inset cover the whole
+   viewport above the app chrome, ProjectView dropping .main-content's
+   containment while expanded. The opaque background fills around letterboxed
+   media. */
 .file-pane-preview--fullscreen {
     position: fixed;
     inset: 0;
@@ -1589,13 +1637,21 @@ function goToNextDiff() {
     z-index: 2;
     display: flex;
     gap: var(--wa-space-2xs);
+    /* Re-enable inside the inert frame-overlay layer when teleported over the
+       pooled HTML frame (the layer is pointer-events:none by contract; no
+       generic `> *` re-enable there, to avoid a specificity tie). No-op when
+       rendered in place over a non-pooled preview. */
+    pointer-events: auto;
 }
 .preview-action-btn {
     opacity: 0.6;
     transition: opacity 0.15s ease;
 }
 .preview-action-btn:hover,
-.file-pane-preview:hover .preview-action-btn {
+.file-pane-preview:hover .preview-action-btn,
+/* When teleported into the pooled HTML frame's overlay layer, the hover
+   target is that layer, not .file-pane-preview. */
+.frame-overlay-layer:hover .preview-action-btn {
     opacity: 1;
 }
 
@@ -1622,15 +1678,13 @@ function goToNextDiff() {
     margin: auto;
 }
 
+/* Placeholder sizing only — the pooled iframe (in FrameHost) carries the
+   border/background; PersistentFrame positions it over this box. */
 .html-preview {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
-    border: none;
-    /* Rendered pages assume an opaque page background; force white so
-       transparent/unstyled HTML stays readable in dark mode. */
-    background: white;
 }
 
 .pdf-preview {

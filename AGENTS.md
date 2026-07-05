@@ -141,6 +141,10 @@ Draft sessions/messages/media persisted to IndexedDB (`frontend/src/utils/draftS
 
 Large item lists use a custom scroller (`useVirtualScroll.js`, `VirtualScroller.vue`): raw items → `computeVisualItems()` (display mode, group expansion) → rendered. Visual items are stabilized across recomputes — each new item is compared by `lineNum` to the cached one; identical → old reference reused, so Vue skips re-render even though `computeVisualItems` makes new objects.
 
+### Persistent frames (iframes)
+
+An `<iframe>` reloads whenever its DOM node is detached or re-parented — which is what KeepAlive (session switch) and Teleport (dock moves) do to panes. Embedded pages that must survive (Browser pane, artifact HTML preview) therefore render through `PersistentFrame` (`frontend/src/components/frames/`): the pane keeps a placeholder; the real iframe lives in `FrameHost` (mounted once in ProjectView), absolutely positioned over the placeholder's rect (`stores/framePool.js`). Never `<Teleport>` an iframe and never reorder `FrameHost`'s registry — both move the node and reload it. Over-iframe chrome goes through the frame's overlay layer (`overlayEl` + `<Teleport :disabled>`), not pane-local z-index (capped by `DockRegion`'s `isolation: isolate`).
+
 ### Session item content access — IMPORTANT
 
 Never access `item.content` (raw JSON string) directly. Use `frontend/src/utils/parsedContent.js`:

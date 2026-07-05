@@ -14,6 +14,11 @@
 //   the address bar / Back / Forward / Home only; links followed inside the
 //   page are invisible and Refresh re-creates the iframe on the last recorded
 //   URL. Deliberate, documented limits — see the info tooltip.
+//
+// The iframe itself is rendered through PersistentFrame (frames/), so it lives
+// in the app-level FrameHost and is NOT reloaded by session switches (KeepAlive)
+// or dock moves — only an explicit remount (frameKey bump on hard navigation /
+// refresh in fallback mode) re-creates it.
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { hostMessage, isCompanionMessage } from '../../browser-companion/protocol'
 import { useDataStore } from '../../stores/data'
@@ -23,7 +28,11 @@ import { apiFetch } from '../../utils/api'
 import { resolveProjectBrowserUrl } from '../../utils/browserDefaults'
 import { looksLocalUrl, normalizeBrowserUrl } from '../../utils/browserUrl'
 import { debounce } from '../../utils/debounce'
+import PersistentFrame from '../frames/PersistentFrame.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+
+// Stable identity — an inline literal would churn the frame descriptor watch.
+const BROWSER_FRAME_ATTRS = { allow: 'clipboard-read; clipboard-write; fullscreen', title: 'Browser' }
 
 const props = defineProps({
     sessionId: { type: String, default: null },
@@ -33,6 +42,9 @@ const props = defineProps({
     active: { type: Boolean, default: false },
     // Bumped by SessionView on explicit tab activation → focus the address bar.
     focusRequest: { type: Number, default: 0 },
+    // True while this pane's frame is shown inside the docking overlay — raises
+    // the pooled iframe above the overlay panel.
+    frameElevated: { type: Boolean, default: false },
 })
 
 const store = useDataStore()
@@ -65,7 +77,11 @@ const historyIndex = ref(-1)
 const frameKey = ref(0)          // bump = recreate the iframe (fallback navigate / refresh)
 const loading = ref(false)
 const everActivated = ref(false)
-const frameEl = ref(null)
+// The PersistentFrame component; frameEl resolves to the live <iframe> element
+// it manages (in the pool, or inline in fallback contexts). Companion messaging
+// reads frameEl.value.contentWindow through it.
+const persistentFrameRef = ref(null)
+const frameEl = computed(() => persistentFrameRef.value?.frameEl ?? null)
 const addressFocused = ref(false)
 
 // ── Companion channel. The embedded page may include the TwiCC companion
@@ -597,16 +613,17 @@ function onSaveSelect(event) {
         </wa-callout>
 
         <div class="browser-body">
-            <iframe
+            <PersistentFrame
                 v-if="everActivated && currentUrl && !mixedContentBlocked"
-                ref="frameEl"
-                :key="frameKey"
+                ref="persistentFrameRef"
+                :frame-id="`browser:${instanceId}`"
                 :src="frameSrc"
+                :remount-key="frameKey"
+                :attrs="BROWSER_FRAME_ATTRS"
+                :elevated="props.frameElevated"
                 class="browser-frame"
-                allow="clipboard-read; clipboard-write; fullscreen"
-                title="Browser"
                 @load="onFrameLoad"
-            ></iframe>
+            />
             <div v-else-if="!currentUrl" class="browser-empty">
                 <wa-icon name="globe" class="browser-empty-icon"></wa-icon>
                 <p>Enter a URL above to preview your project — e.g. your dev server.</p>
@@ -708,14 +725,12 @@ function onSaveSelect(event) {
     display: flex;
 }
 
-/* White canvas: most pages assume a light default background, and a
-   transparent iframe over TwiCC's dark theme renders them unreadable. */
+/* Placeholder sizing only — the pooled iframe (in FrameHost) carries the
+   border/background; PersistentFrame positions it over this box. */
 .browser-frame {
     flex: 1;
     width: 100%;
     height: 100%;
-    border: none;
-    background: #fff;
 }
 
 .browser-empty {

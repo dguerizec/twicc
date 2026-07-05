@@ -10,6 +10,7 @@ import { computed, ref, onBeforeUnmount } from 'vue'
 import DockRegion from './DockRegion.vue'
 import DockGutter from './DockGutter.vue'
 import LayoutOverlay from './LayoutOverlay.vue'
+import { useFramePoolStore } from '../../../stores/framePool'
 
 const props = defineProps({
     layout: { type: Object, required: true },       // the useSessionLayout() return
@@ -136,6 +137,7 @@ function splitterStyle(s) {
         : { left: `${s.x}px`, top: `${s.y}px`, width: `${s.w}px` }
 }
 
+const framePool = useFramePoolStore()
 let drag = null
 function onSplitterMove(event) {
     if (!drag || !sessionLayoutEl.value) return
@@ -145,12 +147,18 @@ function onSplitterMove(event) {
     props.layout.setResizeFraction(drag.configKey, frac)
 }
 function endDrag() {
+    // Guard the pool release: endDrag also runs from onBeforeUnmount even when
+    // no drag started (and again after one ends). An unguarded end would
+    // decrement some OTHER live drag's depth. Neutralize pooled-iframe
+    // pointer-events only for the duration of a real drag.
+    const wasDragging = drag !== null
     drag = null
     draggingId.value = null
     window.removeEventListener('pointermove', onSplitterMove)
     window.removeEventListener('pointerup', endDrag)
     document.body.style.userSelect = ''
     document.body.style.cursor = ''
+    if (wasDragging) framePool.endDividerDrag()
 }
 function onSplitterDown(event, s) {
     event.preventDefault()
@@ -160,6 +168,7 @@ function onSplitterDown(event, s) {
     else if (s.configKey === 'rightColFrac') props.layout.setActiveResize('right')
     drag = { axis: s.axis, origin: s.axis === 'h' ? s.originY : s.originX, from: s.from || 'start', extent: s.extent, configKey: s.configKey }
     draggingId.value = s.id
+    framePool.beginDividerDrag()
     window.addEventListener('pointermove', onSplitterMove)
     window.addEventListener('pointerup', endDrag)
     document.body.style.userSelect = 'none'

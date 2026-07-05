@@ -19,6 +19,7 @@ import { useCodeCommentsStore, buildCommentedPathsSet } from '../../stores/codeC
 import { usePanZoom, useSyncedPanZoom } from '../../composables/usePanZoom'
 import { usePanelContentFocus } from '../../composables/usePanelContentFocus'
 import { useDataStore } from '../../stores/data'
+import { useSplitDividerDragFlag } from '../../composables/useSplitDividerDragFlag'
 import { PROCESS_STATE } from '../../constants'
 import { deriveGitRoots, getWorktreeParent } from '../../utils/projectRoots'
 
@@ -1309,6 +1310,11 @@ onUnmounted(() => {
 const TREE_DEFAULT_WIDTH = 250
 const treePanelWidth = ref(TREE_DEFAULT_WIDTH)
 const splitPanelRef = ref(null)
+// Neutralize pooled-iframe pointer-events while this split's divider is dragged.
+// Pooled frames are absolutely positioned over the whole content area, so a
+// frame from another pane (e.g. a Browser tab docked beside Git) can sit under
+// this divider's path and would otherwise capture the drag.
+useSplitDividerDragFlag(splitPanelRef)
 
 // Hide the split panel during KeepAlive transitions to prevent the visual
 // glitch where wa-split-panel briefly renders at position 0 before Vue

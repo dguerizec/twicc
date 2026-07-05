@@ -9,6 +9,7 @@ import { useCodeCommentsStore, buildCommentedPathsSet } from '../../stores/codeC
 import { useSettingsStore } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
 import { deriveFileRoots, getWorktreeParent } from '../../utils/projectRoots'
+import { useSplitDividerDragFlag } from '../../composables/useSplitDividerDragFlag'
 
 const emit = defineEmits(['navigate'])
 
@@ -106,6 +107,12 @@ const props = defineProps({
     routeOwner: {
         type: Boolean,
         default: true,
+    },
+    // Forwarded to FilePane: raise its pooled HTML-preview frame above the
+    // docking overlay when this panel is shown there.
+    frameElevated: {
+        type: Boolean,
+        default: false,
     },
 })
 
@@ -724,6 +731,15 @@ watch(
 const TREE_DEFAULT_WIDTH = 250
 const treePanelWidth = ref(TREE_DEFAULT_WIDTH)
 const splitPanelRef = ref(null)
+// Neutralize pooled-iframe pointer-events while this split's divider is dragged
+// (the content pane on the right can be a pooled HTML preview that would freeze
+// the drag; a pooled frame from another pane can also sit under its path).
+useSplitDividerDragFlag(splitPanelRef)
+
+// The FilePane's over-iframe overlay layer, when its HTML preview owns a pooled
+// frame — the route-issue callout is teleported there so it paints above the
+// frame (its own z-index can't, inside DockRegion's isolated context).
+const filePaneFrameOverlayEl = computed(() => filePaneRef.value?.frameOverlayEl ?? null)
 
 // Hide the split panel during KeepAlive transitions to prevent the visual
 // glitch where wa-split-panel briefly renders at position 0 before Vue
@@ -904,18 +920,23 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged, reloadAll })
 
 <template>
     <div class="files-panel">
-        <div v-if="routeIssueMessage" class="pane-callout-overlay">
-            <wa-callout
-                variant="warning"
-                appearance="filled-outlined"
-                class="pane-callout"
-            >
-                <wa-icon slot="icon" name="circle-exclamation"></wa-icon>
-                <span>{{ routeIssueMessage.before }}</span>
-                <span v-if="routeIssueMessage.detail" class="pane-callout-detail">{{ routeIssueMessage.detail }}</span>
-                <span>{{ routeIssueMessage.after }}</span>
-            </wa-callout>
-        </div>
+        <!-- Route-issue callout. Teleported over the pooled HTML frame when the
+             preview owns one (pane-local z-index can't beat the FrameHost layer);
+             renders in place otherwise. -->
+        <Teleport :to="filePaneFrameOverlayEl" :disabled="!filePaneFrameOverlayEl">
+            <div v-if="routeIssueMessage" class="pane-callout-overlay">
+                <wa-callout
+                    variant="warning"
+                    appearance="filled-outlined"
+                    class="pane-callout"
+                >
+                    <wa-icon slot="icon" name="circle-exclamation"></wa-icon>
+                    <span>{{ routeIssueMessage.before }}</span>
+                    <span v-if="routeIssueMessage.detail" class="pane-callout-detail">{{ routeIssueMessage.detail }}</span>
+                    <span>{{ routeIssueMessage.after }}</span>
+                </wa-callout>
+            </div>
+        </Teleport>
 
         <!-- ═══ Hidden owners: single instances that get reparented ═══ -->
         <div ref="treeOwnerRef" class="reparent-owner">
@@ -999,6 +1020,7 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged, reloadAll })
                     :preview-by-default="previewByDefault"
                     :render-only="renderOnly"
                     :artifact-bookmark-session-id="artifactBookmarkSessionId"
+                    :frame-elevated="frameElevated"
                 />
                 <div v-show="!selectedFile" class="panel-placeholder">
                     Select a file

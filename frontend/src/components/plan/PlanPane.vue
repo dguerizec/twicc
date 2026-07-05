@@ -21,6 +21,9 @@ const props = defineProps({
     // Whether this pane owns the URL (false for a docked, unfocused panel —
     // then routeDocPath belongs to another tab and must not drive selection).
     routeOwner: { type: Boolean, default: true },
+    // Forwarded to FilePane: raise its pooled HTML-preview frame above the
+    // docking overlay when this pane is shown there.
+    frameElevated: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['navigate'])
@@ -222,6 +225,7 @@ defineExpose({ reload: () => filePaneRef.value?.reload() })
                 :render-only="true"
                 :preview-by-default="true"
                 :active="active"
+                :frame-elevated="frameElevated"
             />
             <div v-else class="plan-state">
                 <wa-icon name="file-circle-question"></wa-icon>

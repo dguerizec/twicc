@@ -48,12 +48,27 @@ import AppTooltip from '../components/ui/AppTooltip.vue'
 import UsageGraphDialog from '../components/app/UsageGraphDialog.vue'
 import AggregatedProcessIndicator from '../components/ui/AggregatedProcessIndicator.vue'
 import CodeCommentsIndicator from '../components/ui/CodeCommentsIndicator.vue'
+import FrameHost from '../components/frames/FrameHost.vue'
+import { useFramePoolStore } from '../stores/framePool'
+import { useSplitDividerDragFlag } from '../composables/useSplitDividerDragFlag'
 
 const route = useRoute()
 const router = useRouter()
 const store = useDataStore()
 const settingsStore = useSettingsStore()
 const { registerCommands, unregisterCommands } = useCommandRegistry()
+
+// Persistent-frame host. hostMounted must be true BEFORE any child mounts
+// (panes register their frames at setup, and a cold-load deep link mounts them
+// before FrameHost's DOM) — so set it here in ProjectView's own setup.
+const framePool = useFramePoolStore()
+framePool.setHostMounted(true)
+onUnmounted(() => framePool.setHostMounted(false))
+
+// Project sidebar split: neutralize iframe pointer-events while its divider is
+// dragged (an iframe would otherwise capture pointermove and freeze the drag).
+const projectSplitRef = ref(null)
+useSplitDividerDragFlag(projectSplitRef)
 
 // Poll home data during startup so sparklines and project stats update
 // as sessions are indexed by background compute.
@@ -1571,6 +1586,7 @@ function updateSidebarClosedClass(closed) {
         <input type="checkbox" id="sidebar-toggle-state" class="sidebar-toggle-checkbox" :checked="initialSidebarChecked" @change="handleSidebarToggle"/>
 
         <wa-split-panel
+            ref="projectSplitRef"
             class="project-view"
             :position-in-pixels="DEFAULT_SIDEBAR_WIDTH"
             primary="start"
@@ -2390,6 +2406,13 @@ function updateSidebarClosedClass(closed) {
                     />
                 </KeepAlive>
             </div>
+
+            <!-- Persistent iframe layer: iframes (Browser pane, artifact HTML
+                 preview) live here, absolutely positioned over their panes'
+                 placeholders, so KeepAlive session switches and dock Teleports
+                 no longer reload them. Mounted AFTER the branches so its cells
+                 win the z=11 tie against the docking overlay panel. -->
+            <FrameHost />
         </main>
     </wa-split-panel>
 
@@ -2734,6 +2757,9 @@ wa-dropdown-item:hover .row-menu-trigger,
     overflow: hidden;
     background: var(--wa-color-surface-default);
     z-index: 1;
+    /* Containing block for the absolutely-positioned FrameHost, stable in both
+       states (container-type below is dropped while a preview is expanded). */
+    position: relative;
     container-type: inline-size;
     container-name: main-content;
 }
