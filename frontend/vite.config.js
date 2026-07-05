@@ -7,6 +7,25 @@ const backendPort = process.env.BACKEND_PORT || '3500'
 // Optional: allow a custom host for dev tunnels (e.g. ngrok, Cloudflare Tunnel)
 const devAllowedHost = process.env.DEV_HOSTNAME
 
+// Dev-only: embed the browser-companion script in TwiCC's own pages, so a dev
+// instance loaded inside another instance's Browser tab (TwiCC-in-TwiCC)
+// reports real in-page navigation. Relative src: it resolves against whatever
+// origin THIS instance is reached at (localhost or a dev-tunnel hostname) and
+// rides the /_twicc proxy below — no mixed-content, no per-env URL. The script
+// is inert outside an iframe, so it costs nothing in normal top-level use.
+// Production pages are untouched: users opt in on their own apps instead.
+const injectBrowserCompanion = {
+    name: 'twicc-inject-browser-companion',
+    apply: 'serve',
+    transformIndexHtml() {
+        return [{
+            tag: 'script',
+            attrs: { src: '/_twicc/browser-companion.js', defer: true },
+            injectTo: 'head',
+        }]
+    },
+}
+
 export default defineConfig(({ command }) => ({
     plugins: [
         vue({
@@ -15,7 +34,8 @@ export default defineConfig(({ command }) => ({
                     isCustomElement: (tag) => tag.startsWith('wa-')
                 }
             }
-        })
+        }),
+        injectBrowserCompanion,
     ],
     // Use /static/ base only for production build (Django serves static files)
     // In dev mode, use root path
