@@ -3687,6 +3687,23 @@ async def artifact_shell_asset(request, asset):
     return response
 
 
+async def browser_companion_script(request):
+    """Serve the browser-companion bundle (built by vite.config.companion.js).
+
+    Loaded cross-origin by the user's OWN dev-server pages via a classic
+    <script> tag, so it must stay reachable without TwiCC auth — like the
+    broker shim, it relies on the middleware's non-API fallthrough (see
+    auth/middleware.py); do not move it under /api/. 404 until ``npm run
+    build`` produced it."""
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    script = settings.PACKAGE_DIR / "static" / "browser-companion" / "companion.js"
+    response = await asyncio.to_thread(_raw_file_response, str(script))
+    if response is None:
+        raise Http404("Browser companion not built")
+    return response
+
+
 async def spa_index(request):
     """Catch-all for Vue Router - serves index.html."""
     index_path = settings.FRONTEND_DIST_DIR / "index.html"

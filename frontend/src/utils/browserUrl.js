@@ -42,3 +42,12 @@ export function normalizeBrowserUrl(input) {
     if (!url.hostname) return null
     return url.href
 }
+
+// True when a normalized http(s) URL targets a local-ish host (localhost,
+// bare IPs, *.local/*.test, host:port dev boxes) — used to decide whether the
+// companion-script hint is actionable (it only makes sense on pages the user
+// owns, not on external sites).
+export function looksLocalUrl(url) {
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return false
+    return LOCAL_HOST_RE.test(url.replace(/^https?:\/\//i, ''))
+}

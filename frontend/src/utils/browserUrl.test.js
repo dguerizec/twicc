@@ -7,7 +7,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeBrowserUrl } from './browserUrl.js'
+import { looksLocalUrl, normalizeBrowserUrl } from './browserUrl.js'
 
 test('keeps explicit http(s) URLs (normalized by URL())', () => {
     assert.equal(normalizeBrowserUrl('http://localhost:3000'), 'http://localhost:3000/')
@@ -52,4 +52,19 @@ test('rejects empty / unparsable input', () => {
 
 test('trims surrounding whitespace', () => {
     assert.equal(normalizeBrowserUrl('  localhost:3000  '), 'http://localhost:3000/')
+})
+
+test('looksLocalUrl accepts local-ish http(s) URLs', () => {
+    assert.equal(looksLocalUrl('http://localhost:5173/'), true)
+    assert.equal(looksLocalUrl('http://127.0.0.1:3500/app'), true)
+    assert.equal(looksLocalUrl('http://myapp.test/'), true)
+    assert.equal(looksLocalUrl('http://devbox:9000/'), true)
+})
+
+test('looksLocalUrl rejects public and non-http URLs', () => {
+    assert.equal(looksLocalUrl('https://example.com/'), false)
+    assert.equal(looksLocalUrl('https://github.com/foo'), false)
+    assert.equal(looksLocalUrl('ftp://localhost/'), false)
+    assert.equal(looksLocalUrl('localhost:5173'), false) // expects a full URL
+    assert.equal(looksLocalUrl(null), false)
 })
