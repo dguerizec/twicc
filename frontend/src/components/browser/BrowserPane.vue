@@ -620,7 +620,34 @@ function onSaveSelect(event) {
                     {{ isFullscreen ? 'Exit full screen' : 'Full screen' }}
                 </AppTooltip>
 
+                <!-- Companion control. Until connected it is a plain status
+                     button (a tap reveals the how-to-add hint); once connected
+                     it becomes a dropdown (with-caret) exposing companion
+                     actions. WA custom events are stopped from bubbling so a
+                     nested wa-show/wa-hide never reaches a same-named ancestor. -->
+                <wa-dropdown
+                    v-if="companionStatus === 'present'"
+                    placement="bottom-end"
+                    @click.stop
+                    @wa-show.stop
+                    @wa-hide.stop
+                    @wa-after-show.stop
+                    @wa-after-hide.stop
+                >
+                    <wa-button
+                        :id="`browser-companion-${instanceId}`"
+                        slot="trigger"
+                        appearance="plain"
+                        size="small"
+                        class="browser-btn companion-status present"
+                        with-caret
+                    >
+                        <wa-icon name="plug"></wa-icon>
+                    </wa-button>
+                    <wa-dropdown-item>Dummy entry</wa-dropdown-item>
+                </wa-dropdown>
                 <wa-button
+                    v-else
                     :id="`browser-companion-${instanceId}`"
                     appearance="plain"
                     size="small"
@@ -632,8 +659,14 @@ function onSaveSelect(event) {
                 </wa-button>
                 <!-- force + click trigger: the tooltip is hover-only and hidden
                      on touch by default, but here a tap must reveal the companion
-                     status/help on mobile too (no hover there). -->
-                <AppTooltip :for="`browser-companion-${instanceId}`" force trigger="hover focus click">{{ companionTooltip }}</AppTooltip>
+                     status/help on mobile too (no hover there). In the connected
+                     dropdown case, click is dropped from the trigger so the tap
+                     opens the menu instead of racing the tooltip. -->
+                <AppTooltip
+                    :for="`browser-companion-${instanceId}`"
+                    force
+                    :trigger="companionStatus === 'present' ? 'hover focus' : 'hover focus click'"
+                >{{ companionTooltip }}</AppTooltip>
             </div>
         </div>
 
