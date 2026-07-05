@@ -696,7 +696,7 @@ defineExpose({
                             :disabled="interrupting"
                             @click="handleInterrupt"
                         >
-                            <wa-icon name="circle-pause" label="Interrupt"></wa-icon>
+                            <wa-icon name="circle-stop" label="Interrupt"></wa-icon>
                         </wa-button>
                         <AppTooltip :for="`session-header-${sessionId}-interrupt-button`">Interrupt the current turn (keeps the session alive)</AppTooltip>
 
