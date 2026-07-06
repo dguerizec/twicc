@@ -746,15 +746,15 @@ function onHomeSelect(event) {
     <div class="browser-pane" :class="{ 'browser-pane--fullscreen': isFullscreen }">
         <div class="browser-toolbar">
             <div class="browser-toolbar-left">
-                <wa-button :id="`browser-back-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!canGoBack" @click="goBack">
+                <wa-button :id="`browser-back-${instanceId}`" appearance="plain" size="small" class="browser-btn reduced-height" :disabled="!canGoBack" @click="goBack">
                     <wa-icon name="arrow-left"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="`browser-back-${instanceId}`">Back</AppTooltip>
-                <wa-button :id="`browser-forward-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!canGoForward" @click="goForward">
+                <wa-button :id="`browser-forward-${instanceId}`" appearance="plain" size="small" class="browser-btn reduced-height" :disabled="!canGoForward" @click="goForward">
                     <wa-icon name="arrow-right"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="`browser-forward-${instanceId}`">Forward</AppTooltip>
-                <wa-button :id="`browser-refresh-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" @click="refresh">
+                <wa-button :id="`browser-refresh-${instanceId}`" appearance="plain" size="small" class="browser-btn reduced-height" :disabled="!currentUrl" @click="refresh">
                     <wa-icon name="rotate-right"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="`browser-refresh-${instanceId}`">Refresh</AppTooltip>
@@ -772,7 +772,7 @@ function onHomeSelect(event) {
                     @wa-after-show.stop
                     @wa-after-hide.stop
                 >
-                    <wa-button :id="`browser-home-${instanceId}`" slot="trigger" appearance="plain" size="small" class="browser-btn">
+                    <wa-button :id="`browser-home-${instanceId}`" slot="trigger" appearance="plain" size="small" class="browser-btn reduced-height">
                         <wa-icon name="house"></wa-icon>
                     </wa-button>
                     <wa-dropdown-item disabled class="save-menu-header">Open a saved URL…</wa-dropdown-item>
@@ -790,7 +790,7 @@ function onHomeSelect(event) {
                     </wa-dropdown-item>
                 </wa-dropdown>
                 <template v-else>
-                    <wa-button :id="`browser-home-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!primaryHomeUrl" @click="goHome">
+                    <wa-button :id="`browser-home-${instanceId}`" appearance="plain" size="small" class="browser-btn reduced-height" :disabled="!primaryHomeUrl" @click="goHome">
                         <wa-icon name="house"></wa-icon>
                     </wa-button>
                     <AppTooltip :for="`browser-home-${instanceId}`">{{ primaryHomeUrl ? `Home — ${primaryHomeUrl}` : 'Home (no saved URL for this project)' }}</AppTooltip>
@@ -800,7 +800,7 @@ function onHomeSelect(event) {
 
             <wa-input
                 ref="addressInputRef"
-                class="browser-address"
+                class="browser-address reduced-height"
                 size="small"
                 autocomplete="off"
                 placeholder="Enter a URL — e.g. localhost:5173"
@@ -827,7 +827,7 @@ function onHomeSelect(event) {
                     @wa-after-show.stop
                     @wa-after-hide.stop
                 >
-                    <wa-button :id="`browser-save-${instanceId}`" slot="trigger" appearance="plain" size="small" class="browser-btn" :disabled="!canSave">
+                    <wa-button :id="`browser-save-${instanceId}`" slot="trigger" appearance="plain" size="small" class="browser-btn reduced-height" :disabled="!canSave">
                         <wa-icon name="bookmark"></wa-icon>
                     </wa-button>
                     <wa-dropdown-item disabled class="save-menu-header">Save current URL as default for…</wa-dropdown-item>
@@ -867,7 +867,7 @@ function onHomeSelect(event) {
                 </wa-dropdown>
                 <AppTooltip :for="`browser-save-${instanceId}`">Save this URL as a default…</AppTooltip>
 
-                <wa-button :id="`browser-external-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" @click="openExternal">
+                <wa-button :id="`browser-external-${instanceId}`" appearance="plain" size="small" class="browser-btn reduced-height" :disabled="!currentUrl" @click="openExternal">
                     <wa-icon name="arrow-up-right-from-square"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="`browser-external-${instanceId}`">Open in a new browser tab</AppTooltip>
@@ -876,7 +876,7 @@ function onHomeSelect(event) {
                     :id="fullscreenButtonId"
                     appearance="plain"
                     size="small"
-                    class="browser-btn"
+                    class="browser-btn reduced-height"
                     @click="toggleFullscreen"
                 >
                     <wa-icon :name="isFullscreen ? 'compress' : 'expand'"></wa-icon>
@@ -894,7 +894,7 @@ function onHomeSelect(event) {
                     :id="`browser-companion-${instanceId}`"
                     appearance="plain"
                     size="small"
-                    class="browser-btn companion-status"
+                    class="browser-btn reduced-height companion-status"
                     :class="companionStatus"
                     @click="onCompanionIconClick"
                 >
@@ -913,7 +913,7 @@ function onHomeSelect(event) {
                     :id="`browser-responsive-${instanceId}`"
                     appearance="plain"
                     size="small"
-                    class="browser-btn responsive-toggle"
+                    class="browser-btn reduced-height responsive-toggle"
                     :class="{ active: responsiveActive }"
                     :disabled="!currentUrl"
                     @click="responsiveActive = !responsiveActive"
@@ -931,7 +931,7 @@ function onHomeSelect(event) {
                     :id="`browser-select-toggle-${instanceId}`"
                     appearance="plain"
                     size="small"
-                    class="browser-btn select-toggle"
+                    class="browser-btn reduced-height select-toggle"
                     :class="{ active: selectAreaActive }"
                     @click="setSelectArea(!selectAreaActive)"
                 >
@@ -950,7 +950,7 @@ function onHomeSelect(event) {
                     :id="`browser-errors-${instanceId}`"
                     appearance="plain"
                     size="small"
-                    class="browser-btn error-indicator"
+                    class="browser-btn reduced-height error-indicator"
                     @click="openErrorComment"
                 >
                     <wa-icon name="triangle-exclamation"></wa-icon>
@@ -1135,6 +1135,17 @@ function onHomeSelect(event) {
 .browser-address {
     flex: 1;
     min-width: min(10rem, 90%);
+}
+
+/* reduced-height shrinks the whole control through its font-size; the typed
+   URL (native input part) and the start-slot glyph (globe / loading spinner)
+   get the small size back. */
+.browser-address::part(input) {
+    font-size: var(--wa-font-size-s);
+}
+
+.browser-address > [slot='start'] {
+    font-size: var(--wa-font-size-s);
 }
 
 /* Companion status is a normal toolbar button now; the plug's colour + dim

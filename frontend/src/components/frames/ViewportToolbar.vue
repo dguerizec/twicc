@@ -53,7 +53,7 @@ function swap() {
     <div class="viewport-toolbar">
         <span class="subbar-label">Viewport</span>
         <wa-select
-            class="viewport-preset"
+            class="viewport-preset reduced-height"
             size="small"
             placeholder="Custom size"
             :value="presetValue"
@@ -67,7 +67,7 @@ function swap() {
         </wa-select>
         <div class="viewport-dimensions">
             <wa-input
-                class="viewport-size-input"
+                class="viewport-size-input reduced-height"
                 size="small"
                 type="number"
                 :min="VIEWPORT_MIN"
@@ -77,7 +77,7 @@ function swap() {
             ></wa-input>
             <span class="viewport-glue">×</span>
             <wa-input
-                class="viewport-size-input"
+                class="viewport-size-input reduced-height"
                 size="small"
                 type="number"
                 :min="VIEWPORT_MIN"
@@ -86,12 +86,12 @@ function swap() {
                 @change="onSizeChange('h', $event)"
             ></wa-input>
             <span class="viewport-glue">px</span>
+            <wa-button :id="`viewport-swap-${instanceId}`" appearance="plain" size="small" class="subbar-btn reduced-height" @click="swap">
+                <wa-icon name="right-left"></wa-icon>
+            </wa-button>
+            <AppTooltip :for="`viewport-swap-${instanceId}`">Swap width and height</AppTooltip>
         </div>
-        <wa-button :id="`viewport-swap-${instanceId}`" appearance="plain" size="small" class="subbar-btn" @click="swap">
-            <wa-icon name="right-left"></wa-icon>
-        </wa-button>
-        <AppTooltip :for="`viewport-swap-${instanceId}`">Swap width and height</AppTooltip>
-        <wa-button :id="`viewport-close-${instanceId}`" appearance="plain" size="small" class="subbar-btn subbar-close" @click="$emit('close')">
+        <wa-button :id="`viewport-close-${instanceId}`" appearance="plain" size="small" class="subbar-btn reduced-height subbar-close" @click="$emit('close')">
             <wa-icon name="xmark"></wa-icon>
         </wa-button>
         <AppTooltip :for="`viewport-close-${instanceId}`">Exit responsive mode</AppTooltip>
@@ -127,8 +127,8 @@ function swap() {
 }
 
 .viewport-preset {
-    width: 14rem;
-    max-width: 100%;
+    flex: 1;
+    min-width: min(5rem, 50%);
 }
 
 .viewport-dimensions {
@@ -138,7 +138,15 @@ function swap() {
 }
 
 .viewport-size-input {
-    width: 5.25rem;
+    width: 5rem;
+}
+
+/* reduced-height shrinks the whole control through its font-size; the typed
+   dimension (native input part) and the select's displayed value get the
+   small size back. */
+.viewport-size-input::part(input),
+.viewport-preset::part(display-input) {
+    font-size: var(--wa-font-size-s);
 }
 
 /* The "×" between the fields and the trailing "px" unit. */
