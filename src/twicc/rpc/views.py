@@ -112,6 +112,15 @@ async def dispatch(request: HttpRequest, command_path: str) -> HttpResponse:
             return _json(err, status=400)
         argv = render_argv(spec, body)
 
+    # Execute in-process: set the transport seam's backend_loop so any mutating
+    # command runs its drop-request payload straight through the service handlers
+    # on this loop (no drop file, no polling). Reads are unaffected. Identity is
+    # deliberately NOT bound here — /rpc/ callers are not sessions, so self/parent
+    # keep failing with the clean "no TwiCC session found" error, as today.
+    from twicc.cli._drop_request import transport
+
+    loop = asyncio.get_running_loop()
+    token = transport.backend_loop.set(loop)
     try:
         result = await asyncio.to_thread(_run_invoke, argv)
     except Exception:
@@ -124,6 +133,8 @@ async def dispatch(request: HttpRequest, command_path: str) -> HttpResponse:
         # structured 500 so the root cause is recoverable from the logs.
         logger.exception("RPC command %r failed (argv=%r)", command_path, argv)
         return _json({"error": "Internal error while executing the command."}, status=500)
+    finally:
+        transport.backend_loop.reset(token)
     return _json({"exit_code": result.exit_code, "result": result.result, "error": result.error})
 
 
