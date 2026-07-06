@@ -16,6 +16,7 @@ unprotected instance refuses non-loopback callers outright).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 
@@ -68,7 +69,9 @@ async def handle_mcp(scope, receive, send) -> None:
     if scope_remote_access_blocked(scope):
         await _plain_response(send, 403, {"error": "Remote access is disabled."})
         return
-    if not _authorized(scope):
+    # ``_authorized`` reads the token/secret files; keep that off the event loop,
+    # matching the /rpc/ auth middleware's sync_to_async convention.
+    if not await asyncio.to_thread(_authorized, scope):
         await _plain_response(
             send, 401, {"error": "A TwiCC MCP session token or API token is required."},
             headers=[(b"www-authenticate", b"Bearer")],
