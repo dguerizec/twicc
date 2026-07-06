@@ -15,6 +15,9 @@ import TextSelectionComment from '../session/detail/TextSelectionComment.vue'
 import ArtifactBookmarkButton from '../artifacts/ArtifactBookmarkButton.vue'
 import ArtifactBrokerPrompt from '../artifacts/ArtifactBrokerPrompt.vue'
 import PersistentFrame from '../frames/PersistentFrame.vue'
+import SelectAreaToolbar from '../frames/SelectAreaToolbar.vue'
+import ViewportStage from '../frames/ViewportStage.vue'
+import ViewportToolbar from '../frames/ViewportToolbar.vue'
 import { useDataStore } from '../../stores/data'
 import { useTextSelectionComment } from '../../composables/useTextSelectionComment'
 
@@ -103,6 +106,9 @@ const markdownPreviewButtonId = useId()
 const svgPreviewButtonId = useId()
 const htmlPreviewButtonId = useId()
 const htmlPreviewReloadButtonId = useId()
+const responsiveButtonId = useId()
+const selectButtonId = useId()
+const previewToolsButtonId = useId()
 const mermaidPreviewButtonId = useId()
 const viewInFilesButtonId = useId()
 const searchButtonId = useId()
@@ -350,6 +356,197 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
             : null,
     [previewIframeRef, htmlPreviewSrc, isHtmlPreviewActive],
 )
+
+// --- Session context (both HTML-preview modes) -------------------------------
+// Responsive + select mode only make sense inside a session: the sidebar
+// slash-route Artifacts browser (ArtifactsBrowserView) is a sessionless
+// cross-session viewer. `insertTextAtCursor` is provided ONLY by SessionView,
+// so its presence is the exact "we're in a session tab" signal (true in both
+// the Files and Artifacts tabs, false in the slash-route viewer).
+const inSessionContext = computed(() => !!insertTextAtCursor)
+
+// --- Responsive viewport (HTML preview) --------------------------------------
+// Same feature as the Browser pane's responsive mode, through the shared
+// frames/ViewportStage + ViewportToolbar: the preview iframe takes an exact
+// CSS-pixel viewport inside a scrollable hatched canvas. Pure host-side — the
+// artifact just sees a small iframe. Per-pane refs, no persistence (parity
+// with the Browser pane).
+const responsiveActive = ref(false)
+const viewportWidth = ref(375)
+const viewportHeight = ref(667)
+const viewportStageRef = ref(null)
+
+// --- Element select mode (HTML preview) --------------------------------------
+// Same feature as the Browser pane's select-area mode, but with NO companion:
+// the preview iframe is same-origin (file-raw on TwiCC's own host,
+// allow-same-origin sandbox), so the shared picker
+// (element-select/picker.js — the very module the companion runs in-page)
+// runs from HERE, directly against the iframe's document.
+//
+// The session whose composer/draft the picked-element comment feeds: the Files
+// tab passes it as sessionId, the Artifacts tab as artifactBookmarkSessionId
+// (its sessionId is null — SessionView.vue). Both are inside the same
+// SessionView, so insertTextAtCursor targets the right composer regardless; the
+// id is only needed to attach the screenshot to that session's draft.
+const composerSessionId = computed(() => props.sessionId || props.artifactBookmarkSessionId || null)
+// Gate: in a session tab (inSessionContext) with a resolvable composer session.
+const canSelectElement = computed(() => inSessionContext.value && !!composerSessionId.value)
+const selectToolbarRef = ref(null)
+const selectModeActive = ref(false)
+const selectState = ref(null)
+let picker = null
+
+async function createPicker() {
+    const frameEl = previewIframeRef.value
+    const win = frameEl?.contentWindow
+    const doc = frameEl?.contentDocument
+    if (!win || !doc) return
+    // Lazy import: modern-screenshot stays out of the main bundle until the
+    // mode is first used.
+    const { createElementPicker } = await import('../../element-select/picker')
+    // Re-check after the await: the mode may have been toggled off, the iframe
+    // element replaced, or the SAME element reloaded onto a new document (the
+    // contentDocument identity check — a reload keeps the element) while the
+    // module loaded. Building on the captured-but-dead doc would silently
+    // break the mode until the next reload.
+    if (
+        !selectModeActive.value ||
+        picker ||
+        previewIframeRef.value !== frameEl ||
+        frameEl.contentDocument !== doc
+    )
+        return
+    picker = createElementPicker({
+        win,
+        doc,
+        onState: (state) => {
+            selectState.value = state
+        },
+    })
+    picker.enable()
+}
+
+function destroyPicker() {
+    picker?.destroy()
+    picker = null
+    selectState.value = null
+}
+
+function setSelectMode(enabled) {
+    if (selectModeActive.value === enabled) return
+    selectModeActive.value = enabled
+    // Drop any open element comment so a stale one can't flash back on re-entry.
+    elementCommentPosition.value = null
+    if (enabled) createPicker()
+    else destroyPicker()
+}
+
+// Toolbar relays. Named functions (not inline arrows in the template) so the
+// non-reactive `picker` closure variable is always read at call time.
+function selectNav(direction) {
+    picker?.nav(direction)
+}
+
+function selectClear() {
+    picker?.clear()
+}
+
+// Re-arm across reloads. Agent edits bump the cache-bust src, the reload
+// button does too, and KeepAlive re-parenting gives the pooled iframe a fresh
+// browsing context — in every case the picker's document dies; `load` on the
+// live element is the one reliable signal (same pattern as
+// useArtifactBroker's rebind). Unlike the Browser pane (which drops the mode
+// on navigation — the page may be a different site), an artifact reload is an
+// iteration on the same document: keep the mode on, selection cleared.
+let pickerIframe = null
+function onPickerFrameLoad() {
+    destroyPicker()
+    if (selectModeActive.value) createPicker()
+}
+watch(
+    previewIframeRef,
+    (iframe) => {
+        if (iframe === pickerIframe) return
+        pickerIframe?.removeEventListener('load', onPickerFrameLoad)
+        pickerIframe = iframe ?? null
+        pickerIframe?.addEventListener('load', onPickerFrameLoad)
+        // New element = new browsing context: rebuild on it too.
+        onPickerFrameLoad()
+    },
+    { flush: 'post' },
+)
+// A different file is a different context — drop the mode (its `load` would
+// otherwise re-arm the picker on an unrelated page).
+watch(() => props.filePath, () => setSelectMode(false))
+watch(isHtmlPreviewActive, (active) => {
+    if (!active) setSelectMode(false)
+})
+
+// --- Element comment widget (select mode) ---
+// Second TextSelectionComment instance, parallel to the text-selection one
+// (they share the screen, not state — opening one closes the other). The
+// "quote" is the picked element's description; the screenshot switch renders
+// the element itself.
+const elementCommentText = ref('')
+const elementCommentPosition = ref(null) // viewport anchor, or null = closed
+const elementCommentSourceLabel = computed(
+    () => `from the HTML preview of ${props.displayPath || props.filePath}`,
+)
+
+function openElementComment() {
+    const description = picker?.describe()
+    const rect = selectToolbarRef.value?.$el?.getBoundingClientRect()
+    if (!description || !rect) return
+    const lines = []
+    if (description.openingTag) lines.push(`Element: ${description.openingTag}`)
+    if (description.text) lines.push(`Text: "${description.text}"`)
+    lines.push(`Path: ${description.chain}`)
+    closeTextSelectionComment()
+    elementCommentText.value = lines.join('\n')
+    elementCommentPosition.value = { top: rect.bottom, left: rect.left + rect.width / 2, above: false }
+}
+
+// Passed to the comment widget's "Include screenshot" switch; rejects cleanly
+// so the switch can revert.
+function captureElementScreenshot() {
+    if (!picker) return Promise.reject(new Error('select mode is off'))
+    return picker.capture()
+}
+
+// dataUrl → File → draft attachment (the same path a manual image upload
+// takes, so provider validation / resize / caps all apply). Uses the resolved
+// composer session id (NOT props.sessionId — null in the Artifacts tab).
+async function attachElementScreenshot(dataUrl) {
+    const sessionId = composerSessionId.value
+    if (!sessionId) throw new Error('no session to attach to')
+    const blob = await (await fetch(dataUrl)).blob()
+    const file = new File([blob], `artifact-capture-${Date.now()}.png`, { type: 'image/png' })
+    await dataStore.addAttachment(sessionId, file)
+}
+
+// --- Floating preview actions: collapsed behind a round "tools" toggle ------
+// With two or more actions offered, the floating row folds behind a single
+// round screwdriver-wrench button (click to unfold) so it doesn't crowd the
+// rendered page. A preview offering only Full screen (markdown, PDF, media…)
+// keeps its direct button — a toggle hiding one action would just add a click.
+const previewActionsExpanded = ref(false)
+
+// Mirrors the v-if of each action button in the template (Full screen is
+// always offered on an active preview).
+const previewActionsCollapsible = computed(() => {
+    const html = showHtmlPreview.value && isHtmlFile.value && !props.diffMode
+    const count =
+        1 +
+        (html && htmlPreviewSrc.value && inSessionContext.value ? 1 : 0) + // responsive
+        (html && htmlPreviewSrc.value && canSelectElement.value ? 1 : 0) + // select
+        (html && artifactBookmark.value ? 1 : 0) // open in new tab
+    return count > 1
+})
+
+// Fold back on file switch — the unfolded row is a transient, per-page state.
+watch(() => props.filePath, () => {
+    previewActionsExpanded.value = false
+})
 
 // --- Edit mode state ---
 const isEditing = ref(false)
@@ -847,6 +1044,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:toggle-file-edit', onToggleEditShortcut)
     unregisterCommand(toggleEditCommandId)
+    pickerIframe?.removeEventListener('load', onPickerFrameLoad)
+    pickerIframe = null
+    destroyPicker()
 })
 
 // Expose the toggle in the command palette only while this is the active,
@@ -1334,17 +1534,46 @@ function goToNextDiff() {
                      the page's relative CSS/JS/asset references resolve to
                      sibling raw URLs. Sandboxed: scripts run but top-level
                      navigation, popups and modals are not allowed. -->
-                <PersistentFrame
-                    v-if="showHtmlPreview && isHtmlFile && htmlPreviewSrc && !diffMode"
-                    ref="persistentFrameRef"
-                    :frame-id="`artifact-html:${instanceId}`"
-                    :src="htmlPreviewSrc"
-                    :remount-key="filePath"
-                    :attrs="HTML_PREVIEW_FRAME_ATTRS"
-                    :elevated="props.frameElevated"
-                    :fullscreen="isPreviewFullscreen"
-                    class="html-preview"
-                />
+                <div v-if="showHtmlPreview && isHtmlFile && htmlPreviewSrc && !diffMode" class="html-preview-area">
+                    <ViewportToolbar
+                        v-if="responsiveActive"
+                        v-model:width="viewportWidth"
+                        v-model:height="viewportHeight"
+                        @close="responsiveActive = false"
+                    />
+                    <SelectAreaToolbar
+                        v-if="selectModeActive"
+                        ref="selectToolbarRef"
+                        :state="selectState"
+                        @nav="selectNav"
+                        @clear="selectClear"
+                        @comment="openElementComment"
+                        @close="setSelectMode(false)"
+                    />
+                    <!-- The stage wrappers render in BOTH modes (only restyled)
+                         so PersistentFrame never unmounts on a mode toggle — a
+                         remount would re-register the pooled iframe and reload
+                         it. bodyEl is the frame's clip container: a scrolled-out
+                         stage must not paint over the pane's chrome. -->
+                    <ViewportStage
+                        ref="viewportStageRef"
+                        :active="responsiveActive"
+                        v-model:width="viewportWidth"
+                        v-model:height="viewportHeight"
+                    >
+                        <PersistentFrame
+                            ref="persistentFrameRef"
+                            :frame-id="`artifact-html:${instanceId}`"
+                            :src="htmlPreviewSrc"
+                            :remount-key="filePath"
+                            :attrs="HTML_PREVIEW_FRAME_ATTRS"
+                            :elevated="props.frameElevated"
+                            :fullscreen="isPreviewFullscreen"
+                            :clip-el="viewportStageRef?.bodyEl ?? null"
+                            class="html-preview"
+                        />
+                    </ViewportStage>
+                </div>
 
                 <!-- Network-broker consent prompt for the preview iframe (§9).
                      Teleported over the pooled HTML frame when one exists (its
@@ -1381,45 +1610,105 @@ function goToNextDiff() {
                     <video :key="filePath" :src="rawFileUrl" controls class="video-preview"></video>
                 </div>
 
-                <!-- Floating actions, top-right of the preview: open the page in a new
-                     tab (HTML only — there it runs as a real, unsandboxed page) and the
-                     expand / compress toggle (all preview types). Teleported over the
-                     pooled HTML frame when active (its z-index can't beat the FrameHost
-                     layer); for every other preview type frameOverlayEl is null so it
-                     renders in place, above the in-pane preview, as before. -->
+                <!-- Floating actions, top-right of the preview. With two or more
+                     actions they fold behind the round "tools" toggle (see
+                     previewActionsCollapsible); a single-action preview (just
+                     Full screen) keeps its direct button. Teleported over the
+                     pooled HTML frame when active (its z-index can't beat the
+                     FrameHost layer); for every other preview type
+                     frameOverlayEl is null so it renders in place, above the
+                     in-pane preview, as before. -->
                 <Teleport :to="frameOverlayEl" :disabled="!frameOverlayEl">
                 <div class="preview-actions">
-                    <!-- A real link (wa-button renders an <a> when given href), so
-                         middle-click / ctrl-click / "copy link" / "open in new tab"
-                         all work. Bookmarked HTML only — the id-based dedicated URL. -->
-                    <template v-if="showHtmlPreview && isHtmlFile && !diffMode && artifactBookmark">
+                    <template v-if="!previewActionsCollapsible || previewActionsExpanded">
+                        <!-- Responsive-mode toggle (HTML preview, session context
+                             only): exact device-size viewport, same feature as the
+                             Browser pane. Hidden in the sessionless slash-route
+                             Artifacts browser (inSessionContext). -->
+                        <template v-if="showHtmlPreview && isHtmlFile && !diffMode && htmlPreviewSrc && inSessionContext">
+                            <wa-button
+                                :id="responsiveButtonId"
+                                class="preview-action-btn"
+                                :class="{ 'preview-action-btn--active': responsiveActive }"
+                                size="small"
+                                variant="neutral"
+                                appearance="filled"
+                                @click="responsiveActive = !responsiveActive"
+                            >
+                                <wa-icon name="mobile-screen-button"></wa-icon>
+                            </wa-button>
+                            <AppTooltip :for="responsiveButtonId">
+                                {{ responsiveActive ? 'Exit responsive mode' : 'Responsive mode — preview at a device size' }}
+                            </AppTooltip>
+                        </template>
+                        <!-- Select-element toggle (HTML preview, composer reachable):
+                             pick an element in the rendered page and hand its
+                             description — with an optional screenshot — to the agent. -->
+                        <template v-if="showHtmlPreview && isHtmlFile && !diffMode && htmlPreviewSrc && canSelectElement">
+                            <wa-button
+                                :id="selectButtonId"
+                                class="preview-action-btn"
+                                :class="{ 'preview-action-btn--active': selectModeActive }"
+                                size="small"
+                                variant="neutral"
+                                appearance="filled"
+                                @click="setSelectMode(!selectModeActive)"
+                            >
+                                <wa-icon name="arrow-pointer"></wa-icon>
+                            </wa-button>
+                            <AppTooltip :for="selectButtonId">
+                                {{ selectModeActive ? 'Stop selecting an element' : 'Select an element' }}
+                            </AppTooltip>
+                        </template>
+                        <!-- A real link (wa-button renders an <a> when given href), so
+                             middle-click / ctrl-click / "copy link" / "open in new tab"
+                             all work. Bookmarked HTML only — the id-based dedicated URL. -->
+                        <template v-if="showHtmlPreview && isHtmlFile && !diffMode && artifactBookmark">
+                            <wa-button
+                                :id="previewOpenTabButtonId"
+                                class="preview-action-btn"
+                                size="small"
+                                variant="neutral"
+                                appearance="filled"
+                                :href="`/artifacts/${artifactBookmark.id}/`"
+                                target="_blank"
+                                rel="noopener"
+                            >
+                                <wa-icon name="up-right-from-square"></wa-icon>
+                            </wa-button>
+                            <AppTooltip :for="previewOpenTabButtonId">Open in new tab</AppTooltip>
+                        </template>
                         <wa-button
-                            :id="previewOpenTabButtonId"
+                            :id="previewFullscreenButtonId"
                             class="preview-action-btn"
                             size="small"
                             variant="neutral"
                             appearance="filled"
-                            :href="`/artifacts/${artifactBookmark.id}/`"
-                            target="_blank"
-                            rel="noopener"
+                            @click="togglePreviewFullscreen"
                         >
-                            <wa-icon name="up-right-from-square"></wa-icon>
+                            <wa-icon :name="isPreviewFullscreen ? 'compress' : 'expand'"></wa-icon>
                         </wa-button>
-                        <AppTooltip :for="previewOpenTabButtonId">Open in new tab</AppTooltip>
+                        <AppTooltip :for="previewFullscreenButtonId">
+                            {{ isPreviewFullscreen ? 'Exit full screen' : 'Full screen' }}
+                        </AppTooltip>
                     </template>
-                    <wa-button
-                        :id="previewFullscreenButtonId"
-                        class="preview-action-btn"
-                        size="small"
-                        variant="neutral"
-                        appearance="filled"
-                        @click="togglePreviewFullscreen"
-                    >
-                        <wa-icon :name="isPreviewFullscreen ? 'compress' : 'expand'"></wa-icon>
-                    </wa-button>
-                    <AppTooltip :for="previewFullscreenButtonId">
-                        {{ isPreviewFullscreen ? 'Exit full screen' : 'Full screen' }}
-                    </AppTooltip>
+                    <!-- The round "tools" toggle folding/unfolding the row above. -->
+                    <template v-if="previewActionsCollapsible">
+                        <wa-button
+                            :id="previewToolsButtonId"
+                            class="preview-action-btn preview-tools-btn"
+                            :class="{ 'preview-action-btn--active': previewActionsExpanded }"
+                            size="small"
+                            variant="neutral"
+                            appearance="filled"
+                            @click="previewActionsExpanded = !previewActionsExpanded"
+                        >
+                            <wa-icon name="screwdriver-wrench"></wa-icon>
+                        </wa-button>
+                        <AppTooltip :for="previewToolsButtonId">
+                            {{ previewActionsExpanded ? 'Hide tools' : 'Tools' }}
+                        </AppTooltip>
+                    </template>
                 </div>
                 </Teleport>
             </div>
@@ -1493,6 +1782,24 @@ function goToNextDiff() {
                 :metadata="textSelectionMetadata"
                 :clear-source-selection="clearSourceSelection"
                 @close="closeTextSelectionComment"
+            />
+        </Teleport>
+
+        <!-- Element-select comment widget (HTML preview) — teleported to body
+             like every other consumer. The "quote" is the element description;
+             no source selection to clear. -->
+        <Teleport to="body">
+            <TextSelectionComment
+                v-if="elementCommentPosition"
+                :selected-text="elementCommentText"
+                :position="elementCommentPosition"
+                :source-label="elementCommentSourceLabel"
+                subject="selected area"
+                auto-expand
+                :clear-source-selection="() => {}"
+                :capture-screenshot="captureElementScreenshot"
+                :attach-screenshot="attachElementScreenshot"
+                @close="elementCommentPosition = null"
             />
         </Teleport>
     </div>
@@ -1655,6 +1962,22 @@ function goToNextDiff() {
     opacity: 1;
 }
 
+/* Mode toggles (responsive / select): fully opaque + brand icon while active. */
+.preview-action-btn--active {
+    opacity: 1;
+}
+.preview-action-btn--active wa-icon {
+    color: var(--wa-color-brand-fill-loud);
+}
+
+/* The round "tools" toggle: a circle (square box, no inline padding — the
+   flex part centers the icon). */
+.preview-tools-btn::part(base) {
+    border-radius: 50%;
+    aspect-ratio: 1;
+    padding: 0;
+}
+
 .markdown-preview-container {
     position: absolute;
     inset: 0;
@@ -1678,11 +2001,19 @@ function goToNextDiff() {
     margin: auto;
 }
 
+/* The preview area stacks the mode sub-toolbars over the viewport stage
+   (flex:1 via its own .viewport-body rule). */
+.html-preview-area {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 /* Placeholder sizing only — the pooled iframe (in FrameHost) carries the
    border/background; PersistentFrame positions it over this box. */
 .html-preview {
-    position: absolute;
-    inset: 0;
+    flex: 1;
     width: 100%;
     height: 100%;
 }

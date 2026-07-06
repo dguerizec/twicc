@@ -23,7 +23,6 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, useId, watch } from 
 import { hostMessage, isCompanionMessage } from '../../browser-companion/protocol'
 import { isOpen as mediaPreviewOpen } from '../../composables/useMediaPreview'
 import { useDataStore } from '../../stores/data'
-import { useFramePoolStore } from '../../stores/framePool'
 import { useSettingsStore } from '../../stores/settings'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { apiFetch } from '../../utils/api'
@@ -31,6 +30,9 @@ import { resolveProjectBrowserUrl } from '../../utils/browserDefaults'
 import { looksLocalUrl, normalizeBrowserUrl } from '../../utils/browserUrl'
 import { debounce } from '../../utils/debounce'
 import PersistentFrame from '../frames/PersistentFrame.vue'
+import SelectAreaToolbar from '../frames/SelectAreaToolbar.vue'
+import ViewportStage from '../frames/ViewportStage.vue'
+import ViewportToolbar from '../frames/ViewportToolbar.vue'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import WorktreeBadge from '../project/WorktreeBadge.vue'
 import TextSelectionComment from '../session/detail/TextSelectionComment.vue'
@@ -60,7 +62,6 @@ const emit = defineEmits(['interact'])
 const store = useDataStore()
 const settingsStore = useSettingsStore()
 const workspacesStore = useWorkspacesStore()
-const framePool = useFramePoolStore()
 const instanceId = useId()
 
 // ── Default URL: project chain first, then the first non-archived workspace
@@ -93,9 +94,6 @@ const everActivated = ref(false)
 // reads frameEl.value.contentWindow through it.
 const persistentFrameRef = ref(null)
 const frameEl = computed(() => persistentFrameRef.value?.frameEl ?? null)
-// The body element — scroll/clip container handed to PersistentFrame so the
-// pooled iframe gets clipped to it (matters in responsive mode, see below).
-const browserBodyRef = ref(null)
 const addressFocused = ref(false)
 
 // ── Companion channel. The embedded page may include the TwiCC companion
@@ -290,7 +288,6 @@ onBeforeUnmount(() => {
     if (isFullscreen.value) expandPreviewHost?.(false)
     clearHelloGraceTimer()
     rejectPendingCapture('pane closed')
-    endViewportResize() // balance the pool's divider-drag depth if mid-drag
     persistUrlDebounced.cancel()
 })
 
@@ -629,7 +626,7 @@ const commentAllowScreenshot = ref(false)
 const commentSourceLabel = computed(() => `from the browser page at ${currentUrl.value}`)
 
 function openSelectComment(description) {
-    const rect = selectToolbarRef.value?.getBoundingClientRect()
+    const rect = selectToolbarRef.value?.$el?.getBoundingClientRect()
     if (!rect) return
     commentText.value = description
     commentSubject.value = 'selected area'
@@ -662,137 +659,15 @@ function openErrorComment(event) {
 }
 
 // ── Responsive mode: the stage (the iframe's placeholder box) takes an exact
-// CSS-pixel viewport size instead of filling the pane, and the body becomes a
-// scrollable hatched canvas around it. Pure host-side feature — no companion
-// involved: the page reacts to its iframe size exactly as to a small window.
-// The dimensions are driven from three equivalent inputs (preset list, manual
-// fields, drag handles) over the same two refs.
-const VIEWPORT_PRESETS = [
-    { label: 'iPhone SE', width: 375, height: 667 },
-    { label: 'iPhone 15', width: 393, height: 852 },
-    { label: 'iPhone 15 Pro Max', width: 430, height: 932 },
-    { label: 'Pixel 8', width: 412, height: 915 },
-    { label: 'Galaxy S24', width: 360, height: 780 },
-    { label: 'iPad Mini', width: 768, height: 1024 },
-    { label: 'iPad Pro 11"', width: 834, height: 1194 },
-    { label: 'iPad Pro 12.9"', width: 1024, height: 1366 },
-    { label: 'Laptop', width: 1280, height: 800 },
-    { label: 'Laptop L', width: 1440, height: 900 },
-    { label: 'Desktop', width: 1920, height: 1080 },
-]
-const VIEWPORT_MIN = 100
-const VIEWPORT_MAX = 8000
-
-// Resize handles around the stage — one per side and corner. dirX/dirY say
-// which way each handle pushes a dimension: e.g. the west handle (dirX -1)
-// grows the width when dragged left. 0 = that axis is untouched.
-const VIEWPORT_HANDLES = [
-    { key: 'n', dirX: 0, dirY: -1 },
-    { key: 's', dirX: 0, dirY: 1 },
-    { key: 'e', dirX: 1, dirY: 0 },
-    { key: 'w', dirX: -1, dirY: 0 },
-    { key: 'ne', dirX: 1, dirY: -1 },
-    { key: 'nw', dirX: -1, dirY: -1 },
-    { key: 'se', dirX: 1, dirY: 1 },
-    { key: 'sw', dirX: -1, dirY: 1 },
-]
-
+// CSS-pixel viewport size instead of filling the pane. Pure host-side feature
+// — no companion involved: the page reacts to its iframe size exactly as to a
+// small window. All the machinery (toolbar, hatched canvas, drag handles)
+// lives in the shared frames/ViewportStage + ViewportToolbar; only the mode
+// flag and the dimensions are the pane's.
 const responsiveActive = ref(false)
 const viewportWidth = ref(375)
 const viewportHeight = ref(667)
-
-const stageStyle = computed(() =>
-    responsiveActive.value
-        ? { width: `${viewportWidth.value}px`, height: `${viewportHeight.value}px` }
-        : null
-)
-
-// The preset matching the current dimensions in either orientation (a rotated
-// device is still that device); '' → the select shows its "Custom" placeholder.
-const viewportPresetValue = computed(() => {
-    const w = viewportWidth.value
-    const h = viewportHeight.value
-    const match = VIEWPORT_PRESETS.find(
-        (p) => (p.width === w && p.height === h) || (p.width === h && p.height === w)
-    )
-    return match ? `${match.width}x${match.height}` : ''
-})
-
-function clampViewportSize(value) {
-    return Math.min(VIEWPORT_MAX, Math.max(VIEWPORT_MIN, Math.round(value)))
-}
-
-function onViewportPresetChange(event) {
-    const match = VIEWPORT_PRESETS.find((p) => `${p.width}x${p.height}` === event.target.value)
-    if (!match) return
-    viewportWidth.value = match.width
-    viewportHeight.value = match.height
-}
-
-function onViewportSizeChange(axis, event) {
-    const parsed = Number.parseInt(event.target.value, 10)
-    if (Number.isFinite(parsed)) {
-        if (axis === 'w') viewportWidth.value = clampViewportSize(parsed)
-        else viewportHeight.value = clampViewportSize(parsed)
-    }
-    // Reflect the applied value back into the field (covers clamping and
-    // garbage input, which leave the ref — and thus the binding — unchanged).
-    event.target.value = String(axis === 'w' ? viewportWidth.value : viewportHeight.value)
-}
-
-function swapViewport() {
-    const width = viewportWidth.value
-    viewportWidth.value = viewportHeight.value
-    viewportHeight.value = width
-}
-
-// Drag-resize via the handles in the hatched gutter. Pointer capture keeps
-// the events flowing to the handle; beginDividerDrag() additionally turns off
-// pointer-events on ALL pooled iframes (same need as split dividers: an
-// iframe is a separate browsing context that swallows move events the moment
-// the pointer crosses it). Incremental (per-move) deltas, so the doubling
-// below can flip mid-drag as an axis crosses the fit/overflow boundary.
-let viewportDrag = null // { dirX, dirY, lastX, lastY }
-const viewportDragKey = ref(null) // template mirror — keeps the handle lit
-
-function startViewportResize(handle, event) {
-    if (viewportDrag) return
-    event.preventDefault()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    viewportDrag = { dirX: handle.dirX, dirY: handle.dirY, lastX: event.clientX, lastY: event.clientY }
-    viewportDragKey.value = handle.key
-    framePool.beginDividerDrag()
-}
-
-function onViewportResizeMove(event) {
-    if (!viewportDrag) return
-    const body = browserBodyRef.value
-    const dx = event.clientX - viewportDrag.lastX
-    const dy = event.clientY - viewportDrag.lastY
-    viewportDrag.lastX = event.clientX
-    viewportDrag.lastY = event.clientY
-    // While an axis has no overflow the stage is centered on it (margin:auto),
-    // so its dragged edge moves only half as fast as the box grows — double
-    // the delta to keep the handle under the pointer. Once the axis overflows
-    // the stage anchors to the start and it's back to 1:1. `+ 1` absorbs
-    // sub-pixel rounding on the scroll/client comparison. dirX/dirY carry the
-    // handle's sign, so a west/north handle grows the box when dragged out.
-    if (viewportDrag.dirX) {
-        const factor = body && body.scrollWidth <= body.clientWidth + 1 ? 2 : 1
-        viewportWidth.value = clampViewportSize(viewportWidth.value + viewportDrag.dirX * dx * factor)
-    }
-    if (viewportDrag.dirY) {
-        const factor = body && body.scrollHeight <= body.clientHeight + 1 ? 2 : 1
-        viewportHeight.value = clampViewportSize(viewportHeight.value + viewportDrag.dirY * dy * factor)
-    }
-}
-
-function endViewportResize() {
-    if (!viewportDrag) return
-    viewportDrag = null
-    viewportDragKey.value = null
-    framePool.endDividerDrag()
-}
+const viewportStageRef = ref(null)
 
 // ── Save-URL menu -------------------------------------------------------------
 const project = computed(() => store.getProject(props.projectId))
@@ -1089,91 +964,26 @@ function onHomeSelect(event) {
         </div>
 
         <!-- Responsive-viewport toolbar: shown while the responsive mode is on
-             (always ABOVE the select toolbar when both are open). Preset list,
-             manual dimension fields and the swap button all drive the same
-             viewport refs the stage's drag handles update — everything stays
-             in sync whichever way the size changes. -->
-        <div v-if="responsiveActive" class="responsive-toolbar">
-            <span class="subbar-label">Viewport</span>
-            <wa-select
-                class="viewport-preset"
-                size="small"
-                placeholder="Custom size"
-                :value="viewportPresetValue"
-                @change="onViewportPresetChange"
-            >
-                <wa-option
-                    v-for="preset in VIEWPORT_PRESETS"
-                    :key="preset.label"
-                    :value="`${preset.width}x${preset.height}`"
-                >{{ preset.label }} — {{ preset.width }}×{{ preset.height }}</wa-option>
-            </wa-select>
-            <div class="viewport-dimensions">
-                <wa-input
-                    class="viewport-size-input"
-                    size="small"
-                    type="number"
-                    :min="VIEWPORT_MIN"
-                    :max="VIEWPORT_MAX"
-                    :value="String(viewportWidth)"
-                    @change="onViewportSizeChange('w', $event)"
-                ></wa-input>
-                <span class="viewport-glue">×</span>
-                <wa-input
-                    class="viewport-size-input"
-                    size="small"
-                    type="number"
-                    :min="VIEWPORT_MIN"
-                    :max="VIEWPORT_MAX"
-                    :value="String(viewportHeight)"
-                    @change="onViewportSizeChange('h', $event)"
-                ></wa-input>
-                <span class="viewport-glue">px</span>
-            </div>
-            <wa-button :id="`browser-viewport-swap-${instanceId}`" appearance="plain" size="small" class="browser-btn" @click="swapViewport">
-                <wa-icon name="right-left"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="`browser-viewport-swap-${instanceId}`">Swap width and height</AppTooltip>
-            <wa-button :id="`browser-responsive-close-${instanceId}`" appearance="plain" size="small" class="browser-btn subbar-close" @click="responsiveActive = false">
-                <wa-icon name="xmark"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="`browser-responsive-close-${instanceId}`">Exit responsive mode</AppTooltip>
-        </div>
+             (always ABOVE the select toolbar when both are open). -->
+        <ViewportToolbar
+            v-if="responsiveActive"
+            v-model:width="viewportWidth"
+            v-model:height="viewportHeight"
+            @close="responsiveActive = false"
+        />
 
         <!-- Select-area toolbar: shown while the picking mode is on. The
              navigation buttons walk the page's DOM from the highlighted
              element — every step is executed by the companion in the page. -->
-        <div v-if="selectAreaActive" ref="selectToolbarRef" class="select-toolbar">
-            <span class="subbar-label">Select area</span>
-            <wa-button :id="`browser-select-clear-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.locked" @click="selectClear">
-                <wa-icon name="ban"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="`browser-select-clear-${instanceId}`">Clear the selection</AppTooltip>
-            <wa-button :id="`browser-select-parent-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.canParent" @click="selectNav('parent')">
-                <wa-icon name="arrow-up"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="`browser-select-parent-${instanceId}`">Select the parent</AppTooltip>
-            <wa-button :id="`browser-select-child-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.canFirstChild" @click="selectNav('first-child')">
-                <wa-icon name="arrow-down"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="`browser-select-child-${instanceId}`">Select the first child</AppTooltip>
-            <wa-button :id="`browser-select-prev-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.canPrevSibling" @click="selectNav('prev-sibling')">
-                <wa-icon name="arrow-left"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="`browser-select-prev-${instanceId}`">Select the previous sibling</AppTooltip>
-            <wa-button :id="`browser-select-next-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.canNextSibling" @click="selectNav('next-sibling')">
-                <wa-icon name="arrow-right"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="`browser-select-next-${instanceId}`">Select the next sibling</AppTooltip>
-            <wa-button :id="`browser-select-comment-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!selectState?.hasSelection" @click="selectComment">
-                <wa-icon name="comment" variant="regular"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="`browser-select-comment-${instanceId}`">Comment on the selection</AppTooltip>
-            <wa-button :id="`browser-select-close-${instanceId}`" appearance="plain" size="small" class="browser-btn subbar-close" @click="setSelectArea(false)">
-                <wa-icon name="xmark"></wa-icon>
-            </wa-button>
-            <AppTooltip :for="`browser-select-close-${instanceId}`">Exit select mode</AppTooltip>
-        </div>
+        <SelectAreaToolbar
+            v-if="selectAreaActive"
+            ref="selectToolbarRef"
+            :state="selectState"
+            @nav="selectNav"
+            @clear="selectClear"
+            @comment="selectComment"
+            @close="setSelectArea(false)"
+        />
 
         <!-- Comment widget (teleported to body like every other consumer —
              avoids overflow clipping and sits above fullscreen). Shared by the
@@ -1235,54 +1045,39 @@ function onHomeSelect(event) {
             </div>
         </wa-callout>
 
-        <!-- The canvas/stage wrappers exist in BOTH modes (only restyled) so
-             the PersistentFrame component never unmounts on a mode toggle —
-             a remount would re-register the pooled iframe and reload it. -->
-        <div ref="browserBodyRef" class="browser-body" :class="{ 'browser-body--responsive': responsiveActive }">
-            <div v-if="everActivated && currentUrl && !mixedContentBlocked" class="browser-canvas">
-                <div class="browser-stage" :style="stageStyle">
-                    <PersistentFrame
-                        ref="persistentFrameRef"
-                        :frame-id="`browser:${instanceId}`"
-                        :src="frameSrc"
-                        :remount-key="frameKey"
-                        :attrs="BROWSER_FRAME_ATTRS"
-                        :elevated="props.frameElevated"
-                        :fullscreen="isFullscreen"
-                        :clip-el="browserBodyRef"
-                        class="browser-frame"
-                        @load="onFrameLoad"
-                    />
-                    <!-- Resize handles live in the hatched gutter just OUTSIDE
-                         the stage box, so the pooled iframe (which overlays
-                         exactly the stage rect) never covers them. One per side
-                         and corner (see VIEWPORT_HANDLES). -->
-                    <template v-if="responsiveActive">
-                        <div
-                            v-for="handle in VIEWPORT_HANDLES"
-                            :key="handle.key"
-                            class="viewport-handle"
-                            :class="[
-                                `viewport-handle--${handle.key}`,
-                                { 'viewport-handle--dragging': viewportDragKey === handle.key },
-                            ]"
-                            @pointerdown="startViewportResize(handle, $event)"
-                            @pointermove="onViewportResizeMove"
-                            @pointerup="endViewportResize"
-                            @pointercancel="endViewportResize"
-                        ></div>
-                    </template>
+        <!-- The stage wrappers render in BOTH modes (only restyled) so the
+             PersistentFrame component never unmounts on a mode toggle — a
+             remount would re-register the pooled iframe and reload it. -->
+        <ViewportStage
+            ref="viewportStageRef"
+            :active="responsiveActive"
+            v-model:width="viewportWidth"
+            v-model:height="viewportHeight"
+            :show-stage="!!(everActivated && currentUrl && !mixedContentBlocked)"
+        >
+            <PersistentFrame
+                ref="persistentFrameRef"
+                :frame-id="`browser:${instanceId}`"
+                :src="frameSrc"
+                :remount-key="frameKey"
+                :attrs="BROWSER_FRAME_ATTRS"
+                :elevated="props.frameElevated"
+                :fullscreen="isFullscreen"
+                :clip-el="viewportStageRef?.bodyEl ?? null"
+                class="browser-frame"
+                @load="onFrameLoad"
+            />
+            <template #empty>
+                <div v-if="!currentUrl" class="browser-empty">
+                    <wa-icon name="globe" class="browser-empty-icon"></wa-icon>
+                    <p>Enter a URL above to preview your project — e.g. your dev server.</p>
+                    <p class="browser-empty-hint">
+                        Use the <wa-icon name="bookmark"></wa-icon> menu to save it as the
+                        default for this project or one of its workspaces.
+                    </p>
                 </div>
-            </div>
-            <div v-else-if="!currentUrl" class="browser-empty">
-                <wa-icon name="globe" class="browser-empty-icon"></wa-icon>
-                <p>Enter a URL above to preview your project — e.g. your dev server.</p>
-                <p class="browser-empty-hint">
-                    Use the <wa-icon name="bookmark"></wa-icon> menu to save it as the
-                    default for this project or one of its workspaces.
-                </p>
-            </div>
-        </div>
+            </template>
+        </ViewportStage>
     </div>
 </template>
 
@@ -1379,50 +1174,6 @@ function onHomeSelect(event) {
     font-variant-numeric: tabular-nums;
 }
 
-/* Mode sub-toolbars (responsive viewport, select area) share one look. */
-.select-toolbar,
-.responsive-toolbar {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--wa-space-2xs);
-    padding: var(--wa-space-2xs);
-    border-bottom: 1px solid var(--wa-color-border-quiet);
-    flex-shrink: 0;
-}
-
-.subbar-label {
-    font-size: var(--wa-font-size-xs);
-    color: var(--wa-color-text-quiet);
-    padding-inline: var(--wa-space-2xs);
-}
-
-/* Exit button pinned to the far right, away from the mode's controls. */
-.subbar-close {
-    margin-left: auto;
-}
-
-.viewport-preset {
-    width: 14rem;
-    max-width: 100%;
-}
-
-.viewport-dimensions {
-    display: flex;
-    align-items: center;
-    gap: var(--wa-space-3xs);
-}
-
-.viewport-size-input {
-    width: 5.25rem;
-}
-
-/* The "×" between the fields and the trailing "px" unit. */
-.viewport-glue {
-    font-size: var(--wa-font-size-xs);
-    color: var(--wa-color-text-quiet);
-}
-
 .browser-banner {
     margin: var(--wa-space-xs);
     flex-shrink: 0;
@@ -1483,193 +1234,12 @@ function onHomeSelect(event) {
     min-width: 0;
 }
 
-.browser-body {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-}
-
-/* Responsive mode: the body turns into a scroll container around the
-   fixed-size stage. */
-.browser-body--responsive {
-    display: block;
-    overflow: auto;
-}
-
-/* Pass-through wrapper in normal mode; in responsive mode it carries the
-   hatched "neutral zone" background and the gutter around the stage. */
-.browser-canvas {
-    flex: 1;
-    display: flex;
-    min-width: 0;
-    min-height: 0;
-}
-
-/* width/height: max-content on purpose: unlike the scroll container's own
-   padding, a child's box is part of the scrollable content on EVERY side, so
-   the gutter (and the resize handles living in it) stays reachable even when
-   the stage overflows the pane. min-*: 100% makes the canvas at least fill the
-   pane, giving margin:auto (below) room to center the stage. The +12px in the
-   padding hosts the resize handles, which sit just outside the stage box. */
-.browser-body--responsive .browser-canvas {
-    display: flex;
-    width: max-content;
-    height: max-content;
-    min-width: 100%;
-    min-height: 100%;
-    padding: calc((var(--wa-space-m) + 12px) * 2);
-    background-color: var(--wa-color-surface-lowered);
-    background-image: repeating-linear-gradient(
-        45deg,
-        transparent 0,
-        transparent 6px,
-        color-mix(in srgb, var(--wa-color-neutral-fill-loud) 12%, transparent) 6px,
-        color-mix(in srgb, var(--wa-color-neutral-fill-loud) 12%, transparent) 7px
-    );
-}
-
-/* Normal mode: the stage just relays the flex sizing down to the frame. */
-.browser-stage {
-    flex: 1;
-    display: flex;
-    min-width: 0;
-    min-height: 0;
-}
-
-/* Responsive mode: the stage IS the device viewport — an exact-CSS-pixel box
-   (inline style) the placeholder fills. margin:auto centers it both axes when
-   it fits; per the flexbox spec, auto margins resolve to 0 on overflow, so it
-   then anchors to the start (top-left) and the whole thing stays scroll-
-   reachable — NOT the unreachable-start trap of justify/align: center. */
-.browser-body--responsive .browser-stage {
-    position: relative;
-    flex: none;
-    display: block;
-    margin: auto;
-}
-
 /* Placeholder sizing only — the pooled iframe (in FrameHost) carries the
    border/background; PersistentFrame positions it over this box. */
 .browser-frame {
     flex: 1;
     width: 100%;
     height: 100%;
-}
-
-/* Drag handles in the gutter just outside the stage box (see template note).
-   Sides span the corresponding edge; corners fill the 12px squares the sides
-   leave uncovered (sides run 0→edge, corners sit at -12px), so the perimeter
-   is seamless with no overlap. */
-.viewport-handle {
-    position: absolute;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    touch-action: none;
-}
-
-.viewport-handle::after {
-    content: '';
-    border-radius: 999px;
-    background: var(--wa-color-neutral-fill-loud);
-    opacity: 0.5;
-    transition: opacity 0.15s ease;
-}
-
-.viewport-handle:hover::after,
-.viewport-handle--dragging::after {
-    opacity: 1;
-}
-
-/* Vertical sides (west/east): full-height strips, a vertical grip bar. */
-.viewport-handle--e,
-.viewport-handle--w {
-    top: 0;
-    bottom: 0;
-    width: 12px;
-    cursor: ew-resize;
-}
-
-.viewport-handle--e {
-    right: -12px;
-}
-
-.viewport-handle--w {
-    left: -12px;
-}
-
-.viewport-handle--e::after,
-.viewport-handle--w::after {
-    width: 4px;
-    height: 2.5rem;
-    max-height: 60%;
-}
-
-/* Horizontal sides (north/south): full-width strips, a horizontal grip bar. */
-.viewport-handle--n,
-.viewport-handle--s {
-    left: 0;
-    right: 0;
-    height: 12px;
-    cursor: ns-resize;
-}
-
-.viewport-handle--s {
-    bottom: -12px;
-}
-
-.viewport-handle--n {
-    top: -12px;
-}
-
-.viewport-handle--n::after,
-.viewport-handle--s::after {
-    height: 4px;
-    width: 2.5rem;
-    max-width: 60%;
-}
-
-/* Corners: 12px squares with a small square grip; cursor matches the diagonal
-   (nwse for the ↖↘ pair, nesw for the ↗↙ pair). */
-.viewport-handle--ne,
-.viewport-handle--nw,
-.viewport-handle--se,
-.viewport-handle--sw {
-    width: 12px;
-    height: 12px;
-}
-
-.viewport-handle--ne::after,
-.viewport-handle--nw::after,
-.viewport-handle--se::after,
-.viewport-handle--sw::after {
-    width: 8px;
-    height: 8px;
-    border-radius: var(--wa-border-radius-s);
-}
-
-.viewport-handle--nw {
-    top: -12px;
-    left: -12px;
-    cursor: nwse-resize;
-}
-
-.viewport-handle--se {
-    bottom: -12px;
-    right: -12px;
-    cursor: nwse-resize;
-}
-
-.viewport-handle--ne {
-    top: -12px;
-    right: -12px;
-    cursor: nesw-resize;
-}
-
-.viewport-handle--sw {
-    bottom: -12px;
-    left: -12px;
-    cursor: nesw-resize;
 }
 
 .browser-empty {
