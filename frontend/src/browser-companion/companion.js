@@ -14,9 +14,18 @@ import { domToPng } from 'modern-screenshot'
 
 import { companionMessage, isHostMessage } from './protocol'
 
+// This script is injected into a page we do not own. It must be INVISIBLE to
+// that page: everything lives inside install()'s closure (the Vite IIFE build
+// exposes no module global), the single global property we set is namespaced
+// (window.__twiccBrowserCompanion, the double-load guard), and a failure must
+// never surface in the host — a throw here just leaves the companion "absent".
 if (window.parent !== window && !window.__twiccBrowserCompanion) {
     window.__twiccBrowserCompanion = true
-    install()
+    try {
+        install()
+    } catch {
+        // Swallow: the host page must never see a companion error.
+    }
 }
 
 function install() {
@@ -333,12 +342,19 @@ function install() {
 
     // SPA URL changes. The History API has no event for pushState/replaceState
     // — patch them; popstate/hashchange cover traversals everywhere, and the
-    // Navigation API adds accurate coverage on Chromium.
+    // Navigation API adds accurate coverage on Chromium. This is the one
+    // page-owned global we mutate: keep it perfectly transparent — always call
+    // the original, always return its result, and never let our own bookkeeping
+    // throw into the page's navigation call.
     for (const method of ['pushState', 'replaceState']) {
         const original = window.history[method]
         window.history[method] = function (...args) {
             const result = original.apply(this, args)
-            scheduleState()
+            try {
+                scheduleState()
+            } catch {
+                // Instrumentation must never break the page's navigation.
+            }
             return result
         }
     }
