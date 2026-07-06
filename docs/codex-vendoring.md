@@ -34,7 +34,8 @@ Assumes the new version is already published on PyPI as `openai-codex-cli-bin` *
 3. Bump `openai-codex-cli-bin==<matching version>` in `pyproject.toml`, run `uv lock` and `uv sync`.
 4. Diff the new SDK's `pyproject.toml` against ours — copy any new runtime dependency over (today only `pydantic>=2.12` is shared).
 5. Run the checklist from the `reference_codex_sdk_update_procedure.md` memory: verify the monkey-patch path `_client._sync._approval_handler`, that `ThreadStartParams`/`TurnStartParams` still accept `approval_policy`/`approvals_reviewer`/`sandbox(_policy)`, that the SDK subclassing in `sdk_wrappers.py` still compiles, that `codex_cli_bin.bundled_codex_path` still exists, etc.
-6. Run `./scripts/build-release.sh` and check the resulting wheel installs and runs locally.
+6. Re-verify the TwiCC MCP server's per-thread config keys (`src/twicc/providers/codex/agent/manager.py`, `_twicc_mcp_server_config`): `url`, `http_headers`, `default_tools_approval_mode`, `tool_timeout_sec`, `startup_timeout_sec` against `codex-rs/config/src/mcp_types.rs`; that the streamable-HTTP MCP client stays un-gated (`codex-rs/codex-mcp/src/connection_manager.rs`); and the `tool_search_always_defer_mcp_tools` feature key (`codex-rs/features/src/lib.rs`) — still `Stage::UnderDevelopment`? removed/promoted? If it changed, flip `TWICC_MCP_CODEX_DEFER=False` in `src/twicc/mcp/__init__.py` (eager fallback).
+7. Run `./scripts/build-release.sh` and check the resulting wheel installs and runs locally.
 
 ## Why we still vendor the SDK
 

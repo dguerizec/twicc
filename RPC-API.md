@@ -10,6 +10,8 @@ hand-written endpoint layer** — so the CLI reference *is* the API reference:
 
 This file only documents what differs from running the CLI locally.
 
+> **Shared machinery with the MCP server.** TwiCC's built-in MCP server (`/mcp`, see [`SKILLS-AND-CLI.md`](SKILLS-AND-CLI.md)) is generated from the *same* registry, JSON schemas and response envelope as `/rpc/` — one command tree, three front doors. Both now execute in-process: a `/rpc/` mutation runs its request straight through the service handlers on the backend's event loop (no drop file, no polling), same as an MCP tool call.
+
 ## Endpoints
 
 | Method & path | Purpose |

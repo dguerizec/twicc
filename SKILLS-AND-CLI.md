@@ -1,6 +1,6 @@
 # TwiCC skills & CLI
 
-> Drive TwiCC from a terminal or from inside an agent — the `twicc` command-line interface and the matching agent-skill plugin are two front doors to the same surface.
+> Drive TwiCC from a terminal or from inside an agent — the `twicc` command-line interface, the matching agent-skill plugin, and the built-in MCP server are three front doors to the same surface.
 
 TwiCC ships a command-line interface (every `twicc <command>`) **and** a Claude Code / Codex plugin (auto-installed) whose skills wrap those same commands. Anything a skill lets an agent do, you can do from a shell with the exact same `twicc` command — the skills are guided wrappers around the CLI, not a separate capability set. That is why they are documented together here: each entry lists both its command and its **Skill**.
 
@@ -15,6 +15,10 @@ Two audiences, one surface:
 - **Read vs write.** Read commands query TwiCC's database directly and work whether or not a backend is running (a few, like live process state, need the backend). Write commands drop a request file that the **running** TwiCC server picks up, then poll for the server's final status — they need a live backend and accept `--timeout` (default 30 s). If the deadline passes the request stays on disk and may still apply server-side.
 - **Exit codes.** `0` success; non-zero on failure (typically `1` not-found / validation, `2` backend down, `5` timeout). Run `twicc <command> --help` for a command's exact codes.
 - **Catalogues drift.** The model / effort / permission / preset lists shown below are the current built-ins; the live source of truth is always `twicc info` (see below).
+
+## The MCP server (`/mcp`)
+
+Inside a TwiCC-driven agent session, every command below (minus `settings`, plus `whoami`) is also an MCP tool (`mcp__twicc__<command>` on Claude Code; names use `_` for `/` and `-`: `create_session`, `session_content`, `update_session_settings`, …). Same arguments (the JSON schema mirrors the CLI options), same JSON output wrapped in `{"exit_code", "result", "error"}`, same exit codes. Available in every permission mode and auto-approved (no prompt) — TwiCC's control plane, not the project's code. Prefer the tools when available: no shell, no drop-file latency, and your session identity travels with the call (`self` / `parent` / `whoami` work without PID tricks). The CLI remains the way to script TwiCC from outside a session, and the only surface for `settings`, `password`, `token`, and the `claude` / `codex` passthroughs.
 
 ## Resolving the executable (`$TWICC`)
 
