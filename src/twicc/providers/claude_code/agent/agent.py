@@ -969,12 +969,20 @@ class ClaudeCodeAgent(BaseAgent):
             # is deterministic, so the file self-heals across restarts. Gated on
             # the TWICC_NO_MCP kill switch. ``MCP_TOOL_TIMEOUT`` lets long
             # ``*_wait`` tools run without the SDK's default cutoff.
+            #
+            # Allow-list ``mcp__twicc`` (server-level) so our tools are permitted
+            # in EVERY mode — the ``can_use_tool`` auto-approve below is not
+            # enough on its own: ``dontAsk`` (read-only) denies a permissioned
+            # tool BEFORE the callback is consulted, so without this allow-list
+            # our control-plane tools would be blocked in read-only mode. The
+            # allow-list is the Claude equivalent of Codex's approve mode (D9).
             from twicc.mcp import mcp_enabled
             from twicc.mcp.wiring import write_claude_mcp_config
 
             _mcp_on = mcp_enabled()
             mcp_servers_option = str(write_claude_mcp_config(self.session_id)) if _mcp_on else {}
             mcp_env_option = {"MCP_TOOL_TIMEOUT": "600000"} if _mcp_on else {}
+            mcp_allowed_option = ["mcp__twicc"] if _mcp_on else []
 
             options = ClaudeAgentOptions(
                 system_prompt=system_prompt_option,
@@ -991,6 +999,7 @@ class ClaudeCodeAgent(BaseAgent):
                 settings=fast_mode_settings,
                 plugins=[{"type": "local", "path": str(get_plugin_dir())}],
                 can_use_tool=self._handle_pending_request,
+                allowed_tools=mcp_allowed_option,
                 disallowed_tools=disallowed_tools,
                 hooks={
                     "PreToolUse": [HookMatcher(matcher=None, hooks=[_pre_tool_use])],

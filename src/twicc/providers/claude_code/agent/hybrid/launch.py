@@ -142,11 +142,15 @@ def build_argv(
     # TwiCC's own MCP server (/mcp): pass the per-session config as a FILE path
     # (never inline JSON — the bearer token would show in ``ps``). No
     # ``--strict-mcp-config`` so the user's own MCP servers survive.
+    # ``--allowedTools mcp__twicc`` permits our tools in EVERY mode: ``dontAsk``
+    # (read-only) denies a permissioned tool before the hook fires, so the
+    # allow-list is required for the control plane to work in read-only.
     from twicc.mcp import mcp_enabled
     from twicc.mcp.wiring import write_claude_mcp_config
 
     if mcp_enabled():
         argv += ["--mcp-config", str(write_claude_mcp_config(session_id))]
+        argv += ["--allowedTools", "mcp__twicc"]
     for add_dir in add_dirs:
         argv += ["--add-dir", add_dir]
     if addendum_path is not None:
