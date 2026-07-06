@@ -197,9 +197,11 @@ in the worktree `.env`, restart, then repeat A1 — **expect `503`** (`MCP serve
 
 ### B1 — An MCP mutation creates no drop file
 
+Uses the backend-log discriminator (see the Part D note: an empty drop dir proves nothing —
+the watcher only logs for a *file-based* drop).
+
 ```bash
-# Snapshot the drop dir, run a mutation tool, confirm nothing was written.
-ls -1 drop-requests/ 2>/dev/null | wc -l           # baseline count
+before=$(wc -l < logs/backend.log)
 cat > /tmp/mcp_mutation.py <<'PY'
 import os, sys, httpx
 url = os.environ["MCP_URL"]; tok = sys.argv[1]
@@ -212,10 +214,11 @@ with httpx.Client(timeout=30) as c:
     print(r.json()["result"]["structuredContent"])
 PY
 MCP_URL="$MCP_URL" TWICC_DATA_DIR=$PWD uv run --active python /tmp/mcp_mutation.py "$(mint_token some-plan-session)"
-ls -1 drop-requests/ 2>/dev/null | wc -l           # must equal baseline
+tail -n +$((before+1)) logs/backend.log | grep -c "DropRequestsWatcher"   # expect 0
 ```
-**Expect:** the tool result shows `'status': 'created'` and a `workspace_id`; the drop-dir
-count is **unchanged**. Verify the workspace exists, then delete it:
+**Expect:** the tool result shows `'status': 'created'` and a `workspace_id`; **zero**
+`DropRequestsWatcher` lines were logged for it (it ran in-process). Verify the workspace
+exists, then delete it:
 ```bash
 $TWICC workspaces | grep -i mcp-smoke-ws
 $TWICC delete-workspace mcp-smoke-ws          # local-mode cleanup (uses a drop file — that is Part E)
@@ -255,8 +258,20 @@ tools directly**, the way it uses any tool — no shell, no token, no CLI. The `
 commands that appear here are **scaffolding only** (spawn a test agent, or read its answer);
 what is being tested is always the **MCP tool call the agent makes**.
 
-Throughout Part D, confirm `drop-requests/` stays empty (`ls -1 drop-requests/ | wc -l` → 0):
-every MCP mutation runs in-process, never as a drop file.
+**Verifying "no drop file" — the reliable way.** Do **not** rely on `drop-requests/` being
+empty: it looks empty after *any* completed operation, because the CLI deletes its own drop +
+status files as soon as it reads the result. The real discriminator is the **backend log** —
+the file-based path makes the watcher log `[DropRequestsWatcher] received …` and
+`[DropRequestsWatcher] <status> … -> …`, whereas the in-process MCP path never goes through
+the watcher. So, around any MCP mutation:
+
+```bash
+before=$(wc -l < logs/backend.log)
+# … the agent runs the MCP mutation (e.g. mcp__twicc__update_session_title) …
+tail -n +$((before+1)) logs/backend.log | grep -c "DropRequestsWatcher"   # expect 0 for MCP
+```
+Contrast with **Part E**: a CLI mutation from a terminal *does* produce those `DropRequestsWatcher`
+lines. Same command, two transports — that difference is the actual proof.
 
 > **How to observe a spawned agent's result:** `$TWICC create-session` prints the new
 > `session_id` (the PROMPT is a **positional argument**). Read the agent's answer with
@@ -291,7 +306,7 @@ $TWICC create-session --provider claude_code --permission-mode default --project
 ```
 **Expect** (read with `$TWICC session <child_id> messages --tail 5`): the agent used
 `mcp__twicc__whoami` and `mcp__twicc__create_session` to accomplish the goal — it was *not*
-told which tools to use. Drop-dir stays empty.
+told which tools to use. (Optional: apply the backend-log check above to confirm the mutation — if any — ran in-process.)
 
 ### D1 — Claude Code (SDK), restrictive mode — auto-approve
 
@@ -305,8 +320,7 @@ $TWICC create-session --provider claude_code --permission-mode default --project
   "Call the mcp__twicc__whoami tool, then use mcp__twicc__update_session_title to set this session's title to 'mcp-d1' (session self). Report what each returned."
 ```
 Read with `$TWICC session <child_id> messages --tail 5`; check `$TWICC session <child_id>`
-shows the new title. **Expect:** both tools ran with **no approval prompt** in `default` mode,
-drop-dir empty.
+shows the new title. **Expect:** both tools ran with **no approval prompt** in `default` mode; the backend-log check shows **0** `DropRequestsWatcher` lines for the mutation.
 
 ### D2 — Claude Code hybrid (tmux) — auto-approve card
 
@@ -324,8 +338,7 @@ $TWICC create-session --provider codex --permission-mode auto --project "$PROJEC
   "Call the twicc whoami MCP tool, then use the twicc update_session_title tool to set this session's title to 'mcp-d3' (session self). Report both results."
 ```
 **Expect:** `whoami` returns the **canonical** session id (proves the draft→canonical alias);
-the title changes with **no approval prompt** (validates `default_tools_approval_mode="approve"`);
-drop-dir empty.
+the title changes with **no approval prompt** (validates `default_tools_approval_mode="approve"`); the backend-log check shows **0** `DropRequestsWatcher` lines.
 
 ### D4 — Codex read-only / strict mode can still call a write tool (D9)
 
