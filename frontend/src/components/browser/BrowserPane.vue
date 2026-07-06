@@ -29,6 +29,7 @@ import { apiFetch } from '../../utils/api'
 import { resolveProjectBrowserUrl } from '../../utils/browserDefaults'
 import { looksLocalUrl, normalizeBrowserUrl } from '../../utils/browserUrl'
 import { debounce } from '../../utils/debounce'
+import { showHelp } from '../help/showHelp'
 import PersistentFrame from '../frames/PersistentFrame.vue'
 import SelectAreaToolbar from '../frames/SelectAreaToolbar.vue'
 import ViewportStage from '../frames/ViewportStage.vue'
@@ -531,14 +532,18 @@ async function copySnippet() {
 
 const companionTooltip = computed(() => {
     if (companionStatus.value === 'present') {
-        return 'Companion connected — the toolbar follows the page’s real navigation and history.'
+        return 'Companion connected — the toolbar follows the page’s real navigation and history. Click for help on this tab.'
     }
     if (companionStatus.value === 'waiting') return 'Checking for the TwiCC companion script…'
     return 'No companion script on this page — history is toolbar-only. Click to see how to add it.'
 })
 
+// Open the Browser tab's help page (reference open — no dismiss switch).
+// While no companion is detected, also re-surface the snippet banner the
+// help points at (it may have been dismissed).
 function onCompanionIconClick() {
     if (companionStatus.value === 'absent') snippetDismissed.value = false
+    showHelp('browser-tab', { showDontShowAgain: false })
 }
 
 // ── Select-area mode: toggled from the companion menu; the actual picking

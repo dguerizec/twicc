@@ -835,6 +835,17 @@ watch(activeTabId, (id) => {
     })
 }, { immediate: true })
 
+// Same nudge for the Browser tab: first visit surfaces its help page (what
+// the tab can do, the companion script, embedding limits).
+watch(activeTabId, (id) => {
+    if (id !== 'browser') return
+    helpStore.maybeAutoShow('browser-tab', {
+        platform: settingsStore._isTouchDevice ? 'mobile' : 'desktop',
+        os: settingsStore.os,
+        enabledProviders: settingsStore.enabledProviders,
+    })
+}, { immediate: true })
+
 const centerActiveTab = computed(() => {
     if (isCenterTab(activeTabId.value)) return activeTabId.value
     return isCenterTab(lastCenterTab.value) ? lastCenterTab.value : 'main'
