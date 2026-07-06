@@ -25,6 +25,31 @@ Some pages can't be embedded:
 
 Your local dev servers are the sweet spot; that's what the tab is for.
 
+### Logins and storage
+
+Whether the embedded page keeps you logged in depends on where your dev
+server sits relative to TwiCC.
+
+**Same host** — TwiCC and your app both on `localhost`, any ports. Nothing
+to do: the page shares the exact cookies and storage it uses in a normal
+tab, so a login you did there already applies. Ports are irrelevant here —
+`localhost:5173` and `localhost:3000` count as the same site.
+
+**Different domains** — e.g. TwiCC on one tunnel, your app on another. The
+browser isolates the embedded page, so you start logged out and a few
+**dev-only** settings are needed:
+
+- **Allow framing** — many frameworks forbid embedding by default with
+  `X-Frame-Options` / `frame-ancestors` (Django, Rails…); relax it in dev.
+- **Cookies** — set your session cookie `SameSite=None; Secure`. `Secure`
+  holds over `https` and `http://localhost`, but not a plain-http LAN IP.
+- Then **log in once inside the tab**. The embedded page gets its own
+  private cookie/storage area, kept across reloads. `localStorage` and
+  `IndexedDB` need no setup — same isolation, they just work.
+
+Keep these behind a dev flag — you don't want `SameSite=None` or open
+framing in production.
+
 ### The companion script
 
 An embedded page is a black box for TwiCC: links followed inside it are
