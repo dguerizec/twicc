@@ -16,6 +16,8 @@ Spawn a new agent session. The session appears in TwiCC exactly as if started fr
 
 ## How to invoke
 
+**Prefer the `mcp__twicc__*` tools when you have them.** Inside a TwiCC session your tool list may include `mcp__twicc__*` tools — one per command below (the command with `/` and `-` turned into `_`, e.g. `mcp__twicc__create_session`, `mcp__twicc__update_session_settings`). When present, use them instead of the `$TWICC` CLI: same arguments, same JSON result, no shell, and your session identity travels with the call so `self`/`parent` resolve on their own. Fall back to the `$TWICC` CLI below when those tools aren't available (outside a session, or when scripting from a terminal).
+
 TwiCC's executable varies by launch mode (uvx, dev, installed tool). ALWAYS USE THIS TO RESOLVE $TWICC AT THE START OF EACH BASH INVOCATION:
 
 ```bash

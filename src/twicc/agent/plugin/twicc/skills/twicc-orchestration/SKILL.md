@@ -15,6 +15,8 @@ A TwiCC session can spawn other sessions, which can spawn their own, forming a *
 
 ## Resolving `$TWICC`
 
+**Prefer the `mcp__twicc__*` tools when you have them.** Inside a TwiCC session the same commands are exposed as `mcp__twicc__*` tools (`/` and `-` → `_`, e.g. `mcp__twicc__create_session`, `mcp__twicc__send_message`, `mcp__twicc__sessions`). When present, use them over the `$TWICC` CLI: same arguments, same JSON, no shell, and your identity travels with the call (`self`/`parent` resolve on their own). The `$TWICC` CLI below is the fallback when those tools aren't available.
+
 The examples here and in the role skills (`-leader`, `-manager`, `-worker`) call TwiCC's CLI as `$TWICC`. Its executable varies by launch mode (uvx, dev, installed tool), so resolve it at the start of each bash invocation:
 
 ```bash
