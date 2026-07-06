@@ -19,6 +19,17 @@ to bottom, record PASS/FAIL for each step in the results table at the end.
 - Every tool is available in **every permission mode** and **auto-approved** (no prompt) on
   both providers — it is a control plane, orthogonal to the project's permissions (D9).
 
+**Two testing layers — do not confuse them:**
+- **Parts A–C = the raw HTTP endpoint** (a low-level harness). You talk to `/mcp` directly
+  with `curl`/`httpx` and a hand-minted token. This is *not* how an agent uses the server;
+  it exists only to prove the endpoint's mechanics (auth gate, protocol, no drop files).
+- **Part D = the real agent flow.** A live agent (you, or a spawned child) calls the
+  `mcp__twicc__*` tools **the way it uses any tool** — no shell, no token handling, TwiCC
+  injected the connection for it. This is what actually validates the feature. In Part D,
+  any `$TWICC …` shell command is **scaffolding only** (to spawn a test agent or read its
+  answer); the thing under test is the **MCP tool call the agent makes**, not the CLI (which
+  is unchanged by this work).
+
 ---
 
 ## 0. Preconditions & setup
@@ -237,61 +248,91 @@ MCP_URL="$MCP_URL" TWICC_DATA_DIR=$PWD uv run --active python /tmp/mcp_whoami.py
 
 ---
 
-## Part D — Provider wiring (real spawned sessions)
+## Part D — The real agent flow
 
-> These require spawning real agent sessions via `twicc create-session` (the PROMPT is a
-> **positional argument**, not a flag). Every spawned prompt below is self-contained. After
-> each, read the child's output with `$TWICC session <child_id> messages` (JSON array — look
-> at the last entries) and confirm the tool ran **without any pending approval** (if the
-> result JSON is present, it was auto-approved). Confirm `drop-requests/` stays empty
-> throughout.
+This is the part that actually validates the feature: **an agent using the `mcp__twicc__*`
+tools directly**, the way it uses any tool — no shell, no token, no CLI. The `$TWICC …`
+commands that appear here are **scaffolding only** (spawn a test agent, or read its answer);
+what is being tested is always the **MCP tool call the agent makes**.
 
-### D1 — Claude Code (SDK) session, restrictive mode
+Throughout Part D, confirm `drop-requests/` stays empty (`ls -1 drop-requests/ | wc -l` → 0):
+every MCP mutation runs in-process, never as a drop file.
+
+> **How to observe a spawned agent's result:** `$TWICC create-session` prints the new
+> `session_id` (the PROMPT is a **positional argument**). Read the agent's answer with
+> `$TWICC session <child_id> messages --tail 3`. If the tool's result is present in the
+> transcript, the tool ran **and was auto-approved** (no pending approval blocked it).
+
+### D0 — You, the executor, call the tools directly (no scaffolding)
+
+**If the agent running this plan is itself a TwiCC session with the MCP wired** (check: your
+tool list contains `mcp__twicc__*` — e.g. `mcp__twicc__whoami`), do the most authentic test
+first: just **use the tools**, no `twicc` CLI, no curl.
+
+- Call `mcp__twicc__whoami`. **Expect:** it returns *your own* session id — proving identity
+  travels with the connection (no PID tricks, no token you had to supply).
+- Call `mcp__twicc__sessions`. **Expect:** the sessions list (a plain read tool).
+- Call `mcp__twicc__create_session` with a short prompt to spawn a child, then
+  `mcp__twicc__whoami` again. **Expect:** the child is created and recorded with *you* as its
+  spawner (`spawned_by`), with no approval step — exactly like invoking a skill.
+
+This single part demonstrates the whole point of the server: the agent drives TwiCC's control
+plane through typed tools, autonomously. Everything below only adds *mode/provider coverage*
+that D0 cannot reach from a single bypass-mode session.
+
+### D-goal — Goal-oriented (agent chooses the tools itself)
+
+Spawn a child and give it a **goal, without naming any tool**, to confirm the agent reaches
+for the MCP tools on its own:
 
 ```bash
-# Spawn a Claude session in DEFAULT mode (NOT bypass) so the permission callback fires.
 $TWICC create-session --provider claude_code --permission-mode default --project "$PROJECT_ID" \
-  "Call the mcp__twicc__whoami tool. Reply with ONLY the JSON it returns."
+  "Without using any shell command, find out your own TwiCC session id and your project id, then spawn a child TwiCC session whose prompt is 'say hello'. Report the ids and the child's id."
 ```
-Note the returned `session_id` (the create-session JSON output), wait a few seconds, then:
+**Expect** (read with `$TWICC session <child_id> messages --tail 5`): the agent used
+`mcp__twicc__whoami` and `mcp__twicc__create_session` to accomplish the goal — it was *not*
+told which tools to use. Drop-dir stays empty.
+
+### D1 — Claude Code (SDK), restrictive mode — auto-approve
+
+The mode-specific checks below *do* name the tool, on purpose: they are deterministic probes
+of one behavior (auto-approve in a restrictive mode), not a test of agent autonomy (that is
+D0/D-goal).
+
 ```bash
-$TWICC session <child_id> messages          # inspect the last assistant message
-ls -1 drop-requests/ | wc -l                # expect 0
+# DEFAULT mode (NOT bypass) so the permission callback actually fires.
+$TWICC create-session --provider claude_code --permission-mode default --project "$PROJECT_ID" \
+  "Call the mcp__twicc__whoami tool, then use mcp__twicc__update_session_title to set this session's title to 'mcp-d1' (session self). Report what each returned."
 ```
-**Expect:** the child reports its own `session_id`, **no approval prompt** was raised (the
-tool result is present), drop-dir empty. Then repeat with a mutation prompt:
-`"Use mcp__twicc__update_session_title to set this session's title to 'mcp-d1' (session self)."`
-and confirm the title changes (`$TWICC session <child_id>` shows the new title) with no prompt.
+Read with `$TWICC session <child_id> messages --tail 5`; check `$TWICC session <child_id>`
+shows the new title. **Expect:** both tools ran with **no approval prompt** in `default` mode,
+drop-dir empty.
 
-### D2 — Claude Code hybrid (tmux) session
+### D2 — Claude Code hybrid (tmux) — auto-approve card
 
-Repeat D1 but with a **hybrid (tmux) Claude session** — this mode is driven by the
-`terminalUseTmux` setting / the way your setup launches tmux-CLI sessions, not a
-`create-session` flag. Launch one in `default` mode and prompt it to call
-`mcp__twicc__whoami`. Same expectations. **This is the key check for the hybrid auto-approve
-fix:** the MCP tool must run with **no approval card** in `default` mode.
-Also verify token survival across a restart: mid-session, restart the backend
-(`devctl.py restart back`), then send the session a new prompt to call `mcp__twicc__whoami`
-again — it must still succeed (the token is deterministic, baked into the session's
-`mcp-config` file).
+Same as D1 but with a **hybrid (tmux) Claude session** (driven by the `terminalUseTmux`
+setting / your tmux-CLI launch path, not a `create-session` flag), in `default` mode. **This
+is the key check for the hybrid auto-approve fix:** the MCP tools must run with **no approval
+card**. Then verify **token survival across a restart:** mid-session, restart the backend
+(`devctl.py restart back`), send the session a new prompt to call `mcp__twicc__whoami` — it
+must still succeed (the token is deterministic, baked into the session's `mcp-config` file).
 
-### D3 — Codex session, non-yolo mode
+### D3 — Codex, non-yolo mode — canonical identity + auto-approve
 
 ```bash
 $TWICC create-session --provider codex --permission-mode auto --project "$PROJECT_ID" \
-  "Call the twicc whoami MCP tool. Reply with ONLY the session id it returns."
+  "Call the twicc whoami MCP tool, then use the twicc update_session_title tool to set this session's title to 'mcp-d3' (session self). Report both results."
 ```
-**Expect:** the child returns the **canonical** session id (proves the draft→canonical alias),
-no approval prompt. Then a mutation:
-`"Use the twicc update_session_title tool to set this session's title to 'mcp-d3' (session self)."`
-— title changes with **no approval prompt** (validates `default_tools_approval_mode="approve"`),
-drop-dir stays empty.
+**Expect:** `whoami` returns the **canonical** session id (proves the draft→canonical alias);
+the title changes with **no approval prompt** (validates `default_tools_approval_mode="approve"`);
+drop-dir empty.
 
 ### D4 — Codex read-only / strict mode can still call a write tool (D9)
 
-Spawn a Codex session in `read_only`/strict mode and prompt it to run
-`update_session_title` on itself. **Expect:** it works — MCP is a control plane available in
-every mode, even though the same session cannot run the `twicc` CLI at all.
+Spawn a Codex session in `read_only`/strict mode and prompt it to run the
+`update_session_title` MCP tool on itself. **Expect:** it works — MCP is a control plane
+available in every mode, **even though the same session cannot run the `twicc` CLI at all**
+(no shell execution in read-only). This is the capability skills/CLI cannot provide.
 
 ---
 
@@ -339,6 +380,8 @@ $TWICC delete-workspace mcp-cli-smoke      # status: deleted
 | A6 | TWICC_NO_MCP → 503 | | (skip if no restart) |
 | B1 | MCP mutation, no drop file | | |
 | C1 | token → whoami identity | | |
+| D0 | Executor uses mcp__twicc__* directly (whoami/sessions/create_session) | | |
+| D-goal | Goal-oriented: agent picks MCP tools itself | | |
 | D1 | Claude SDK default: whoami+mutation, no prompt | | |
 | D2 | Claude hybrid: no card + token survives restart | | |
 | D3 | Codex auto: canonical id + mutation, no prompt | | |
