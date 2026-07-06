@@ -26,27 +26,43 @@ const Z_TIERS = {
 function cellStyle(frame) {
     const { x, y, width, height } = frame.rect
     const zIndex = Z_TIERS[frame.zTier] ?? Z_TIERS.base
-    if (frame.zTier === 'fullscreen') {
-        // The fullscreen wrapper is position:fixed while .main-content drops
-        // its container-type (main-content--preview-expanded), so viewport
-        // coordinates are correct AND escape .main-content's overflow clip.
-        return {
-            position: 'fixed',
-            left: `${x}px`,
-            top: `${y}px`,
-            width: `${width}px`,
-            height: `${height}px`,
-            zIndex,
+    const style =
+        frame.zTier === 'fullscreen'
+            ? {
+                  // The fullscreen wrapper is position:fixed while .main-content drops
+                  // its container-type (main-content--preview-expanded), so viewport
+                  // coordinates are correct AND escape .main-content's overflow clip.
+                  position: 'fixed',
+                  left: `${x}px`,
+                  top: `${y}px`,
+                  width: `${width}px`,
+                  height: `${height}px`,
+                  zIndex,
+              }
+            : {
+                  position: 'absolute',
+                  left: `${x - hostRect.x.value}px`,
+                  top: `${y - hostRect.y.value}px`,
+                  width: `${width}px`,
+                  height: `${height}px`,
+                  zIndex,
+              }
+    // Clip away the parts that scrolled out of the owner's clip container
+    // (Browser pane responsive mode): the frame paints above pane content,
+    // so an unclipped overhang would cover the pane's own chrome. Both rects
+    // are viewport-based, so the deltas hold for either positioning branch —
+    // clip-path resolves against the element's own border box.
+    const clip = frame.clipRect
+    if (clip) {
+        const top = Math.max(0, clip.y - y)
+        const left = Math.max(0, clip.x - x)
+        const right = Math.max(0, x + width - (clip.x + clip.width))
+        const bottom = Math.max(0, y + height - (clip.y + clip.height))
+        if (top || right || bottom || left) {
+            style.clipPath = `inset(${top}px ${right}px ${bottom}px ${left}px)`
         }
     }
-    return {
-        position: 'absolute',
-        left: `${x - hostRect.x.value}px`,
-        top: `${y - hostRect.y.value}px`,
-        width: `${width}px`,
-        height: `${height}px`,
-        zIndex,
-    }
+    return style
 }
 
 watch(() => pool.geometryEpoch, () => hostRect.update(), { flush: 'post' })

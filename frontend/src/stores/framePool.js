@@ -24,6 +24,9 @@ export const useFramePoolStore = defineStore('framePool', {
         // id → descriptor {
         //   src, remountKey, attrs, zTier ('base'|'overlay'|'fullscreen'),
         //   visible, rect {x,y,width,height},
+        //   clipRect ({x,y,width,height}|null) — viewport rect of the owner's
+        //     scroll container; FrameHost clip-paths the frame to it so a
+        //     scrolled-out placeholder doesn't paint over the pane's chrome,
         //   onLoad (markRaw fn|null),
         //   el (markRaw iframe element|null, set by FrameHost),
         //   overlayEl (markRaw div|null, set by FrameHost),
@@ -58,6 +61,7 @@ export const useFramePoolStore = defineStore('framePool', {
                 zTier: zTier || 'base',
                 visible: false,
                 rect: { x: 0, y: 0, width: 0, height: 0 },
+                clipRect: null,
                 onLoad: onLoad ? markRaw(onLoad) : null,
                 el: null,
                 overlayEl: null,

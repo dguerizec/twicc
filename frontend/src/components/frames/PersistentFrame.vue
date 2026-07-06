@@ -21,6 +21,12 @@ const props = defineProps({
     // Owner-provided stacking situation (see plan §2 z-tiers).
     elevated: { type: Boolean, default: false },   // inside the docking overlay
     fullscreen: { type: Boolean, default: false }, // preview expanded full-window
+    // Scroll container the placeholder can move out of (Browser pane
+    // responsive mode). The pooled iframe paints ABOVE pane content, so
+    // FrameHost clip-paths it to this element's rect — without it a
+    // scrolled-out placeholder would drag the frame over the pane's own
+    // chrome (toolbars, banners). Null = no clipping (today's behavior).
+    clipEl: { type: Object, default: null },
 })
 
 const emit = defineEmits(['load'])
@@ -45,12 +51,14 @@ const activated = ref(true)
 onActivated(() => {
     activated.value = true
     bounding.update()
+    clipBounding.update()
 })
 onDeactivated(() => {
     activated.value = false
 })
 
 const bounding = useElementBounding(placeholderEl)
+const clipBounding = useElementBounding(() => props.clipEl)
 const visible = computed(
     () => activated.value && bounding.width.value > 0.5 && bounding.height.value > 0.5
 )
@@ -78,12 +86,39 @@ if (pooled) {
         [bounding.x, bounding.y, bounding.width, bounding.height],
         ([x, y, width, height]) => pool.setRect(props.frameId, { x, y, width, height })
     )
+    // A 0-sized clip container means "not measured yet" (the prop lands one
+    // render before the rect does) — treat it as no clipping rather than
+    // blanking the frame for a tick.
+    watch(
+        [() => props.clipEl, clipBounding.x, clipBounding.y, clipBounding.width, clipBounding.height],
+        ([el, x, y, width, height]) => {
+            pool.patch(props.frameId, {
+                clipRect: el && width > 0.5 && height > 0.5 ? { x, y, width, height } : null,
+            })
+            // The placeholder lives INSIDE the clip container, so a container
+            // move that leaves the placeholder's own size unchanged — a
+            // sub-toolbar toggling or a banner appearing above it — shifts it
+            // invisibly to its own ResizeObserver. Re-measure on any clip-rect
+            // change so the pooled frame keeps following its placeholder.
+            bounding.update()
+        }
+    )
     // Layout mutations that move without resizing (dock retarget, overlay
     // open/close, maximize) are announced through the epoch.
-    watch(() => pool.geometryEpoch, () => bounding.update(), { flush: 'post' })
+    watch(
+        () => pool.geometryEpoch,
+        () => {
+            bounding.update()
+            clipBounding.update()
+        },
+        { flush: 'post' }
+    )
 }
 
-onMounted(() => bounding.update())
+onMounted(() => {
+    bounding.update()
+    clipBounding.update()
+})
 
 // The live iframe element (pooled or inline) — owners use it for
 // contentWindow (companion postMessage) and load listeners (broker).
