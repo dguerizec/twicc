@@ -27,6 +27,12 @@ const props = defineProps({
     // scrolled-out placeholder would drag the frame over the pane's own
     // chrome (toolbars, banners). Null = no clipping (today's behavior).
     clipEl: { type: Object, default: null },
+    // Force the frame hidden regardless of the placeholder's size. The frame
+    // paints ABOVE pane content, so a pane-local overlay that must cover the
+    // preview (e.g. the Files tab's mobile file-tree overlay) can't win on
+    // z-index — the owner suppresses the frame instead. The iframe keeps
+    // running; only its cell's visibility flips.
+    suppressed: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['load'])
@@ -60,7 +66,7 @@ onDeactivated(() => {
 const bounding = useElementBounding(placeholderEl)
 const clipBounding = useElementBounding(() => props.clipEl)
 const visible = computed(
-    () => activated.value && bounding.width.value > 0.5 && bounding.height.value > 0.5
+    () => activated.value && !props.suppressed && bounding.width.value > 0.5 && bounding.height.value > 0.5
 )
 
 if (pooled) {

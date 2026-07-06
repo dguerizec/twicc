@@ -92,6 +92,14 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    // Force the pooled HTML-preview frame hidden even when the placeholder has
+    // size. Used when a pane-local overlay must cover the preview but can't beat
+    // the app-level FrameHost layer on z-index (the Files tab's mobile file-tree
+    // overlay).
+    frameSuppressed: {
+        type: Boolean,
+        default: false,
+    },
 })
 
 const emit = defineEmits(['revert'])
@@ -1689,6 +1697,7 @@ function goToNextDiff() {
                             :attrs="HTML_PREVIEW_FRAME_ATTRS"
                             :elevated="props.frameElevated"
                             :fullscreen="isPreviewFullscreen"
+                            :suppressed="props.frameSuppressed"
                             :clip-el="viewportStageRef?.bodyEl ?? null"
                             class="html-preview"
                         />

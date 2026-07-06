@@ -563,6 +563,12 @@ onBeforeUnmount(() => {
  */
 const selectedFile = computed(() => fileTreePanelRef.value?.selectedFile ?? null)
 
+// Mobile only: the file-tree overlay covers the whole panel when open. A
+// pooled HTML-preview frame paints above pane content and would show through
+// that overlay, so suppress it while the overlay is up (the content is fully
+// covered anyway). Proxied from the FileTreePanel ref like selectedFile.
+const treeOverlayOpen = computed(() => isMobile.value && !!fileTreePanelRef.value?.fileTreeOpen)
+
 // On a tab-activation focus request from the layout (focusRequest bumped by SessionView), focus the
 // panel's primary content: the file viewer when a file is open (so keyboard nav keeps reading/scrolling
 // it), otherwise the tree's search filter. Deferred until the host sub-panel ref appears (it can mount a
@@ -1021,6 +1027,7 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged, reloadAll })
                     :render-only="renderOnly"
                     :artifact-bookmark-session-id="artifactBookmarkSessionId"
                     :frame-elevated="frameElevated"
+                    :frame-suppressed="treeOverlayOpen"
                 />
                 <div v-show="!selectedFile" class="panel-placeholder">
                     Select a file
