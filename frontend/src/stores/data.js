@@ -4841,6 +4841,43 @@ export const useDataStore = defineStore('data', {
             }
         },
 
+        /**
+         * Ask the backend to re-probe the on-disk existence of the session's
+         * tracked plan documents. An entry's `exists` flag is set at
+         * write-detection time from the `tool_use` line — logged before the
+         * tool flushes the file — so a doc written exactly once can be recorded
+         * as `missing` and stay that way until the (rare) full recompute
+         * re-probes. The Plan tab fires this on activation to clear such a
+         * stale flag: the backend persists + broadcasts `session_updated` only
+         * when a flag actually flipped. Best-effort — failures are swallowed
+         * (the flags just stay as they were). We also merge `plan_paths` from
+         * the HTTP response directly (covers the hidden-session case, which
+         * skips the broadcast); merging only that field avoids clobbering any
+         * in-flight optimistic layout/browser_url state.
+         * @param {string} projectId - The project ID
+         * @param {string} sessionId - The session ID
+         */
+        async refreshSessionPlanExistence(projectId, sessionId) {
+            try {
+                const response = await apiFetch(
+                    `/api/projects/${projectId}/sessions/${sessionId}/`,
+                    {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ refresh_plan_existence: true })
+                    }
+                )
+                if (!response.ok) return
+                const updatedSession = await response.json()
+                const cur = this.sessions[sessionId]
+                if (cur && Array.isArray(updatedSession.plan_paths)) {
+                    cur.plan_paths = updatedSession.plan_paths
+                }
+            } catch {
+                // Best-effort re-probe; a failure leaves the flags unchanged.
+            }
+        },
+
         // --- MRU (Most Recently Used) navigation tracking ---
 
         /**

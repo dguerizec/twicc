@@ -613,6 +613,53 @@ async def apply_session_goal_dismissed_change(session, created_at: str) -> str |
     return error
 
 
+async def refresh_session_plan_existence(session) -> bool:
+    """Re-probe the on-disk existence of every ``Session.plan_paths`` entry.
+
+    Each entry's ``exists`` flag is computed at write-detection time from the
+    ``tool_use`` line — which is logged *before* the tool actually creates the
+    file — so a document written exactly once can be recorded as missing and
+    stay that way until the next full recompute (which re-probes, but rarely
+    runs). This lets the Plan tab trigger a cheap on-demand re-probe when the
+    user brings it to the foreground, flipping stale ``missing`` flags back
+    live via the caller's ``session_updated`` broadcast.
+
+    Like ``apply_session_goal_dismissed_change``, the whole read-modify-write
+    runs on a fresh row under the DB write lock: ``plan_paths`` is compute-owned
+    and rewritten concurrently (watcher live-sync, full recompute, plans
+    watcher, subagent folds), so mutating a possibly stale in-memory copy could
+    clobber entries this pass never saw. ``_plan_doc_roots`` and the
+    ``os.path.exists`` probes are sync-only, so they run inside the locked
+    thread. The passed ``session`` instance is updated in place so the caller's
+    broadcast carries the change.
+
+    Returns ``True`` when at least one entry's ``exists`` flag flipped.
+    """
+    from twicc.core.models import Session
+    from twicc.providers.compute_base import BaseSessionCompute
+    from twicc.providers.plan_docs import refresh_entries_existence
+
+    def _refresh() -> list | None:
+        entries = (
+            Session.objects.filter(id=session.id)
+            .values_list("plan_paths", flat=True)
+            .first()
+        )
+        if not entries:
+            return None
+        roots = BaseSessionCompute._plan_doc_roots(session)
+        if not refresh_entries_existence(entries, roots):
+            return None
+        Session.objects.filter(id=session.id).update(plan_paths=entries)
+        return entries
+
+    entries = await run_under_db_write_lock(lambda: sync_to_async(_refresh)())
+    if entries is None:
+        return False
+    session.plan_paths = entries
+    return True
+
+
 async def update_session_pinned_from_payload(payload: dict) -> UpdateSessionResult:
     """Pin or unpin an existing session.
 

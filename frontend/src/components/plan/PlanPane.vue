@@ -186,6 +186,33 @@ watch(() => selectedEntry.value?.updated_at, (next, prev) => {
     if (next && prev && next !== prev) filePaneRef.value?.reload()
 })
 
+// --- On-demand existence re-probe -------------------------------------------
+
+// An entry's ``exists`` flag is set at write-detection time from the
+// ``tool_use`` line — logged before the tool flushes the file — so a doc
+// written exactly once can stay flagged ``(missing)`` until the rare full
+// recompute re-probes. When this tab is brought to the foreground (or its
+// docs first arrive on a direct deep-link), ask the backend to re-probe: it
+// persists + broadcasts ``session_updated`` only if a flag actually flipped.
+// Watching ``entries.length`` (not the array itself) keeps updated_at bumps —
+// which don't change the count — from re-firing during active editing; a short
+// throttle guards against rapid tab toggles.
+let lastProbeAt = 0
+function refreshExistenceOnShow() {
+    if (!props.active || !props.projectId || !entries.value.length) return
+    const now = Date.now()
+    if (now - lastProbeAt < 5000) return
+    lastProbeAt = now
+    store.refreshSessionPlanExistence(props.projectId, props.sessionId)
+}
+watch(
+    [() => props.active, () => entries.value.length],
+    refreshExistenceOnShow,
+    { immediate: true },
+)
+// Re-arm the throttle when the session changes so the next tab is probed fresh.
+watch(() => props.sessionId, () => { lastProbeAt = 0 })
+
 // SessionView calls reload() on ``twicc:plan-changed`` and on WS reconnect.
 defineExpose({ reload: () => filePaneRef.value?.reload() })
 </script>

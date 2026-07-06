@@ -1042,6 +1042,15 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
                 return JsonResponse({"error": error}, status=409)
             needs_broadcast = True
 
+        # Handle plan-doc existence refresh: re-probe each plan_paths entry's
+        # on-disk ``exists`` flag, live. Sent by the Plan tab on activation to
+        # clear a stale ``missing`` flag (existence is otherwise only re-probed
+        # by the rare full recompute). Only broadcasts when a flag flipped.
+        if data.get("refresh_plan_existence"):
+            from twicc.core.services.session_update import refresh_session_plan_existence
+            if await refresh_session_plan_existence(session):
+                needs_broadcast = True
+
         # Broadcast session_updated for archived/pinned changes.
         # Title changes don't need this: writing to JSONL triggers the
         # file watcher which broadcasts session_updated automatically.
