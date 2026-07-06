@@ -182,10 +182,9 @@ def settings_set(
     import django
     django.setup()
 
-    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
-    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._drop_request.output import emit_validation_errors
-    from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.validation import ValidationError
     from twicc.cli._output import emit_error
     from twicc.cli.settings._keys import ValueParseError, parse_value
@@ -200,20 +199,16 @@ def settings_set(
         raise typer.Exit(1)
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
     payload = {"patch": {key: parsed}}
-    drop = write_drop_file(payload, kind="settings:update")
+    sub = transport.submit(payload, kind="settings:update")
+    outcome = transport.wait(sub, timeout_seconds=timeout)
+    sub.cleanup()
 
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
-
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
-
-    code = emit_settings_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
+    code = emit_settings_final(outcome, request_uuid=sub.request_uuid, timeout=timeout)
     raise typer.Exit(code)
 
 
@@ -235,9 +230,8 @@ def settings_unset(
     import django
     django.setup()
 
-    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
-    from twicc.cli._drop_request.drop_file import write_drop_file
-    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._output import emit_error
     from twicc.cli.settings._output import emit_settings_final
     from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS
@@ -247,18 +241,14 @@ def settings_unset(
     default = SYNCED_SETTINGS_DEFAULTS[key]
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
     payload = {"patch": {key: default}}
-    drop = write_drop_file(payload, kind="settings:update")
+    sub = transport.submit(payload, kind="settings:update")
+    outcome = transport.wait(sub, timeout_seconds=timeout)
+    sub.cleanup()
 
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
-
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
-
-    code = emit_settings_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
+    code = emit_settings_final(outcome, request_uuid=sub.request_uuid, timeout=timeout)
     raise typer.Exit(code)

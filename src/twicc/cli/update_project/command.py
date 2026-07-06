@@ -272,10 +272,9 @@ def update_project_main(
     import django
     django.setup()
 
-    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
-    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._drop_request.output import emit_final, emit_validation_errors
-    from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.validation import ValidationError
     from twicc.core.enums import Provider
     from twicc.core.models import Project
@@ -283,17 +282,15 @@ def update_project_main(
     from twicc.workspaces import validate_browser_url, validate_color
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
     def _submit_and_exit(payload: dict, kind: str) -> None:
-        drop = write_drop_file(payload, kind=kind)
-        status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-        outcome = poll_status(status_path, timeout_seconds=timeout)
-        drop.path.unlink(missing_ok=True)
-        status_path.unlink(missing_ok=True)
-        emit_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
+        sub = transport.submit(payload, kind=kind)
+        outcome = transport.wait(sub, timeout_seconds=timeout)
+        sub.cleanup()
+        emit_final(outcome, request_uuid=sub.request_uuid, timeout=timeout)
         if outcome.status == "updated":
             raise typer.Exit(0)
         if outcome.status == "rejected":

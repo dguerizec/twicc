@@ -70,17 +70,13 @@ def send_message_cmd(
         AttachmentResizeError,
         validate_and_encode,
     )
+    from twicc.cli._drop_request import transport
     from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
-    from twicc.cli._drop_request.discovery import (
-        ServerDownError,
-        check_heartbeat,
-    )
-    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._drop_request.output import (
         emit_final,
         emit_validation_errors,
     )
-    from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.prompt import resolve_prompt, PromptError
     from twicc.cli._drop_request.session_lookup import (
         SessionLookupError,
@@ -92,7 +88,7 @@ def send_message_cmd(
     from twicc.providers.helpers import get_provider_helpers
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
@@ -215,18 +211,13 @@ def send_message_cmd(
         "documents": attach_result.documents,
     }
 
-    drop = write_drop_file(payload, kind="session:send_message")
-
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
-
-    # Cleanup our own files.
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
+    sub = transport.submit(payload, kind="session:send_message")
+    outcome = transport.wait(sub, timeout_seconds=timeout)
+    sub.cleanup()
 
     emit_final(
         outcome,
-        request_uuid=drop.request_uuid,
+        request_uuid=sub.request_uuid,
         timeout=timeout,
     )
 

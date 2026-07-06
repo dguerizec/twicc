@@ -193,13 +193,12 @@ def update_project_settings_cmd(
     import django
     django.setup()
 
+    from twicc.cli._drop_request import transport
     from twicc.cli._drop_request.aliases import resolve_alias, supported_fields
     from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
-    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
-    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._drop_request.help_strings import parse_context_max
     from twicc.cli._drop_request.output import emit_final, emit_validation_errors
-    from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.validation import (
         ValidationError,
         validate_no_set_unset_conflict,
@@ -212,7 +211,7 @@ def update_project_settings_cmd(
     # Server-up check first (exit 2 wins over any validation error), matching
     # the other drop-file commands.
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
@@ -345,15 +344,11 @@ def update_project_settings_cmd(
         "updates": updates,
     }
 
-    drop = write_drop_file(payload, kind="project:update_settings")
+    sub = transport.submit(payload, kind="project:update_settings")
+    outcome = transport.wait(sub, timeout_seconds=timeout)
+    sub.cleanup()
 
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
-
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
-
-    emit_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
+    emit_final(outcome, request_uuid=sub.request_uuid, timeout=timeout)
 
     if outcome.status == "updated":
         raise typer.Exit(0)

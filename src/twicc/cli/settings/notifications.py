@@ -115,24 +115,20 @@ def _drop_and_poll(payload: dict, kind: str, timeout: int):
     Raises ``SystemExit(2)`` directly (via :func:`~twicc.cli._output.emit_error`)
     when the server is down, consistent with every other drop command.
     """
-    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
-    from twicc.cli._drop_request.drop_file import write_drop_file
-    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._output import emit_error
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
-    drop = write_drop_file(payload, kind=kind)
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
+    sub = transport.submit(payload, kind=kind)
+    outcome = transport.wait(sub, timeout_seconds=timeout)
+    sub.cleanup()
 
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
-
-    return outcome, drop.request_uuid
+    return outcome, sub.request_uuid
 
 
 def _drop_patch(patch: dict, timeout: int) -> int:

@@ -461,24 +461,20 @@ def provider_main(
         )])
         raise typer.Exit(1)
 
-    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
-    from twicc.cli._drop_request.drop_file import write_drop_file
-    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli.settings._output import emit_settings_final
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
-    drop = write_drop_file({"patch": patch}, kind="settings:update")
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
+    sub = transport.submit({"patch": patch}, kind="settings:update")
+    outcome = transport.wait(sub, timeout_seconds=timeout)
+    sub.cleanup()
 
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
-
-    code = emit_settings_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
+    code = emit_settings_final(outcome, request_uuid=sub.request_uuid, timeout=timeout)
     raise typer.Exit(code)
 
 
@@ -534,25 +530,21 @@ def _drop_patch(patch: dict, timeout: int) -> int:
 
     Shared by all five sub-commands to avoid repeating the check/drop/poll loop.
     """
-    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
-    from twicc.cli._drop_request.drop_file import write_drop_file
-    from twicc.cli._drop_request.polling import poll_status
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._output import emit_error
     from twicc.cli.settings._output import emit_settings_final
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
-    drop = write_drop_file({"patch": patch}, kind="settings:update")
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
+    sub = transport.submit({"patch": patch}, kind="settings:update")
+    outcome = transport.wait(sub, timeout_seconds=timeout)
+    sub.cleanup()
 
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
-
-    return emit_settings_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
+    return emit_settings_final(outcome, request_uuid=sub.request_uuid, timeout=timeout)
 
 
 def _setup_and_validate(ctx: typer.Context):

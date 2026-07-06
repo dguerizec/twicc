@@ -45,10 +45,8 @@ def wait_cmd(
         project_virtual_state,
         serialize_wait_result,
     )
-    from twicc.cli._drop_request.discovery import (
-        ServerDownError,
-        check_heartbeat,
-    )
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._twicc_info import resolve_live_twicc
     from twicc.core.models import ProcessRun, Session
 
@@ -83,7 +81,7 @@ def wait_cmd(
     # --- Server-up check (exit 2 on failure, like stop_cmd) --------------
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(f"Error: {e}", code=2)
 

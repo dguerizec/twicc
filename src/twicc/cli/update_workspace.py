@@ -149,10 +149,9 @@ def update_workspace_cmd(
     import django
     django.setup()
 
-    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
-    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._drop_request.output import emit_final, emit_validation_errors
-    from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.validation import ValidationError
     from twicc.cli._output import emit_error
     from twicc.core.models import Project
@@ -165,7 +164,7 @@ def update_workspace_cmd(
     )
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
@@ -281,15 +280,11 @@ def update_workspace_cmd(
         "unset_browser_url": unset_browser_url,
     }
 
-    drop = write_drop_file(payload, kind="workspace:update")
+    sub = transport.submit(payload, kind="workspace:update")
+    outcome = transport.wait(sub, timeout_seconds=timeout)
+    sub.cleanup()
 
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
-
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
-
-    emit_final(outcome, request_uuid=drop.request_uuid, timeout=timeout)
+    emit_final(outcome, request_uuid=sub.request_uuid, timeout=timeout)
 
     if outcome.status == "updated":
         raise typer.Exit(0)

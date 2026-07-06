@@ -76,10 +76,8 @@ def wait_cmd(
     django.setup()
 
     from twicc.agent.states import AgentState
-    from twicc.cli._drop_request.discovery import (
-        ServerDownError,
-        check_heartbeat,
-    )
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._process_state import (
         VALID_VIRTUAL_STATES,
         project_virtual_state,
@@ -146,7 +144,7 @@ def wait_cmd(
     # --- Server-up check (exit 2) ----------------------------------------
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(f"Error: {e}", code=2)
 

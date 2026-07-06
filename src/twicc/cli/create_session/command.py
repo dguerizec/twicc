@@ -237,11 +237,10 @@ def create_session_cmd(
         AttachmentResizeError,
         validate_and_encode,
     )
+    from twicc.cli._drop_request import transport
     from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
-    from twicc.cli._drop_request.discovery import ServerDownError, check_heartbeat
-    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._drop_request.output import emit_final, emit_validation_errors
-    from twicc.cli._drop_request.polling import poll_status
     from twicc.cli._drop_request.prompt import resolve_prompt, PromptError
     from twicc.cli._drop_request.project import resolve_project
     from twicc.cli._drop_request.presets import apply_preset_and_overrides, PresetError
@@ -255,7 +254,7 @@ def create_session_cmd(
     from twicc.providers.helpers import get_provider_helpers
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
@@ -474,18 +473,13 @@ def create_session_cmd(
     elif wt_path:
         payload["worktree_path"] = wt_path
 
-    drop = write_drop_file(payload, kind="session:create")
-
-    status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-    outcome = poll_status(status_path, timeout_seconds=timeout)
-
-    # Cleanup our own files (cf. spec §5.5).
-    drop.path.unlink(missing_ok=True)
-    status_path.unlink(missing_ok=True)
+    sub = transport.submit(payload, kind="session:create")
+    outcome = transport.wait(sub, timeout_seconds=timeout)
+    sub.cleanup()
 
     emit_final(
         outcome,
-        request_uuid=drop.request_uuid,
+        request_uuid=sub.request_uuid,
         timeout=timeout,
     )
 

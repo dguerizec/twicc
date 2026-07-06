@@ -283,6 +283,10 @@ seen-tips.json
 seen-help.json
 # RPC API token store (SHA-256 digests; lives in the data dir, appears in worktrees).
 api-tokens.json
+# MCP per-install signing secret + per-session Claude MCP config files (bearer
+# tokens); both live in the data dir and appear at the worktree root.
+mcp-secret
+mcp-configs/
 # Per-provider agent settings presets (one file per provider, see
 # BaseProviderHelpers.get_settings_presets_path).
 *-settings-presets.json
