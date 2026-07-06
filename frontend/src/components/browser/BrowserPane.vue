@@ -1122,13 +1122,13 @@ function onHomeSelect(event) {
 }
 
 .companion-status.present wa-icon {
-    color: var(--wa-color-success-fill-loud);
+    color: var(--wa-color-brand-fill-loud);
 }
 
-/* Select-area toggle: green while the picking mode is active, normal otherwise
-   (mirrors the connected-companion plug colour). */
+/* Select-area toggle: brand colour while the picking mode is active, normal
+   otherwise (mirrors the connected-companion plug colour). */
 .select-toggle.active wa-icon {
-    color: var(--wa-color-success-fill-loud);
+    color: var(--wa-color-brand-fill-loud);
 }
 
 /* Page-errors indicator: warning glyph + count, in the danger colour. */
