@@ -300,6 +300,46 @@ function effectiveType() {
 }
 
 /**
+ * Attempt to parse a string as a JSON object or array.
+ * Only structural results (objects, arrays) qualify — scalar JSON such as
+ * "42", "true" or "null" is intentionally left as a plain string so an id,
+ * version or code stored as a string doesn't silently morph into a
+ * number/boolean. A cheap first-character check avoids the try/catch on the
+ * vast majority of non-JSON strings.
+ * @param {string} str
+ * @returns {object|Array|null} The parsed structure, or null if not one.
+ */
+function tryParseJsonStructure(str) {
+    const trimmed = str.trim()
+    if (trimmed.length < 2) return null
+    const first = trimmed[0]
+    if (first !== '{' && first !== '[') return null
+    try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed !== null && typeof parsed === 'object') return parsed
+    } catch {
+        // Not valid JSON — leave the value as a plain string.
+    }
+    return null
+}
+
+/**
+ * When this node's value is a plain string that actually contains a JSON
+ * object or array, expose the parsed structure so the template can render it
+ * as nested children (as if the key held that structure natively) instead of
+ * raw text.
+ *
+ * Scoped to read mode with no override in play: edit mode round-trips the
+ * string verbatim (so it stays a string), and an explicit parent intent
+ * (override) always wins over auto-detection. Returns null otherwise.
+ */
+const parsedJsonValue = computed(() => {
+    if (props.editable || props.override) return null
+    if (typeof props.value !== 'string') return null
+    return tryParseJsonStructure(props.value)
+})
+
+/**
  * Value to feed the ``string-code`` branch of the template. When the
  * underlying ``value`` is an array (typical for argv-shaped tool inputs
  * like Codex's ``local_shell_call.action.command``) we join with a
@@ -567,8 +607,15 @@ const readDiffEditorRefs = reactive({})
 
 <template>
     <div class="jhv-node" :class="{ 'jhv-nested': depth >= 1 }">
+        <!-- String that holds a JSON object/array: parse it and render the
+             structure as children, as if the key held it natively. Read-only,
+             auto-detected (no override), so no round-trip concern. -->
+        <template v-if="parsedJsonValue !== null">
+            <JsonHumanView :value="parsedJsonValue" :name="name" :depth="depth" />
+        </template>
+
         <!-- Hidden: override says this field should not be rendered -->
-        <template v-if="effectiveType() === 'hidden'" />
+        <template v-else-if="effectiveType() === 'hidden'" />
 
         <!-- Null / undefined (not editable — no meaningful type to edit into) -->
         <template v-else-if="effectiveType() === 'null'">
