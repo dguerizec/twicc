@@ -83,6 +83,21 @@ class Submission:
             return PollOutcome(status=status, data=data, received_seen=True)
         return None
 
+    def was_received(self) -> bool:
+        """Whether the request has reached at least the ``received`` stage.
+
+        Backend mode: always True (submitting IS receipt). Local mode: reads the
+        status file for a ``received`` marker. Used to keep the timeout wording
+        accurate ("received but no response" vs "no confirmation") in the batch
+        pollers, which never observe the intermediate via :meth:`poll`.
+        """
+        if self._future is not None:
+            return True
+        try:
+            return orjson.loads(self._status_path.read_bytes()).get("status") == "received"
+        except (FileNotFoundError, ValueError, OSError):
+            return False
+
     def cleanup(self) -> None:
         """Delete the request/status files (local mode); no-op in backend mode."""
         if self._drop_path is not None:
@@ -127,15 +142,6 @@ def wait(submission: Submission, timeout_seconds: int) -> PollOutcome:
         outcome = submission.poll()
         if outcome is not None:
             return outcome
-        received_seen = received_seen or _local_received_seen(submission)
+        received_seen = received_seen or submission.was_received()
         time.sleep(POLL_INTERVAL_SECONDS)
     return PollOutcome(status=None, data=None, received_seen=received_seen)
-
-
-def _local_received_seen(submission: Submission) -> bool:
-    if submission._status_path is None:
-        return True
-    try:
-        return orjson.loads(submission._status_path.read_bytes()).get("status") == "received"
-    except (FileNotFoundError, ValueError, OSError):
-        return False

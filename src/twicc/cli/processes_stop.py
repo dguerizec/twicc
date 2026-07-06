@@ -41,8 +41,6 @@ from __future__ import annotations
 
 import time
 
-import orjson
-
 from twicc.cli._output import emit_error, emit_json
 
 
@@ -76,11 +74,8 @@ def stop_cmd(
     import django
     django.setup()
 
-    from twicc.cli._drop_request.discovery import (
-        ServerDownError,
-        check_heartbeat,
-    )
-    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._drop_request.session_lookup import (
         SessionLookupError,
         lookup_session,
@@ -123,7 +118,7 @@ def stop_cmd(
     # --- Server-up check (exit 2 mirrors process stop) -------------------
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(f"Error: {e}", code=2)
 
@@ -211,10 +206,9 @@ def stop_cmd(
         payload = {"session_id": resolved.session_id}
         if force:
             payload["force"] = True
-        drop = write_drop_file(payload, kind="process:stop")
-        status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
-        entry["request_uuid"] = drop.request_uuid
-        initial_drops.append((sid, drop, status_path))
+        sub = transport.submit(payload, kind="process:stop")
+        entry["request_uuid"] = sub.request_uuid
+        initial_drops.append((sid, sub))
 
     # --- Cumulative poll until all pending are resolved or timeout -------
 
@@ -223,40 +217,33 @@ def stop_cmd(
     try:
         while pending and time.time() < deadline:
             still_pending = []
-            for sid, drop, status_path in pending:
-                if not status_path.exists():
-                    still_pending.append((sid, drop, status_path))
+            for sid, sub in pending:
+                outcome = sub.poll()
+                if outcome is None:
+                    # Missing, mid-rename, or "received" — keep polling.
+                    still_pending.append((sid, sub))
                     continue
-                try:
-                    data = orjson.loads(status_path.read_bytes())
-                except (orjson.JSONDecodeError, OSError):
-                    # Status file mid-rename — retry next tick.
-                    still_pending.append((sid, drop, status_path))
-                    continue
-                status = data.get("status")
-                if status in ("stopped", "rejected", "failed"):
-                    entry = outcomes[sid]
-                    entry["status"] = status
-                    if status == "rejected":
-                        errors = data.get("errors", [])
-                        entry["error"] = (
-                            "; ".join(
-                                f"{e.get('code')}: {e.get('message')}"
-                                for e in errors
-                            )
-                            if errors else None
+                status = outcome.status
+                data = outcome.data
+                entry = outcomes[sid]
+                entry["status"] = status
+                if status == "rejected":
+                    errors = data.get("errors", [])
+                    entry["error"] = (
+                        "; ".join(
+                            f"{e.get('code')}: {e.get('message')}"
+                            for e in errors
                         )
-                    elif status == "failed":
-                        entry["error"] = data.get("error")
-                else:
-                    # "received" or other intermediate — keep polling.
-                    still_pending.append((sid, drop, status_path))
+                        if errors else None
+                    )
+                elif status == "failed":
+                    entry["error"] = data.get("error")
             pending = still_pending
             if pending:
                 time.sleep(POLL_INTERVAL_SECONDS)
 
         # Anything still pending after the deadline = timeout.
-        for sid, _, _ in pending:
+        for sid, _ in pending:
             outcomes[sid]["status"] = "timeout"
             outcomes[sid]["error"] = (
                 f"No final status within {timeout}s "
@@ -266,9 +253,8 @@ def stop_cmd(
         # Always clean up the drop + status files we created, even if the
         # poll loop raised. ``missing_ok=True`` covers the server having
         # already deleted them.
-        for _, drop, status_path in initial_drops:
-            drop.path.unlink(missing_ok=True)
-            status_path.unlink(missing_ok=True)
+        for _, sub in initial_drops:
+            sub.cleanup()
 
     # --- Emit JSON array in input order ----------------------------------
 

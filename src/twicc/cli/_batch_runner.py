@@ -42,7 +42,6 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-import orjson
 import typer
 
 from twicc.cli._output import emit_error, emit_json
@@ -86,11 +85,8 @@ def run_batch(
     import django
     django.setup()
 
-    from twicc.cli._drop_request.discovery import (
-        ServerDownError,
-        check_heartbeat,
-    )
-    from twicc.cli._drop_request.drop_file import write_drop_file
+    from twicc.cli._drop_request import transport
+    from twicc.cli._drop_request.discovery import ServerDownError
     from twicc.cli._drop_request.output import build_final
     from twicc.cli._drop_request.polling import PollOutcome
     from twicc.cli._drop_request.session_lookup import (
@@ -139,7 +135,7 @@ def run_batch(
     # --- Server-up check (exit 2 mirrors the singular command) -----------
 
     try:
-        check_heartbeat()
+        transport.ensure_server_available()
     except ServerDownError as e:
         emit_error(f"Error: {e}", code=2)
 
@@ -189,7 +185,7 @@ def run_batch(
     # order. Lookup / prepare failures land here immediately (validation_error,
     # no drop); survivors get a placeholder filled in after polling.
     results: dict[str, dict | None] = {}
-    pending: list[tuple[str, object, object]] = []  # (sid, drop, status_path)
+    pending: list[tuple[str, transport.Submission]] = []  # (sid, submission)
 
     for sid in unique_ids:
         try:
@@ -221,65 +217,44 @@ def run_batch(
             }
             continue
 
-        drop = write_drop_file(outcome, kind=kind)
-        status_path = drop.path.with_name(f"{drop.request_uuid}.status.json")
         results[sid] = None
-        pending.append((sid, drop, status_path))
+        pending.append((sid, transport.submit(outcome, kind=kind)))
 
     # --- Cumulative poll until all pending are resolved or timeout -------
 
-    received_seen: dict[str, bool] = {sid: False for sid, _, _ in pending}
-    last_data: dict[str, dict | None] = {sid: None for sid, _, _ in pending}
+    received_seen: dict[str, bool] = {sid: False for sid, _ in pending}
     still = list(pending)
     deadline = time.time() + timeout
     try:
         while still and time.time() < deadline:
-            next_round: list[tuple[str, object, object]] = []
-            for sid, drop, status_path in still:
-                if not status_path.exists():
-                    next_round.append((sid, drop, status_path))
-                    continue
-                try:
-                    data = orjson.loads(status_path.read_bytes())
-                except (orjson.JSONDecodeError, OSError):
-                    # Status file mid-rename — retry next tick.
-                    next_round.append((sid, drop, status_path))
-                    continue
-                status = data.get("status")
-                last_data[sid] = data
-                if status == "received":
+            next_round: list[tuple[str, transport.Submission]] = []
+            for sid, sub in still:
+                if not received_seen[sid] and sub.was_received():
                     received_seen[sid] = True
-                    next_round.append((sid, drop, status_path))
+                outcome = sub.poll()
+                if outcome is None:
+                    # Still pending (missing, mid-rename, or "received").
+                    next_round.append((sid, sub))
                     continue
-                if status in (success_status, "rejected", "failed"):
-                    outcome = PollOutcome(
-                        status=status, data=data,
-                        received_seen=received_seen[sid],
-                    )
-                    results[sid] = build_final(
-                        outcome, request_uuid=drop.request_uuid, timeout=timeout,
-                    )
-                else:
-                    # Unknown intermediate — keep polling.
-                    next_round.append((sid, drop, status_path))
+                results[sid] = build_final(
+                    outcome, request_uuid=sub.request_uuid, timeout=timeout,
+                )
             still = next_round
             if still:
                 time.sleep(POLL_INTERVAL_SECONDS)
 
         # Anything still pending after the deadline = timeout.
-        for sid, drop, status_path in still:
+        for sid, sub in still:
             outcome = PollOutcome(
-                status=None, data=last_data[sid],
-                received_seen=received_seen[sid],
+                status=None, data=None, received_seen=received_seen[sid],
             )
             results[sid] = build_final(
-                outcome, request_uuid=drop.request_uuid, timeout=timeout,
+                outcome, request_uuid=sub.request_uuid, timeout=timeout,
             )
     finally:
         # Always clean up the drop + status files we created, even on a raise.
-        for _, drop, status_path in pending:
-            drop.path.unlink(missing_ok=True)
-            status_path.unlink(missing_ok=True)
+        for _, sub in pending:
+            sub.cleanup()
 
     # --- Aggregate + emit in input order ---------------------------------
 
