@@ -28,6 +28,7 @@ Not a substitute for splitting work you can already see is large (→ divide-and
 ## Pitfalls
 - The briefing must be self-contained — the child has none of your memory.
 - Offload *state*, not your transcript: a fresh child wants the conclusions, not the journey.
-- Read-only sessions can't write the scratch — this is an executor move.
+- Read-only sessions can't write the scratch (a filesystem write, which the
+  `mcp__twicc__*` tools don't grant) — this is an executor move.
 
 Examples: `examples/context-relay.md`.

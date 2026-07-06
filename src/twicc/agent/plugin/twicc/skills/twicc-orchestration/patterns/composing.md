@@ -36,8 +36,10 @@ common, useful combinations to start from. When none fits, compose your own.
   This is about **control** (synchronization and the final merge), not about who may
   talk to whom: children are free to coordinate sideways with their siblings
   (`patterns/peer-coordination.md`) — you still only wait on and aggregate your own.
-- **Read-only children can't push or spawn.** A `strict`/`dontAsk` child is a
-  pull-only leaf — design around that.
+- **Read-only children still push and spawn via `mcp__twicc__*`.** A `strict`/`dontAsk`
+  child can't write files, edit code, or run shell — but the MCP tools let it spawn,
+  send, and retag (see twicc-orchestration › Permission modes). It's a pull-only leaf
+  only when it has no MCP tools; design around whichever applies.
 
 ## Reading the named patterns
 

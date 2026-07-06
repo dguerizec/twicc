@@ -60,7 +60,7 @@ A spawned session starts with **no memory of you** — every prompt must be self
 
 - **Push** — an executor child reports up with `send-message parent` (the `parent` keyword resolves to its spawner). Skill: `twicc-send-message`.
 - **Pull** — a parent can read any child's messages at any time with `$TWICC session <child_id> messages --tail N`, whether or not the child can push. The two coexist: you can look in on a child without waiting for its report.
-- A **read-only** child (see below) cannot push — pull is the only way to read it.
+- A **read-only** child (see below) cannot push *through the CLI*, but **can** push via `mcp__twicc__send_message` when it has the MCP tools; without them, pull is the only way to read it.
 - **Sideways** — siblings *can* talk to each other directly; there is no rule that exchanges must go through the parent. An executor reaches one peer with `send-message <sibling_id>` or broadcasts to all of them with `send-messages --siblings self` (the reference session is always excluded); any session can pull a peer with `$TWICC session <sibling_id> messages`. Discover your peers first with `sessions --siblings self`, `processes --siblings self`, or `topology self --siblings`. Use it for genuine peer coordination — a handoff, a heads-up, sharing a result — not as a replacement for reporting: control and aggregation still flow up to the common parent. Some patterns (e.g. independent quorum advisors) deliberately keep siblings isolated for independence — don't wire peer chat there. Full pattern: `patterns/peer-coordination.md`.
 
 ## Choosing a provider
@@ -69,14 +69,16 @@ The user can exclude providers from orchestration (a per-provider switch in the 
 
 ## Permission modes — use only the two extremes
 
-Every session knows its own `permission_mode` from its injected context. For orchestration, use only the two **non-interactive** extremes of each provider — one that allows everything, one that allows nothing:
+Every session knows its own `permission_mode` from its injected context. For orchestration, use only the two **non-interactive** extremes of each provider — one that allows everything, one that blocks the shell:
 
-- **Executor — allows everything** (Claude Code `bypassPermissions`, Codex `yolo`; alias for both `open`): can act, write, spawn children, and push to its parent.
-- **Read-only — allows only reading** (Claude Code `dontAsk`, Codex `strict`; alias for both `strict`): pure read/analysis of the given project; cannot run commands, so cannot spawn, `send-message`, or write. Always a terminal leaf, read only by pull. Worth using only for pure code/content analysis.
+- **Executor — allows everything** (Claude Code `bypassPermissions`, Codex `yolo`; alias for both `open`): can run shell, write files, edit code, spawn children, and push to its parent — by any means (the `$TWICC` CLI or the MCP tools).
+- **Read-only — no shell execution** (Claude Code `dontAsk`, Codex `strict`; alias for both `strict`): pure read/analysis of the given project. It **cannot run any shell command**, so it cannot use the `$TWICC` CLI, the bash-based skills, write files, or edit code.
+
+**But read-only is not a dead end for orchestration.** The `mcp__twicc__*` tools are a control plane mediated by the provider core, *not* the execution sandbox — so they work in **every** mode, read-only included. A read-only session can therefore still drive TwiCC through those tools: `mcp__twicc__create_session` to spawn a child, `mcp__twicc__send_message` (target `parent`) to push, `mcp__twicc__update_session` to retag itself, and every read tool. So a read-only session is a **pull-only leaf only when it has no `mcp__twicc__*` tools** (e.g. MCP disabled); with them it can delegate and push like an executor — it just still cannot touch the shell, the filesystem, or the project's code.
 
 Those aliases are provider-agnostic: pass `--permission-mode open` or `--permission-mode strict` and each provider resolves it to the concrete value above — no need to remember `bypassPermissions`/`yolo`/`dontAsk` per provider.
 
-Avoid the interactive modes: they pause for per-tool approvals or questions, and a spawned session waiting on a user dialog is one you cannot reliably unblock or steer from a parent. Choose a child's mode by what it needs to do — a manager must be an executor (a read-only manager could neither create children nor report).
+Avoid the interactive modes: they pause for per-tool approvals or questions, and a spawned session waiting on a user dialog is one you cannot reliably unblock or steer from a parent. Choose a child's mode by what it needs to do — a manager must spawn children and report, which a read-only session can do **only** through the `mcp__twicc__*` tools (never the CLI); make a manager an executor unless you are deliberately relying on its MCP tools.
 
 ## Wait only on your direct children
 
@@ -112,7 +114,7 @@ Useful keys (free — conventions, not rules):
 Who sets them:
 
 - A **parent** tags a child at spawn (`create-session --annotation mode=worker --annotation job=reviewer`).
-- A session updates **its own** tags as it goes (`update-session self annotations set:status=done`) — but a read-only session can't run commands, so it keeps whatever the parent gave it.
+- A session updates **its own** tags as it goes (`update-session self annotations set:status=done`) — a read-only session can't run the CLI for this, but can retag itself with `mcp__twicc__update_session` when it has the MCP tools; otherwise it keeps whatever the parent gave it.
 
 Keep values **short and single-line** — annotations are metadata, not a message channel. Anything long goes in the message or a scratch file.
 
@@ -128,7 +130,7 @@ How the shared scratch works:
 - The leader picks a folder (typically `<scratch_base_dir>/<leader_session_id>/`) and passes its absolute path to each child as the `scratch_dir` annotation. A child that spawns children **propagates the same `scratch_dir`**, so the whole subtree converges on one folder. A `scratch_dir` annotation **takes precedence** over your own `scratch_base_dir`.
 - **Already created**: the shared folder is the root session's own scratch dir, which TwiCC pre-creates (like every session's), so write to it directly — `mkdir -p` stays harmless/idempotent if you ever point `scratch_dir` at a custom path.
 - **Prefix every file with your own session id** (`<session_id>-report.md`) so two agents never clobber the same file.
-- **Read-only sessions**: cannot **write** the scratch, but **can read** it — TwiCC grants every tree member read access to the shared scratch, so a read-only executor still pulls peers' files from there; it returns its own result in its reply (the parent reads it by pull).
+- **Read-only sessions**: cannot **write** the scratch (that is a filesystem write, which the MCP tools do not grant), but **can read** it — TwiCC grants every tree member read access to the shared scratch, so a read-only session still pulls peers' files from there. It returns its own result either in its reply (the parent pulls it) or by pushing it with `mcp__twicc__send_message` when it has the MCP tools.
 
 Pattern: an executor (worker or manager) writes `<scratch_dir>/<session_id>-result.md`, then sends a short `send-message parent` ("done, see `<session_id>-result.md`"); the parent reads the file.
 
@@ -153,7 +155,7 @@ For exact command recipes (barriers, scoped waits, races, batch stops, subtree a
 
 ## Freedom
 
-This is the unconstrained model: nothing here is enforced except the technical limits of read-only mode. The conventions above are what keep an orchestration legible — follow them, but the system will not stop you from doing otherwise.
+This is the unconstrained model: nothing here is enforced except the technical limits of read-only mode (no shell, no file writes — though the `mcp__twicc__*` tools still work, see *Permission modes*). The conventions above are what keep an orchestration legible — follow them, but the system will not stop you from doing otherwise.
 
 ## Orchestration patterns (for leaders and managers)
 

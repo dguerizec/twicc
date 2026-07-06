@@ -14,7 +14,8 @@ concurrency inside each manager.
 5. Leader waits on its managers only, merges the area deliverables into the audit report.
 
 ## Notes
-- Managers must be executors (they spawn + report). Workers that only read can be
-  read-only; workers that edit need executor write permission.
+- Managers spawn + report — read-only can do that only via the `mcp__twicc__*` tools,
+  so prefer executor managers. Workers that only read can be read-only; workers that
+  edit need executor write permission.
 - Cap K per manager from `usage` headroom — a wide codebase × wide pool exhausts quota.
 - For a read-only audit (no edits), all workers are `dontAsk`/`strict` analysts, pulled.

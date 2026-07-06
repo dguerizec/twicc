@@ -21,7 +21,7 @@ You decide the shape:
 
 You can mix both. When unsure whether a piece is atomic, spawn a worker; if it escalates back, split it yourself.
 
-Pick each child's permission mode by need. **Read-only (`strict`/`dontAsk`) is worth it only for pure code analysis** (a confined reader); for anything that acts, spawn an executor.
+Pick each child's permission mode by need. **Read-only (`strict`/`dontAsk`) confines a child to reading/analyzing the project** — no shell, no writes, no code edits — so it's the safe pick for a pure analyst. Note it is *not* cut off from orchestration: the `mcp__twicc__*` tools work in read-only too, so such a child can still report (`mcp__twicc__send_message parent`) and even spawn via MCP. Spawn an executor when the child must act **on the project** (run commands, write, edit code).
 
 ## Brief and spawn
 

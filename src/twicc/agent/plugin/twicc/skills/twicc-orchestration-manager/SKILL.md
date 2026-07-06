@@ -12,9 +12,9 @@ You are a **manager**: an internal node with a parent above you and children bel
 - Your parent spawned you and told you to load this skill.
 - Your mandate is itself a sub-project worth splitting across children.
 
-## You must be an executor
+## You must be able to spawn and report
 
-A manager has to spawn children and report up — a read-only session (`strict`/`dontAsk`) can do neither. If you find yourself read-only, you cannot act as a manager: say so in your deliverable (you cannot push either) so your parent can re-spawn you correctly.
+A manager has to spawn children and report up. Through the `$TWICC` CLI that needs an executor — but the `mcp__twicc__*` tools work in every mode, so a read-only session (`strict`/`dontAsk`) **can** still manage *via those tools* (`mcp__twicc__create_session` to spawn, `mcp__twicc__send_message` target `parent` to report); it just can't run shell, write files, or edit code. So an executor is the natural manager, and read-only management is only possible with the MCP tools wired. If you find yourself read-only **and** without those tools, you genuinely cannot spawn or push: say so in your deliverable so your parent can re-spawn you correctly.
 
 ## Receive, decompose, aggregate
 

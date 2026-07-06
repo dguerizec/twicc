@@ -17,7 +17,7 @@ Shape: star · push or pull · barrier · synthesize · heterogeneous (by angle)
 2. Spawn one worker per lens, same target, `--annotation job=<lens>`. For pure
    reading, read-only (`strict`/`dontAsk`) workers are ideal here.
 3. Barrier on your direct children.
-4. Pull each lens's findings (read-only can't push) and synthesize: group by area,
+4. Pull each lens's findings (read-only workers are pulled here by design) and synthesize: group by area,
    drop duplicates, surface conflicts between lenses.
 
 ## Use it when
@@ -27,8 +27,8 @@ Not when the criteria interact and need one combined judgment (→ debate).
 
 ## Pitfalls
 - Lenses that overlap heavily waste agents — make them distinct.
-- This is the canonical home for **read-only analyst** workers; they return text you
-  must pull, not push.
+- This is the canonical home for **read-only analyst** workers; pull their text
+  findings (with the `mcp__twicc__*` tools they could push, but pulling fits here).
 - Synthesis is real work — don't just staple the N reports together.
 
 Examples: `examples/pr-review.md`.

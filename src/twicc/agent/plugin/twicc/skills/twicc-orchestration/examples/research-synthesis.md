@@ -9,7 +9,7 @@ Shape: leader → (read-only planner) → N read-only researchers → synthesis.
 2. Scatter: one read-only researcher per sub-question
    (`--permission-mode dontAsk --annotation job=<sub-question>`), each returning
    findings with citations.
-3. Barrier; pull every researcher (read-only can't push).
+3. Barrier; pull every researcher (read-only researchers are pulled here by design).
 4. Synthesize: reconcile findings, flag disagreements between sources, write the answer.
 
 ## Notes

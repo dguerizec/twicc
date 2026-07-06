@@ -45,7 +45,9 @@ Not when pieces are sequential (→ pipeline) or all decide one question (→ qu
 ## Pitfalls
 - **Wait on your own children only** — a leader waits on its managers, never on a
   manager's workers. Reaching into grandchildren breaks encapsulation and races the manager.
-- A manager **must be an executor** (it spawns and reports up); read-only can't manage.
+- A manager **must spawn and report up** — read-only can do this only via the
+  `mcp__twicc__*` tools (never the CLI), so prefer an executor unless you're
+  deliberately relying on MCP (see twicc-orchestration › Permission modes).
 - **Aggregate at every level** — a manager hands up a synthesis, not a raw dump of
   its workers' outputs.
 - An uneven split stalls the barrier — split the heavy piece further or give it a manager.

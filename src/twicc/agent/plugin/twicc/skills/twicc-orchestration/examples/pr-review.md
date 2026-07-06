@@ -9,7 +9,7 @@ serious findings with a second pass, then synthesizes.
 2. Per dimension, spawn a read-only analyst on the repo (safe — it can't write):
    `create-session --hidden --permission-mode dontAsk --annotation job=security
     'Review the diff for security issues only; list each as file:line + severity.'`
-   Read-only → it can't push; you will pull it.
+   Read-only (safe — it can't touch the code); you will pull it.
 3. Barrier: `processes wait --spawned-by self user_turn dead --timeout 600`.
 4. Pull each analyst (`session <id> messages --tail 1`); collect all findings.
 5. For each HIGH finding, a quick produce-refute: spawn one executor to confirm it is

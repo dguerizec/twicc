@@ -21,9 +21,10 @@ Shape: star or mesh · sideways (peer `send-message` + pull) · continuous · pe
   messages`. Each peer still reports its own result to the parent.
 
 ## Protocol
-1. The parent spawns the peers as **executors** (a read-only leaf can't send — it
-   can only be pulled), giving each: its own task, the fact that its co-workers are
-   siblings, and how to discover them.
+1. The parent spawns the peers (executors, so they can also do project work), giving
+   each: its own task, the fact that its co-workers are siblings, and how to discover
+   them. (Read-only peers can still send via the `mcp__twicc__*` tools; if MCP is off
+   they can only be pulled.)
 2. A peer that produces something the others need announces it:
    `send-messages --siblings self --message 'auth done — login at /v2/login, schema in <scratch_dir>/<id>-auth.md'`.
 3. A peer that needs a peer's output pulls it (`session <sibling_id> messages
@@ -50,8 +51,9 @@ isolate the peers on purpose — never let them confer).
   can deadlock — keep lateral exchanges short and asynchronous. A peer that has gone
   `dead` is resurrected by the next `send-message`, so you never need to keep peers
   alive for each other.
-- **Read-only peers can't send** — they can only be pulled. If a peer must announce
-  things to its siblings, spawn it as an executor.
+- **A read-only peer can still announce** — the `mcp__twicc__*` send tools work in
+  every mode (see twicc-orchestration › Permission modes); only with MCP disabled is
+  it pull-only.
 - **Discovery is live.** `--siblings self` excludes you and reflects whoever exists
   now; a peer spawned later is automatically in scope — re-run the discovery rather
   than caching ids.

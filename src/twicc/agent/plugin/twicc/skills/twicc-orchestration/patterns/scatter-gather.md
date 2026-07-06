@@ -28,7 +28,8 @@ have a few real cross-dependencies the workers can resolve between themselves
 (→ peer-coordination).
 
 ## Pitfalls
-- A read-only worker can't push — pull it instead.
+- A read-only worker without the `mcp__twicc__*` tools can't push — pull it instead
+  (with MCP available it can push too; pulling is a fine default here).
 - Wait on your own children only.
 - One oversized piece stalls the barrier — split it further, or hand it to a manager.
 - Don't fan out dozens at once — see worker-pool for backpressure.
