@@ -139,6 +139,14 @@ def build_argv(
         argv += ["--disallowedTools", "AskUserQuestion"]
     argv += ["--settings", build_hooks_settings(session_id, bool(settings.fast_mode))]
     argv += ["--plugin-dir", str(get_plugin_dir())]
+    # TwiCC's own MCP server (/mcp): pass the per-session config as a FILE path
+    # (never inline JSON — the bearer token would show in ``ps``). No
+    # ``--strict-mcp-config`` so the user's own MCP servers survive.
+    from twicc.mcp import mcp_enabled
+    from twicc.mcp.wiring import write_claude_mcp_config
+
+    if mcp_enabled():
+        argv += ["--mcp-config", str(write_claude_mcp_config(session_id))]
     for add_dir in add_dirs:
         argv += ["--add-dir", add_dir]
     if addendum_path is not None:

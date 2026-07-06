@@ -640,6 +640,16 @@ class ClaudeCodeAgent(BaseAgent):
         Returns:
             PermissionResultAllow or PermissionResultDeny from the user's response
         """
+        # TwiCC's own MCP tools are a control plane (they drive sessions,
+        # messages, bookmarks — never the project's code); auto-approve them in
+        # every mode and trust, exactly like the skills+CLI the agent already
+        # has. This fires before any pending request is created, so no prompt
+        # ever appears. In ``bypassPermissions`` the callback isn't invoked at
+        # all; this covers the restrictive modes (default/plan/acceptEdits).
+        # See MCP plan D9.
+        if tool_name.startswith("mcp__twicc__"):
+            return PermissionResultAllow()
+
         request_id = str(uuid.uuid4())
 
         if tool_name == "AskUserQuestion":
@@ -953,6 +963,19 @@ class ClaudeCodeAgent(BaseAgent):
             # pre-creation inside the helper.
             work_dirs = await self._resolve_and_create_work_dirs()
 
+            # TwiCC's own MCP server (/mcp): pass its per-session config as a
+            # FILE path (never the inline dict form, which the SDK serialises
+            # onto the argv — the bearer token would show in ``ps``). The token
+            # is deterministic, so the file self-heals across restarts. Gated on
+            # the TWICC_NO_MCP kill switch. ``MCP_TOOL_TIMEOUT`` lets long
+            # ``*_wait`` tools run without the SDK's default cutoff.
+            from twicc.mcp import mcp_enabled
+            from twicc.mcp.wiring import write_claude_mcp_config
+
+            _mcp_on = mcp_enabled()
+            mcp_servers_option = str(write_claude_mcp_config(self.session_id)) if _mcp_on else {}
+            mcp_env_option = {"MCP_TOOL_TIMEOUT": "600000"} if _mcp_on else {}
+
             options = ClaudeAgentOptions(
                 system_prompt=system_prompt_option,
                 cwd=self.cwd,
@@ -985,6 +1008,8 @@ class ClaudeCodeAgent(BaseAgent):
                 max_buffer_size=10 * 1024 * 1024,  # 10 MB — prevent crashes on large tool outputs
                 extra_args=extra_args,
                 include_partial_messages=True,
+                mcp_servers=mcp_servers_option,
+                env=mcp_env_option,
             )
 
             if resume:
