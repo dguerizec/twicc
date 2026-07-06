@@ -124,7 +124,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "$MCP_URL" \
 
 ```bash
 # Create a PAT (prints the one-time secret as plain text). Save it.
-$TWICC token create mcp-test-plan
+$TWICC token create --name mcp-test-plan
 # Copy the printed twicc_pat_... value into PAT below:
 export PAT='twicc_pat_REPLACE_ME'
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "$MCP_URL" \
