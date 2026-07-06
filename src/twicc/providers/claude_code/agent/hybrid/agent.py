@@ -476,6 +476,14 @@ class HybridClaudeAgent(BaseAgent):
             return False
         tool_name = payload.get("tool_name") or ""
 
+        # TwiCC MCP tools are a control plane (drive sessions, not the project's
+        # code); auto-approve them silently in every mode, matching the SDK path's
+        # can_use_tool short-circuit so D9 (auto-approve on both providers) holds
+        # for hybrid too. Fires only if the CLI actually prompts for the tool.
+        if tool_name.startswith("mcp__twicc__"):
+            await self._write_allow_status(nonce)
+            return False
+
         # System work-dir auto-approval: answer silently (no GUI card) when the
         # request targets ONLY this session's own artifacts/scratch dirs (and the
         # orchestration root's shared scratch). Disabled in untrusted projects
@@ -493,7 +501,7 @@ class HybridClaudeAgent(BaseAgent):
                         "Auto-approving hybrid %s for session %s — targets only "
                         "system work dirs", tool_name, self.session_id,
                     )
-                    await self._auto_approve_work_dir(nonce)
+                    await self._write_allow_status(nonce)
                     # HANDLED: the status file drives the CLI hook and the watcher
                     # deletes the drop; no pending is registered (no GUI card).
                     return False
@@ -516,8 +524,8 @@ class HybridClaudeAgent(BaseAgent):
         await self._notify_state_change()
         return True
 
-    async def _auto_approve_work_dir(self, nonce: str) -> None:
-        """Write an ``allow`` status for a system-dir auto-approval.
+    async def _write_allow_status(self, nonce: str) -> None:
+        """Write an ``allow`` status for a silent auto-approval (work dirs, MCP).
 
         No pending is registered and no GUI card is shown: the CLI's still-polling
         hook reads this ``.status.json`` and proceeds, exactly as it would for a
