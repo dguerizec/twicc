@@ -399,7 +399,7 @@ function refresh() {
 }
 
 function goHome() {
-    if (defaultUrl.value) navigate(defaultUrl.value)
+    if (primaryHomeUrl.value) navigate(primaryHomeUrl.value)
 }
 
 function openExternal() {
@@ -697,6 +697,35 @@ function onSaveSelect(event) {
         workspacesStore.updateWorkspace(value.slice(3), { browserUrl: currentUrl.value })
     }
 }
+
+// ── Home options: the saved default URLs across the levels that carry one —
+// the worktree/project itself, its main repo (worktree case), and each member
+// workspace. Deduped by URL (levels often share one), so the count reflects
+// DISTINCT destinations: one → the Home button just navigates to it; several →
+// a dropdown lets the user pick. Priority order (project → main repo →
+// workspace) keeps the badge of the first level that defines a given URL.
+const homeOptions = computed(() => {
+    const opts = []
+    const seen = new Set()
+    const add = (key, url, ws) => {
+        if (!url || seen.has(url)) return
+        seen.add(url)
+        opts.push({ key, url, ws })
+    }
+    add('project', project.value?.default_browser_url)
+    add('main-repo', mainRepoProject.value?.default_browser_url)
+    for (const ws of memberWorkspaces.value) add(`ws:${ws.id}`, ws.browserUrl, ws)
+    return opts
+})
+
+// The URL the plain Home button navigates to: the first configured level, or
+// the resolved default (covers path-ancestor inheritance not listed above).
+const primaryHomeUrl = computed(() => homeOptions.value[0]?.url || defaultUrl.value)
+
+function onHomeSelect(event) {
+    const url = event.detail?.item?.value
+    if (url) navigate(url)
+}
 </script>
 
 <template>
@@ -715,10 +744,44 @@ function onSaveSelect(event) {
                     <wa-icon name="rotate-right"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="`browser-refresh-${instanceId}`">Refresh</AppTooltip>
-                <wa-button :id="`browser-home-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!defaultUrl" @click="goHome">
-                    <wa-icon name="house"></wa-icon>
-                </wa-button>
-                <AppTooltip :for="`browser-home-${instanceId}`">{{ defaultUrl ? `Home — ${defaultUrl}` : 'Home (no saved URL for this project)' }}</AppTooltip>
+                <!-- Home: a plain button for a single saved URL, or a dropdown
+                     (like Save) when several levels — worktree, main repo,
+                     workspace — each define one. WA custom events are stopped
+                     from bubbling as in the Save menu. -->
+                <wa-dropdown
+                    v-if="homeOptions.length > 1"
+                    placement="bottom-start"
+                    @click.stop
+                    @wa-select.stop="onHomeSelect"
+                    @wa-show.stop
+                    @wa-hide.stop
+                    @wa-after-show.stop
+                    @wa-after-hide.stop
+                >
+                    <wa-button :id="`browser-home-${instanceId}`" slot="trigger" appearance="plain" size="small" class="browser-btn">
+                        <wa-icon name="house"></wa-icon>
+                    </wa-button>
+                    <wa-dropdown-item disabled class="save-menu-header">Open a saved URL…</wa-dropdown-item>
+                    <wa-dropdown-item v-for="opt in homeOptions" :key="opt.key" :value="opt.url">
+                        <div class="home-menu-item">
+                            <WorktreeBadge v-if="opt.key === 'project' && mainRepoProject" :project-id="props.projectId" />
+                            <ProjectBadge v-else-if="opt.key === 'project'" :project-id="props.projectId" />
+                            <ProjectBadge v-else-if="opt.key === 'main-repo'" :project-id="mainRepoProject.id" />
+                            <span v-else class="save-menu-ws">
+                                <wa-icon name="layer-group" :style="opt.ws.color ? { color: opt.ws.color } : null"></wa-icon>
+                                {{ opt.ws.name }}
+                            </span>
+                            <span class="home-menu-url">{{ opt.url }}</span>
+                        </div>
+                    </wa-dropdown-item>
+                </wa-dropdown>
+                <template v-else>
+                    <wa-button :id="`browser-home-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!primaryHomeUrl" @click="goHome">
+                        <wa-icon name="house"></wa-icon>
+                    </wa-button>
+                    <AppTooltip :for="`browser-home-${instanceId}`">{{ primaryHomeUrl ? `Home — ${primaryHomeUrl}` : 'Home (no saved URL for this project)' }}</AppTooltip>
+                </template>
+                <AppTooltip v-if="homeOptions.length > 1" :for="`browser-home-${instanceId}`">Home — choose a saved URL</AppTooltip>
             </div>
 
             <wa-input
@@ -1135,6 +1198,20 @@ function onSaveSelect(event) {
     margin-left: var(--wa-space-xs);
     font-size: var(--wa-font-size-2xs);
     color: var(--wa-color-text-quiet);
+}
+
+/* Home menu: each level's badge stacked over its saved URL. */
+.home-menu-item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-3xs);
+    min-width: 0;
+}
+
+.home-menu-url {
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-text-quiet);
+    overflow-wrap: anywhere;
 }
 
 /* Workspace level marker: layer-group badge + name inline, so it lines up with
