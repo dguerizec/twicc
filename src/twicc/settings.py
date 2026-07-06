@@ -182,7 +182,12 @@ TWICC_PASSWORD_HASH = os.environ.get("TWICC_PASSWORD_HASH", "")
 TWICC_ALLOW_INSECURE_REMOTE = os.environ.get("TWICC_ALLOW_INSECURE_REMOTE", "").strip().lower() in ("1", "true", "yes")
 
 # Session settings
-SESSION_COOKIE_NAME = os.environ.get("TWICC_SESSION_COOKIE", "sessionid")
+# Prefixed default (not Django's bare "sessionid"): TwiCC and a user's own dev
+# app often both run on localhost, and cookies ignore the port — a shared
+# "sessionid" slot on host localhost would clobber between the two (typically
+# another Django app, previewed in the Browser tab). The prefix keeps them in
+# separate cookie slots. Still overridable via TWICC_SESSION_COOKIE.
+SESSION_COOKIE_NAME = os.environ.get("TWICC_SESSION_COOKIE", "twicc_sessionid")
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 # Effectively no server-side expiry: TwiCC is self-hosted, the real protection
 # is the password (PBKDF2) plus the fingerprint that invalidates every session
