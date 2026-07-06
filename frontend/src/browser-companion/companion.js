@@ -68,6 +68,8 @@ function install() {
         if (message.type === 'ack') {
             hostOrigin = event.origin
             scheduleState()
+            // Flush any errors captured before the host connected.
+            if (errorLog.length) scheduleErrorPost()
             return
         }
         if (message.type !== 'command' || event.origin !== hostOrigin) return
@@ -361,6 +363,76 @@ function install() {
     window.addEventListener('popstate', scheduleState)
     window.addEventListener('hashchange', scheduleState)
     window.navigation?.addEventListener('currententrychange', scheduleState)
+
+    // ── Page error capture: console.error, uncaught exceptions and unhandled
+    // rejections are buffered and the list pushed to the host, which badges the
+    // count and lets the user hand them to the agent. Wrapping console.error is
+    // the one page global we touch beyond the history patch — kept transparent:
+    // we always delegate to the original and never throw into the caller. The
+    // listeners are passive observers (no preventDefault), so the page's own
+    // error handling is untouched.
+    const ERROR_LOG_MAX = 50
+    const ERROR_TEXT_MAX = 1000
+    const errorLog = []
+    let errorTotal = 0
+    let errorPostScheduled = false
+
+    function formatErrorArg(arg) {
+        if (arg instanceof Error) return arg.stack || `${arg.name}: ${arg.message}`
+        if (typeof arg === 'string') return arg
+        try {
+            return JSON.stringify(arg)
+        } catch {
+            try {
+                return String(arg)
+            } catch {
+                return '[unserializable]'
+            }
+        }
+    }
+
+    function scheduleErrorPost() {
+        if (!hostOrigin || errorPostScheduled) return
+        errorPostScheduled = true
+        // Coalesce a synchronous burst (one render throwing many errors) into a
+        // single post carrying the whole (capped) buffer.
+        queueMicrotask(() => {
+            errorPostScheduled = false
+            if (hostOrigin) post(companionMessage('errors', { errors: errorLog.slice(), total: errorTotal }), hostOrigin)
+        })
+    }
+
+    function pushError(kind, text) {
+        const trimmed = (text || '').trim()
+        if (!trimmed) return
+        errorTotal++
+        errorLog.push({ kind, text: trimmed.length > ERROR_TEXT_MAX ? `${trimmed.slice(0, ERROR_TEXT_MAX)}…` : trimmed })
+        if (errorLog.length > ERROR_LOG_MAX) errorLog.shift()
+        scheduleErrorPost()
+    }
+
+    const originalConsoleError = console.error
+    console.error = function (...args) {
+        try {
+            pushError('console.error', args.map(formatErrorArg).join(' '))
+        } catch {
+            // Capture must never disturb the page's own logging.
+        }
+        return originalConsoleError.apply(this, args)
+    }
+
+    window.addEventListener('error', (event) => {
+        // Uncaught JS exceptions only: an ErrorEvent carries a message. Resource
+        // load failures (img/script) also fire here but with an element target
+        // and no message — skip those.
+        if (!event.message) return
+        const where = event.filename ? ` (${event.filename}:${event.lineno}:${event.colno})` : ''
+        pushError('uncaught', event.error?.stack || `${event.message}${where}`)
+    })
+
+    window.addEventListener('unhandledrejection', (event) => {
+        pushError('unhandledrejection', formatErrorArg(event.reason))
+    })
 
     // User interactions inside the page never reach the host document (the
     // frame is cross-origin), so the host's click-to-focus rule — interacting

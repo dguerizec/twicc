@@ -138,6 +138,9 @@ function onWindowMessage(event) {
         // the old one, so the host flag must not claim the mode is still on.
         selectAreaActive.value = false
         selectState.value = null
+        // Fresh document → the previous page's errors are gone.
+        pageErrors.value = []
+        pageErrorTotal.value = 0
         rejectPendingCapture('page reloaded')
         clearHelloGraceTimer()
         // A connected companion is definitive proof the page is reachable and
@@ -203,6 +206,15 @@ function onWindowMessage(event) {
             else if (typeof data.dataUrl === 'string' && data.dataUrl.startsWith('data:image/')) resolve(data.dataUrl)
             else reject(new Error('no image returned'))
         }
+    } else if (data.type === 'errors') {
+        // The companion pushed the current page-error buffer (console.error,
+        // uncaught exceptions, unhandled rejections). Drives the toolbar badge.
+        if (Array.isArray(data.errors)) {
+            pageErrors.value = data.errors
+                .filter((e) => e && typeof e.text === 'string')
+                .map((e) => ({ kind: typeof e.kind === 'string' ? e.kind : 'error', text: e.text }))
+            pageErrorTotal.value = typeof data.total === 'number' ? data.total : pageErrors.value.length
+        }
     } else if (data.type === 'focus') {
         // Real user input inside the embedded page — the cross-origin
         // equivalent of DockRegion's click-to-focus. A hidden frame can't
@@ -215,6 +227,8 @@ function onWindowMessage(event) {
         companionStatus.value = 'waiting'
         selectAreaActive.value = false
         selectState.value = null
+        pageErrors.value = []
+        pageErrorTotal.value = 0
         rejectPendingCapture('page navigating away')
         // The frozen pre-companion stack becomes reachable the moment we
         // leave 'present' — and this waiting window is exactly when users
@@ -252,7 +266,7 @@ function onFullscreenKeydown(event) {
         // An open select-comment widget or media preview has priority: this
         // capture-phase listener would otherwise exit fullscreen on the same
         // keypress those use to close themselves.
-        if (selectCommentPosition.value || mediaPreviewOpen.value) return
+        if (commentPosition.value || mediaPreviewOpen.value) return
         event.stopPropagation()
         isFullscreen.value = false
     }
@@ -551,9 +565,8 @@ function setSelectArea(enabled) {
     selectAreaActive.value = enabled
     selectState.value = null
     rejectPendingCapture('select mode changed')
-    // Drop any open comment widget — its v-if also gates on selectAreaActive,
-    // but resetting avoids a stale one flashing back on the next mode entry.
-    selectCommentPosition.value = null
+    // Drop any open comment widget so a stale one can't flash back on re-entry.
+    commentPosition.value = null
     sendToCompanion(hostMessage('command', { action: 'select-mode', enabled }))
 }
 
@@ -594,22 +607,52 @@ async function attachScreenshot(dataUrl) {
     await store.addAttachment(props.sessionId, file)
 }
 
-// ── Select-area comment widget: reuses the text-selection comment window,
-// quoting the companion's element description instead of a DOM selection.
-// Initial position: horizontally centered, top edge right below the select
-// toolbar — the user can drag it anywhere afterwards, as usual.
+// ── Comment widget: reuses the text-selection comment window for two sources —
+// a picked element (select-area, with the screenshot switch) and the page's
+// captured errors. One shared position/text/subject drives a single instance;
+// `commentAllowScreenshot` gates the Include-screenshot switch (element only).
+// Initial position: horizontally centered, top edge right below the anchor —
+// the user can drag it anywhere afterwards, as usual.
 const selectToolbarRef = ref(null)
-const selectCommentText = ref('')
-const selectCommentPosition = ref(null)
-// Rendered into the formatted message header ("Comment on selected text …:")
-// so the agent knows which page the element lives on.
-const selectCommentSourceLabel = computed(() => `from the browser page at ${currentUrl.value}`)
+const commentText = ref('')
+const commentPosition = ref(null)          // viewport anchor, or null = closed
+const commentSubject = ref('selected area')
+const commentAllowScreenshot = ref(false)
+// Rendered into the formatted message header so the agent knows which page the
+// element / errors live on.
+const commentSourceLabel = computed(() => `from the browser page at ${currentUrl.value}`)
 
 function openSelectComment(description) {
     const rect = selectToolbarRef.value?.getBoundingClientRect()
     if (!rect) return
-    selectCommentText.value = description
-    selectCommentPosition.value = { top: rect.bottom, left: rect.left + rect.width / 2, above: false }
+    commentText.value = description
+    commentSubject.value = 'selected area'
+    commentAllowScreenshot.value = true
+    commentPosition.value = { top: rect.bottom, left: rect.left + rect.width / 2, above: false }
+}
+
+// ── Page errors: the companion buffers console.error / uncaught exceptions /
+// unhandled rejections and pushes the list here; a toolbar badge shows the
+// count and clicking hands them to the agent via the same comment widget.
+const pageErrors = ref([])       // [{ kind, text }], capped by the companion
+const pageErrorTotal = ref(0)    // true count (may exceed the capped list)
+
+function formatErrorList() {
+    const body = pageErrors.value.map((e) => `[${e.kind}] ${e.text}`).join('\n\n')
+    if (pageErrorTotal.value > pageErrors.value.length) {
+        return `(showing the last ${pageErrors.value.length} of ${pageErrorTotal.value} errors)\n\n${body}`
+    }
+    return body
+}
+
+function openErrorComment(event) {
+    if (!pageErrors.value.length) return
+    const rect = event.currentTarget?.getBoundingClientRect()
+    if (!rect) return
+    commentText.value = formatErrorList()
+    commentSubject.value = 'page errors'
+    commentAllowScreenshot.value = false
+    commentPosition.value = { top: rect.bottom, left: rect.left + rect.width / 2, above: false }
 }
 
 // ── Save-URL menu -------------------------------------------------------------
@@ -803,6 +846,25 @@ function onSaveSelect(event) {
                     v-if="companionStatus === 'present'"
                     :for="`browser-select-toggle-${instanceId}`"
                 >{{ selectAreaActive ? 'Stop selecting an element' : 'Select an element' }}</AppTooltip>
+
+                <!-- Page-errors indicator: shown only when the companion has
+                     reported errors. The count sits next to a warning glyph;
+                     clicking hands the list to the agent via the comment widget. -->
+                <wa-button
+                    v-if="companionStatus === 'present' && pageErrors.length"
+                    :id="`browser-errors-${instanceId}`"
+                    appearance="plain"
+                    size="small"
+                    class="browser-btn error-indicator"
+                    @click="openErrorComment"
+                >
+                    <wa-icon name="triangle-exclamation"></wa-icon>
+                    <span class="error-count">{{ pageErrorTotal }}</span>
+                </wa-button>
+                <AppTooltip
+                    v-if="companionStatus === 'present' && pageErrors.length"
+                    :for="`browser-errors-${instanceId}`"
+                >{{ pageErrorTotal }} error{{ pageErrorTotal > 1 ? 's' : '' }} on this page — click to add them to your message</AppTooltip>
             </div>
         </div>
 
@@ -841,22 +903,23 @@ function onSaveSelect(event) {
             <AppTooltip :for="`browser-select-close-${instanceId}`">Exit select mode</AppTooltip>
         </div>
 
-        <!-- Select-area comment widget (teleported to body like every other
-             consumer — avoids overflow clipping and sits above fullscreen).
-             No source selection to clear: the "quote" is the companion's
-             element description. Hidden with the mode (v-if on both). -->
+        <!-- Comment widget (teleported to body like every other consumer —
+             avoids overflow clipping and sits above fullscreen). Shared by the
+             select-area flow (element description, with the screenshot switch)
+             and the page-errors flow (error list, no screenshot). No source
+             selection to clear: the "quote" is the text we hand it. -->
         <Teleport to="body">
             <TextSelectionComment
-                v-if="selectAreaActive && selectCommentPosition"
-                :selected-text="selectCommentText"
-                :position="selectCommentPosition"
-                :source-label="selectCommentSourceLabel"
-                subject="selected area"
+                v-if="commentPosition"
+                :selected-text="commentText"
+                :position="commentPosition"
+                :source-label="commentSourceLabel"
+                :subject="commentSubject"
                 auto-expand
                 :clear-source-selection="() => {}"
-                :capture-screenshot="captureScreenshot"
-                :attach-screenshot="attachScreenshot"
-                @close="selectCommentPosition = null"
+                :capture-screenshot="commentAllowScreenshot ? captureScreenshot : null"
+                :attach-screenshot="commentAllowScreenshot ? attachScreenshot : null"
+                @close="commentPosition = null"
             />
         </Teleport>
 
@@ -1003,6 +1066,18 @@ function onSaveSelect(event) {
    (mirrors the connected-companion plug colour). */
 .select-toggle.active wa-icon {
     color: var(--wa-color-success-fill-loud);
+}
+
+/* Page-errors indicator: warning glyph + count, in the danger colour. */
+.error-indicator wa-icon,
+.error-indicator .error-count {
+    color: var(--wa-color-danger-fill-loud);
+}
+
+.error-indicator .error-count {
+    margin-inline-start: var(--wa-space-3xs);
+    font-size: var(--wa-font-size-s);
+    font-variant-numeric: tabular-nums;
 }
 
 .select-toolbar {
