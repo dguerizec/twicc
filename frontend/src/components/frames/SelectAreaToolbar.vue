@@ -40,7 +40,15 @@ const instanceId = useId()
             <wa-icon name="arrow-right"></wa-icon>
         </wa-button>
         <AppTooltip :for="`select-next-${instanceId}`">Select the next sibling</AppTooltip>
-        <wa-button :id="`select-comment-${instanceId}`" appearance="plain" size="small" class="subbar-btn reduced-height" :disabled="!state?.hasSelection" @click="$emit('comment')">
+        <wa-button
+            :id="`select-comment-${instanceId}`"
+            appearance="plain"
+            size="small"
+            class="subbar-btn reduced-height"
+            :class="{ 'comment-armed': state?.locked }"
+            :disabled="!state?.hasSelection"
+            @click="$emit('comment')"
+        >
             <wa-icon name="comment" variant="regular"></wa-icon>
         </wa-button>
         <AppTooltip :for="`select-comment-${instanceId}`">Comment on the selection</AppTooltip>
@@ -77,5 +85,18 @@ const instanceId = useId()
 /* Exit button pinned to the far right, away from the mode's controls. */
 .subbar-close {
     margin-left: auto;
+}
+
+/* Once an element is locked (green frame), the comment button invites the
+   click: brand colour + the same pulse the live-agent robot uses
+   (ProcessIndicator's `pulse`, 1s). */
+.comment-armed wa-icon {
+    color: var(--wa-color-brand-fill-loud);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
 }
 </style>
