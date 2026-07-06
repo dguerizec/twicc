@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Plan tab** — now covers every plan-like document a session touched (plans, specs, handoffs…), for Claude and Codex alike (+CLI/skill/API).
+- **Authentication** — to avoid interfering with other sites running on localhost previewed in the new Browser tab, the session cookie changed; users who have set a TwiCC password will need to sign in again.
 
 ### Fixed
 
