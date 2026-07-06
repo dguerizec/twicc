@@ -57,7 +57,8 @@ def _register(registry: dict, chain: list[Level], options: list[ParamSpec], cmd:
     )
 
 
-def _walk(cmd: click.Command, token: str | None, chain: list[Level], registry: dict, *, is_root: bool) -> None:
+def _walk(cmd: click.Command, token: str | None, chain: list[Level], registry: dict, *,
+          is_root: bool, excluded_roots: frozenset[str]) -> None:
     args, opts = _split_params(cmd)
     if isinstance(cmd, click.Group):
         # Ancestor levels carry the group's ARGUMENTS only (its options default
@@ -68,25 +69,29 @@ def _walk(cmd: click.Command, token: str | None, chain: list[Level], registry: d
         if not is_root and getattr(cmd, "invoke_without_command", False):
             _register(registry, child_chain, opts, cmd)
         for sub_name, sub in cmd.commands.items():
-            if is_root and sub_name in LOCAL_ONLY_COMMANDS:
+            if is_root and sub_name in excluded_roots:
                 continue
-            _walk(sub, sub_name, child_chain, registry, is_root=False)
+            _walk(sub, sub_name, child_chain, registry, is_root=False, excluded_roots=excluded_roots)
     else:
         leaf_chain = chain + [Level(token=token, arguments=args)]
         _register(registry, leaf_chain, opts, cmd)
 
 
-_registry: dict[str, CommandSpec] | None = None
+_registries: dict[frozenset[str], dict[str, CommandSpec]] = {}
 
 
-def build_registry() -> dict[str, CommandSpec]:
-    """Build (once, cached) the path → CommandSpec registry."""
-    global _registry
-    if _registry is None:
+def build_registry(*, excluded_roots: frozenset[str] = frozenset(LOCAL_ONLY_COMMANDS)) -> dict[str, CommandSpec]:
+    """Build (cached per ``excluded_roots``) the path → CommandSpec registry.
+
+    The default excludes the local-only commands (the ``/rpc/`` surface). The
+    MCP server passes its own exclusion set (see :mod:`twicc.mcp.tools`).
+    """
+    global _registries
+    if excluded_roots not in _registries:
         reg: dict[str, CommandSpec] = {}
-        _walk(get_command(), None, [], reg, is_root=True)
-        _registry = reg
-    return _registry
+        _walk(get_command(), None, [], reg, is_root=True, excluded_roots=excluded_roots)
+        _registries[excluded_roots] = reg
+    return _registries[excluded_roots]
 
 
 def _render_argument(p: ParamSpec, body: dict) -> list[str]:
