@@ -594,6 +594,18 @@ class CodexAgentManager(BaseAgentManager):
             thread_config: dict[str, Any] = {
                 "model_reasoning_summary": "detailed",
             }
+            # TwiCC's own MCP server (/mcp). All tools available in every mode,
+            # auto-approved (``default_tools_approval_mode="approve"`` short-
+            # circuits the approval_policy) — it is a control plane, orthogonal
+            # to the project's permission mode (MCP plan D9). The token is minted
+            # against ``session_id`` (the draft id for a brand-new session); the
+            # draft→canonical alias registered after thread_start makes it
+            # resolve correctly. Gated on the TWICC_NO_MCP kill switch.
+            from twicc.mcp import mcp_enabled
+
+            if mcp_enabled():
+                thread_config["mcp_servers"] = {"twicc": _twicc_mcp_server_config(session_id)}
+                _apply_codex_mcp_context_mode(thread_config)
             if resume:
                 # Model is sticky to the existing thread server-side — leave it
                 # unset so the resumed thread keeps whatever model it was started
@@ -643,6 +655,13 @@ class CodexAgentManager(BaseAgentManager):
                 # from the stored copy by ``compute_base``. Never on resume:
                 # the original block already lives in the replayed rollout.
                 inject_context(thread.id, session_id=thread.id)
+
+                # The MCP token in thread_config was minted against the DRAFT
+                # session_id; map it to the canonical id Codex just minted so
+                # /mcp resolves the caller correctly (harmless no-op if equal).
+                from twicc.mcp.identity import register_draft_alias
+
+                register_draft_alias(session_id, thread.id)
 
             # On resume ``thread.id == session_id``; on new sessions Codex
             # picked its own canonical id and ``_start_agent`` will broadcast
@@ -700,6 +719,40 @@ class CodexAgentManager(BaseAgentManager):
         Code-specific.
         """
         return self._state_based_timeout(agent, current_time)
+
+
+def _twicc_mcp_server_config(session_id: str) -> dict:
+    """Per-thread TwiCC MCP server entry (TOML-shaped, json_to_toml-merged).
+
+    Every tool is exposed in every mode; ``default_tools_approval_mode="approve"``
+    makes them auto-approve without a per-call prompt, independent of the
+    session's approval_policy (Codex's ``AppToolApproval::Approve`` short-circuits
+    the whole approval check). TwiCC MCP is a control plane, orthogonal to the
+    project's permission mode (MCP plan D9).
+    """
+    from twicc.mcp import mcp_base_url
+    from twicc.mcp.identity import mint_session_token
+
+    return {
+        "url": mcp_base_url(),
+        "http_headers": {"Authorization": f"Bearer {mint_session_token(session_id)}"},
+        "default_tools_approval_mode": "approve",
+        "tool_timeout_sec": 600,
+        "startup_timeout_sec": 30,
+    }
+
+
+def _apply_codex_mcp_context_mode(thread_config: dict) -> None:
+    """Force MCP tool-schema deferral on Codex unless the constant disables it."""
+    from twicc.mcp import TWICC_MCP_CODEX_DEFER
+
+    if not TWICC_MCP_CODEX_DEFER:
+        return  # eager: Codex loads all schemas into context
+    features = thread_config.setdefault("features", {})
+    features["tool_search_always_defer_mcp_tools"] = True
+    # Enabling an under-development feature otherwise prints an unstable-features
+    # warning on every thread start.
+    thread_config["suppress_unstable_features_warning"] = True
 
 
 def get_codex_agent_manager() -> CodexAgentManager:

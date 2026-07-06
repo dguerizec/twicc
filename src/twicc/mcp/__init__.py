@@ -10,6 +10,13 @@ from __future__ import annotations
 
 import os
 
+# Codex: force Tool Search deferral of MCP schemas (Codex loads all schemas
+# eagerly below its 100-tool threshold). True = defer (clean context, full tool
+# set) via the experimental ``tool_search_always_defer_mcp_tools`` feature; flip
+# to False for eager loading if that under-development flag regresses on a Codex
+# bump. See the MCP plan D10 / research doc §3.
+TWICC_MCP_CODEX_DEFER = True
+
 
 def mcp_enabled() -> bool:
     """Kill switch: ``TWICC_NO_MCP=1`` disables mount and per-session wiring."""
