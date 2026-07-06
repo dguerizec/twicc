@@ -159,6 +159,62 @@ _RESULT_ID_FIELDS: tuple[str, ...] = (
 )
 
 
+# Per-status timestamp field. The CLI relies on these for its wording.
+_STATUS_TIME_FIELDS: dict[str, str] = {
+    "received": "received_at",
+    "created": "created_at",
+    "sent": "sent_at",
+    "updated": "updated_at",
+    "stopped": "stopped_at",
+    "deleted": "deleted_at",
+    "rejected": "rejected_at",
+    "failed": "failed_at",
+}
+
+
+def stamp_status_times(data: dict) -> dict:
+    """Stamp the per-status timestamp field (same contract as the status file)."""
+    field = _STATUS_TIME_FIELDS.get(data.get("status"))
+    if field:
+        data.setdefault(field, _iso_now())
+    return data
+
+
+async def execute_drop_payload(payload: dict, kind: str | None) -> dict:
+    """Route ``payload`` to its kind service and return the final status dict.
+
+    Exactly the dict the watcher would persist as ``<uuid>.status.json``
+    (timestamps included, ``request_uuid`` NOT included — the transport layer
+    owns that key). Never raises: service exceptions become ``failed``.
+    """
+    handler = _KIND_HANDLERS.get(kind) if kind else None
+    if handler is None:
+        return stamp_status_times({"status": "failed", "error": f"Unknown payload kind: {kind!r}"})
+
+    module_path, attr_name, success_status = handler
+    service = getattr(importlib.import_module(module_path), attr_name)
+    try:
+        result = await service(payload)
+    except Exception as e:  # noqa: BLE001 — mirror the watcher's catch-all
+        logger.exception("[drop-request] service raised for kind %s", kind)
+        return stamp_status_times({"status": "failed", "error": f"{type(e).__name__}: {e}"})
+
+    if result.success:
+        status_data: dict = {"status": success_status}
+        for attr in _RESULT_ID_FIELDS:
+            value = getattr(result, attr, None)
+            if value is not None:
+                status_data[attr] = value
+        extra = getattr(result, "status_extra", None)
+        if isinstance(extra, dict):
+            status_data.update(extra)
+        return stamp_status_times(status_data)
+    return stamp_status_times({
+        "status": "rejected",
+        "errors": [e._asdict() for e in (result.errors or [])],
+    })
+
+
 class DropRequestsWatcher:
     def __init__(self) -> None:
         self.directory = get_drop_requests_dir()
@@ -251,53 +307,22 @@ class DropRequestsWatcher:
             payload = data.get("payload") or {}
             kind = payload.get("kind")
 
-            handler = _KIND_HANDLERS.get(kind) if kind else None
-            if handler is None:
-                logger.warning("[DropRequestsWatcher] unknown kind for %s: %r",
-                               request_uuid, kind)
-                await self._write_status(request_uuid, {
-                    "status": "failed",
-                    "error": f"Unknown payload kind: {kind!r}",
-                })
-                return  # CLI will delete both drop + status files
-
-            module_path, attr_name, success_status = handler
-            service = getattr(importlib.import_module(module_path), attr_name)
-
-            try:
-                result = await service(payload)
-            except Exception as e:
-                logger.exception("[DropRequestsWatcher] service raised for %s", request_uuid)
-                await self._write_status(request_uuid, {
-                    "status": "failed",
-                    "error": f"{type(e).__name__}: {e}",
-                })
-                return  # CLI will delete both drop + status files
-
-            if result.success:
-                status_data: dict = {"status": success_status}
-                for attr in _RESULT_ID_FIELDS:
-                    value = getattr(result, attr, None)
-                    if value is not None:
-                        status_data[attr] = value
-                extra = getattr(result, "status_extra", None)
-                if isinstance(extra, dict):
-                    status_data.update(extra)
+            status_data = await execute_drop_payload(payload, kind)
+            if status_data["status"] == "failed":
+                logger.warning("[DropRequestsWatcher] failed %s: %s",
+                               request_uuid, status_data.get("error"))
+            elif status_data["status"] == "rejected":
+                logger.warning("[DropRequestsWatcher] rejected %s: %s",
+                               request_uuid, status_data.get("errors"))
+            else:
                 log_id = (
-                    getattr(result, "session_id", None)
-                    or getattr(result, "workspace_id", None)
+                    status_data.get("session_id")
+                    or status_data.get("workspace_id")
                     or "?"
                 )
                 logger.info("[DropRequestsWatcher] %s %s -> %s",
-                            success_status, request_uuid, log_id)
-                await self._write_status(request_uuid, status_data)
-            else:
-                logger.warning("[DropRequestsWatcher] rejected %s: %s",
-                               request_uuid, result.errors)
-                await self._write_status(request_uuid, {
-                    "status": "rejected",
-                    "errors": [e._asdict() for e in (result.errors or [])],
-                })
+                            status_data["status"], request_uuid, log_id)
+            await self._write_status(request_uuid, status_data)
             # No unlink here: the CLI cleans up its own drop-file once it
             # observes the final status. The watcher only deletes during the
             # boot scan, for files left behind by a crashed CLI
@@ -309,24 +334,10 @@ class DropRequestsWatcher:
     # Status file writer (atomic via tmp + rename)
     # ------------------------------------------------------------------
     async def _write_status(self, request_uuid: str, data: dict) -> None:
-        # Merge timestamps. The CLI relies on them for the wording.
+        # Merge timestamps. The CLI relies on them for the wording. Idempotent
+        # via setdefault: execute_drop_payload already stamps its own results.
         data.setdefault("request_uuid", request_uuid)
-        if data["status"] == "received":
-            data.setdefault("received_at", _iso_now())
-        elif data["status"] == "created":
-            data.setdefault("created_at", _iso_now())
-        elif data["status"] == "sent":
-            data.setdefault("sent_at", _iso_now())
-        elif data["status"] == "updated":
-            data.setdefault("updated_at", _iso_now())
-        elif data["status"] == "stopped":
-            data.setdefault("stopped_at", _iso_now())
-        elif data["status"] == "deleted":
-            data.setdefault("deleted_at", _iso_now())
-        elif data["status"] == "rejected":
-            data.setdefault("rejected_at", _iso_now())
-        elif data["status"] == "failed":
-            data.setdefault("failed_at", _iso_now())
+        stamp_status_times(data)
 
         path = self.directory / f"{request_uuid}{STATUS_SUFFIX}"
         tmp = path.with_suffix(path.suffix + TMP_SUFFIX)
