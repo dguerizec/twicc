@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Browser tab** — preview a page (typically your project's dev server) right next to the conversation: browse it, view it at any device size, and point the agent straight at elements on the page.
 - **Artifacts tab** — rendered web pages get the same tools as the Browser tab: pick an element to comment on it to the agent, and preview at any device size.
+- **MCP server** — agents can now drive TwiCC through built-in MCP tools (spawn sessions, send messages, orchestrate) instead of shell commands.
 
 ### Changed
 
