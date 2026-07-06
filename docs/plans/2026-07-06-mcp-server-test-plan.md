@@ -405,4 +405,6 @@ $TWICC delete-workspace mcp-cli-smoke      # status: deleted
 
 **Cleanup checklist:** revert any `.env` (`TWICC_NO_MCP`) and `__init__.py`
 (`TWICC_MCP_CODEX_DEFER`) changes + restart; revoke the test PAT (`$TWICC token revoke <id>`);
-delete any leftover test workspaces/sessions you created; `rm /tmp/mcp_*.py`.
+delete the test **workspaces** you created (`$TWICC delete-workspace <id>`); **hide/archive**
+the test **sessions** you spawned (`$TWICC update-session <id> hide` / `$TWICC update-session
+<id> archive`) — never delete a session or its JSONL; `rm /tmp/mcp_*.py`.
