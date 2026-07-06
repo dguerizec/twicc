@@ -18,6 +18,13 @@ artifact.
 From there you can **bookmark** any artifact, giving it a name and a scope:
 the project the session belongs to, that project's workspace, or everywhere.
 
+For rendered web pages, the round **tools** button in the corner unfolds
+extra actions: a **responsive mode** to preview the page at an exact device
+size, and an **element selection** mode to click any element on the page
+and hand the agent a precise description of it — with an optional note and
+screenshot — instead of describing it with words. They work exactly as in
+the [Browser tab](help/browser-tab).
+
 The **Artifacts view** (open it from anywhere with the icon at the top of
 the sidebar, just to the right of the project selector) gathers the
 artifacts you've bookmarked, each shown according to the scope you chose for
