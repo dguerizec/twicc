@@ -557,11 +557,6 @@ function setSelectArea(enabled) {
     sendToCompanion(hostMessage('command', { action: 'select-mode', enabled }))
 }
 
-function onCompanionMenuSelect(event) {
-    if (event.detail?.item?.value !== 'select-area') return
-    setSelectArea(!selectAreaActive.value)
-}
-
 function selectNav(direction) {
     sendToCompanion(hostMessage('command', { action: 'select-nav', direction }))
 }
@@ -665,18 +660,22 @@ function onSaveSelect(event) {
     <div class="browser-pane" :class="{ 'browser-pane--fullscreen': isFullscreen }">
         <div class="browser-toolbar">
             <div class="browser-toolbar-left">
-                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!canGoBack" title="Back" @click="goBack">
+                <wa-button :id="`browser-back-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!canGoBack" @click="goBack">
                     <wa-icon name="arrow-left"></wa-icon>
                 </wa-button>
-                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!canGoForward" title="Forward" @click="goForward">
+                <AppTooltip :for="`browser-back-${instanceId}`">Back</AppTooltip>
+                <wa-button :id="`browser-forward-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!canGoForward" @click="goForward">
                     <wa-icon name="arrow-right"></wa-icon>
                 </wa-button>
-                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" title="Refresh" @click="refresh">
+                <AppTooltip :for="`browser-forward-${instanceId}`">Forward</AppTooltip>
+                <wa-button :id="`browser-refresh-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" @click="refresh">
                     <wa-icon name="rotate-right"></wa-icon>
                 </wa-button>
-                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!defaultUrl" :title="defaultUrl ? `Home — ${defaultUrl}` : 'Home (no saved URL for this project)'" @click="goHome">
+                <AppTooltip :for="`browser-refresh-${instanceId}`">Refresh</AppTooltip>
+                <wa-button :id="`browser-home-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!defaultUrl" @click="goHome">
                     <wa-icon name="house"></wa-icon>
                 </wa-button>
+                <AppTooltip :for="`browser-home-${instanceId}`">{{ defaultUrl ? `Home — ${defaultUrl}` : 'Home (no saved URL for this project)' }}</AppTooltip>
             </div>
 
             <wa-input
@@ -708,7 +707,7 @@ function onSaveSelect(event) {
                     @wa-after-show.stop
                     @wa-after-hide.stop
                 >
-                    <wa-button slot="trigger" appearance="plain" size="small" class="browser-btn" :disabled="!canSave" title="Save this URL as a default…">
+                    <wa-button :id="`browser-save-${instanceId}`" slot="trigger" appearance="plain" size="small" class="browser-btn" :disabled="!canSave">
                         <wa-icon name="bookmark"></wa-icon>
                     </wa-button>
                     <wa-dropdown-item disabled class="save-menu-header">Save current URL as default for…</wa-dropdown-item>
@@ -746,10 +745,12 @@ function onSaveSelect(event) {
                         </wa-dropdown-item>
                     </template>
                 </wa-dropdown>
+                <AppTooltip :for="`browser-save-${instanceId}`">Save this URL as a default…</AppTooltip>
 
-                <wa-button appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" title="Open in a new browser tab" @click="openExternal">
+                <wa-button :id="`browser-external-${instanceId}`" appearance="plain" size="small" class="browser-btn" :disabled="!currentUrl" @click="openExternal">
                     <wa-icon name="arrow-up-right-from-square"></wa-icon>
                 </wa-button>
+                <AppTooltip :for="`browser-external-${instanceId}`">Open in a new browser tab</AppTooltip>
 
                 <wa-button
                     :id="fullscreenButtonId"
@@ -764,38 +765,12 @@ function onSaveSelect(event) {
                     {{ isFullscreen ? 'Exit full screen' : 'Full screen' }}
                 </AppTooltip>
 
-                <!-- Companion control. Until connected it is a plain status
-                     button (a tap reveals the how-to-add hint); once connected
-                     it becomes a dropdown (with-caret) exposing companion
-                     actions. WA custom events are stopped from bubbling so a
-                     nested wa-show/wa-hide never reaches a same-named ancestor. -->
-                <wa-dropdown
-                    v-if="companionStatus === 'present'"
-                    placement="bottom-end"
-                    @click.stop
-                    @wa-select.stop="onCompanionMenuSelect"
-                    @wa-show.stop
-                    @wa-hide.stop
-                    @wa-after-show.stop
-                    @wa-after-hide.stop
-                >
-                    <wa-button
-                        :id="`browser-companion-${instanceId}`"
-                        slot="trigger"
-                        appearance="plain"
-                        size="small"
-                        class="browser-btn companion-status present"
-                        with-caret
-                    >
-                        <wa-icon name="plug"></wa-icon>
-                    </wa-button>
-                    <wa-dropdown-item value="select-area">
-                        <wa-icon slot="icon" name="arrow-pointer"></wa-icon>
-                        {{ selectAreaActive ? 'Stop selecting' : 'Select area' }}
-                    </wa-dropdown-item>
-                </wa-dropdown>
+                <!-- Companion status button (plain, always). The plug's colour
+                     reflects the connection state; a tap reveals its status/help
+                     tooltip, and while disconnected a click re-opens the
+                     how-to-add hint. force + click trigger so the tooltip shows
+                     on touch too (no hover there). -->
                 <wa-button
-                    v-else
                     :id="`browser-companion-${instanceId}`"
                     appearance="plain"
                     size="small"
@@ -805,16 +780,29 @@ function onSaveSelect(event) {
                 >
                     <wa-icon name="plug"></wa-icon>
                 </wa-button>
-                <!-- force + click trigger: the tooltip is hover-only and hidden
-                     on touch by default, but here a tap must reveal the companion
-                     status/help on mobile too (no hover there). In the connected
-                     dropdown case, click is dropped from the trigger so the tap
-                     opens the menu instead of racing the tooltip. -->
                 <AppTooltip
                     :for="`browser-companion-${instanceId}`"
                     force
-                    :trigger="companionStatus === 'present' ? 'hover focus' : 'hover focus click'"
+                    trigger="hover focus click"
                 >{{ companionTooltip }}</AppTooltip>
+
+                <!-- Select-area toggle (needs the companion, so only shown once
+                     connected). Turns green while the picking mode is active. -->
+                <wa-button
+                    v-if="companionStatus === 'present'"
+                    :id="`browser-select-toggle-${instanceId}`"
+                    appearance="plain"
+                    size="small"
+                    class="browser-btn select-toggle"
+                    :class="{ active: selectAreaActive }"
+                    @click="setSelectArea(!selectAreaActive)"
+                >
+                    <wa-icon name="arrow-pointer"></wa-icon>
+                </wa-button>
+                <AppTooltip
+                    v-if="companionStatus === 'present'"
+                    :for="`browser-select-toggle-${instanceId}`"
+                >{{ selectAreaActive ? 'Stop selecting an element' : 'Select an element' }}</AppTooltip>
             </div>
         </div>
 
@@ -1008,6 +996,12 @@ function onSaveSelect(event) {
 }
 
 .companion-status.present wa-icon {
+    color: var(--wa-color-success-fill-loud);
+}
+
+/* Select-area toggle: green while the picking mode is active, normal otherwise
+   (mirrors the connected-companion plug colour). */
+.select-toggle.active wa-icon {
     color: var(--wa-color-success-fill-loud);
 }
 
