@@ -104,6 +104,11 @@ def get_api_tokens_path() -> Path:
     return get_data_dir() / "api-tokens.json"
 
 
+def get_mcp_secret_path() -> Path:
+    """Per-install secret used to sign per-session MCP tokens (chmod 600)."""
+    return get_data_dir() / "mcp-secret"
+
+
 def get_synced_settings_path() -> Path:
     """Return the synced settings file path (<data_dir>/settings.json)."""
     return get_data_dir() / "settings.json"
