@@ -25,10 +25,17 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Iterator
+from contextvars import ContextVar
 
 import psutil
 
 logger = logging.getLogger(__name__)
+
+# Out-of-band caller identity. The MCP endpoint (and any future in-backend
+# invoker that knows who is calling) sets this before running a command
+# in-process; PID ancestry is meaningless there (the "caller" is the backend
+# itself). ``None`` = unset → fall back to the PID walk.
+forced_session_id: ContextVar[str | None] = ContextVar("twicc_forced_session_id", default=None)
 
 
 def _walk_ppids() -> Iterator[int]:
@@ -59,6 +66,10 @@ def resolve_current_session():
     """
     from twicc.agent.states import AgentState
     from twicc.core.models import ProcessRun, Session
+
+    forced = forced_session_id.get()
+    if forced is not None:
+        return Session.objects.filter(pk=forced).first()
 
     # One DB read returns every live agent_pid → session_id pair.
     pid_to_session_id = dict(

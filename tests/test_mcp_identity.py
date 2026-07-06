@@ -48,3 +48,31 @@ def test_draft_alias_resolution():
     token = identity.mint_session_token("draft-id")
     identity.register_draft_alias("draft-id", "canonical-id")
     assert identity.resolve_session_token(token) == "canonical-id"
+
+
+@pytest.mark.django_db
+def test_forced_session_id_overrides_pid_walk():
+    from twicc.cli._drop_request.whoami import forced_session_id, resolve_current_session
+    from twicc.core.models import Project, Session
+
+    project = Project.objects.create(id="-tmp-proj", directory="/tmp/proj", name="proj")
+    session = Session.objects.create(
+        id="11111111-1111-1111-1111-111111111111", project=project,
+    )
+    token = forced_session_id.set(session.id)
+    try:
+        resolved = resolve_current_session()
+        assert resolved is not None and resolved.id == session.id
+    finally:
+        forced_session_id.reset(token)
+
+
+@pytest.mark.django_db
+def test_forced_unknown_session_id_resolves_none():
+    from twicc.cli._drop_request.whoami import forced_session_id, resolve_current_session
+
+    token = forced_session_id.set("no-such-session")
+    try:
+        assert resolve_current_session() is None
+    finally:
+        forced_session_id.reset(token)
