@@ -297,6 +297,11 @@ async def run_server(port: int):
     heartbeat_task = asyncio.create_task(heartbeat_loop())
     drop_watcher_task = asyncio.create_task(get_drop_requests_watcher().start())
 
+    # TwiCC's own MCP server (/mcp): keeps the streamable-HTTP session manager
+    # alive until shutdown. Disabled by TWICC_NO_MCP (the task returns early).
+    from twicc.mcp.endpoint import start_mcp_task
+    mcp_task = asyncio.create_task(start_mcp_task(shutdown_event))
+
     # Per-session artifacts presence tracking (powers the session's Artifacts
     # tab). Filesystem-only, so it starts immediately like the drop watcher —
     # no dependency on the initial JSONL sync.
@@ -380,6 +385,9 @@ async def run_server(port: int):
 
         logger.info("Stopping drop-requests watcher task...")
         await _cancel_task(drop_watcher_task, "Drop-requests watcher task")
+
+        logger.info("Stopping MCP server task...")
+        await _cancel_task(mcp_task, "MCP server task")
 
         logger.info("Stopping artifacts watcher task...")
         await _cancel_task(artifacts_watcher_task, "Artifacts watcher task")

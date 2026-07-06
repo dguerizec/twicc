@@ -1991,12 +1991,29 @@ websocket_urlpatterns = [
 # Django ASGI application for HTTP requests
 django_asgi_app = get_asgi_application()
 
+
+async def http_router(scope, receive, send):
+    """Route ``/mcp`` to the raw-ASGI MCP endpoint; everything else to Django.
+
+    The MCP endpoint is intentionally mounted *in front of* Django (no
+    middleware, no urls.py, no SPA catch-all): it speaks its own streamable-HTTP
+    protocol with its own token auth.
+    """
+    path = scope.get("path", "")
+    if path == "/mcp" or path.startswith("/mcp/"):
+        from twicc.mcp.endpoint import handle_mcp
+
+        await handle_mcp(scope, receive, send)
+        return
+    await django_asgi_app(scope, receive, send)
+
+
 # Protocol router for HTTP and WebSocket
 # SessionMiddlewareStack reads the session cookie from the WebSocket
 # HTTP upgrade request, making session data available in the consumer's scope.
 application = ProtocolTypeRouter(
     {
-        "http": django_asgi_app,
+        "http": http_router,
         "websocket": SessionMiddlewareStack(
             URLRouter(websocket_urlpatterns)
         ),
