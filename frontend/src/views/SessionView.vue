@@ -286,8 +286,8 @@ function trackedPlanDocPathFor(absolutePath) {
     return null
 }
 
-function insertTextAtCursor(text) {
-    sessionItemsListRef.value?.insertTextAtCursor(text)
+function insertTextAtCursor(text, options) {
+    sessionItemsListRef.value?.insertTextAtCursor(text, options)
 }
 provide('insertTextAtCursor', insertTextAtCursor)
 

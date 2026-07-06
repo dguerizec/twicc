@@ -241,7 +241,10 @@ async function addToMessage() {
         },
         { isSelectedText: true, sourceLabel: props.sourceLabel, subject: props.subject },
     )
-    insertTextAtCursor(formatted + '\n')
+    // No focus: the user already composed here in the widget; grabbing the
+    // composer's focus would pop the mobile keyboard (and the composer may be
+    // behind a docked-pane overlay). The text still lands in the draft.
+    insertTextAtCursor(formatted + '\n', { focus: false })
     submitting.value = false
     close()
 }

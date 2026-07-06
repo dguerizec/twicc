@@ -1646,7 +1646,7 @@ async function handleReset() {
  * If no cursor position is available, appends to the end.
  * Focuses the textarea and positions the cursor after the inserted text.
  */
-function insertTextAtCursor(text) {
+function insertTextAtCursor(text, { focus = true } = {}) {
     // Collapsed: the textarea is hidden, so there is no usable caret/focus and we
     // must NOT pop the composer open — the user may be reading the conversation
     // and adding comments. Append to the draft and stay collapsed; the text is
@@ -1665,6 +1665,13 @@ function insertTextAtCursor(text) {
     const newText = before + text + after
 
     updateTextareaContent(newText)
+
+    // Callers with their own text entry (the floating comment widget) pass
+    // focus:false so "Add to message" doesn't grab focus and pop the mobile
+    // keyboard — jarring in general, and outright broken when the composer sits
+    // behind an overlay (a docked Browser pane). The text still lands in the
+    // draft; only the caret move + focus are skipped.
+    if (!focus) return
 
     // Position cursor after the inserted text and focus
     const newPos = pos + text.length
