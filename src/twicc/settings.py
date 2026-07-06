@@ -204,6 +204,18 @@ SESSION_COOKIE_SAMESITE = "Lax"
 # SESSION_COOKIE_AGE at 100 years there is nothing useful to refresh anyway.
 SESSION_SAVE_EVERY_REQUEST = False
 
+# Dev mode: make TwiCC's own session cookie usable when TwiCC is itself embedded
+# cross-site in another TwiCC's Browser tab (e.g. two worktree instances, each
+# exposed over its own HTTPS tunnel). A Lax cookie is withheld in a cross-site
+# iframe; SameSite=None lets it flow, and browsers require Secure alongside None.
+# Secure is fine over the usual dev origins — HTTPS tunnels and http://localhost
+# (a secure context) — but NOT over a plain-http LAN IP, where the cookie won't
+# be set at all (use localhost or a tunnel there). Dev-only: we never widen the
+# cross-site cookie surface for real deployments.
+if DEBUG:
+    SESSION_COOKIE_SAMESITE = "None"
+    SESSION_COOKIE_SECURE = True
+
 ROOT_URLCONF = "twicc.urls"
 
 # Django template engine — used for the few server-rendered pages (currently the
