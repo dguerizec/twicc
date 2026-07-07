@@ -27,7 +27,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { apiFetch } from '../../utils/api'
 import { resolveProjectBrowserUrl } from '../../utils/browserDefaults'
-import { looksLocalUrl, normalizeBrowserUrl } from '../../utils/browserUrl'
+import { normalizeBrowserUrl } from '../../utils/browserUrl'
 import { debounce } from '../../utils/debounce'
 import { showHelp } from '../help/showHelp'
 import PersistentFrame from '../frames/PersistentFrame.vue'
@@ -506,13 +506,16 @@ const companionSnippet = computed(() => {
     const origin = settingsStore.getPublicBaseUrl || window.location.origin
     return `<script src="${origin}/_twicc/browser-companion.js" defer><\/script>`
 })
-// Only nag where the snippet is actionable: a loaded local-ish page, no
-// higher-priority diagnostic (probe banner) on screen.
+// Nag on any loaded page without a companion, unless the user dismissed it
+// (dismissal is per-mount — a TwiCC reload brings it back). Still yields to a
+// higher-priority diagnostic (probe / mixed-content banner) and never shows on
+// the blank state. Not gated on URL locality: a tunnel / reverse-proxy dev page
+// is one the user owns just as much as localhost — the plug already treats every
+// page as companion-eligible, so the banner matches it.
 const showCompanionHint = computed(
     () =>
         companionStatus.value === 'absent' &&
         !!currentUrl.value &&
-        looksLocalUrl(currentUrl.value) &&
         !snippetDismissed.value &&
         !probeResult.value &&
         !mixedContentBlocked.value
@@ -1154,13 +1157,24 @@ function onHomeSelect(event) {
 }
 
 /* Companion status is a normal toolbar button now; the plug's colour + dim
-   reflect the connection state (icon targeted directly — currentColor glyph). */
+   reflect the connection state (icon targeted directly — currentColor glyph).
+   The base (dim/quiet) is the transient 'waiting' state; 'absent' turns it a
+   full-opacity alert red (companion not installed) and 'present' the brand
+   colour (connected). */
 .companion-status {
     opacity: 0.55;
 }
 
 .companion-status wa-icon {
     color: var(--wa-color-text-quiet);
+}
+
+.companion-status.absent {
+    opacity: 1;
+}
+
+.companion-status.absent wa-icon {
+    color: var(--wa-color-danger-60);
 }
 
 .companion-status.present {
