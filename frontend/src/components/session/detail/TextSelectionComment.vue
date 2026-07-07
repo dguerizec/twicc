@@ -50,6 +50,14 @@ const placeholderText = computed(() => {
     return `Optional comment... (${keys} to add to message)`
 })
 
+// The help hint (discard-on-click-outside note + drag tip) is dismissible: once
+// the user clicks "Dismiss", it stays hidden for good (persisted to localStorage).
+const showHelpHint = computed(() => !settingsStore.selectionCommentHintDismissed)
+
+function dismissHelpHint() {
+    settingsStore.setSelectionCommentHintDismissed(true)
+}
+
 const expanded = ref(false)
 const commentText = ref('')
 const textareaRef = ref(null)
@@ -135,7 +143,7 @@ function onDragPointerDown(e) {
     // Don't drag when interacting with quote (scrollable), textareas, buttons,
     // or the screenshot controls (switch + clickable thumbnail).
     const target = e.target
-    if (target.closest('.tsc-quote, wa-textarea, wa-button, textarea, button, .tsc-shot')) return
+    if (target.closest('.tsc-quote, wa-textarea, wa-button, textarea, button, a, .tsc-shot')) return
     e.preventDefault()
     isDragging.value = true
     dragStart = { x: e.clientX, y: e.clientY, ...panelOffset.value }
@@ -364,8 +372,9 @@ defineExpose({ isExpanded: expanded })
                 </div>
             </div>
 
-            <div class="tsc-help">
+            <div v-if="showHelpHint" class="tsc-help">
                 <strong>Note:</strong> Clicking outside this dialog will discard the selection and any comment entered. Drag here to move the dialog.
+                <a class="tsc-help-dismiss" href="#" @click.prevent="dismissHelpHint">Dismiss</a>
             </div>
 
             <div class="tsc-actions">
@@ -481,6 +490,17 @@ defineExpose({ isExpanded: expanded })
     font-size: var(--wa-font-size-s);
     line-height: 1.3;
     color: var(--wa-color-text-quiet);
+}
+
+/* Inline "Dismiss" link that permanently hides the hint above. */
+.tsc-help-dismiss {
+    color: var(--wa-color-brand);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.tsc-help-dismiss:hover {
+    text-decoration: none;
 }
 
 /* ── Actions ─────────────────────────────────────────────────────── */

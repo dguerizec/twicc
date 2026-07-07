@@ -46,6 +46,9 @@ export const SETTINGS_SCHEMA = {
     showActiveAcrossFilters: false,
     showHiddenFiles: false,
     showGitIgnoredFiles: false,
+    // Whether the user dismissed the text-selection comment widget's help hint
+    // (the "clicking outside discards / drag to move" note). Local-only.
+    selectionCommentHintDismissed: false,
     notifUserTurnSound: NOTIFICATION_SOUNDS.NONE,
     notifUserTurnBrowser: false,
     notifPendingRequestSound: NOTIFICATION_SOUNDS.NONE,
@@ -133,6 +136,7 @@ const SETTINGS_VALIDATORS = {
     showActiveAcrossFilters: (v) => typeof v === 'boolean',
     showHiddenFiles: (v) => typeof v === 'boolean',
     showGitIgnoredFiles: (v) => typeof v === 'boolean',
+    selectionCommentHintDismissed: (v) => typeof v === 'boolean',
     notifUserTurnSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
     notifUserTurnBrowser: (v) => typeof v === 'boolean',
     notifPendingRequestSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
@@ -694,6 +698,17 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
+         * Set whether the text-selection comment widget's help hint is dismissed.
+         * Local-only (persisted to localStorage only); off by default.
+         * @param {boolean} dismissed
+         */
+        setSelectionCommentHintDismissed(dismissed) {
+            if (SETTINGS_VALIDATORS.selectionCommentHintDismissed(dismissed)) {
+                this.selectionCommentHintDismissed = dismissed
+            }
+        },
+
+        /**
          * Set show archived sessions mode.
          * This setting is not exposed in the settings panel — it is only
          * toggled from the session list options dropdown in the sidebar.
@@ -1065,6 +1080,7 @@ export function initSettings() {
             showActiveAcrossFilters: store.showActiveAcrossFilters,
             showHiddenFiles: store.showHiddenFiles,
             showGitIgnoredFiles: store.showGitIgnoredFiles,
+            selectionCommentHintDismissed: store.selectionCommentHintDismissed,
             notifUserTurnSound: store.notifUserTurnSound,
             notifUserTurnBrowser: store.notifUserTurnBrowser,
             notifPendingRequestSound: store.notifPendingRequestSound,
