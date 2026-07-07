@@ -80,8 +80,9 @@ it's safe to keep in your dev template. If you access TwiCC from another
 machine, configure the [external URL](help/external-url) so the snippet
 points at an address your browser can reach.
 
-The **plug** button shows the companion status: colored when connected,
-dimmed otherwise. Clicking it opens this help page.
+The **plug** button shows the companion status: brand-colored when
+connected, red when the script is missing, dimmed while detecting.
+Clicking it opens this help page.
 
 ### Responsive mode
 

@@ -535,10 +535,10 @@ async function copySnippet() {
 
 const companionTooltip = computed(() => {
     if (companionStatus.value === 'present') {
-        return 'Companion connected — the toolbar follows the page’s real navigation and history. Click for help on this tab.'
+        return 'Companion connected — real navigation history, element selection and page-error capture are available. Click for help on this tab.'
     }
     if (companionStatus.value === 'waiting') return 'Checking for the TwiCC companion script…'
-    return 'No companion script on this page — history is toolbar-only. Click to see how to add it.'
+    return 'No companion script on this page — real history, element selection and error capture are off. Click to see how to add it.'
 })
 
 // Open the Browser tab's help page (reference open — no dismiss switch).
@@ -1039,9 +1039,10 @@ function onHomeSelect(event) {
             <wa-icon slot="icon" name="plug"></wa-icon>
             <div class="companion-hint">
                 <span>
-                    This page doesn't include the TwiCC companion script, so
-                    Back/Forward only track URLs entered in the toolbar. Add it
-                    to your dev page for real history tracking:
+                    This page doesn't include the TwiCC companion script. Add it
+                    to your dev page to unlock real navigation history, element
+                    selection (click a part of the page to describe it to the
+                    agent), and page-error capture:
                 </span>
                 <code class="companion-snippet">{{ companionSnippet }}</code>
                 <div class="companion-hint-actions">
