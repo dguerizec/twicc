@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Reconnect** — messages arrived while disconnected (e.g. phone asleep) no longer stay missing until a page refresh.
 - **"Finished working" notifications** — no longer sent while background agents are still running.
+- **Codex service status** — issues on OpenAI's side are now reported; they previously went unnoticed.
 - **Claude scheduled wake-up** — correctly handle Claude's ScheduleWakeup tool, and don't stop sessions that are waiting on one.
 
 ## [1.90.0] - 2026-07-03

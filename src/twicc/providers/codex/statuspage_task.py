@@ -23,7 +23,6 @@ _statuspage_stop_event: asyncio.Event | None = None
 
 # Cache the last known status (set by the check task, read on WS connect)
 _last_known_status: str | None = None
-_last_known_updated_at: str | None = None
 
 # Interval for statuspage check: 2 minutes in seconds
 STATUSPAGE_INTERVAL = 2 * 60
@@ -121,7 +120,7 @@ async def start_statuspage_task() -> None:
     - Broadcasts codex:openai_status only when the status actually changes
     - Handles graceful shutdown via stop event
     """
-    global _last_known_status, _last_known_updated_at
+    global _last_known_status
 
     stop_event = get_statuspage_stop_event()
     # Reset for hot-restart support: clear the stop event so a relaunched
@@ -134,25 +133,25 @@ async def start_statuspage_task() -> None:
         try:
             result = await _fetch_codex_status()
             if result:
-                # Only act if updated_at changed (something happened on the status page)
-                if result.updated_at != _last_known_updated_at:
-                    old_status = _last_known_status
-                    _last_known_updated_at = result.updated_at
-
-                    # Only broadcast if the status itself changed
-                    if result.status != old_status:
-                        _last_known_status = result.status
-                        # Don't broadcast on the very first check (startup)
-                        # — the on-connect message handles informing new clients
-                        if old_status is not None:
-                            logger.info(
-                                "Codex status changed: %s -> %s",
-                                old_status,
-                                result.status,
-                            )
-                            await _broadcast_status_change(result.status)
-                        else:
-                            logger.info("Codex initial status: %s", result.status)
+                old_status = _last_known_status
+                # Detect changes off the component `status` alone. We do NOT
+                # gate on the component's `updated_at`: OpenAI's incident.io
+                # endpoint sets it to the definition's last bulk-edit time, not
+                # the status-transition time, so gating on it silently drops
+                # every real status change. `status` is the authoritative signal.
+                if result.status != old_status:
+                    _last_known_status = result.status
+                    # Don't broadcast on the very first check (startup)
+                    # — the on-connect message handles informing new clients
+                    if old_status is not None:
+                        logger.info(
+                            "Codex status changed: %s -> %s",
+                            old_status,
+                            result.status,
+                        )
+                        await _broadcast_status_change(result.status)
+                    else:
+                        logger.info("Codex initial status: %s", result.status)
             else:
                 logger.warning("Statuspage check: Codex API component not found")
         except Exception as e:

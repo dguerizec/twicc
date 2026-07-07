@@ -22,7 +22,6 @@ _statuspage_stop_event: asyncio.Event | None = None
 
 # Cache the last known status (set by the check task, read on WS connect)
 _last_known_status: str | None = None
-_last_known_updated_at: str | None = None
 
 # Interval for statuspage check: 2 minutes in seconds
 STATUSPAGE_INTERVAL = 2 * 60
@@ -119,7 +118,7 @@ async def start_statuspage_task() -> None:
     - Broadcasts claude_code:anthropic_status only when the status actually changes
     - Handles graceful shutdown via stop event
     """
-    global _last_known_status, _last_known_updated_at
+    global _last_known_status
 
     stop_event = get_statuspage_stop_event()
     # Reset for hot-restart support: clear the stop event so a relaunched
@@ -132,25 +131,26 @@ async def start_statuspage_task() -> None:
         try:
             result = await _fetch_claude_code_status()
             if result:
-                # Only act if updated_at changed (something happened on the status page)
-                if result.updated_at != _last_known_updated_at:
-                    old_status = _last_known_status
-                    _last_known_updated_at = result.updated_at
-
-                    # Only broadcast if the status itself changed
-                    if result.status != old_status:
-                        _last_known_status = result.status
-                        # Don't broadcast on the very first check (startup)
-                        # — the on-connect message handles informing new clients
-                        if old_status is not None:
-                            logger.info(
-                                "Claude Code status changed: %s -> %s",
-                                old_status,
-                                result.status,
-                            )
-                            await _broadcast_status_change(result.status)
-                        else:
-                            logger.info("Claude Code initial status: %s", result.status)
+                old_status = _last_known_status
+                # Detect changes off the component `status` alone — the
+                # authoritative signal. We deliberately do NOT gate on the
+                # component's `updated_at`: some status-page backends (e.g.
+                # incident.io) set it to a bulk definition-edit time rather than
+                # the status-transition time, which would silently drop every
+                # real change. Keying off `status` stays correct across providers.
+                if result.status != old_status:
+                    _last_known_status = result.status
+                    # Don't broadcast on the very first check (startup)
+                    # — the on-connect message handles informing new clients
+                    if old_status is not None:
+                        logger.info(
+                            "Claude Code status changed: %s -> %s",
+                            old_status,
+                            result.status,
+                        )
+                        await _broadcast_status_change(result.status)
+                    else:
+                        logger.info("Claude Code initial status: %s", result.status)
             else:
                 logger.warning("Statuspage check: Claude Code component not found")
         except Exception as e:
