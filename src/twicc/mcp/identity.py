@@ -1,12 +1,14 @@
 """Caller identity for the MCP endpoint.
 
 A session token is self-describing and deterministic:
-``twicc_mcp_<session_id>.<hmac_sha256(secret, session_id)[:32]>``. The secret
-is a per-install random file in the data dir, so tokens survive backend
-restarts (a hybrid tmux agent outlives the backend and must keep calling
-``/mcp`` with the token baked into its launch config) and need no storage or
-revocation: they only grant "act as this session on this machine", the same
-authority the PID-ancestry CLI grants any local process today.
+``twicc_mcp_<session_id>.<sig>``, the signature being a salted HMAC of the
+session id under the per-install ``SECRET_KEY`` (random, persisted in the
+data dir — see :mod:`twicc.secret_key`; the salt domain-separates it from
+every other SECRET_KEY use). Tokens therefore survive backend restarts (a
+hybrid tmux agent outlives the backend and must keep calling ``/mcp`` with
+the token baked into its launch config) and need no storage or revocation:
+they only grant "act as this session on this machine", the same authority
+the PID-ancestry CLI grants any local process today.
 
 Brand-new Codex sessions are the one wrinkle: the token is minted against the
 frontend draft id (the canonical id only exists once ``thread_start``
@@ -18,48 +20,26 @@ canonical id, and the alias is no longer needed.
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import logging
-import os
-import secrets
 
-from twicc import paths
+from django.utils.crypto import salted_hmac
 
 logger = logging.getLogger(__name__)
 
 TOKEN_PREFIX = "twicc_mcp_"
+_KEY_SALT = "twicc.mcp.identity"
 _SIG_LEN = 32  # hex chars = 128 bits, ample for a local HMAC capability
 
-_secret: bytes | None = None
 _draft_aliases: dict[str, str] = {}
 
 
 def _reset_for_tests() -> None:
-    global _secret
-    _secret = None
     _draft_aliases.clear()
 
 
-def _get_secret() -> bytes:
-    """Read (or create once) the per-install signing secret, cached."""
-    global _secret
-    if _secret is None:
-        path = paths.get_mcp_secret_path()
-        try:
-            _secret = bytes.fromhex(path.read_text().strip())
-        except (FileNotFoundError, ValueError):
-            _secret = secrets.token_bytes(32)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(_secret.hex())
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, path)
-    return _secret
-
-
 def _sign(session_id: str) -> str:
-    mac = hmac.new(_get_secret(), f"mcp:{session_id}".encode(), hashlib.sha256)
+    mac = salted_hmac(_KEY_SALT, f"mcp:{session_id}", algorithm="sha256")
     return mac.hexdigest()[:_SIG_LEN]
 
 

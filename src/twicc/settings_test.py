@@ -10,6 +10,10 @@ DATABASES = {
     }
 }
 
+# Fixed key: tests must not depend on the developer's real <data_dir>/secret-key
+# (twicc.settings loads or creates it at import).
+SECRET_KEY = "test-secret-key"
+
 # Disable password protection in tests. The setting is otherwise sourced from
 # the developer's local ``.env`` via :mod:`twicc.settings`, which would make
 # every test that hits the HTTP stack require an authenticated session.

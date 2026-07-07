@@ -104,9 +104,13 @@ def get_api_tokens_path() -> Path:
     return get_data_dir() / "api-tokens.json"
 
 
-def get_mcp_secret_path() -> Path:
-    """Per-install secret used to sign per-session MCP tokens (chmod 600)."""
-    return get_data_dir() / "mcp-secret"
+def get_secret_key_path() -> Path:
+    """Per-install Django SECRET_KEY file (chmod 600).
+
+    Generated once by :func:`twicc.secret_key.load_or_create_secret_key`;
+    also the root secret behind derived signatures (MCP session tokens).
+    """
+    return get_data_dir() / "secret-key"
 
 
 def get_synced_settings_path() -> Path:

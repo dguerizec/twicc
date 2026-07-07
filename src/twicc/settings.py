@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from twicc.paths import ensure_data_dirs, get_backend_log_path, get_db_path, get_env_path
+from twicc.secret_key import load_or_create_secret_key
 from twicc.version import get_version
 
 PACKAGE_DIR = Path(__file__).resolve().parent  # src/twicc/
@@ -137,7 +138,10 @@ load_dotenv(get_env_path())
 # Ensure data directories exist (db/, logs/)
 ensure_data_dirs()
 
-SECRET_KEY = "dev-insecure-key-do-not-use-in-production"
+# Per-install random key, generated on first startup and persisted to
+# <data_dir>/secret-key (override: TWICC_SECRET_KEY). Rotating it forces a
+# re-login and re-mints the MCP session tokens derived from it.
+SECRET_KEY = load_or_create_secret_key()
 
 # TWICC_DEBUG is set by devctl when launching the backend process.
 # It controls Django's DEBUG mode and the twicc logger level.

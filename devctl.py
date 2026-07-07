@@ -170,8 +170,9 @@ def synced_config_files(base_dir: Path) -> list[Path]:
 def copy_data_from_main() -> bool:
     """Copy the database, search index and user config from the main data directory to the worktree.
 
-    Copies data.sqlite and any WAL/SHM files, the search-index/ directory, and
-    the user preference files (settings, workspaces, presets, snippets, tips).
+    Copies data.sqlite and any WAL/SHM files, the search-index/ directory, the
+    user preference files (settings, workspaces, presets, snippets, tips) and
+    the per-install secret-key.
     Only called in worktree mode when the local database doesn't exist yet, so
     everything lands together on first setup. Existing local files are never
     overwritten.
@@ -228,6 +229,14 @@ def copy_data_from_main() -> bool:
     if copied_config:
         print(f"  Copied config files: {', '.join(copied_config)}")
 
+    # Copy the per-install SECRET_KEY so the Django sessions carried over in
+    # the copied database stay valid in the worktree (same signing key).
+    source_secret = DEFAULT_DATA_DIR / "secret-key"
+    target_secret = DATA_DIR / "secret-key"
+    if source_secret.exists() and not target_secret.exists():
+        shutil.copy2(source_secret, target_secret)
+        print("  Copied secret-key")
+
     return True
 
 
@@ -261,10 +270,11 @@ def link_shared_dirs_from_main() -> None:
 def clear_local_data() -> None:
     """Delete the local database, search index and user config in the worktree.
 
-    Removes data.sqlite and any WAL/SHM files, the search-index/ directory, and
-    the user preference files (settings, workspaces, presets, snippets, tips), so
-    the next start creates a fresh empty database, rebuilds the search index, and
-    carries no config over from the main data directory.
+    Removes data.sqlite and any WAL/SHM files, the search-index/ directory, the
+    user preference files (settings, workspaces, presets, snippets, tips) and the
+    per-install secret-key, so the next start creates a fresh empty database,
+    rebuilds the search index, and carries no config or key over from the main
+    data directory.
     """
     # Clear database
     target_db = DATA_DIR / "db" / "data.sqlite"
@@ -288,6 +298,13 @@ def clear_local_data() -> None:
         removed_config.append(config_file.name)
     if removed_config:
         print(f"  Cleared config files: {', '.join(removed_config)}")
+
+    # Clear the per-install SECRET_KEY so the isolated instance generates its
+    # own instead of sharing the main install's signing key.
+    target_secret = DATA_DIR / "secret-key"
+    if target_secret.exists():
+        os.remove(target_secret)
+        print("  Cleared secret-key")
 
     # Remove shared-dir symlinks (artifacts/, scratch/) so the fresh start gets
     # isolated local dirs. Only unlink a symlink — never delete a real directory
