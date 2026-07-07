@@ -324,7 +324,7 @@ CURRENT_SEARCH_VERSION = 4
 # Process auto-stop timeouts (in seconds)
 # Processes are automatically stopped if they remain in a state for too long
 PROCESS_TIMEOUT_STARTING = 60  # 1 minute - process stuck during startup
-PROCESS_TIMEOUT_USER_TURN = 30 * 60  # 30 minutes - idle, waiting for user input
+PROCESS_TIMEOUT_USER_TURN = 3900  # 65 min - idle, waiting for user input. Kept >= the prompt-cache TTL (1h) so a return within the cache window reuses the live process instead of forcing a resume (which regenerates Claude Code's env/gitStatus/date/memory prefix and busts the conversation cache).
 PROCESS_TIMEOUT_ASSISTANT_TURN = 3 * 60 * 60  # 3 hours - no activity from agent
 PROCESS_TIMEOUT_ASSISTANT_TURN_ABSOLUTE = 10 * 60 * 60  # 10 hours - max total duration for a turn
 
