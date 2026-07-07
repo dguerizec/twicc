@@ -199,11 +199,24 @@ class ClaudeCodeAgent(BaseAgent):
         # agents are children of the CLI process, so they never outlive this
         # object.
         self._live_background_tasks: dict[str, str] = {}
-        # True while the "waiting for N subagents" process label is what the
-        # frontend shows (broadcast when a turn ends held in ASSISTANT_TURN);
-        # refreshed as agents finish, cleared as soon as the parent streams
-        # its own activity again. See _refresh_waiting_label.
+        # True while a "waiting" process label is what the frontend shows —
+        # either "waiting for N subagents" (live background agents) or
+        # "waiting for scheduled wakeup (HH:MM)" (a pending ScheduleWakeup).
+        # Broadcast when a turn ends held in ASSISTANT_TURN; refreshed as the
+        # held state changes, cleared as soon as the parent streams its own
+        # activity again. See _refresh_waiting_label.
         self._waiting_label_active = False
+        # Epoch (seconds) the latest ScheduleWakeup is due to fire, or None.
+        # Claude's ScheduleWakeup tool ends the turn, but the harness re-invokes
+        # the agent once the delay elapses; like a live background agent, a
+        # still-future wake-up holds the session in ASSISTANT_TURN instead of
+        # dropping to USER_TURN — no "finished working" churn and no idle
+        # auto-stop while it waits. A new ScheduleWakeup always supersedes the
+        # previous deadline and nothing else clears it (a later message does NOT
+        # cancel the wake-up), so the turn-end test is a pure "deadline > now".
+        # In-memory only: the wake-up timer lives in the CLI process and never
+        # outlives it. See the ResultMessage handler and _refresh_waiting_label.
+        self._pending_wakeup_at: float | None = None
         self._get_session_slug = get_session_slug
         self._on_cron_created = on_cron_created
         self._on_cron_deleted = on_cron_deleted
@@ -1347,21 +1360,25 @@ class ClaudeCodeAgent(BaseAgent):
                 await self._refresh_waiting_label()
 
     async def _refresh_waiting_label(self) -> None:
-        """Broadcast/refresh the "waiting for N subagents" process label.
+        """Broadcast/refresh the "waiting" process label held in ASSISTANT_TURN.
 
         Shown by ``WorkingAssistantMessage`` instead of the bare "thinking"
         while a turn ended held in ASSISTANT_TURN (see the ResultMessage
-        handler). Falls back to clearing when no agent is left — the
-        wake-up that follows repaints the real status anyway.
+        handler). Live background agents win the label ("waiting for N
+        subagents"); with none left but a pending ScheduleWakeup it becomes
+        "waiting for scheduled wakeup (HH:MM)". Falls back to clearing when
+        neither holds — the activity that follows repaints the real status.
         """
         count = len(self._live_background_tasks)
-        if count == 0:
+        if count > 0:
+            label = f"waiting for {count} subagent{'s' if count > 1 else ''}"
+        elif self._has_pending_wakeup():
+            label = f"waiting for scheduled wakeup ({self._format_wakeup_time()})"
+        else:
             await self._clear_waiting_label()
             return
         self._waiting_label_active = True
-        await self._broadcast_process_label(
-            f"waiting for {count} subagent{'s' if count > 1 else ''}"
-        )
+        await self._broadcast_process_label(label)
 
     async def _clear_waiting_label(self) -> None:
         """Drop the waiting label if it is currently shown (no-op otherwise)."""
@@ -1369,6 +1386,38 @@ class ClaudeCodeAgent(BaseAgent):
             return
         self._waiting_label_active = False
         await self._broadcast_process_label("")
+
+    def _note_schedule_wakeup(self, tool_use_result: dict) -> None:
+        """Stamp the deadline of the latest ScheduleWakeup from its tool_result.
+
+        ``tool_use_result`` is the tool_result payload of *any* tool; only a
+        ScheduleWakeup carries ``scheduledFor`` (epoch ms), so anything else is
+        ignored. That value is authoritative — the harness rounds the requested
+        ``delaySeconds`` up to the next whole minute, so recomputing from the
+        delay lands ~a minute early. The deadline is what the ResultMessage
+        handler compares against the clock to decide whether to hold
+        ASSISTANT_TURN. A new call always overwrites the previous deadline;
+        nothing else clears it (see ``self._pending_wakeup_at``).
+        """
+        # Inner key is camelCase in the JSONL; tolerate snake_case defensively.
+        scheduled_for_ms = tool_use_result.get("scheduledFor")
+        if scheduled_for_ms is None:
+            scheduled_for_ms = tool_use_result.get("scheduled_for")
+        if not isinstance(scheduled_for_ms, (int, float)) or isinstance(scheduled_for_ms, bool):
+            return
+        self._pending_wakeup_at = scheduled_for_ms / 1000.0
+        logger.debug(
+            "Session %s: ScheduleWakeup noted — holding until %s",
+            self.session_id, self._format_wakeup_time(),
+        )
+
+    def _has_pending_wakeup(self) -> bool:
+        """True while the last-seen ScheduleWakeup is still due to fire."""
+        return self._pending_wakeup_at is not None and self._pending_wakeup_at > time.time()
+
+    def _format_wakeup_time(self) -> str:
+        """Local ``HH:MM`` of the pending wake-up deadline (for the label)."""
+        return datetime.fromtimestamp(self._pending_wakeup_at).strftime("%H:%M")
 
     async def apply_live_settings(self, settings: AgentSettings) -> None:
         """Apply live and idle setting changes to the live SDK client.
@@ -1528,6 +1577,15 @@ class ClaudeCodeAgent(BaseAgent):
                 # to hold ASSISTANT_TURN while background agents still run.
                 if isinstance(msg, SystemMessage):
                     await self._update_live_background_tasks(msg)
+
+                # A ScheduleWakeup's tool_result carries the authoritative fire
+                # time (``scheduledFor``, epoch ms). The harness rounds the
+                # requested delay up to the next whole minute, so we read this
+                # rather than recompute from ``delaySeconds`` (which lands ~a
+                # minute early). Recorded so the ResultMessage branch can hold
+                # ASSISTANT_TURN until it fires.
+                if isinstance(msg, UserMessage) and isinstance(msg.tool_use_result, dict):
+                    self._note_schedule_wakeup(msg.tool_use_result)
 
                 if isinstance(msg, StreamEvent):
                     # Stream events only carry the parent's own model output
@@ -1771,28 +1829,39 @@ class ClaudeCodeAgent(BaseAgent):
                         self._active_tools.clear()
                         await self._broadcast_process_tools()
 
-                    if self._live_background_tasks and not was_soft_interrupt:
-                        # The async-by-default CLI ends its turn as soon as
-                        # the parent stops talking, even while background
-                        # agents it spawned are still running; their terminal
-                        # task-notifications will wake it for follow-up turns.
-                        # Holding ASSISTANT_TURN here is the single choke
-                        # point that keeps every USER_TURN consumer quiet —
-                        # process-state broadcasts, external "finished
-                        # working" pushes, browser notifications — until a
-                        # turn ends with no live agent left. A deliberate
-                        # soft interrupt bypasses the hold: the user asked
-                        # for control, show the session as theirs.
-                        logger.info(
-                            "Session %s: turn ended with %d background agent(s) still "
-                            "running — holding ASSISTANT_TURN (%s)",
-                            self.session_id,
-                            len(self._live_background_tasks),
-                            ", ".join(
-                                f"{tid} ({desc})" if desc else tid
-                                for tid, desc in self._live_background_tasks.items()
-                            ),
-                        )
+                    hold_for_background = bool(self._live_background_tasks)
+                    hold_for_wakeup = self._has_pending_wakeup()
+                    if (hold_for_background or hold_for_wakeup) and not was_soft_interrupt:
+                        # The async-by-default CLI ends its turn as soon as the
+                        # parent stops talking — while background agents it
+                        # spawned keep running, and/or a ScheduleWakeup it set is
+                        # still pending; either way the harness re-invokes it for
+                        # a follow-up turn (a terminal task-notification, or the
+                        # wake-up firing). Holding ASSISTANT_TURN here is the
+                        # single choke point that keeps every USER_TURN consumer
+                        # quiet — process-state broadcasts, external "finished
+                        # working" pushes, browser notifications, the idle
+                        # auto-stop — until a turn ends with nothing left to wait
+                        # on. A deliberate soft interrupt bypasses the hold: the
+                        # user asked for control, show the session as theirs.
+                        if hold_for_background:
+                            logger.info(
+                                "Session %s: turn ended with %d background agent(s) still "
+                                "running — holding ASSISTANT_TURN (%s)",
+                                self.session_id,
+                                len(self._live_background_tasks),
+                                ", ".join(
+                                    f"{tid} ({desc})" if desc else tid
+                                    for tid, desc in self._live_background_tasks.items()
+                                ),
+                            )
+                        else:
+                            logger.info(
+                                "Session %s: turn ended with a pending scheduled wake-up "
+                                "(~%ds out) — holding ASSISTANT_TURN",
+                                self.session_id,
+                                int(self._pending_wakeup_at - time.time()),
+                            )
                         if self.state != AgentState.ASSISTANT_TURN:
                             self._set_state(AgentState.ASSISTANT_TURN)
                             await self._notify_state_change()
