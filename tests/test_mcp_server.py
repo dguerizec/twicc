@@ -69,3 +69,26 @@ def test_call_tool_mutation_bypasses_drop_files(tmp_path, monkeypatch, isolated_
 def test_unknown_tool_raises():
     with pytest.raises(mcp_server.UnknownToolError):
         asyncio.run(mcp_server.dispatch_tool("nope", {}, session_id=None))
+
+
+def test_call_tool_normalizes_datetime_to_json_native(monkeypatch):
+    """Command results carry orjson-native objects (datetime timestamps, e.g.
+    ``session … messages``). dispatch_tool must hand the MCP SDK plain JSON
+    types — the SDK serializes the envelope with stdlib ``json.dumps``, which
+    chokes on datetime ("Object of type datetime is not JSON serializable").
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from twicc.rpc.invoker import InvocationResult
+
+    ts = datetime(2026, 7, 6, 19, 14, 24, 421000, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        mcp_server,
+        "_run_invoke",
+        lambda argv: InvocationResult(exit_code=0, result=[{"timestamp": ts}], error=None),
+    )
+    result = asyncio.run(mcp_server.dispatch_tool("workspaces", {}, session_id=None))
+    # The SDK does exactly this on the returned dict; it must not raise.
+    json.dumps(result)
+    assert result["result"][0]["timestamp"] == "2026-07-06T19:14:24.421000+00:00"

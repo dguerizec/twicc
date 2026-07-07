@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import orjson
 from mcp import types as mcp_types
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -72,7 +73,14 @@ async def dispatch_tool(name: str, arguments: dict, *, session_id: str | None) -
     finally:
         transport.backend_loop.reset(tok_loop)
         forced_session_id.reset(tok_sid)
-    return {"exit_code": result.exit_code, "result": result.result, "error": result.error}
+    envelope = {"exit_code": result.exit_code, "result": result.result, "error": result.error}
+    # Normalize to plain JSON-native types, exactly as the CLI (``_output.emit_json``)
+    # and the ``/rpc/`` view (``views._json``) do. Command results carry orjson-native
+    # objects (``datetime`` timestamps, ...) the MCP SDK would otherwise hand to stdlib
+    # ``json.dumps`` (lowlevel/server.py), which raises "Object of type datetime is not
+    # JSON serializable" and surfaces as a tool error. The orjson round-trip gives the
+    # SDK the same ISO-string shape agents already get from the CLI/skills path.
+    return orjson.loads(orjson.dumps(envelope))
 
 
 def _session_id_from_request() -> str | None:
