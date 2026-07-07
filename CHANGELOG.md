@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Plan tab** — now covers every plan-like document a session touched (plans, specs, handoffs…), for Claude and Codex alike (+CLI/skill/API).
 - **Authentication** — to avoid interfering with other sites running on localhost previewed in the new Browser tab, the session cookie changed; users who have set a TwiCC password will need to sign in again.
+- **Claude Agent SDK** — Upgrade from 0.2.110 to 0.2.111 (bundled Claude Code CLI: 2.1.191 → 2.1.202)
 
 ### Fixed
 
