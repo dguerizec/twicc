@@ -102,6 +102,7 @@ uv tool upgrade twicc
 - **Slash commands and file references**: `/` for Claude Code, `$` for Codex, `@` for files — from the message input
 - **Snippets and history**: reusable text snippets with placeholders (global or per-project), plus a picker to reuse earlier messages
 - **Drafts**: unsent messages and new sessions are saved locally and survive a reload
+- **Artifacts**: agents produce rendered artifacts — images, reports, interactive HTML playgrounds (with network calls you approve per host) — shown inside TwiCC in the session's Artifacts tab, and bookmarkable in a dedicated view
 
 ### Code and files
 
@@ -125,10 +126,20 @@ uv tool upgrade twicc
 - **Automatic titles**: each session gets a suggested title on its own
 - **Archiving**: archive projects and sessions, including bulk archive of old ones
 
-### Layout and artifacts
+### Layout
 
-- **Dockable layout**: arrange a session's tool tabs into a multi-pane workspace, resize and maximize panes, and save named layouts with per-project and global defaults
-- **Artifacts**: agents produce rendered artifacts — images, reports, interactive HTML playgrounds (with network calls you approve per host) — shown inside TwiCC and bookmarkable in a dedicated view
+- **Dockable layout**: arrange a session's tabs into a multi-pane workspace — dock, tab, resize, and maximize panes, and save named layouts with per-project and global defaults
+- **Session tabs**, in order:
+  - **Chat** — the live conversation with the agent; each subagent you open gets its own tab alongside it
+  - **Files** — browse, view, and edit the project's files
+  - **Git** — log, diffs, and commit details, when the project is a Git repo
+  - **Terminal** — a full integrated terminal
+  - **Tasks** — the session's task/todo list, when it has one
+  - **Plan** — the plan-like documents the session touched, read-only
+  - **Artifacts** — the rendered artifacts the agent produced
+  - **Orchestration** — the tree of sessions this one spawned or was spawned by
+  - **Workflows** — Claude Code workflow runs, live as they execute
+  - **Browser** — an embedded web browser
 - **Themes**: light/dark color scheme and several visual themes with a customizable accent color
 
 ### Search and navigation
@@ -156,6 +167,8 @@ uv tool upgrade twicc
 ### Self-aware: agent skills and CLI
 
 TwiCC exposes a full `twicc` command-line interface — and a Claude Code / Codex plugin (auto-installed) whose skills wrap the same commands, so an agent can drive TwiCC from inside a running session. Either way you can inspect projects, workspaces, and sessions, run a full-text search, check usage and cost, and **create, reply to, update, and control sessions and their live processes** — every list/inspect command outputs JSON for scripting.
+
+The same surface is also exposed as **native MCP tools**: TwiCC runs a built-in MCP server and wires it into every session on both providers automatically, so an agent gets the full command set as first-class tools with nothing to set up.
 
 See [`SKILLS-AND-CLI.md`](SKILLS-AND-CLI.md) for the full reference, or run `twicc --help`.
 

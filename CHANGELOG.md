@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **Browser tab** — preview a page (typically your project's dev server) right next to the conversation: browse it, view it at any device size, and point the agent straight at elements on the page.
-- **Artifacts tab** — rendered web pages get the same tools as the Browser tab: pick an element to comment on it to the agent, and preview at any device size.
+- **Artifacts tools** — rendered web pages get the same tools as the Browser tab: pick an element to comment on it to the agent, and preview at any device size.
 - **MCP server** — agents can now drive TwiCC through built-in MCP tools (spawn sessions, send messages, orchestrate) instead of shell commands.
 
 ### Changed
@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Reconnect** — messages arrived while disconnected (e.g. phone asleep) no longer stay missing until a page refresh.
 - **"Finished working" notifications** — no longer sent while background agents are still running.
+- **Claude scheduled wake-up** — correctly handle Claude's ScheduleWakeup tool, and don't stop sessions that are waiting on one.
 
 ## [1.90.0] - 2026-07-03
 
