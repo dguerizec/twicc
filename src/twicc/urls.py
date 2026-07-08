@@ -150,11 +150,13 @@ urlpatterns = [
     path("share/<str:token>/api/items/", share_session_views.api_items),
     path("share/<str:token>/api/items/<int:line_num>/tool-results/<str:tool_id>/", share_session_views.api_tool_results),
     path("share/<str:token>/api/tool-states/", share_session_views.api_tool_states),
+    path("share/<str:token>/api/backend-patch/<str:tool_id>/", share_session_views.api_backend_patch),
     path("share/<str:token>/api/subagents/", share_session_views.api_subagents),
     path("share/<str:token>/api/subagent/<str:subagent_id>/items/metadata/", share_session_views.api_subagent_items_metadata),
     path("share/<str:token>/api/subagent/<str:subagent_id>/items/", share_session_views.api_subagent_items),
     path("share/<str:token>/api/subagent/<str:subagent_id>/items/<int:line_num>/tool-results/<str:tool_id>/", share_session_views.api_subagent_tool_results),
     path("share/<str:token>/api/subagent/<str:subagent_id>/tool-states/", share_session_views.api_subagent_tool_states),
+    path("share/<str:token>/api/subagent/<str:subagent_id>/backend-patch/<str:tool_id>/", share_session_views.api_subagent_backend_patch),
     path("share/<str:token>/media/<str:filename>", share_session_views.share_session_media),
     # Artifact-share meta + proxy live under /api/ too (shape-uniform with sessions).
     path("share/<str:token>/api/artifact-meta/", share_artifact_views.api_meta),

@@ -194,6 +194,39 @@ async def _tool_results(request, token, line_num, tool_id, subagent_id=None):
     return _json({"results": results})
 
 
+# A tool_result line carrying an originalFile can be large; skip past this and the
+# viewer falls back to the input-based diff (matches the owner's "file too large").
+_MAX_BACKEND_PATCH_BYTES = 1_000_000
+
+
+async def _result_items(request, token, tool_id, subagent_id=None):
+    """Raw content of the tool_result line(s) backing one tool call, ceiling-EXEMPT
+    (gated by ``ToolResultLink`` like tool-results) but frozen-clamped. The full-file
+    Edit / apply_patch diff needs ``structuredPatch`` + ``originalFile`` (Claude) or
+    ``original_files`` (Codex), which live in a DEBUG_ONLY line the display ceiling
+    drops from ``/items``. Provider-agnostic: returns ``serialize_session_item`` and
+    lets the reused per-provider frontend extract — no Claude/Codex logic here."""
+    from twicc.core.models import SessionItem, ToolResultLink
+
+    ctx, resp = await _ctx(request, token)
+    if resp:
+        return resp
+    session = ctx.session if subagent_id is None else await _resolve_shared_subagent(ctx, subagent_id)
+    link_lines = await sync_to_async(list)(
+        ToolResultLink.objects.filter(session=session, tool_use_id=tool_id)
+        .values_list("tool_result_line_num", flat=True)
+    )
+    if not link_lines:
+        return _json([], safe=False)
+    max_line = _ceiling_kwargs(ctx, session)["max_line"]
+    qs = SessionItem.objects.filter(session=session, line_num__in=link_lines)
+    if max_line is not None:
+        qs = qs.filter(line_num__lte=max_line)
+    items = await sync_to_async(list)(qs.order_by("line_num"))
+    out = [serialize_session_item(i) for i in items if len(i.content or "") <= _MAX_BACKEND_PATCH_BYTES]
+    return _json(out, safe=False)
+
+
 async def _tool_states(request, token, subagent_id=None):
     """Mirror of the owner's ``views.tool_states`` aggregation, restricted to links
     whose tool_use is a VISIBLE item (ceiling + frozen line) — a hidden tool_use
@@ -289,6 +322,10 @@ async def api_tool_states(request, token):
     return await _tool_states(request, token)
 
 
+async def api_backend_patch(request, token, tool_id):
+    return await _result_items(request, token, tool_id)
+
+
 async def api_subagents(request, token):
     return await share_session_subagents(request, token)
 
@@ -307,6 +344,10 @@ async def api_subagent_tool_results(request, token, subagent_id, line_num, tool_
 
 async def api_subagent_tool_states(request, token, subagent_id):
     return await _tool_states(request, token, subagent_id)
+
+
+async def api_subagent_backend_patch(request, token, subagent_id, tool_id):
+    return await _result_items(request, token, tool_id, subagent_id)
 
 
 # ── Inline transcript media (design §6.2) ───────────────────────────────────

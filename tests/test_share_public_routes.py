@@ -241,3 +241,41 @@ def test_subagent_tool_states(client, session):
     # include_subagents off → 404.
     share_off = _share(session, options={"mode": "live", "include_subagents": False})
     assert _run(client.get(f"/share/{share_off.token}/api/subagent/sub-ts/tool-states/")).status_code == 404
+
+
+def test_backend_patch_serves_debug_only_result_line(client, session):
+    # The Edit's tool_result (structuredPatch/originalFile) is DEBUG_ONLY (line 4).
+    # backend-patch must serve it ceiling-exempt even though /items filters it out.
+    from twicc.core.models import SessionItem
+    payload = orjson.dumps({"toolUseResult": {
+        "structuredPatch": [{"lines": ["-a", "+b"]}], "originalFile": "line1\nline2\n"}}).decode()
+    SessionItem.objects.filter(session=session, line_num=4).update(content=payload)
+    _link(session, 3, 4, "tu-edit")  # tool_use line 3 (visible), result line 4 (debug)
+    share = _share(session, options={"mode": "live", "max_display_mode": "normal"})
+    # /items filters the debug result line out …
+    items = orjson.loads(_run(client.get(f"/share/{share.token}/api/items/?range=1:5")).content)
+    assert 4 not in [it["line_num"] for it in items]
+    # … but backend-patch serves it (gated by the tool id).
+    res = _run(client.get(f"/share/{share.token}/api/backend-patch/tu-edit/"))
+    assert res.status_code == 200
+    rows = orjson.loads(res.content)
+    assert [r["line_num"] for r in rows] == [4]
+    assert "originalFile" in rows[0]["content"]
+    # Unknown tool id → empty, not an error.
+    assert orjson.loads(_run(client.get(f"/share/{share.token}/api/backend-patch/nope/")).content) == []
+
+
+def test_backend_patch_snapshot_clamp_and_size_cap(client, session):
+    from twicc.core.models import SessionItem
+    from twicc.share.session_views import _MAX_BACKEND_PATCH_BYTES
+    SessionItem.objects.filter(session=session, line_num=4).update(
+        content=orjson.dumps({"toolUseResult": {"originalFile": "x"}}).decode())
+    _link(session, 3, 4, "tu-mid")
+    # Snapshot frozen at line 3: the result line 4 is post-freeze → dropped.
+    snap = _share(session, options={"mode": "snapshot", "max_display_mode": "normal", "frozen_at_line": 3})
+    assert orjson.loads(_run(client.get(f"/share/{snap.token}/api/backend-patch/tu-mid/")).content) == []
+    # Size cap: an oversized originalFile is skipped (viewer falls back to input diff).
+    big = orjson.dumps({"toolUseResult": {"originalFile": "y" * (_MAX_BACKEND_PATCH_BYTES + 10)}}).decode()
+    SessionItem.objects.filter(session=session, line_num=4).update(content=big)
+    live = _share(session, options={"mode": "live", "max_display_mode": "normal"})
+    assert orjson.loads(_run(client.get(f"/share/{live.token}/api/backend-patch/tu-mid/")).content) == []

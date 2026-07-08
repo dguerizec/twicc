@@ -49,6 +49,9 @@ const openSubagent = inject('openSubagent', null)
 // instead of the auth-protected SPA API (a viewer holds no session). Default null
 // → SPA keeps its apiFetch behaviour. Returns the ``{ results }`` payload.
 const fetchToolResult = inject('fetchToolResult', null)
+// Share-only seam: the Edit/Write tool_result line is DEBUG_ONLY and filtered out
+// of the share's /items endpoint, so the full-file diff pulls it ceiling-exempt.
+const fetchBackendPatchItems = inject('fetchBackendPatchItems', null)
 
 const props = defineProps({
     name: {
@@ -726,6 +729,22 @@ watchEffect(async () => {
     const item = dataStore.getSessionItem(props.sessionId, lineNum)
     if (item && hasContent(item)) {
         applyExtracted(getParsedContent(item))
+        return
+    }
+    // Share: the result line is ceiling-filtered out of /items, so fetch it by tool
+    // id via the ceiling-exempt seam and seed the store — then extract as usual.
+    if (fetchBackendPatchItems) {
+        fileChangeBackendPatchLoading.value = true
+        try {
+            const rows = await fetchBackendPatchItems(props.toolId)
+            if (rows?.length) {
+                dataStore.addSessionItems(props.sessionId, rows)
+                const fetched = dataStore.getSessionItem(props.sessionId, lineNum)
+                if (fetched && hasContent(fetched)) applyExtracted(getParsedContent(fetched))
+            }
+        } finally {
+            fileChangeBackendPatchLoading.value = false
+        }
         return
     }
     fileChangeBackendPatchLoading.value = true

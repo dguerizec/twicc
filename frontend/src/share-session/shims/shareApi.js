@@ -19,6 +19,10 @@ export function makeShareApi(tokenPath) {
                 : `${base}/api/items/${lineNum}/tool-results/${toolId}/`),
         fetchToolStates: (subagentId = null) =>
             jget(subagentId ? `${base}/api/subagent/${subagentId}/tool-states/` : `${base}/api/tool-states/`),
+        // Raw tool_result item(s) for a tool call — the ceiling-exempt source of the
+        // Edit/apply_patch full-file diff (structuredPatch/originalFile live there).
+        fetchBackendPatchItems: (toolId, subagentId = null) =>
+            jget(subagentId ? `${base}/api/subagent/${subagentId}/backend-patch/${toolId}/` : `${base}/api/backend-patch/${toolId}/`),
         fetchSubagents: () => jget(`${base}/api/subagents/`),
         mediaUrl: (filename) => `${base}/media/${filename}`,
     }

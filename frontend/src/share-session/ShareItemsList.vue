@@ -82,6 +82,10 @@ function toggleGroup(head) { store.toggleExpandedGroup(props.sessionId, head) }
 const shareApi = inject('shareApi')
 provide('fetchToolResult', (lineNum, toolId, parentSessionId) =>
     shareApi.fetchToolResults(lineNum, toolId, parentSessionId || null))
+// Bound to THIS list's session context (root vs subagent) so the reused Edit /
+// apply_patch diff can pull its ceiling-filtered tool_result line by tool id.
+provide('fetchBackendPatchItems', (toolId) =>
+    shareApi.fetchBackendPatchItems(toolId, props.parentSessionId || null))
 provide('rewriteContentMediaUrl', (url) => {
     // /artifacts/<sid>/<file> → /share/<t>/media/<file> when sid === shared session.
     const m = /^\/artifacts\/([^/]+)\/([^/?#]+)$/.exec(url)

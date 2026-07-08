@@ -1,7 +1,7 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, inject, watchEffect } from 'vue'
 import { useDataStore } from '../../../../../stores/data'
-import { getParsedContent } from '../../../../../utils/parsedContent'
+import { getParsedContent, hasContent } from '../../../../../utils/parsedContent'
 import { applyStructuredPatch, reconstructFromHunks } from '../../../../../utils/patchUtils'
 import { parseApplyPatchEnvelope } from '../../../../../providers/codex/parsePatch'
 import { parseUnifiedDiff } from '../../../../../providers/codex/parseUnifiedDiff'
@@ -46,6 +46,26 @@ const props = defineProps({
 })
 
 const dataStore = useDataStore()
+
+// Share-only: the ``event_msg.patch_apply_end`` line carrying ``original_files`` is
+// DEBUG_ONLY and filtered out of the share's /items, so ``patchEndPayload`` (which
+// reads it from the store) finds nothing → hunks fallback. Pull it ceiling-exempt
+// by tool id and seed the store; patchEndPayload then reacts to its arrival.
+const fetchBackendPatchItems = inject('fetchBackendPatchItems', null)
+if (fetchBackendPatchItems) {
+    watchEffect(async () => {
+        const toolState = dataStore.getToolState(props.sessionId, props.toolId)
+        const lineNums = toolState?.toolResultLineNums
+        if (!Array.isArray(lineNums) || lineNums.length === 0) return
+        const missing = lineNums.some((ln) => {
+            const it = dataStore.getSessionItem(props.sessionId, ln)
+            return !(it && hasContent(it))
+        })
+        if (!missing) return
+        const rows = await fetchBackendPatchItems(props.toolId)
+        if (rows?.length) dataStore.addSessionItems(props.sessionId, rows)
+    })
+}
 
 const session = computed(() => dataStore.getSession(props.sessionId))
 const project = computed(() => {
