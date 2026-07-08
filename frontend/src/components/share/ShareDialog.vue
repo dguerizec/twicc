@@ -31,7 +31,13 @@ const createdUrl = ref('')
 const dialogRef = ref(null)
 const formId = 'share-dialog-form'
 
-watch(() => props.open, (o) => { if (o) reset() })
+// `immediate` matters for the on-demand mounts (ProjectView's artifact/session
+// dialog, ShareManagerDialog's edit dialog): they are v-if'd in at the same tick
+// `open` becomes true, so the component mounts with `open` already true and a
+// plain watcher never sees the false→true edge — leaving the form (title…)
+// unseeded on the first open in a tab. The `if (o)` guard keeps a closed mount a
+// no-op.
+watch(() => props.open, (o) => { if (o) reset() }, { immediate: true })
 function reset() {
     error.value = ''; createdUrl.value = ''
     const e = props.edit
