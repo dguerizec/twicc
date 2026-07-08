@@ -1,12 +1,33 @@
-/* Root transcript CSS custom properties shared by the SPA (App.vue) and the
-   share bundle so they can't drift (design §8.8). Only the App.vue-level trio;
-   --card-spacing / --max-card-width ship with SessionItem.vue's own CSS. */
+/* Root transcript CSS custom properties AND global base rules shared by the SPA
+   (App.vue) and the share bundle so they can't drift (design §8.8). Imported by
+   both entry points; the share has no App.vue, so anything the transcript render
+   tree depends on globally must live here, not in App.vue's scoped-file <style>. */
 :root {
     --base-user-assistant-card-color: var(--wa-color-gray-95);
     --user-card-base-color: oklch(from var(--base-user-assistant-card-color) calc(l + 0.015) c h);
     --assistant-card-base-color: oklch(from var(--base-user-assistant-card-color) calc(l + 0.03) c h);
     --main-shadow-size: var(--wa-shadow-offset-y-s);
+
+    /* Code font alias used by tool cards (ToolUseContent, ApplyPatch…). WA has no
+       --wa-font-mono of its own, so an unset var would drop those to the browser
+       monospace default. */
+    --wa-font-mono: var(--wa-font-family-code);
 }
 .wa-dark {
     --base-user-assistant-card-color: var(--wa-color-surface-raised);
+}
+
+/* Override WA 3.3's "box-sizing: inherit" from @layer wa-native: native <details>
+   break inherit propagation (Chrome & Firefox), so slotted content inside
+   wa-details falls back to content-box — mis-sizing tool-card bodies (double
+   scrollbars). Unlayered, so it beats the layered WA rule regardless of order. */
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
+/* WA styles native <blockquote> with a serif font at a larger size; markdown in
+   the transcript wants it to match surrounding body text. */
+blockquote {
+    font-family: inherit !important;
+    font-size: inherit !important;
 }

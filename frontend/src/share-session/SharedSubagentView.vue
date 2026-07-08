@@ -31,8 +31,10 @@ const current = computed(() => props.stack[props.stack.length - 1])
 .subagent-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.4); }
 .subagent-panel { position: absolute; top: 0; right: 0; bottom: 0; width: min(52rem, 100%);
     background: var(--wa-color-surface-default); box-shadow: -4px 0 24px rgba(0,0,0,.3);
-    display: flex; flex-direction: column; overflow: auto; }
-.subagent-head { position: sticky; top: 0; display: flex; justify-content: space-between;
+    display: flex; flex-direction: column; overflow: hidden; }
+/* The inner ShareItemsList (flex:1; min-height:0 via the shell styles) owns the
+   scroll, so the head stays fixed and the drawer never traps the wheel. */
+.subagent-head { flex: 0 0 auto; display: flex; justify-content: space-between;
     align-items: center; padding: .5rem 1rem; background: var(--wa-color-surface-default); }
 .crumbs { display: flex; gap: .35rem; font-size: var(--wa-font-size-s); color: var(--wa-color-text-quiet); }
 </style>

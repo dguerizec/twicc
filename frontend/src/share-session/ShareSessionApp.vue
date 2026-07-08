@@ -109,12 +109,30 @@ onMounted(() => {
 </template>
 
 <style>
-.share-shell { max-width: 60rem; margin: 0 auto; padding: 1rem; }
-.share-header { position: sticky; top: 0; z-index: 3; display: flex; justify-content: space-between;
+/* App-shell layout: the viewer fills the viewport so the transcript list scrolls
+   INTERNALLY. The VirtualScroller needs a bounded-height parent (it uses
+   height:100% + overscroll-behavior:contain); without one it grows to full
+   content height and swallows the wheel over the content, leaving only the page
+   margins scrollable. This mirrors the SPA's SessionItemsList flex chain. */
+html, body { height: 100%; margin: 0; }
+#app { height: 100%; }
+.share-shell { max-width: 60rem; margin: 0 auto; padding: 0 1rem; height: 100%;
+    display: flex; flex-direction: column; }
+.share-header { flex: 0 0 auto; display: flex; justify-content: space-between;
     align-items: center; gap: 1rem; padding: .5rem 0; background: var(--wa-color-surface-default); }
 .share-title { display: flex; align-items: center; gap: .5rem; }
 .share-controls { display: flex; align-items: center; gap: .5rem; }
-.share-footer { text-align: center; color: var(--wa-color-text-quiet); font-size: var(--wa-font-size-s);
-    padding: 2rem 0 1rem; }
-@media print { .share-header, .share-controls, .share-footer { display: none; } }
+.share-banner { flex: 0 0 auto; }
+.share-items-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    overflow: hidden; position: relative; }
+.share-items-list .session-items { flex: 1; min-height: 0; }
+.share-footer { flex: 0 0 auto; text-align: center; color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-s); padding: .75rem 0; }
+/* Print: let everything flow (the scroller still only renders its virtualized
+   window, but at least it isn't clipped to one viewport). */
+@media print {
+    html, body, #app, .share-shell { height: auto; }
+    .share-items-list, .share-items-list .session-items { overflow: visible; min-height: 0; }
+    .share-header, .share-controls, .share-footer { display: none; }
+}
 </style>

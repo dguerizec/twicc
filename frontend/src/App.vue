@@ -742,16 +742,8 @@ const toastTheme = computed(() => {
     margin: 0;
 }
 
-/*
- * Override WA 3.3's "box-sizing: inherit" from @layer wa-native.
- * Native <details> elements break "inherit" propagation (both Chrome & Firefox):
- * children inside <details> fall back to content-box even when the parent is border-box.
- * This affects all slotted content inside wa-details. Using explicit border-box fixes it.
- * Our unlayered CSS has higher cascade priority than @layer wa-native.
- */
-*, *::before, *::after {
-    box-sizing: border-box;
-}
+/* box-sizing: border-box override (WA @layer wa-native) moved to the shared
+   styles/transcript-tokens.css so the share bundle (no App.vue) gets it too. */
 
 body {
     margin: 0;
@@ -857,7 +849,7 @@ body.sidebar-closed {
     --diff-insertedTextBackground: #A7E9B8;
     --diff-selectionBackground: var(--selection-bg-color);
 
-    --wa-font-mono: var(--wa-font-family-code);
+    /* --wa-font-mono moved to the shared styles/transcript-tokens.css. */
 }
 
 wa-split-panel {
@@ -976,10 +968,7 @@ body .Notivue__content-title {
     }
 }
 
-/* Keep blockquote normal size */
-blockquote {
-    font-family: inherit !important;
-    font-size: inherit !important;
-}
+/* blockquote font-family/size normalization moved to the shared
+   styles/transcript-tokens.css so the share bundle inherits it too. */
 
 </style>
