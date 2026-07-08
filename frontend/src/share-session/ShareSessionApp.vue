@@ -25,6 +25,7 @@ store.setSession({
     title: meta.title || 'Shared session',
     last_line: meta.last_line, git_directory: null, cwd: null, artifacts_dir: null,
     created_at: meta.created_at, last_updated_at: meta.last_updated_at,
+    compacted: meta.compacted === true,
 })
 settings.areMessageTimestampsShown = meta.show_timestamps !== false
 settings.setDisplayMode(clampMode(meta.max_display_mode || 'normal'))
@@ -108,7 +109,17 @@ onMounted(() => {
                 m.session_id, m.tool_use_id, m.result_count, m.completed_at,
                 m.error ?? null, m.extra ?? null, m.tool_result_line_nums || [],
             ),
-            onClosed: () => { revoked.value = true },
+            // Assistant-turn indicator: inject/drop the reused "<Provider> is
+            // thinking" synthetic message (root session only).
+            onProcessState: (m) => store.setLiveAssistantTurn(meta.session_id, m.state === 'assistant_turn'),
+            // A subagent spawned live becomes openable (seed its link + session so
+            // the tool card's "View Agent" resolves it).
+            onAgentLink: (link) => {
+                if (!link?.agent_id) return
+                store.addAgentLink(meta.session_id, link)
+                seedAgentSession(link.agent_id, link.agent_slug)
+            },
+            onClosed: () => { revoked.value = true; store.setLiveAssistantTurn(meta.session_id, false) },
         })
     }
 })

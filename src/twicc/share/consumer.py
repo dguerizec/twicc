@@ -47,12 +47,34 @@ class ShareConsumer(AsyncJsonWebsocketConsumer):
         self.descendant_ids = await self._load_descendants()
         await self.channel_layer.group_add("updates", self.channel_name)
         await self.accept()
+        # Seed the current assistant state so a viewer landing mid-turn sees the
+        # "is thinking" indicator immediately (process_state is edge-triggered).
+        await self._send_current_assistant_state()
 
     async def disconnect(self, code):
         try:
             await self.channel_layer.group_discard("updates", self.channel_name)
         except Exception:
             pass
+
+    async def _send_current_assistant_state(self) -> None:
+        """Push the session's live process state to a just-connected viewer, so the
+        "is thinking" indicator shows even when the page is opened mid-assistant-turn
+        (the broadcast below is edge-triggered and would otherwise miss the ongoing
+        turn until it ends)."""
+        from twicc.agent import serialize_agent_info
+        from twicc.agent.registry import get_agent_manager_registry
+
+        try:
+            agents = get_agent_manager_registry().get_active_agents()
+        except Exception:
+            return  # no live registry (e.g. tests) — nothing to seed
+        for info in agents:
+            if info.session_id == self.session_id:
+                state = serialize_agent_info(info).get("state")
+                if state:
+                    await self.send_json({"type": "share_process_state", "state": state})
+                return
 
     async def _load_descendants(self) -> set[str]:
         if not self.include_subagents:
@@ -127,9 +149,33 @@ class ShareConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({**data, "type": "share_tool_state"})
             return
 
+        if mtype == "process_state":
+            # Root session only: drives the viewer's "<Provider> is thinking"
+            # indicator. Carries the state alone — never the label/tools/crons the
+            # owner UI shows.
+            if data.get("session_id") != self.session_id:
+                return
+            await self.send_json({"type": "share_process_state", "state": data.get("state")})
+            return
+
         if mtype == "agent_link_created" and self.include_subagents:
             if data.get("parent_session_id") == self.session_id:
-                self.descendant_ids.add(data.get("agent_session_id"))
+                agent_id = data.get("agent_session_id")
+                self.descendant_ids.add(agent_id)
+                # Let the viewer open a subagent spawned after page load — its
+                # "View Agent" button resolves through this link (seeded once at
+                # load otherwise, so a live-spawned agent would be un-openable).
+                await self.send_json({
+                    "type": "share_agent_link",
+                    "link": {
+                        "agent_id": agent_id,
+                        "agent_slug": data.get("agent_slug"),
+                        "tool_use_id": data.get("tool_use_id"),
+                        "tool_use_line_num": data.get("tool_use_line_num"),
+                        "is_background": data.get("is_background"),
+                        "started_at": data.get("started_at"),
+                    },
+                })
             return
 
         if mtype == "session_updated":

@@ -355,6 +355,9 @@ def serialize_share_public_meta(share):
             "max_display_mode": opts.get("max_display_mode", "normal"),
             "include_subagents": opts.get("include_subagents", True),
             "show_timestamps": opts.get("show_timestamps", True),
+            # Drives the viewer's /compact reorder (compact_summary vs the /compact
+            # command land in swapped JSONL order).
+            "compacted": bool(sess.compacted) if sess else False,
             "created_at": sess.created_at.isoformat() if sess and sess.created_at else None,
             "last_updated_at": sess.last_updated_at.isoformat() if sess and sess.last_updated_at else None,
         }

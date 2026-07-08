@@ -4,6 +4,7 @@
 // api-error recovery) that read-only mode never exercises.
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
+import { DISPLAY_LEVEL, SYNTHETIC_ITEM } from '../../constants'
 import { computeVisualItems, insertDaySeparators, visualItemEqual } from '../../utils/visualItems'
 import { getParsedContent, setParsedContent, clearParsedContent } from '../../utils/parsedContent'
 import { shareApi } from './shareApi'
@@ -34,6 +35,7 @@ export const useDataStore = defineStore('shareData', {
         openDetails: {},         // id -> { key: bool }
         agentLinks: {},          // id -> { toolId: { agentId, isBackground, toolUseLineNum, slug } }
         toolStates: {},          // id -> { toolId: {...} }
+        liveTurns: {},           // id -> bool (live share: root session in assistant_turn)
         _cache: {},              // id -> Map for visual-item stabilization
     }),
     getters: {
@@ -166,12 +168,63 @@ export const useDataStore = defineStore('shareData', {
             // Compact the sparse (line_num-1 keyed) array before computeVisualItems,
             // which iterates with for..of and would choke on holes.
             const items = (this.sessionItems[sessionId] || []).filter(Boolean)
-            if (!items.length) { this.visualItems[sessionId] = []; this._cache[sessionId] = new Map(); return }
+            const isAssistantTurn = !!this.liveTurns[sessionId]
+            if (!items.length && !isAssistantTurn) {
+                this.visualItems[sessionId] = []; this._cache[sessionId] = new Map(); return
+            }
             const settings = useSettingsStore()
             const mode = settings.getDisplayMode
             const expanded = this.expandedGroups[sessionId] || []
             const detailed = new Set(this.detailedBlocks[sessionId] || [])
-            const vis = computeVisualItems(items, mode, expanded, false, detailed)
+
+            // Live share: append the reused "<Provider> is thinking" synthetic
+            // message during an assistant turn. Empty content (no label/tools) makes
+            // WorkingAssistantMessage render its default "thinking" phrase. liveTurns
+            // is set only by the WS process_state path, so snapshots never inject it.
+            let allItems = items
+            if (isAssistantTurn) {
+                const { lineNum, kind: syntheticKind } = SYNTHETIC_ITEM.WORKING_ASSISTANT_MESSAGE
+                const working = {
+                    line_num: lineNum, content: null, kind: 'assistant_message', syntheticKind,
+                    display_level: DISPLAY_LEVEL.ALWAYS, group_head: null, group_tail: null,
+                }
+                setParsedContent(working, {
+                    type: 'assistant', syntheticKind,
+                    label: null, tools: [], lastStartedToolId: null, lastToolVisible: true,
+                    message: { role: 'assistant', content: [] },
+                })
+                allItems = [...items, working]
+            }
+
+            const vis = computeVisualItems(allItems, mode, expanded, isAssistantTurn, detailed)
+
+            // Reorder the /compact command before its compact_summary (they land in
+            // swapped JSONL order). Mirrors the SPA store; gated on the seeded flag.
+            if (this.sessions[sessionId]?.compacted) {
+                for (let i = 0; i < vis.length; i++) {
+                    if (vis[i].kind !== 'compact_summary') continue
+                    for (let j = i + 1; j < Math.min(i + 10, vis.length); j++) {
+                        if (vis[j].kind !== 'user_message') continue
+                        const text = getParsedContent(vis[j])?.message?.content
+                        if (typeof text === 'string' && text.includes('<command-name>/compact</command-name>')) {
+                            const [moved] = vis.splice(j, 1); vis.splice(i, 0, moved)
+                        }
+                        break  // only inspect the first user_message after compact_summary
+                    }
+                }
+            }
+
+            // computeVisualItems doesn't copy syntheticKind onto its output — re-tag
+            // the working message so SessionItem dispatches to WorkingAssistantMessage.
+            if (isAssistantTurn) {
+                for (let i = vis.length - 1; i >= 0; i--) {
+                    if (vis[i].lineNum === SYNTHETIC_ITEM.WORKING_ASSISTANT_MESSAGE.lineNum) {
+                        vis[i].syntheticKind = SYNTHETIC_ITEM.WORKING_ASSISTANT_MESSAGE.kind; break
+                    }
+                    if (vis[i].lineNum >= 0) break  // synthetics sit at the end
+                }
+            }
+
             for (let i = 0; i < vis.length; i++) {
                 const isUser = vis[i].kind === 'user_message'
                 const prevUser = i > 0 ? vis[i - 1].kind === 'user_message' : null
@@ -228,6 +281,21 @@ export const useDataStore = defineStore('shareData', {
                 toolUseLineNum: l.tool_use_line_num, slug: l.agent_slug || null,
             }
             this.agentLinks[sessionId] = map
+        },
+        // Live: merge one subagent link so a tool card's "View Agent" resolves it.
+        addAgentLink(sessionId, link) {
+            const map = this.agentLinks[sessionId] || (this.agentLinks[sessionId] = {})
+            map[link.tool_use_id] = {
+                agentId: link.agent_id, isBackground: link.is_background,
+                toolUseLineNum: link.tool_use_line_num, slug: link.agent_slug || null,
+            }
+        },
+        // Live: root session entered/left an assistant turn — drives the reused
+        // "<Provider> is thinking" synthetic message via recomputeVisualItems.
+        setLiveAssistantTurn(sessionId, active) {
+            if (!!this.liveTurns[sessionId] === !!active) return
+            this.liveTurns[sessionId] = !!active
+            this.recomputeVisualItems(sessionId)
         },
 
         // ── No-op write surface (statically imported by reused components) ──

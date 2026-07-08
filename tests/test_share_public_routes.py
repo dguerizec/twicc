@@ -46,6 +46,7 @@ def test_meta_ok_and_headers(client, session):
     data = orjson.loads(res.content)
     assert data["kind"] == "session"
     assert data["session_id"] == "sess-routes"
+    assert data["compacted"] is False  # drives the viewer's /compact reorder
     # Never leaks the private label / counters / token.
     assert "label" not in data
     assert "token" not in data
@@ -54,6 +55,14 @@ def test_meta_ok_and_headers(client, session):
     assert res["X-Robots-Tag"] == "noindex, nofollow"
     assert res["Referrer-Policy"] == "no-referrer"
     assert res["Cache-Control"] == "no-store"
+
+
+def test_meta_reports_compacted(client, session):
+    session.compacted = True
+    session.save(update_fields=["compacted"])
+    share = _share(session, options={"mode": "live"})
+    res = _run(client.get(f"/share/{share.token}/api/meta/"))
+    assert orjson.loads(res.content)["compacted"] is True
 
 
 def test_unknown_token_404(client, session):

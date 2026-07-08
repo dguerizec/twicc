@@ -163,6 +163,86 @@ def test_share_updated_refreshes_open_socket_filters(session):
     _run(scenario())
 
 
+def test_process_state_forwarded_root_only(session):
+    # Live "is thinking" indicator: the root session's process_state is forwarded
+    # slim (state only); another session's is dropped.
+    share = _share(session, options={"mode": "live", "max_display_mode": "normal"})
+    sid = session.id
+
+    async def scenario():
+        comm = _communicator(share.token)
+        connected, _ = await comm.connect()
+        assert connected
+        layer = get_channel_layer()
+        await layer.group_send("updates", {"type": "broadcast", "data": {
+            "type": "process_state", "session_id": sid, "state": "assistant_turn",
+            "label": "compacting", "tools": ["Bash"],  # owner-only detail, must be stripped
+        }})
+        msg = await comm.receive_json_from(timeout=2)
+        assert msg == {"type": "share_process_state", "state": "assistant_turn"}
+        # Another session's process_state: dropped.
+        await layer.group_send("updates", {"type": "broadcast", "data": {
+            "type": "process_state", "session_id": "some-other-session", "state": "assistant_turn"}})
+        assert await comm.receive_nothing(timeout=0.5)
+        await comm.disconnect()
+
+    _run(scenario())
+
+
+def test_agent_link_forwarded_for_live_spawned_subagent(session):
+    # A subagent spawned after page load must become openable: the consumer both
+    # tracks it as a descendant AND pushes a viewer link so "View Agent" resolves.
+    share = _share(session, options={"mode": "live", "max_display_mode": "normal", "include_subagents": True})
+    sid = session.id
+
+    async def scenario():
+        comm = _communicator(share.token)
+        connected, _ = await comm.connect()
+        assert connected
+        layer = get_channel_layer()
+        await layer.group_send("updates", {"type": "broadcast", "data": {
+            "type": "agent_link_created", "parent_session_id": sid,
+            "agent_session_id": "sub-1", "agent_slug": "explorer",
+            "tool_use_id": "tu-agent", "tool_use_line_num": 3,
+            "is_background": False, "started_at": None,
+        }})
+        msg = await comm.receive_json_from(timeout=2)
+        assert msg["type"] == "share_agent_link"
+        assert msg["link"] == {
+            "agent_id": "sub-1", "agent_slug": "explorer", "tool_use_id": "tu-agent",
+            "tool_use_line_num": 3, "is_background": False, "started_at": None,
+        }
+        # The new subagent is now a tracked descendant: its items forward too.
+        await layer.group_send("updates", {"type": "broadcast", "data": {
+            "type": "session_items_added", "session_id": "sub-1",
+            "items": [{"line_num": 1, "display_level": 1, "content": "{}", "kind": "assistant_message"}],
+        }})
+        items_msg = await comm.receive_json_from(timeout=2)
+        assert items_msg["type"] == "share_items_added" and items_msg["session_id"] == "sub-1"
+        await comm.disconnect()
+
+    _run(scenario())
+
+
+def test_agent_link_not_forwarded_when_subagents_disabled(session):
+    share = _share(session, options={"mode": "live", "include_subagents": False})
+    sid = session.id
+
+    async def scenario():
+        comm = _communicator(share.token)
+        connected, _ = await comm.connect()
+        assert connected
+        layer = get_channel_layer()
+        await layer.group_send("updates", {"type": "broadcast", "data": {
+            "type": "agent_link_created", "parent_session_id": sid,
+            "agent_session_id": "sub-1", "tool_use_id": "tu-agent", "tool_use_line_num": 3,
+        }})
+        assert await comm.receive_nothing(timeout=0.5)
+        await comm.disconnect()
+
+    _run(scenario())
+
+
 def test_unrelated_session_items_not_forwarded(session):
     share = _share(session, options={"mode": "live", "max_display_mode": "normal"})
 
