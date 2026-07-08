@@ -94,6 +94,29 @@ def test_helper_blocks_rg_replace_trap(command):
     assert _rg_replace_trap(command) is True
 
 
+# --- 2b. Glued shell operators: a separator touching the previous word --------
+# The segment splitter cuts on shell operators (``;`` ``|`` ``&&`` ...), but only
+# when the operator is its own token. A plain ``shlex.split`` does NOT tokenize an
+# operator glued to the preceding word: ``echo x; rg`` yields the token ``x;``, so
+# the ``;`` vanishes, the segment boundary is lost, and the ``rg -rn`` after it is
+# swallowed into the previous segment (whose command word is ``echo``/``cat``...)
+# and never checked. These are all real traps that MUST be blocked.
+
+BLOCK_GLUED_OPERATOR_COMMANDS = [
+    'echo "=== x ==="; rg -rn "pat" src/',   # ';' glued to the closing quote (the observed real-world miss)
+    "echo x; rg -rn foo",                     # ';' glued to a bare word
+    "cat x|rg -rn foo",                       # '|' glued on both sides
+    "true&&rg -rln foo",                      # '&&' glued
+    "foo||rg -rn bar",                        # '||' glued
+    "cd /tmp;rg -rn foo",                      # ';' glued between a path and rg
+]
+
+
+@pytest.mark.parametrize("command", BLOCK_GLUED_OPERATOR_COMMANDS)
+def test_helper_blocks_glued_operator_separators(command):
+    assert _rg_replace_trap(command) is True
+
+
 # --- 3. Command-level helper: commands that must NOT be blocked ---------------
 
 ALLOW_COMMANDS = [
@@ -130,7 +153,6 @@ def test_helper_allows_safe_commands(command):
 @pytest.mark.parametrize(
     "command",
     [
-        "cat x|rg -rn foo",   # glued pipe -> shlex keeps "x|rg" as one token
         "sudo rg -rn foo",    # wrapper command -> segment[0] is "sudo", not "rg"
         "xargs rg -rn foo",
     ],

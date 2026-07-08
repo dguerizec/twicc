@@ -81,7 +81,16 @@ def _rg_replace_trap(command: str) -> bool:
     (a false negative just falls back to the status quo, never a wrong block).
     """
     try:
-        tokens = shlex.split(command)
+        # ``shlex.split`` does not tokenize a shell operator glued to the
+        # preceding word (``echo x; rg`` -> token ``x;``): the separator vanishes,
+        # the segment boundary is lost, and a following ``rg -rn`` gets swallowed
+        # into the previous segment and never checked. ``punctuation_chars``
+        # detaches ``; | & < > ( )`` even when glued, so operators become their own
+        # tokens. ``commenters = ""`` mirrors ``shlex.split``'s ``comments=False``.
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";|&<>()")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
     except ValueError:
         return False  # unbalanced quotes etc. -> never block
     segment: list[str] = []
