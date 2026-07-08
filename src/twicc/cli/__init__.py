@@ -647,7 +647,8 @@ def _share_create_session(
     live: bool = typer.Option(True, "--live/--frozen", help="Live-follow or snapshot."),
     max_display: str = typer.Option("normal", "--max-display"),
     include_subagents: bool = typer.Option(True, "--include-subagents/--no-subagents"),
-    title: str = typer.Option(None, "--title", help="Public title shown to viewers (default: the session title)."),
+    title: str = typer.Option(None, "--title", help="Public title shown to viewers (default: the session title). Ignored with --no-title."),
+    show_title: bool = typer.Option(True, "--show-title/--no-title", help="Show a title to viewers; --no-title shows a generic label instead."),
     timeout: int = typer.Option(30, "--timeout"),
 ) -> None:
     from twicc.cli.share_mutation import run_create_session
@@ -655,7 +656,7 @@ def _share_create_session(
         session_id=session_id, label=label, password=password, expires_at=expires,
         mode="live" if live else "snapshot",
         options={"max_display_mode": max_display, "include_subagents": include_subagents,
-                 "display_title": title or ""},
+                 "show_title": show_title, "display_title": (title or "") if show_title else ""},
         timeout=timeout,
     )
 
@@ -666,12 +667,16 @@ def _share_create_artifact(
     label: str = typer.Option("", "--label"),
     password: str = typer.Option(None, "--password"),
     expires: str = typer.Option(None, "--expires"),
-    title: str = typer.Option(None, "--title", help="Public title shown to viewers (default: the bookmark name)."),
+    title: str = typer.Option(None, "--title", help="Public title shown to viewers (default: the bookmark name). Ignored with --no-title."),
+    show_title: bool = typer.Option(True, "--show-title/--no-title", help="Show a title to viewers; --no-title shows a generic label instead."),
     timeout: int = typer.Option(30, "--timeout"),
 ) -> None:
     from twicc.cli.share_mutation import run_create_artifact
-    run_create_artifact(bookmark_id=bookmark_id, label=label, password=password,
-                        expires_at=expires, options={"display_title": title or ""}, timeout=timeout)
+    run_create_artifact(
+        bookmark_id=bookmark_id, label=label, password=password, expires_at=expires,
+        options={"show_title": show_title, "display_title": (title or "") if show_title else ""},
+        timeout=timeout,
+    )
 
 
 @share_app.command(name="revoke")
