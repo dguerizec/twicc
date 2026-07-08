@@ -3,6 +3,8 @@
 // Mirrors ProjectEditDialog.vue's form/submit/focus/guard patterns.
 import { ref, computed, nextTick, useId } from 'vue'
 import { useDataStore } from '../../stores/data'
+import { useSettingsStore } from '../../stores/settings'
+import ShareDialog from '../share/ShareDialog.vue'
 
 const props = defineProps({
     sessionId: { type: String, default: null },
@@ -10,6 +12,12 @@ const props = defineProps({
 })
 const emit = defineEmits(['saved', 'removed'])
 const store = useDataStore()
+const settingsStore = useSettingsStore()
+
+// Share entry point (edit mode only — an existing bookmark id is required).
+const showShareDialog = ref(false)
+const existingAllowedHosts = ref({})
+const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
 
 const dialogRef = ref(null)
 const nameInputRef = ref(null)
@@ -58,6 +66,7 @@ function open(existing = null) {
         existingId.value = existing.id
         localName.value = existing.name || ''
         localScope.value = existing.scope || 'project'
+        existingAllowedHosts.value = existing.allowed_hosts || {}
     } else {
         existingId.value = null
         localName.value = ''
@@ -163,11 +172,25 @@ defineExpose({ open, close })
             >
                 Remove
             </wa-button>
+            <wa-button
+                v-if="isEditMode"
+                variant="neutral"
+                appearance="outlined"
+                :disabled="!sharingEnabled"
+                :title="sharingEnabled ? 'Share this artifact' : 'Configure a share host in Settings → Sharing'"
+                @click="showShareDialog = true"
+            >
+                <wa-icon name="share-nodes" slot="start"></wa-icon>
+                Share…
+            </wa-button>
             <wa-button variant="neutral" appearance="outlined" :disabled="isSaving" @click="close">Cancel</wa-button>
             <wa-button ref="saveButtonRef" type="submit" variant="brand" :disabled="isSaving">
                 {{ isEditMode ? 'Save' : 'Bookmark' }}
             </wa-button>
         </div>
+        <ShareDialog v-if="isEditMode" :open="showShareDialog" kind="artifact"
+                     :bookmark-id="existingId" :allowed-hosts="existingAllowedHosts"
+                     :default-title="localName" @close="showShareDialog = false" />
     </wa-dialog>
 </template>
 

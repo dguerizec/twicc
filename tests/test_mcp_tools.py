@@ -9,10 +9,12 @@ def test_selection_matches_the_skill_surface():
     paths = set(reg)
     assert "whoami" in paths                       # re-admitted local-only
     assert not any(p.split("/")[0] == "settings" for p in paths)
+    # ``share`` is human-only (O5): excluded from the MCP surface like ``settings``.
+    assert not any(p.split("/")[0] == "share" for p in paths)
     for banned in ("password", "token", "run", "claude", "codex"):
         assert not any(p.split("/")[0] == banned for p in paths)
     # Everything else from the RPC registry is present.
-    rpc_paths = {p for p in build_registry() if p.split("/")[0] != "settings"}
+    rpc_paths = {p for p in build_registry() if p.split("/")[0] not in ("settings", "share")}
     assert rpc_paths <= paths
 
 

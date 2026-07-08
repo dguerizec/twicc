@@ -50,6 +50,11 @@ const highlightTerms = inject('searchHighlightTerms', ref([]))
 // default SPA behavior.
 const fileLinks = inject('markdownFileLinks', null)
 
+// Share-mode hook: rewrite in-content media URLs (e.g. /artifacts/<sid>/x.png →
+// /share/<t>/media/x.png). Absent in the SPA (behaviour unchanged); when present,
+// a null return marks the media as not-shared (rendered as a broken placeholder).
+const rewriteContentMediaUrl = inject('rewriteContentMediaUrl', null)
+
 const blocks = ref([])
 const container = ref(null)
 const rendering = ref(true)
@@ -163,6 +168,20 @@ function annotateFileLinksIn(root) {
     }
 }
 
+// Rewrite <img src> through the injected share-mode hook. A null return means
+// "not shared" → drop the src so the browser shows the alt text rather than a
+// broken cross-origin request.
+function rewriteContentMediaUrlsIn(root) {
+    if (!rewriteContentMediaUrl) return
+    for (const img of root.querySelectorAll('img')) {
+        const src = img.getAttribute('src')
+        if (!src) continue
+        const next = rewriteContentMediaUrl(src)
+        if (next == null) { img.removeAttribute('src'); img.setAttribute('data-media-unavailable', 'true') }
+        else if (next !== src) img.setAttribute('src', next)
+    }
+}
+
 // Matches a fenced mermaid block (``` or ~~~) at the start of a line. No `g`
 // flag, so `.test()` stays stateless across calls.
 const MERMAID_FENCE_RE = /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[ \t]*mermaid\b/i
@@ -193,6 +212,7 @@ async function renderOneBlock(src, env, theme, slashTag = false) {
     const mermaidOk = await renderMermaidIn(tmp, theme)
     addLanguageLabelsIn(tmp)
     annotateFileLinksIn(tmp)
+    if (rewriteContentMediaUrl) rewriteContentMediaUrlsIn(tmp)
     html = tmp.innerHTML
 
     // Cache only a fully-successful render. A failed mermaid (incomplete block
@@ -421,7 +441,13 @@ function handleLinkClick(event) {
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return
 
     event.preventDefault()
-    router.push(href)
+    if (router) {
+        router.push(href)
+    } else if (/^https?:/i.test(href)) {
+        // Router-less host (share bundle): open absolute links in a new tab; a
+        // relative SPA route has no meaning here, so it stays inert.
+        window.open(href, '_blank', 'noopener,noreferrer')
+    }
 }
 </script>
 

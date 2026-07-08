@@ -10,7 +10,7 @@
 
 import { WindowMessenger, connect } from 'penpal'
 
-const PROXY_URL = '/api/artifact-proxy/'
+const DEFAULT_PROXY_URL = '/api/artifact-proxy/'
 
 function bytesToBase64(bytes) {
     let binary = ''
@@ -43,11 +43,12 @@ function normalizeHostKey(url) {
     return `${scheme}://${bracketed}:${port}`
 }
 
-async function callProxy(body) {
-    const res = await fetch(PROXY_URL, {
+async function callProxy(proxyUrl, body) {
+    const res = await fetch(proxyUrl, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
+        credentials: 'same-origin',
     })
     if (res.status === 401) throw new Error('not authenticated')
     return await res.json()
@@ -84,7 +85,7 @@ function artifactKeyFor(documentUrl) {
  * @param {(target: {host: string, ip: string, kind: string, canRemember: boolean}) => Promise<'session'|'forever'|'deny'>} opts.showPrompt
  * @param {(url: string, kind: string) => Promise<void>} [opts.persistAllow]  Persist "allow forever" (bookmarked only).
  */
-export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, showPrompt, persistAllow }) {
+export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, showPrompt, persistAllow, mode = 'owner', proxyUrl = DEFAULT_PROXY_URL }) {
     // Per-artifact "This session" grants persist across host re-mounts via the
     // module cache. Seed the live set from them PLUS the persisted "Forever"
     // grants (from the DB, passed in `allowedHosts`).
@@ -170,12 +171,22 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
         // The artifact's own files → served directly, no prompt (§6.6).
         if (sameOrigin && url.href.startsWith(ownDir)) return await hostDirectFetch(req)
 
+        // Share mode (design §9.3/D6): no preflight, no prompt. The server proxy
+        // enforces the owner's allowlist; a non-listed host comes back as an error
+        // which surfaces to the artifact as a failed fetch. Same-origin non-asset
+        // targets are still brokered (never host-direct) — a viewer holds no cookie.
+        if (mode === 'share') {
+            const res = await callProxy(proxyUrl, { mode: 'fetch', request: req })
+            if (res.error) throw new Error(`broker: ${res.reason || res.error}`)
+            return res
+        }
+
         // Everything else is brokered the same way — cross-origin AND any other
         // same-origin target (e.g. TwiCC's own API). No target is special-cased:
         // only the cloud metadata address is ever blocked; everything else is
         // reachable with the user's per-host consent. Resolve the true target
         // first (honest prompt + pin for the cross-origin proxy).
-        const pre = await callProxy({ bookmark_id: currentBookmarkId(), mode: 'preflight', request: req })
+        const pre = await callProxy(proxyUrl, { bookmark_id: currentBookmarkId(), mode: 'preflight', request: req })
         if (pre.error) throw new Error(`blocked: ${pre.reason || pre.error}`)
         const target = pre.target // { ip, kind }
         const key = normalizeHostKey(req.url)
@@ -193,7 +204,7 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
         // authenticated); cross-origin goes through the pinning server proxy.
         if (sameOrigin) return await hostDirectFetch(req)
 
-        const res = await callProxy({
+        const res = await callProxy(proxyUrl, {
             bookmark_id: currentBookmarkId(),
             mode: 'fetch',
             grant: 'once',

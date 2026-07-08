@@ -71,6 +71,7 @@ export const SETTINGS_SCHEMA = {
     waBrand: null,
     externalNotificationTargets: [],
     publicBaseUrl: null,
+    shareBaseUrl: null,
     notifyOnExtraUsageStart: null,
     // Whether the user has seen the hybrid-mode explainer dialog (never shown
     // in the settings panel; gates the hybrid toggle's explainer).
@@ -157,6 +158,7 @@ const SETTINGS_VALIDATORS = {
             && (item.notifyPendingRequest === undefined || typeof item.notifyPendingRequest === 'boolean')
             && (item.awayOnly === undefined || typeof item.awayOnly === 'boolean')),
     publicBaseUrl: (v) => typeof v === 'string',
+    shareBaseUrl: (v) => typeof v === 'string',
 }
 
 /**
@@ -334,6 +336,7 @@ export const useSettingsStore = defineStore('settings', {
         getWaBrand: (state) => state.waBrand,
         getExternalNotificationTargets: (state) => state.externalNotificationTargets,
         getPublicBaseUrl: (state) => state.publicBaseUrl,
+        getShareBaseUrl: (state) => state.shareBaseUrl,
         /**
          * Whether the ``disabledProviders`` key is physically present in settings.json.
          * False until the backend writes it (e.g. after the initial provider-activation dialog).
@@ -870,6 +873,17 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
+         * Set the dedicated share host (design §12). A bare hostname or full URL;
+         * trimmed and stripped of trailing slashes. Empty disables sharing.
+         * @param {string} url
+         */
+        setShareBaseUrl(url) {
+            if (SETTINGS_VALIDATORS.shareBaseUrl(url)) {
+                this.shareBaseUrl = url.trim().replace(/\/+$/, '')
+            }
+        },
+
+        /**
          * Apply synced settings received from the backend.
          * Merges with schema: validates each key, ignores unknown keys,
          * keeps current value if validation fails.
@@ -1091,6 +1105,7 @@ export function initSettings() {
             waBrand: store.waBrand,
             externalNotificationTargets: store.externalNotificationTargets,
             publicBaseUrl: store.publicBaseUrl,
+            shareBaseUrl: store.shareBaseUrl,
         }
         for (const provider of getRegisteredProviders()) {
             Object.assign(dict, getProviderHelpers(provider).getSyncedSettings())

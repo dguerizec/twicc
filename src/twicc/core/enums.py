@@ -46,3 +46,9 @@ class Provider(StrEnum):
     """Backend provider that produced a session."""
     CLAUDE_CODE = "claude_code"
     CODEX = "codex"
+
+
+class ShareKind(StrEnum):
+    """What a share link targets."""
+    SESSION = "session"
+    ARTIFACT = "artifact"

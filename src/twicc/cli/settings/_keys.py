@@ -28,6 +28,7 @@ GENERIC_KEY_DESCRIPTIONS: dict[str, str] = {
     "terminalUseTmux": "Wrap terminal sessions in tmux by default.",
     "terminalTmuxConfigPath": "Path to a custom tmux config for terminal sessions (empty = default).",
     "publicBaseUrl": "Public URL where you reach TwiCC, appended as a deep link to external notifications (empty = no link).",
+    "shareBaseUrl": "Dedicated share host — a hostname distinct from this app, pointing at the same port — where read-only /share/ links are served (empty = sharing disabled).",
     "notifyOnExtraUsageStart": "Master switch for the 'extra usage started' alert (in-app + external push).",
 }
 

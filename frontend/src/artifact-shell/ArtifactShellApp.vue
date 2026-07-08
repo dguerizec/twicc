@@ -3,7 +3,7 @@
 // the artifact's inner document and mounts the *same* broker host + consent
 // prompt the in-SPA preview uses, through the shared `useArtifactBroker`
 // composable — so an artifact behaves identically in both contexts.
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useArtifactBroker } from '../composables/useArtifactBroker'
 import ArtifactBrokerPrompt from '../components/artifacts/ArtifactBrokerPrompt.vue'
 
@@ -12,6 +12,10 @@ const props = defineProps({
     innerDocUrl: { type: String, required: true },
     bookmarkId: { type: Number, default: null },
     allowedHosts: { type: Object, default: () => ({}) },
+    mode: { type: String, default: 'owner' },
+    proxyUrl: { type: String, default: undefined },
+    snapshotAt: { type: [String, null], default: null },
+    tokenPath: { type: [String, null], default: null },
 })
 
 const iframeRef = ref(null)
@@ -37,16 +41,34 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
         documentUrl: new URL(props.innerDocUrl, location.href).href,
         getBookmarkId: () => props.bookmarkId,
         allowedHosts: props.allowedHosts,
-        persistAllow,
+        persistAllow: props.mode === 'share' ? undefined : persistAllow,
+        mode: props.mode,
+        proxyUrl: props.proxyUrl,
     }),
     [iframeRef],
 )
+
+// Share mode: poll the snapshot freshness (D7) for the "updated — reload" banner.
+const updated = ref(false)
+onMounted(() => {
+    if (props.mode !== 'share' || !props.tokenPath) return
+    setInterval(async () => {
+        if (document.hidden) return
+        try {
+            const m = await (await fetch(`${props.tokenPath}/api/artifact-meta/`, { credentials: 'same-origin' })).json()
+            if (m.snapshot_at && m.snapshot_at !== props.snapshotAt) updated.value = true
+        } catch { /* ignore */ }
+    }, 30000)
+})
 </script>
 
 <template>
     <!-- Same sandbox as the in-SPA preview: scripts run, but top-level
          navigation, popups and modals do not. Same-origin kept (localStorage
          works; design §13). -->
+    <div v-if="updated" class="share-update-banner">
+        This artifact was updated — <a href="#" @click.prevent="location.reload()">Reload</a>
+    </div>
     <iframe
         ref="iframeRef"
         :src="innerDocUrl"
@@ -54,7 +76,8 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
         sandbox="allow-scripts allow-same-origin allow-forms"
         title="Artifact"
     ></iframe>
-    <ArtifactBrokerPrompt :prompt="brokerPrompt" @decision="onBrokerDecision" />
+    <!-- Share mode never prompts (server enforces the owner allowlist, D6). -->
+    <ArtifactBrokerPrompt v-if="mode !== 'share'" :prompt="brokerPrompt" @decision="onBrokerDecision" />
 </template>
 
 <style>
@@ -72,5 +95,21 @@ body {
     width: 100%;
     height: 100%;
     border: 0;
+}
+.share-update-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    padding: 0.5rem 1rem;
+    text-align: center;
+    background: #0891b2;
+    color: #fff;
+    font: 500 0.9rem system-ui, -apple-system, sans-serif;
+}
+.share-update-banner a {
+    color: #fff;
+    text-decoration: underline;
 }
 </style>

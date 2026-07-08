@@ -208,7 +208,7 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     'worktreeDirectoryTemplate',
     'terminalUseTmux', 'terminalTmuxConfigPath',
     'waTheme', 'waBrand',
-    'externalNotificationTargets', 'publicBaseUrl',
+    'externalNotificationTargets', 'publicBaseUrl', 'shareBaseUrl',
     'notifyOnExtraUsageStart',
     // Synced but intentionally never shown in the settings panel: records that
     // the user has seen the hybrid-mode explainer dialog (so it stops gating

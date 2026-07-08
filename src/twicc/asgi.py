@@ -36,6 +36,7 @@ from twicc.agent_settings_presets import (
 )
 from twicc.core.enums import Provider
 from twicc.core.services.session_creation import create_session_from_payload
+from twicc.share.consumer import ShareConsumer
 from twicc.providers.claude_code.ws import ClaudeCodeWSHandler
 from twicc.providers.codex.ws import CodexWSHandler
 from twicc.providers.db_writer import run_under_db_write_lock
@@ -566,6 +567,17 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({
                 "type": "artifact_bookmarks_updated",
                 "bookmarks": [serialize_artifact_bookmark(b) for b in artifact_bookmarks],
+            })
+
+        if self._should_send("shares_updated"):
+            from twicc.core.models import Share
+            from twicc.core.serializers import serialize_share
+            shares = await sync_to_async(list)(
+                Share.objects.select_related("session", "artifact_bookmark").all()
+            )
+            await self.send_json({
+                "type": "shares_updated",
+                "shares": [serialize_share(s) for s in shares],
             })
 
         if self._should_send("tips_manifest_pushed"):
@@ -1985,6 +1997,8 @@ websocket_urlpatterns = [
     path("ws/terminal/<str:project_id>/<int:terminal_index>/", terminal_application),
     # Terminal with no project (global/workspace context)
     path("ws/terminal/<int:terminal_index>/", terminal_application),
+    # Public live share stream (design §10, O4). Before ws/ so it isn't shadowed.
+    path("ws/share/<str:token>/", ShareConsumer.as_asgi()),
     path("ws/", WSConsumer.as_asgi()),
 ]
 
@@ -2023,3 +2037,12 @@ application = ProtocolTypeRouter(
 # Serve static files via BlackNoise at the ASGI level.
 application = BlackNoise(application, immutable_file_test=lambda *_: True)
 application.add(settings.FRONTEND_DIST_DIR, "/static")
+
+# Mandatory dedicated share origin (design §12): /share/ is served ONLY on the
+# configured share host (the shareBaseUrl hostname) and NEVER on the working
+# origin. The gate reads shareBaseUrl LIVE, so an Apply in Settings → Sharing takes
+# effect on the next request with no restart. Wrapped ABOVE BlackNoise so the share
+# host never reaches the /static/ mount it doesn't use.
+from twicc.share.asgi_filter import ShareHostGate, ShareOnlyApp  # noqa: E402
+
+application = ShareHostGate(application, ShareOnlyApp(application))

@@ -80,6 +80,8 @@ export function useArtifactBroker(iframeRef, getConfig, watchSources) {
             allowedHosts: config.allowedHosts ?? {},
             showPrompt: showBrokerPrompt,
             persistAllow: config.persistAllow,
+            mode: config.mode ?? 'owner',
+            proxyUrl: config.proxyUrl,
         })
         boundWindow = win
     }

@@ -32,6 +32,12 @@ PUBLIC_PATHS = (
     "/api/auth/",
     "/static/",
     "/artifacts/auth",
+    # Public share surface (O1: the token is the credential; per-link password
+    # gating lives inside the share views). ``/_twicc/share/`` is the built
+    # viewer bundle (no data). Both exempt from the instance-password gate AND
+    # the local-only remote gate — ``_is_data_path`` returns False for them.
+    "/share/",
+    "/_twicc/share/",
 )
 
 # Non-API URL prefixes whose responses leak data and therefore require an

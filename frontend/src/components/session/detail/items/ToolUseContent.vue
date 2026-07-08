@@ -41,6 +41,15 @@ const providerHelpers = computed(() => {
 // Cross-tab file reveal (provided by SessionView)
 const viewFileInFilesTab = inject('viewFileInFilesTab', null)
 
+// Share bundle supplies this to open subagents in an in-page overlay instead of
+// routing. Default null → SPA keeps its router.push behaviour (navigateToSubagent).
+const openSubagent = inject('openSubagent', null)
+
+// Share bundle supplies this to fetch tool results through the public token path
+// instead of the auth-protected SPA API (a viewer holds no session). Default null
+// → SPA keeps its apiFetch behaviour. Returns the ``{ results }`` payload.
+const fetchToolResult = inject('fetchToolResult', null)
+
 const props = defineProps({
     name: {
         type: String,
@@ -163,18 +172,24 @@ async function fetchResult() {
     abortController.value = new AbortController()
 
     try {
-        // Build URL (handles subagent case via parentSessionId)
-        const baseUrl = props.parentSessionId
-            ? `/api/projects/${props.projectId}/sessions/${props.parentSessionId}/subagent/${props.sessionId}`
-            : `/api/projects/${props.projectId}/sessions/${props.sessionId}`
-        const url = `${baseUrl}/items/${props.lineNum}/tool-results/${props.toolId}/`
-        const response = await apiFetch(url, { signal: abortController.value.signal })
+        let data
+        if (fetchToolResult) {
+            // Share bundle: fetch via the token path (no SPA auth); no abort/polling wiring.
+            data = await fetchToolResult(props.lineNum, props.toolId, props.parentSessionId)
+        } else {
+            // Build URL (handles subagent case via parentSessionId)
+            const baseUrl = props.parentSessionId
+                ? `/api/projects/${props.projectId}/sessions/${props.parentSessionId}/subagent/${props.sessionId}`
+                : `/api/projects/${props.projectId}/sessions/${props.sessionId}`
+            const url = `${baseUrl}/items/${props.lineNum}/tool-results/${props.toolId}/`
+            const response = await apiFetch(url, { signal: abortController.value.signal })
 
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`)
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`)
+            }
+
+            data = await response.json()
         }
-
-        const data = await response.json()
         resultData.value = data.results
         resultState.value = 'loaded'
 
@@ -828,6 +843,7 @@ watch(isAgentRunning, (running) => {
  */
 function navigateToSubagent() {
     if (!agentId.value) return
+    if (openSubagent) { openSubagent(agentId.value); return }
     // Preserve the current frame (prefix mode + current project + workspace) and
     // only open the subagent suffix. Carrying the workspace explicitly keeps it
     // even when viewing a cross-filter session whose project is outside it.

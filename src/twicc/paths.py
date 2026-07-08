@@ -167,6 +167,17 @@ def get_session_artifacts_dir(session_id: str) -> Path:
     return get_artifacts_dir() / session_id
 
 
+def get_shares_dir() -> Path:
+    """Root of per-share artifact snapshots (``<data_dir>/shares/``)."""
+    return get_data_dir() / "shares"
+
+
+def get_share_snapshot_dir(share_id: str) -> Path:
+    """Snapshot copy dir for one artifact share (``<data_dir>/shares/<share_id>/``).
+    Path only — the service creates/removes it."""
+    return get_shares_dir() / share_id
+
+
 def get_scratch_dir() -> Path:
     """Return the scratch root directory (``<data_dir>/scratch/``).
 

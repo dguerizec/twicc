@@ -100,6 +100,11 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # used to append a session deep link to external notifications.
     # Empty = no link line.
     "publicBaseUrl": "",
+    # Dedicated share origin (design §12): a hostname DISTINCT from the working
+    # origin, pointing at the same local port. Required to create/serve shares —
+    # /share/ is gated to this host only (share/asgi_filter.py) and the Share UI is
+    # disabled when empty. A bare hostname or a full URL; only the hostname matters.
+    "shareBaseUrl": "",
     # Master switch for the "extra usage started" alert: when a provider starts
     # consuming its extra usage credits again after a quiet period, notify the
     # user. This is the single kill switch for the whole feature — when off, no

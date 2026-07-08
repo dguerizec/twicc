@@ -20,6 +20,7 @@ import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
 import LayoutManagerDialog from '../session/layout/LayoutManagerDialog.vue'
 import ProviderSettingsSection from './ProviderSettingsSection.vue'
+import ShareManagerDialog from '../share/ShareManagerDialog.vue'
 import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateUsageFile, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
 import { useProviderActivation } from '../../composables/useProviderActivation'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
@@ -89,6 +90,7 @@ const sections = computed(() => [
     { id: 'providers',                 label: 'Providers', synced: true },
     ...providerSections.value.filter(s => s.enabled),
     { id: 'notifications',             label: 'Notifications' },
+    { id: 'sharing',                   label: 'Sharing', synced: true },
     { id: 'sessions',      label: 'Sessions' },
     { id: 'layouts',       label: 'Layouts', synced: true },
     { id: 'title',         label: 'Title suggestion', navLabel: 'Titles', synced: true },
@@ -155,6 +157,9 @@ function selectSection(id) {
     if (id === 'global') {
         worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
         publicBaseUrlInput.value = store.getPublicBaseUrl || ''
+    }
+    if (id === 'sharing') {
+        shareBaseUrlInput.value = store.getShareBaseUrl || ''
     }
     if (id === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
@@ -601,6 +606,17 @@ const publicBaseUrlNormalized = computed(() => publicBaseUrlInput.value.trim().r
 const publicBaseUrlModified = computed(() => publicBaseUrlNormalized.value !== (store.getPublicBaseUrl || ''))
 const publicBaseUrlApplyIcon = computed(() => (publicBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
 
+// Dedicated share host (stored as `shareBaseUrl`, design §12) — same Apply pattern
+// as publicBaseUrl, plus a client-side check that it's a DIFFERENT hostname from
+// this app (cookies aren't port-scoped, so a distinct hostname is required).
+const shareBaseUrlInput = ref('')
+const shareBaseUrlInputRef = ref(null)
+const shareBaseUrlError = ref('')
+const shareBaseUrlNormalized = computed(() => shareBaseUrlInput.value.trim().replace(/\/+$/, ''))
+const shareBaseUrlModified = computed(() => shareBaseUrlNormalized.value !== (store.getShareBaseUrl || ''))
+const shareBaseUrlApplyIcon = computed(() => (shareBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
+const showShareManager = ref(false)
+
 // Check if the current prompt is the default
 const isDefaultPrompt = computed(() => titleSystemPrompt.value === SETTINGS_SCHEMA.titleSystemPrompt)
 const isTitleSystemPromptModified = computed(() => titleSystemPromptInput.value !== titleSystemPrompt.value)
@@ -759,6 +775,31 @@ function onPublicBaseUrlApply() {
     // Reflect the store's normalization (trim + trailing-slash strip) back into
     // the field so the Apply icon settles to its "saved" state.
     publicBaseUrlInput.value = store.getPublicBaseUrl || ''
+}
+
+function onShareBaseUrlInputChange(event) {
+    shareBaseUrlInput.value = event.target.value
+    shareBaseUrlError.value = ''
+}
+
+function onShareBaseUrlApply() {
+    shareBaseUrlError.value = ''
+    const raw = shareBaseUrlInput.value.trim()
+    if (raw) {
+        let host
+        try {
+            host = new URL(raw.includes('//') ? raw : `https://${raw}`).hostname
+        } catch {
+            shareBaseUrlError.value = 'Enter a valid hostname or URL.'
+            return
+        }
+        if (host && host.toLowerCase() === window.location.hostname.toLowerCase()) {
+            shareBaseUrlError.value = 'The share host must be a different hostname from this app.'
+            return
+        }
+    }
+    store.setShareBaseUrl(shareBaseUrlInput.value)
+    shareBaseUrlInput.value = store.getShareBaseUrl || ''
 }
 
 // Called when the Notifications section's callout is clicked: jump to Global and
@@ -1041,6 +1082,7 @@ function onPopoverShow() {
     // on open).
     worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
     publicBaseUrlInput.value = store.getPublicBaseUrl || ''
+    shareBaseUrlInput.value = store.getShareBaseUrl || ''
     if (activeSection.value === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
     }
@@ -1381,6 +1423,44 @@ function onChangelogClose() {
 
                 <!-- Notifications Section -->
                 <NotificationSettings v-if="activeSection === 'notifications'" ref="notificationSettingsRef" @go-to-public-base-url="goToPublicBaseUrl" />
+
+                <!-- Sharing Section -->
+                <section v-if="activeSection === 'sharing'" class="settings-section">
+                    <h3 class="settings-section-title">Sharing</h3>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Share host <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                        <div class="setting-input-apply-row">
+                            <wa-input
+                                ref="shareBaseUrlInputRef"
+                                :value="shareBaseUrlInput"
+                                @input="onShareBaseUrlInputChange"
+                                @keydown.enter="onShareBaseUrlApply"
+                                placeholder="share.example.com"
+                                size="small"
+                            ></wa-input>
+                            <wa-button
+                                size="small"
+                                variant="neutral"
+                                @click="onShareBaseUrlApply"
+                            >
+                                <wa-icon :name="shareBaseUrlApplyIcon" slot="start"></wa-icon>
+                                Apply
+                            </wa-button>
+                        </div>
+                        <wa-callout v-if="shareBaseUrlError" variant="danger" size="small">{{ shareBaseUrlError }}</wa-callout>
+                        <span class="setting-group-hint">
+                            Dedicated share host — a hostname distinct from this app, pointing at the
+                            same port (e.g. a second tunnel hostname). Required to create share links;
+                            a different port on the same hostname is not enough. Leave empty to disable sharing.
+                        </span>
+                    </div>
+                    <div class="setting-group">
+                        <wa-button size="small" variant="neutral" @click="showShareManager = true">
+                            <wa-icon name="share-nodes" slot="start"></wa-icon>
+                            Shared links
+                        </wa-button>
+                    </div>
+                </section>
 
                 <!-- Sessions Section -->
                 <section v-if="activeSection === 'sessions'" class="settings-section">
@@ -1894,6 +1974,7 @@ function onChangelogClose() {
     </wa-popover>
     <ChangelogDialog ref="changelogDialogRef" @close="onChangelogClose" />
     <LayoutManagerDialog ref="layoutManagerDialogRef" />
+    <ShareManagerDialog :open="showShareManager" @close="showShareManager = false" />
 </template>
 
 <style scoped>

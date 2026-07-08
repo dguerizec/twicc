@@ -287,3 +287,90 @@ def serialize_session_item_metadata(item):
         "timestamp": item.timestamp.isoformat() if item.timestamp else None,
         # NO content field - that's the whole point
     }
+
+
+def serialize_share(share):
+    """Owner-facing full serializer. Query-light: reads target refs via *_id and
+    only touches the related row's already-loaded fields (callers select_related).
+    Computes ``url_path`` and, for artifact shares, ``source_updated_at`` (outdated
+    badge) — the latter walks the FS, so callers on a hot path may skip it by
+    passing a pre-fetched share whose related bookmark is None."""
+    from twicc.core.enums import ShareKind
+
+    data = {
+        "id": share.id,
+        "token": share.token,  # plaintext (O2) — owner UI needs it to build the URL
+        "kind": share.kind,
+        "label": share.label,
+        "has_password": bool(share.password_hash),
+        "expires_at": share.expires_at.isoformat() if share.expires_at else None,
+        "revoked_at": share.revoked_at.isoformat() if share.revoked_at else None,
+        "status": share.status(),
+        "options": share.options,
+        "view_count": share.view_count,
+        "last_viewed_at": share.last_viewed_at.isoformat() if share.last_viewed_at else None,
+        "notify_on_view": share.notify_on_view,
+        "created_at": share.created_at.isoformat() if share.created_at else None,
+        "updated_at": share.updated_at.isoformat() if share.updated_at else None,
+        "url_path": f"/share/{share.token}/",
+    }
+    if share.kind == ShareKind.SESSION.value:
+        data["session_id"] = share.session_id
+        sess = share.session if share.session_id else None
+        data["project_id"] = sess.project_id if sess else None
+        data["target_title"] = (sess.title if sess else None)
+    else:
+        data["bookmark_id"] = share.artifact_bookmark_id
+        bm = share.artifact_bookmark if share.artifact_bookmark_id else None
+        data["target_name"] = bm.name if bm else None
+        data["allowed_hosts"] = bm.allowed_hosts if bm else {}
+        if bm is not None:
+            from twicc.core.services.share_mutation import source_updated_at
+            src = source_updated_at(bm)
+            data["source_updated_at"] = src.isoformat() if src else None
+    return data
+
+
+def serialize_share_public_meta(share):
+    """Viewer-facing meta (design §6.2). Never label, never counters, never real
+    bookmark/project ids. Session id IS included (needed for media URL rewriting;
+    grants nothing — every real route is gated). Title = the `display_title` override,
+    else the real session title (per `show_title`) / bookmark name; costs per `show_costs`."""
+    from twicc.core.enums import ShareKind
+
+    opts = share.options or {}
+    if share.kind == ShareKind.SESSION.value:
+        sess = share.session
+        frozen = opts.get("frozen_at_line")
+        last_line = sess.last_line if sess else 0
+        if opts.get("mode") == "snapshot" and frozen is not None:
+            last_line = min(last_line, frozen)
+        data = {
+            "kind": "session",
+            "session_id": share.session_id,
+            "provider": sess.provider if sess else None,
+            "last_line": last_line,
+            "mode": opts.get("mode", "live"),
+            "max_display_mode": opts.get("max_display_mode", "normal"),
+            "include_subagents": opts.get("include_subagents", True),
+            "show_timestamps": opts.get("show_timestamps", True),
+            "created_at": sess.created_at.isoformat() if sess and sess.created_at else None,
+            "last_updated_at": sess.last_updated_at.isoformat() if sess and sess.last_updated_at else None,
+        }
+        # Public title: show_title is the master switch — off ⇒ no title at all (the
+        # viewer sees the generic label). On ⇒ the owner's display_title override,
+        # else the real session title.
+        if opts.get("show_title", True):
+            display_title = (opts.get("display_title") or "").strip()
+            data["title"] = display_title or (sess.title if sess else None)
+        if opts.get("show_costs", False):
+            data["total_cost"] = float(sess.total_cost) if sess and sess.total_cost else None
+        return data
+    # Artifact: owner override, else the real bookmark name.
+    display_title = (opts.get("display_title") or "").strip()
+    bookmark = share.artifact_bookmark
+    return {
+        "kind": "artifact",
+        "snapshot_at": opts.get("snapshot_at"),
+        "title": display_title or (bookmark.name if bookmark else None),
+    }

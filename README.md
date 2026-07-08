@@ -184,6 +184,12 @@ A session can spawn other sessions, which can spawn their own, forming a tree of
 
 See [`ORCHESTRATION.md`](ORCHESTRATION.md).
 
+### Sharing
+
+Publish a **read-only** public link to a session transcript or a bookmarked artifact. Each link is an opaque capability URL (the token *is* the credential); you can optionally add a per-link password and an expiry, choose how much detail viewers see (conversation / simplified / normal / debug, with or without subagents, costs, timestamps), share a live-following view or a frozen snapshot, and revoke at any time. Viewers get a clean, dependency-free reader — no TwiCC account, no access to your app.
+
+Sharing is served on a **dedicated share host**, separate from the app you log into: a second hostname that points at the same TwiCC (for example, a second [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) hostname routed to the same service). Set it in **Settings → Sharing**. The working origin never serves `/share/`, and the share host serves only `/share/` — so you can put the share host behind its own provider-side access rules if you want. A different *port* on the same hostname is intentionally not enough (browser cookies aren't port-scoped, so it wouldn't isolate your working session). Leave the share host empty to keep sharing off.
+
 ## How it works
 
 TwiCC reads the JSONL data files written by each provider and indexes them into a local SQLite database (`~/.twicc/db/data.sqlite`). Claude Code sessions are read from `~/.claude/projects/`; Codex sessions are read from `~/.codex/sessions/`. **Provider data files remain the source of truth** — TwiCC never modifies them. Whether you use Claude Code or Codex directly from the terminal or through TwiCC, everything shows up in the same place. On each startup it re-syncs any changes, and while running it keeps watching for new and updated sessions.

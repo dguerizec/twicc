@@ -271,7 +271,10 @@ def _decode_request_body(req: dict) -> bytes | str | None:
     return body
 
 
-async def artifact_proxy(request):
+async def artifact_proxy(request, *, enforced_allowlist: set[str] | None = None):
+    # ``enforced_allowlist`` is set ONLY by the share proxy (design §9.3/D6): the
+    # normalized scheme://host:port must be in it or the fetch is refused 403.
+    # The owner path passes None and deliberately does NOT re-check (broker §6.4).
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     try:
@@ -297,6 +300,10 @@ async def artifact_proxy(request):
     mode = payload.get("mode")
 
     if mode == "preflight":
+        if enforced_allowlist is not None:
+            # The share host fetches directly (no preflight) — a preflight request
+            # here means a misconfigured client; refuse it.
+            return JsonResponse({"error": "bad_request", "reason": "preflight_disabled"}, status=400)
         try:
             target = await resolve_target(host, port)
         except ResolutionError:
@@ -309,8 +316,16 @@ async def artifact_proxy(request):
         # Pin to the IP the host already approved (fresh once-grant); otherwise
         # resolve now (pre-approved host) and report the kind so the host can
         # detect a rebind. The metadata block applies on either path.
+        #
+        # SECURITY: a client-supplied ``pinned_ip`` is honoured ONLY on the owner
+        # path (``enforced_allowlist is None``), where it comes from the owner's own
+        # trusted preflight. On the SHARE path the allowlist is checked against the
+        # URL host, but a viewer-supplied ``pinned_ip`` would decouple the connected
+        # IP from that host — an anonymous SSRF pivot into loopback/LAN. The share
+        # path has no preflight, so a legitimate share client never sends one; always
+        # resolve server-side there and pin to the allowlisted host's real IP.
         pinned_ip = payload.get("pinned_ip")
-        if isinstance(pinned_ip, str) and pinned_ip:
+        if enforced_allowlist is None and isinstance(pinned_ip, str) and pinned_ip:
             ip, kind = pinned_ip, classify_ip(pinned_ip)
         else:
             try:
@@ -320,6 +335,10 @@ async def artifact_proxy(request):
             ip, kind = target.ip, target.kind
         if kind == "metadata":
             return JsonResponse({"error": "blocked", "reason": "metadata"})
+        if enforced_allowlist is not None:
+            key = normalize_host_key(url)
+            if key not in enforced_allowlist:
+                return JsonResponse({"error": "blocked", "reason": "not_allowed"})
 
         try:
             async with httpx.AsyncClient(timeout=OUTBOUND_TIMEOUT_SECONDS) as client:

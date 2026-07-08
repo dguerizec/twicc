@@ -10,7 +10,7 @@ import logging
 from django.db.models import Q
 
 from twicc.agent.states import AgentState
-from twicc.core.enums import ItemKind, Provider
+from twicc.core.enums import ItemKind, Provider, ShareKind
 
 # Django ``choices`` derived from :class:`AgentState` so the runtime enum and
 # the DB column stay in lockstep without redeclaring the values here. Labels
@@ -1507,3 +1507,96 @@ class Command(models.Model):
     def __str__(self):
         scope = self.project_id or "global"
         return f"[{self.provider}] {self.activation_char}{self.name} ({scope})"
+
+
+def generate_share_id() -> str:
+    """Non-secret admin handle for a Share (CLI, logs, UI): ``shr_<hex8>``.
+
+    Collision handling lives in the service (retry loop), not here — a
+    ``default=`` callable can't retry against the DB cheaply.
+    """
+    import secrets
+    return "shr_" + secrets.token_hex(4)
+
+
+class Share(models.Model):
+    """One capability URL targeting one object (session or artifact bookmark).
+
+    The ``token`` is the URL secret (256-bit, plaintext — O2); ``id`` is a short
+    non-secret handle. Exactly one of ``session`` / ``artifact_bookmark`` is set,
+    matching ``kind`` (DB CheckConstraint). Revoking keeps the row + counters;
+    deleting removes it (and its snapshot dir). CASCADE on the target: a share
+    must not outlive what it exposes. See design §5.
+    """
+
+    id = models.CharField(max_length=16, primary_key=True, default=generate_share_id)
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    kind = models.CharField(max_length=16, choices=[(k.value, k.value) for k in ShareKind])
+    session = models.ForeignKey(
+        Session, on_delete=models.CASCADE, null=True, blank=True, related_name="shares",
+    )
+    artifact_bookmark = models.ForeignKey(
+        ArtifactBookmark, on_delete=models.CASCADE, null=True, blank=True, related_name="shares",
+    )
+    label = models.CharField(max_length=255, blank=True, default="")
+    # Per-link password (same PBKDF2 format as auth/hashers). Empty = none.
+    password_hash = models.CharField(max_length=255, blank=True, default="")
+    expires_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    # Kind-specific options (design §5.2). Validated by the service, never trusted raw.
+    options = models.JSONField(default=dict, blank=True)
+    view_count = models.PositiveIntegerField(default=0)
+    last_viewed_at = models.DateTimeField(null=True, blank=True)
+    notify_on_view = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["kind"], name="idx_share_kind"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                name="share_target_matches_kind",
+                condition=(
+                    Q(kind="session", session__isnull=False, artifact_bookmark__isnull=True)
+                    | Q(kind="artifact", artifact_bookmark__isnull=False, session__isnull=True)
+                ),
+            ),
+        ]
+
+    def status(self, now: datetime | None = None) -> str:
+        """``active`` | ``revoked`` | ``expired`` (revoked wins over expired)."""
+        if self.revoked_at is not None:
+            return "revoked"
+        now = now or datetime.now(tz=timezone.utc)
+        if self.expires_at is not None and self.expires_at <= now:
+            return "expired"
+        return "active"
+
+    def is_active(self, now: datetime | None = None) -> bool:
+        return self.status(now) == "active"
+
+    def __str__(self):
+        return f"Share[{self.kind}] {self.id} -> {self.session_id or self.artifact_bookmark_id}"
+
+
+class ShareAccess(models.Model):
+    """One row per share *page view* (design §13). Opportunistically pruned to the
+    newest 500 rows per share on insert; ``Share.view_count`` / ``last_viewed_at``
+    stay denormalised for cheap list display."""
+
+    share = models.ForeignKey(Share, on_delete=models.CASCADE, related_name="accesses")
+    at = models.DateTimeField(auto_now_add=True)
+    ip = models.CharField(max_length=64, blank=True, default="")
+    user_agent = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ["-at"]
+        indexes = [
+            models.Index(fields=["share", "-at"], name="idx_shareaccess_share_at"),
+        ]
+
+    def __str__(self):
+        return f"ShareAccess {self.share_id} @ {self.at.isoformat()}"

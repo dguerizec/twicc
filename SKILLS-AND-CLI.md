@@ -304,6 +304,19 @@ List bookmarked artifacts (viewable files saved from a session's Artifacts tab),
 - Both writes require the live server (broadcast so open UIs refresh) and take `--timeout`; shared mutation service with the REST endpoints (`core/services/artifact_bookmark_mutation.py`).
 - Skill: [`twicc-artifacts`](src/twicc/agent/plugin/twicc/skills/twicc-artifacts/SKILL.md).
 
+## Sharing
+
+Read-only public links to a session transcript or a bookmarked artifact, served under `/share/<token>/` on a **dedicated share host** (a hostname distinct from the working origin; set it in Settings → Sharing — `shareBaseUrl`). **Human-only (O5): no skill and no MCP tool exist for `share`** — it is reachable over RPC with a full-scope Bearer token, but agents are never pointed at it. The token is the credential; per-link password / expiry / revoke are separate.
+
+### `twicc share` / `twicc share show <ID>`
+List (read-only, direct DB — works with the server down) or show one share as JSON. Listing: `--kind <session|artifact>`, `--session ID`, `--project TEXT` (worktree-aware scope), `--include-revoked`, `--limit` (default 50), `--offset`. Each row is the owner serializer (`id`, `token`, `kind`, `label`, `status`, `options`, `view_count`, …) plus a resolved `url` (absolute when `shareBaseUrl` is set, else the relative `/share/<token>/` path).
+
+### `twicc share create session <SESSION_ID>` / `twicc share create artifact <BOOKMARK_ID>`
+Create a link (requires the live server). Session: `--label`, `--password`, `--expires ISO`, `--live/--frozen` (live-follow or snapshot), `--max-display <conversation|simplified|normal|debug>`, `--include-subagents/--no-subagents`, `--show-costs/--no-costs`, `--title` (public title; default = the session title). Artifact: `--label`, `--password`, `--expires`, `--title` (default = the bookmark name); the artifact is snapshotted at creation (design D7).
+
+### `twicc share update <ID>` / `revoke` / `unrevoke` / `delete` / `propagate <ID>`
+Manage an existing link (live server; broadcasts so open UIs refresh). `update` edits `--label` / `--password` / `--expires`. `revoke`/`unrevoke` toggle availability (row + counters kept). `delete` removes it (and its snapshot dir). `propagate` re-freezes a snapshot session share to the current line / re-snapshots an artifact share.
+
 ## Live processes
 
 ### `twicc processes` / `twicc processes <SUBCOMMAND>`

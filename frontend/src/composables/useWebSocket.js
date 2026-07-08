@@ -4,6 +4,7 @@ import { ref, watch } from 'vue'
 import { useWebSocket as useVueWebSocket, useDebounceFn, useThrottleFn } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import { useDataStore } from '../stores/data'
+import { useSharesStore } from '../stores/shares'
 import { useAuthStore } from '../stores/auth'
 import { useReconciliation } from './useReconciliation'
 import { toast } from './useToast'
@@ -1096,6 +1097,18 @@ export function useWebSocket() {
             }
             case 'artifact_bookmark_removed': {
                 store.removeArtifactBookmark(msg.bookmark_id)
+                break
+            }
+            case 'shares_updated': {
+                useSharesStore().setShares(msg.shares || [])
+                break
+            }
+            case 'share_updated': {
+                useSharesStore().upsertShare(msg.share)
+                break
+            }
+            case 'share_removed': {
+                useSharesStore().removeShare(msg.share_id)
                 break
             }
             case 'session_removed':

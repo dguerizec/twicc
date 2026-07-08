@@ -229,7 +229,7 @@ ROOT_URLCONF = "twicc.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [PACKAGE_DIR / "artifacts" / "templates"],
+        "DIRS": [PACKAGE_DIR / "artifacts" / "templates", PACKAGE_DIR / "share" / "templates"],
         "APP_DIRS": False,
         "OPTIONS": {"context_processors": []},
     },

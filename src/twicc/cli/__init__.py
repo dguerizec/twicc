@@ -604,6 +604,120 @@ def _artifacts_unbookmark(
     run_unbookmark(session_id=session_id, path=path, timeout=timeout)
 
 
+share_app = typer.Typer(name="share", help="List / show shares (read). Manage share links (create/revoke/…).", invoke_without_command=True)
+app.add_typer(share_app)
+
+
+@share_app.callback(invoke_without_command=True)
+def _share_default(
+    ctx: typer.Context,
+    kind: str = typer.Option(None, "--kind", help="Filter by kind: session | artifact."),
+    session: str = typer.Option(None, "--session", help="Filter by session id."),
+    project: str = typer.Option(None, "--project", help="Filter by project (worktrees included)."),
+    include_revoked: bool = typer.Option(False, "--include-revoked", help="Include revoked shares."),
+    limit: int = typer.Option(50), offset: int = typer.Option(0),
+) -> None:
+    """List shares as JSON (default action; read-only, direct DB)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from twicc.cli.share import list_main
+    list_main(kind=kind, session=session,
+              project=derive_project_id(project)[0] if project else None,
+              include_revoked=include_revoked, limit=limit, offset=offset)
+
+
+@share_app.command(name="show")
+def _share_show(share_id: str = typer.Argument(help="Share id (shr_…).")) -> None:
+    """Show one share as JSON (read-only)."""
+    from twicc.cli.share import show_main
+    show_main(share_id)
+
+
+# ── Mutation commands (human-only: no skill, no MCP tool — O5) ──────────────
+share_create_app = typer.Typer(name="create", help="Create a share link.", invoke_without_command=True)
+share_app.add_typer(share_create_app)
+
+
+@share_create_app.command(name="session")
+def _share_create_session(
+    session_id: str = typer.Argument(...),
+    label: str = typer.Option("", "--label"),
+    password: str = typer.Option(None, "--password"),
+    expires: str = typer.Option(None, "--expires", help="ISO 8601."),
+    live: bool = typer.Option(True, "--live/--frozen", help="Live-follow or snapshot."),
+    max_display: str = typer.Option("normal", "--max-display"),
+    include_subagents: bool = typer.Option(True, "--include-subagents/--no-subagents"),
+    show_costs: bool = typer.Option(False, "--show-costs/--no-costs"),
+    title: str = typer.Option(None, "--title", help="Public title shown to viewers (default: the session title)."),
+    timeout: int = typer.Option(30, "--timeout"),
+) -> None:
+    from twicc.cli.share_mutation import run_create_session
+    run_create_session(
+        session_id=session_id, label=label, password=password, expires_at=expires,
+        mode="live" if live else "snapshot",
+        options={"max_display_mode": max_display, "include_subagents": include_subagents,
+                 "show_costs": show_costs, "display_title": title or ""},
+        timeout=timeout,
+    )
+
+
+@share_create_app.command(name="artifact")
+def _share_create_artifact(
+    bookmark_id: int = typer.Argument(...),
+    label: str = typer.Option("", "--label"),
+    password: str = typer.Option(None, "--password"),
+    expires: str = typer.Option(None, "--expires"),
+    title: str = typer.Option(None, "--title", help="Public title shown to viewers (default: the bookmark name)."),
+    timeout: int = typer.Option(30, "--timeout"),
+) -> None:
+    from twicc.cli.share_mutation import run_create_artifact
+    run_create_artifact(bookmark_id=bookmark_id, label=label, password=password,
+                        expires_at=expires, options={"display_title": title or ""}, timeout=timeout)
+
+
+@share_app.command(name="revoke")
+def _share_revoke(share_id: str = typer.Argument(...), timeout: int = typer.Option(30)) -> None:
+    from twicc.cli.share_mutation import run_simple
+    run_simple(share_id=share_id, kind="share:revoke", success="updated", timeout=timeout)
+
+
+@share_app.command(name="unrevoke")
+def _share_unrevoke(share_id: str = typer.Argument(...), timeout: int = typer.Option(30)) -> None:
+    from twicc.cli.share_mutation import run_simple
+    run_simple(share_id=share_id, kind="share:unrevoke", success="updated", timeout=timeout)
+
+
+@share_app.command(name="delete")
+def _share_delete(share_id: str = typer.Argument(...), timeout: int = typer.Option(30)) -> None:
+    from twicc.cli.share_mutation import run_simple
+    run_simple(share_id=share_id, kind="share:delete", success="deleted", timeout=timeout)
+
+
+@share_app.command(name="propagate")
+def _share_propagate(share_id: str = typer.Argument(...), timeout: int = typer.Option(30)) -> None:
+    from twicc.cli.share_mutation import run_simple
+    run_simple(share_id=share_id, kind="share:propagate", success="updated", timeout=timeout)
+
+
+@share_app.command(name="update")
+def _share_update(
+    share_id: str = typer.Argument(...),
+    label: str = typer.Option(None, "--label"),
+    password: str = typer.Option(None, "--password"),
+    expires: str = typer.Option(None, "--expires"),
+    timeout: int = typer.Option(30),
+) -> None:
+    from twicc.cli.share_mutation import run_update
+    fields = {}
+    if label is not None:
+        fields["label"] = label
+    if password is not None:
+        fields["password"] = password
+    if expires is not None:
+        fields["expires_at"] = expires or None
+    run_update(share_id=share_id, fields=fields, timeout=timeout)
+
+
 @app.command()
 def usage() -> None:
     """Show the latest usage quota snapshot as JSON."""

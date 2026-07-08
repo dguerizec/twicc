@@ -1,0 +1,32 @@
+// Fetch layer for the share bundle — all requests stay under the share token path.
+export function makeShareApi(tokenPath) {
+    const base = tokenPath.replace(/\/+$/, '')
+    async function jget(url) {
+        const res = await fetch(url, { credentials: 'same-origin' })
+        if (!res.ok) throw new Error(`share fetch ${res.status}`)
+        return res.json()
+    }
+    return {
+        base,
+        fetchMeta: () => jget(`${base}/api/meta/`),
+        fetchItemsMetadata: (subagentId = null) =>
+            jget(subagentId ? `${base}/api/subagent/${subagentId}/items/metadata/` : `${base}/api/items/metadata/`),
+        fetchItems: (rangesQS, subagentId = null) =>
+            jget(subagentId ? `${base}/api/subagent/${subagentId}/items/?${rangesQS}` : `${base}/api/items/?${rangesQS}`),
+        fetchToolResults: (lineNum, toolId, subagentId = null) =>
+            jget(subagentId
+                ? `${base}/api/subagent/${subagentId}/items/${lineNum}/tool-results/${toolId}/`
+                : `${base}/api/items/${lineNum}/tool-results/${toolId}/`),
+        fetchSubagents: () => jget(`${base}/api/subagents/`),
+        mediaUrl: (filename) => `${base}/media/${filename}`,
+    }
+}
+
+// Module-scoped singleton so the shim stores (which can't take constructor args)
+// reach the same API instance the app configured at boot.
+let _api = null
+export function setShareApi(api) { _api = api }
+export function shareApi() {
+    if (!_api) throw new Error('share API not configured')
+    return _api
+}

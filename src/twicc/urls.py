@@ -5,6 +5,12 @@ from .artifacts.proxy import artifact_proxy
 from .browser_probe import browser_frame_check
 from .auth import views as auth_views
 from .rpc import views as rpc_views
+from .share import artifact_views as share_artifact_views
+from .share import owner_views as share_owner_views
+from .share import password_views as share_password_views
+from .share import router as share_router
+from .share import session_views as share_session_views
+from .share import views_assets as share_views_assets
 
 urlpatterns = [
     # Auth endpoints (always accessible, no auth required)
@@ -129,6 +135,32 @@ urlpatterns = [
         "artifacts/<str:session_id>/<str:artifact_file_name>",
         views.session_artifact,
     ),
+    # Owner-side share management (design §11). Under /api/ → password-gated.
+    path("api/shares/", share_owner_views.shares_list),
+    path("api/shares/<str:share_id>/", share_owner_views.share_detail),
+    path("api/shares/<str:share_id>/revoke/", share_owner_views.share_revoke),
+    path("api/shares/<str:share_id>/unrevoke/", share_owner_views.share_unrevoke),
+    path("api/shares/<str:share_id>/propagate/", share_owner_views.share_propagate),
+    path("api/shares/<str:share_id>/accesses/", share_owner_views.share_accesses),
+    # Public share surface (design §6). Order: password page, kind-specific API,
+    # then root + bottom catch (LAST so it can't shadow the API routes).
+    path("share/<str:token>/auth", share_password_views.share_auth),
+    path("share/<str:token>/api/meta/", share_session_views.api_meta),
+    path("share/<str:token>/api/items/metadata/", share_session_views.api_items_metadata),
+    path("share/<str:token>/api/items/", share_session_views.api_items),
+    path("share/<str:token>/api/items/<int:line_num>/tool-results/<str:tool_id>/", share_session_views.api_tool_results),
+    path("share/<str:token>/api/subagents/", share_session_views.api_subagents),
+    path("share/<str:token>/api/subagent/<str:subagent_id>/items/metadata/", share_session_views.api_subagent_items_metadata),
+    path("share/<str:token>/api/subagent/<str:subagent_id>/items/", share_session_views.api_subagent_items),
+    path("share/<str:token>/api/subagent/<str:subagent_id>/items/<int:line_num>/tool-results/<str:tool_id>/", share_session_views.api_subagent_tool_results),
+    path("share/<str:token>/media/<str:filename>", share_session_views.share_session_media),
+    # Artifact-share meta + proxy live under /api/ too (shape-uniform with sessions).
+    path("share/<str:token>/api/artifact-meta/", share_artifact_views.api_meta),
+    path("share/<str:token>/api/proxy/", share_artifact_views.share_artifact_proxy),
+    path("share/", share_router.share_recent),
+    path("share/<str:token>/", share_router.share_root),
+    path("share/<str:token>/<path:asset>", share_router.share_asset_or_doc),
+    path("_twicc/share/<str:asset>", share_views_assets.share_asset),
     # RPC API: every CLI command auto-exposed as ``POST /rpc/<command>``.
     # Gated by Bearer API tokens via ``RpcTokenAuthMiddleware`` (open only when
     # neither a password nor any token is configured). Must precede the SPA
@@ -141,5 +173,5 @@ urlpatterns = [
     # excluded so those URLs surface as 404 instead of serving the SPA HTML.
     # Static files (/static/) are served by BlackNoise at the ASGI level,
     # before reaching Django's URL routing (see asgi.py).
-    re_path(r"^(?!api/|rpc/|static/|ws/|artifacts/).*$", views.spa_index),
+    re_path(r"^(?!api/|rpc/|static/|ws/|artifacts/|share/|_twicc/).*$", views.spa_index),
 ]

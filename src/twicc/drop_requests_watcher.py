@@ -132,6 +132,36 @@ _KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
         "delete_artifact_bookmark_from_payload",
         "deleted",
     ),
+    "share:create": (
+        "twicc.core.services.share_mutation",
+        "create_share_from_payload",
+        "created",
+    ),
+    "share:update": (
+        "twicc.core.services.share_mutation",
+        "update_share_from_payload",
+        "updated",
+    ),
+    "share:revoke": (
+        "twicc.core.services.share_mutation",
+        "revoke_share_from_payload",
+        "updated",
+    ),
+    "share:unrevoke": (
+        "twicc.core.services.share_mutation",
+        "unrevoke_share_from_payload",
+        "updated",
+    ),
+    "share:delete": (
+        "twicc.core.services.share_mutation",
+        "delete_share_from_payload",
+        "deleted",
+    ),
+    "share:propagate": (
+        "twicc.core.services.share_mutation",
+        "propagate_share_from_payload",
+        "updated",
+    ),
     "settings:update": (
         "twicc.core.services.settings_mutation",
         "update_synced_settings_from_payload",
@@ -156,6 +186,7 @@ _RESULT_ID_FIELDS: tuple[str, ...] = (
     "project_id",
     "workspace_id",
     "bookmark_id",
+    "share_id",
 )
 
 

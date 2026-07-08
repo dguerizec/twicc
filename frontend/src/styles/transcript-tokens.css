@@ -1,0 +1,12 @@
+/* Root transcript CSS custom properties shared by the SPA (App.vue) and the
+   share bundle so they can't drift (design §8.8). Only the App.vue-level trio;
+   --card-spacing / --max-card-width ship with SessionItem.vue's own CSS. */
+:root {
+    --base-user-assistant-card-color: var(--wa-color-gray-95);
+    --user-card-base-color: oklch(from var(--base-user-assistant-card-color) calc(l + 0.015) c h);
+    --assistant-card-base-color: oklch(from var(--base-user-assistant-card-color) calc(l + 0.03) c h);
+    --main-shadow-size: var(--wa-shadow-offset-y-s);
+}
+.wa-dark {
+    --base-user-assistant-card-color: var(--wa-color-surface-raised);
+}

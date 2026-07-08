@@ -16,12 +16,22 @@ import '@awesome.me/webawesome/dist/components/callout/callout.js'
 import '@awesome.me/webawesome/dist/components/icon/icon.js'
 
 import ArtifactShellApp from './ArtifactShellApp.vue'
+import { recordShareView } from '../share-recent/recordView'
 
 const dataEl = document.getElementById('twicc-shell-data')
 const shellData = dataEl ? JSON.parse(dataEl.textContent) : {}
 
+if (shellData.mode === 'share') {
+    // Record this artifact share in the browser's recent list (share host homepage).
+    recordShareView({ tokenPath: shellData.tokenPath, kind: 'artifact', title: shellData.title || '' })
+}
 createApp(ArtifactShellApp, {
     innerDocUrl: shellData.innerDocUrl,
     bookmarkId: shellData.bookmarkId ?? null,
     allowedHosts: shellData.allowedHosts ?? {},
+    // Share mode: no bookmark id, no persistence, proxy through the share token.
+    mode: shellData.mode === 'share' ? 'share' : 'owner',
+    proxyUrl: shellData.mode === 'share' ? `${shellData.tokenPath}/api/proxy/` : undefined,
+    snapshotAt: shellData.snapshotAt ?? null,
+    tokenPath: shellData.tokenPath ?? null,
 }).mount('#app')

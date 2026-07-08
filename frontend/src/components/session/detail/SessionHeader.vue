@@ -15,6 +15,8 @@ import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
 import ProcessDuration from '../../ui/ProcessDuration.vue'
 import CostDisplay from '../../ui/CostDisplay.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
+import ShareDialog from '../../share/ShareDialog.vue'
+import { useSharesStore } from '../../../stores/shares'
 
 const props = defineProps({
     sessionId: {
@@ -30,6 +32,12 @@ const props = defineProps({
 
 const store = useDataStore()
 const settingsStore = useSettingsStore()
+const sharesStore = useSharesStore()
+
+// Share entry point (main session only). Disabled when no share host is configured.
+const showShareDialog = ref(false)
+const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+const activeShareCount = computed(() => sharesStore.activeCountForSession(props.sessionId))
 
 // Costs setting
 const showCosts = computed(() => settingsStore.areCostsShown)
@@ -502,6 +510,26 @@ defineExpose({
                 </wa-button>
                 <AppTooltip v-if="mode === 'session' && settingsStore.isDevMode" :for="`session-header-${sessionId}-debug-button`">{{ isSessionDebugForced ? 'Debug view forced for this session — click to restore the global mode' : 'Force the debug view for this session only' }}</AppTooltip>
 
+                <!-- Share button (main session only) -->
+                <wa-button
+                    v-if="mode === 'session' && !session.draft"
+                    :id="`session-header-${sessionId}-share-button`"
+                    variant="neutral"
+                    appearance="plain"
+                    size="small"
+                    class="share-button reduced-height"
+                    :disabled="!sharingEnabled"
+                    @click="showShareDialog = true"
+                >
+                    <wa-icon :name="activeShareCount > 0 ? 'share-nodes' : 'share-nodes'" label="Share"></wa-icon>
+                    <wa-badge v-if="activeShareCount > 0" variant="brand" pill class="share-count-badge">{{ activeShareCount }}</wa-badge>
+                </wa-button>
+                <AppTooltip :for="`session-header-${sessionId}-share-button`">
+                    {{ sharingEnabled
+                        ? (activeShareCount > 0 ? `Share session (${activeShareCount} active link${activeShareCount > 1 ? 's' : ''})` : 'Share session')
+                        : 'Configure a share host in Settings → Sharing to create links' }}
+                </AppTooltip>
+
                 <!-- Pending request indicator (shown when waiting for user response) -->
                 <wa-icon
                     v-if="store.getPendingRequests(sessionId).length > 0"
@@ -511,6 +539,10 @@ defineExpose({
                 ></wa-icon>
                 <AppTooltip v-if="store.getPendingRequests(sessionId).length > 0" :for="`session-header-${sessionId}-pending-request`">Waiting for your response</AppTooltip>
             </div>
+
+            <ShareDialog v-if="mode === 'session'" :open="showShareDialog" kind="session"
+                         :session-id="sessionId" :default-title="session?.title || displayName"
+                         @close="showShareDialog = false" />
 
             <!-- Clickable zone: title + project + context ring + chevron toggle compact mode -->
             <div class="compact-toggle-zone" @click="isCompactExpanded = !isCompactExpanded">
@@ -1037,6 +1069,7 @@ wa-divider {
 .pin-button,
 .archive-button,
 .rename-button,
+.share-button,
 .search-button,
 .debug-button {
     opacity: 0.6;
@@ -1071,6 +1104,7 @@ wa-divider {
 .pin-button:hover,
 .archive-button:hover,
 .rename-button:hover,
+.share-button:hover,
 .search-button:hover,
 .debug-button:hover {
     opacity: 1;

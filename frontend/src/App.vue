@@ -787,9 +787,8 @@ body.sidebar-closed {
         background-color: var(--selection-bg-color);
     }
 
-    --base-user-assistant-card-color: var(--wa-color-gray-95);
-    --user-card-base-color: oklch(from var(--base-user-assistant-card-color) calc(l + 0.015) c h);
-    --assistant-card-base-color: oklch(from var(--base-user-assistant-card-color) calc(l + 0.03) c h);
+    /* --base/user/assistant-card-color + --main-shadow-size live in
+       styles/transcript-tokens.css (shared with the share bundle, design §8.8). */
 
     --wa-font-size-3xs: round(calc(var(--wa-font-size-2xs) / 1.125), 1px);
 
@@ -850,7 +849,6 @@ body.sidebar-closed {
     &[data-theme="awesome"] {
         --divider-size: 4px;
     }
-    --main-shadow-size: var(--wa-shadow-offset-y-s);
 
     /* Diff editor colors (light mode) */
     --diff-removedLineBackground: #FEF1F1;
@@ -868,7 +866,7 @@ wa-split-panel {
 
 .wa-dark {
 
-    --base-user-assistant-card-color: var(--wa-color-surface-raised);
+    /* --base-user-assistant-card-color (dark) lives in styles/transcript-tokens.css */
     --wa-color-brand-border-loud: var(--wa-color-brand-50);
 
     /* Sparkline / heatmap graph colors (dark mode) — green (default) */

@@ -88,6 +88,7 @@ from twicc.quota_wakeup_task import start_quota_wakeup_task  # noqa: E402
 from twicc.session_dirs_cleanup_task import start_session_dirs_cleanup_task  # noqa: E402
 from twicc.tmux_cleanup_task import start_tmux_cleanup_task  # noqa: E402
 from twicc.auth.tokens import start_last_used_flush_task  # noqa: E402
+from twicc.share.view_tracking import start_share_view_flush_task  # noqa: E402
 from twicc.search import SearchIndexLockedError, init_search_index, shutdown_search_index  # noqa: E402
 from twicc.search_indexing_task import (  # noqa: E402
     get_active_indexing_tasks,
@@ -276,6 +277,7 @@ async def run_server(port: int):
     session_dirs_cleanup_task = asyncio.create_task(start_session_dirs_cleanup_task(shutdown_event))
     tmux_cleanup_task = asyncio.create_task(start_tmux_cleanup_task(shutdown_event))
     last_used_flush_task = asyncio.create_task(start_last_used_flush_task(shutdown_event))
+    share_view_flush_task = asyncio.create_task(start_share_view_flush_task(shutdown_event))
     version_check_task = asyncio.create_task(start_version_check_task())
 
     # One-shot trust backfill: settle every not-yet-imported project's trust
@@ -363,6 +365,9 @@ async def run_server(port: int):
 
         logger.info("Stopping token last-used flush task...")
         await _cancel_task(last_used_flush_task, "Token last-used flush task")
+
+        logger.info("Stopping share view flush task...")
+        await _cancel_task(share_view_flush_task, "Share view flush task")
 
         logger.info("Stopping version check task...")
         stop_version_check_task()

@@ -25,7 +25,7 @@ from twicc.rpc.permissions import COOKIE_READONLY_COMMANDS
 
 # The MCP surface: local-only minus whoami, plus the settings group.
 MCP_EXCLUDED_ROOTS: frozenset[str] = frozenset(
-    (set(LOCAL_ONLY_COMMANDS) - {"whoami"}) | {"settings"}
+    (set(LOCAL_ONLY_COMMANDS) - {"whoami"}) | {"settings", "share"}
 )
 
 # Read-only annotation source (metadata only — NOT used for availability).
