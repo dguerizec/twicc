@@ -119,6 +119,10 @@ const providerLabel = computed(() => getProviderLabel(props.session.provider))
 /** Web Awesome icon name for the session's provider. */
 const providerIcon = computed(() => getProviderIcon(props.session.provider))
 
+/** Whether a share host is configured — gates the "Share" menu action (drafts
+ *  have no transcript to share, so they're excluded too). Mirrors SessionHeader. */
+const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+
 /** Whether this session has any pending request waiting for user response. */
 const pendingRequest = computed(() => store.getPendingRequests(props.session.id).length > 0)
 
@@ -362,6 +366,11 @@ function handleMenuSelect(event) {
     const session = props.session
     if (action === 'rename') {
         openRenameDialog(session)
+    } else if (action === 'share') {
+        // Open the globally-mounted ShareDialog (ProjectView) for this session.
+        window.dispatchEvent(new CustomEvent('twicc:open-share-dialog', {
+            detail: { sessionId: session.id },
+        }))
     } else if (action === 'stop') {
         if (!stoppingProcess.value) stopSessionProcess(session.id)
     } else if (action === 'delete-draft') {
@@ -595,6 +604,10 @@ function handleMenuSelect(event) {
             <wa-dropdown-item value="rename">
                 <wa-icon slot="icon" name="pencil"></wa-icon>
                 Rename
+            </wa-dropdown-item>
+            <wa-dropdown-item v-if="!session.draft && sharingEnabled" value="share">
+                <wa-icon slot="icon" name="share-nodes"></wa-icon>
+                Share…
             </wa-dropdown-item>
             <template v-if="!session.draft">
                 <wa-divider></wa-divider>

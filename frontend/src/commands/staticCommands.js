@@ -1244,6 +1244,24 @@ export function initStaticCommands(router) {
             },
         },
         {
+            id: 'ui.share-session',
+            label: 'Share Session…',
+            icon: 'share-nodes',
+            category: 'ui',
+            // Current session only, and only when a share host is configured (a
+            // draft has no transcript to share). Opens the globally-mounted
+            // ShareDialog in ProjectView via the shared window event.
+            when: () => {
+                const sessionId = routeSessionId()
+                if (!sessionId || !settings.getShareBaseUrl) return false
+                const s = data.getSession(sessionId)
+                return !!s && !s.draft
+            },
+            action: () => {
+                window.dispatchEvent(new CustomEvent('twicc:open-share-dialog', { detail: { sessionId: routeSessionId() } }))
+            },
+        },
+        {
             id: 'ui.edit-project',
             label: 'Edit Current Project',
             icon: 'pencil',

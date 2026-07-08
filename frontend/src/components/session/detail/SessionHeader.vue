@@ -1110,6 +1110,18 @@ wa-divider {
     opacity: 1;
 }
 
+/* Compact active-link count tucked into the share icon's top-right corner. A
+   default wa-badge pill is chunky next to a small plain icon button, so shrink
+   it and overlay it rather than letting it inflate the button width. */
+.share-count-badge {
+    position: absolute;
+    top: -0.15rem;
+    inset-inline-end: -0.2rem;
+    font-size: 0.6rem;
+    padding: 0.05rem 0.25rem;
+    pointer-events: none;
+}
+
 .pending-request-indicator {
     color: var(--wa-color-warning-60);
     font-size: var(--wa-font-size-s);

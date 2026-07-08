@@ -38,6 +38,7 @@ import ProjectDetailPanel from '../components/project/ProjectDetailPanel.vue'
 import SessionRenameDialog from '../components/session/detail/SessionRenameDialog.vue'
 import ProjectEditDialog from '../components/project/ProjectEditDialog.vue'
 import WorkspaceManageDialog from '../components/workspace/WorkspaceManageDialog.vue'
+import ShareDialog from '../components/share/ShareDialog.vue'
 import BulkArchiveConfirmDialog from '../components/sidebar/BulkArchiveConfirmDialog.vue'
 import { getUsageRingColor, formatRecentDelta } from '../utils/usage'
 import { buildProjectTree, flattenProjectTree } from '../utils/projectTree'
@@ -406,6 +407,20 @@ function openRenameDialog(session, options = {}) {
 }
 
 provide('openRenameDialog', openRenameDialog)
+
+// Single ShareDialog instance for the sidebar session menu + the "Share Session…"
+// command palette entry (opened via the twicc:open-share-dialog window event).
+// The session header owns its own instance for the currently-open session.
+const shareDialogOpen = ref(false)
+const shareDialogSessionId = ref(null)
+const shareDialogTitle = ref('')
+function openShareDialog(e) {
+    const sessionId = e?.detail?.sessionId
+    if (!sessionId) return
+    shareDialogSessionId.value = sessionId
+    shareDialogTitle.value = store.getSession(sessionId)?.title || ''
+    shareDialogOpen.value = true
+}
 
 // Pending drop data: set when files/text are dropped on a session list item.
 // SessionView watches this and forwards to SessionItemsList once mounted.
@@ -1445,6 +1460,7 @@ onMounted(() => {
     window.addEventListener('twicc:open-new-workspace-dialog', openNewWorkspaceDialog)
     window.addEventListener('twicc:open-manage-workspaces-dialog', openManageWorkspacesDialog)
     window.addEventListener('twicc:open-edit-workspace-dialog', openEditWorkspaceDialog)
+    window.addEventListener('twicc:open-share-dialog', openShareDialog)
     // Alt+Shift+B sidebar toggle shortcut (dispatched by App.vue)
     window.addEventListener('twicc:toggle-sidebar', handleToggleSidebarShortcut)
 })
@@ -1468,6 +1484,7 @@ onBeforeUnmount(() => {
     window.removeEventListener('twicc:open-new-workspace-dialog', openNewWorkspaceDialog)
     window.removeEventListener('twicc:open-manage-workspaces-dialog', openManageWorkspacesDialog)
     window.removeEventListener('twicc:open-edit-workspace-dialog', openEditWorkspaceDialog)
+    window.removeEventListener('twicc:open-share-dialog', openShareDialog)
     window.removeEventListener('twicc:toggle-sidebar', handleToggleSidebarShortcut)
 })
 
@@ -2434,6 +2451,11 @@ function updateSidebarClosedClass(closed) {
 
     <!-- Workspace management dialog -->
     <WorkspaceManageDialog ref="manageWorkspacesDialogRef" />
+
+    <!-- Shared session share dialog (sidebar menu + command palette) -->
+    <ShareDialog v-if="shareDialogSessionId" :open="shareDialogOpen" kind="session"
+                 :session-id="shareDialogSessionId" :default-title="shareDialogTitle"
+                 @close="shareDialogOpen = false" />
 
     <!-- Bulk archive confirmation dialog -->
     <BulkArchiveConfirmDialog
