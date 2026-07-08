@@ -408,18 +408,34 @@ function openRenameDialog(session, options = {}) {
 
 provide('openRenameDialog', openRenameDialog)
 
-// Single ShareDialog instance for the sidebar session menu + the "Share Session…"
-// command palette entry (opened via the twicc:open-share-dialog window event).
-// The session header owns its own instance for the currently-open session.
+// Single ShareDialog instance (per kind) driven by the twicc:open-share-dialog
+// window event — used by the sidebar session menu, the "Share Session…" command,
+// and every artifact entry point (browser-view header, bookmark-list row,
+// FilePane bookmark button). The session header and the bookmark-edit dialog own
+// their own instances for their currently-open target; everything else routes
+// here so there's one artifact dialog mount, not one per row.
+// Detail shape: { sessionId } for a session, or { bookmarkId, allowedHosts, title }
+// for an artifact.
 const shareDialogOpen = ref(false)
+const shareDialogKind = ref('session')
 const shareDialogSessionId = ref(null)
+const shareDialogBookmarkId = ref(null)
+const shareDialogAllowedHosts = ref({})
 const shareDialogTitle = ref('')
 function openShareDialog(e) {
-    const sessionId = e?.detail?.sessionId
-    if (!sessionId) return
-    shareDialogSessionId.value = sessionId
-    shareDialogTitle.value = store.getSession(sessionId)?.title || ''
-    shareDialogOpen.value = true
+    const d = e?.detail || {}
+    if (d.bookmarkId != null) {
+        shareDialogKind.value = 'artifact'
+        shareDialogBookmarkId.value = d.bookmarkId
+        shareDialogAllowedHosts.value = d.allowedHosts || {}
+        shareDialogTitle.value = d.title || ''
+        shareDialogOpen.value = true
+    } else if (d.sessionId) {
+        shareDialogKind.value = 'session'
+        shareDialogSessionId.value = d.sessionId
+        shareDialogTitle.value = store.getSession(d.sessionId)?.title || ''
+        shareDialogOpen.value = true
+    }
 }
 
 // Pending drop data: set when files/text are dropped on a session list item.
@@ -2452,10 +2468,17 @@ function updateSidebarClosedClass(closed) {
     <!-- Workspace management dialog -->
     <WorkspaceManageDialog ref="manageWorkspacesDialogRef" />
 
-    <!-- Shared session share dialog (sidebar menu + command palette) -->
-    <ShareDialog v-if="shareDialogSessionId" :open="shareDialogOpen" kind="session"
+    <!-- Global share dialog (sidebar menu + command palette + artifact entry
+         points), one mount per kind, both driven by the twicc:open-share-dialog
+         event. -->
+    <ShareDialog v-if="shareDialogKind === 'session' && shareDialogSessionId"
+                 :open="shareDialogOpen" kind="session"
                  :session-id="shareDialogSessionId" :default-title="shareDialogTitle"
                  @close="shareDialogOpen = false" />
+    <ShareDialog v-if="shareDialogKind === 'artifact' && shareDialogBookmarkId != null"
+                 :open="shareDialogOpen" kind="artifact"
+                 :bookmark-id="shareDialogBookmarkId" :allowed-hosts="shareDialogAllowedHosts"
+                 :default-title="shareDialogTitle" @close="shareDialogOpen = false" />
 
     <!-- Bulk archive confirmation dialog -->
     <BulkArchiveConfirmDialog

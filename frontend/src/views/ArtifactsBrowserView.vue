@@ -12,6 +12,8 @@
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../stores/data'
+import { useSettingsStore } from '../stores/settings'
+import { useSharesStore } from '../stores/shares'
 import { buildFilesRouteParams } from '../utils/granularRoutes'
 import FilePane from '../components/files/FilePane.vue'
 import ArtifactBookmarkDialog from '../components/artifacts/ArtifactBookmarkDialog.vue'
@@ -27,6 +29,8 @@ const props = defineProps({
 const route = useRoute()
 const router = useRouter()
 const dataStore = useDataStore()
+const settingsStore = useSettingsStore()
+const sharesStore = useSharesStore()
 
 const editDialogRef = ref(null)
 
@@ -39,6 +43,24 @@ const available = ref(null)
 const bookmark = computed(() =>
     props.bookmarkId != null ? dataStore.artifactBookmarks[props.bookmarkId] || null : null
 )
+
+// Share entry point — routes through the globally-mounted artifact ShareDialog
+// (ProjectView) so there's a single dialog instance. Disabled until a share host
+// is configured; badge mirrors the session header's active-link count.
+const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+const activeShareCount = computed(() =>
+    bookmark.value ? sharesStore.activeCountForBookmark(bookmark.value.id) : 0
+)
+function openShare() {
+    if (!bookmark.value || !sharingEnabled.value) return
+    window.dispatchEvent(new CustomEvent('twicc:open-share-dialog', {
+        detail: {
+            bookmarkId: bookmark.value.id,
+            allowedHosts: bookmark.value.allowed_hosts || {},
+            title: bookmark.value.name || '',
+        },
+    }))
+}
 
 // Derive mode from the route name (matches ProjectView's isAllProjectsMode),
 // so navigation targets the right route family regardless of props timing.
@@ -216,6 +238,25 @@ function openInSession() {
                 </div>
                 <div class="abv-header__actions">
                     <wa-button
+                        id="abv-share-button"
+                        size="small"
+                        variant="neutral"
+                        appearance="plain"
+                        class="abv-share-button reduced-height"
+                        :disabled="!sharingEnabled"
+                        @click="openShare"
+                    >
+                        <wa-icon name="share-nodes" label="Share"></wa-icon>
+                        <wa-badge v-if="activeShareCount > 0" variant="brand" pill class="abv-share-badge">{{ activeShareCount }}</wa-badge>
+                    </wa-button>
+                    <AppTooltip for="abv-share-button">
+                        {{ sharingEnabled
+                            ? (activeShareCount > 0
+                                ? `Share artifact (${activeShareCount} active link${activeShareCount > 1 ? 's' : ''})`
+                                : 'Share artifact')
+                            : 'Configure a share host in Settings → Sharing to create links' }}
+                    </AppTooltip>
+                    <wa-button
                         id="abv-open-session-button"
                         size="small"
                         variant="neutral"
@@ -357,6 +398,22 @@ function openInSession() {
     align-items: center;
     gap: var(--wa-space-xs);
     flex-shrink: 0;
+}
+
+/* Relative anchor for the active-link count badge overlaid on the share icon. */
+.abv-share-button {
+    position: relative;
+}
+
+/* Compact active-link count tucked into the share icon's top-right corner
+   (mirrors SessionHeader's .share-count-badge). */
+.abv-share-badge {
+    position: absolute;
+    top: -0.15rem;
+    inset-inline-end: -0.2rem;
+    font-size: 0.6rem;
+    padding: 0.05rem 0.25rem;
+    pointer-events: none;
 }
 
 .abv-content {

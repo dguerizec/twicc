@@ -133,6 +133,18 @@ function onSelect(b) {
     emit('select', b)
 }
 
+// Row Share action — only when a share host is configured. Routes through the
+// globally-mounted artifact ShareDialog (ProjectView) via the shared window
+// event, so the list never mounts a dialog per row.
+const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+function handleMenuSelect(event, b) {
+    if (event.detail.item.value === 'share') {
+        window.dispatchEvent(new CustomEvent('twicc:open-share-dialog', {
+            detail: { bookmarkId: b.id, allowedHosts: b.allowed_hosts || {}, title: b.name || '' },
+        }))
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Keyboard navigation (mirrors SessionList, without the virtual scroller)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -145,7 +157,7 @@ const PAGE_SIZE = 10
 function scrollRowIntoView(index) {
     if (index < 0) return
     nextTick(() => {
-        const rows = listRef.value?.querySelectorAll(':scope > .bookmark-item')
+        const rows = listRef.value?.querySelectorAll(':scope > .bookmark-item-wrapper')
         rows?.[index]?.scrollIntoView({ block: 'nearest' })
     })
 }
@@ -292,6 +304,10 @@ defineExpose({ handleKeyNavigation })
                 v-if="separatorBeforeIds.has(b.id)"
                 v-bind="separatorBeforeIds.get(b.id)"
             />
+            <div
+                class="bookmark-item-wrapper"
+                :class="{ 'bookmark-item-wrapper--compact': compactView }"
+            >
             <wa-button
                 :appearance="isActive(b) ? 'outlined' : 'plain'"
                 :variant="isActive(b) ? 'brand' : 'neutral'"
@@ -336,6 +352,31 @@ defineExpose({ handleKeyNavigation })
                     </span>
                 </div>
             </wa-button>
+            <!-- Row actions menu (outside the button to avoid nesting). Only a
+                 Share action for now, gated on a configured share host. -->
+            <wa-dropdown
+                v-if="sharingEnabled"
+                class="bookmark-menu"
+                placement="bottom-end"
+                @wa-select="(e) => handleMenuSelect(e, b)"
+            >
+                <wa-button
+                    :id="`bookmark-menu-trigger-${b.id}`"
+                    slot="trigger"
+                    variant="neutral"
+                    appearance="plain"
+                    size="small"
+                    class="bookmark-menu-trigger"
+                >
+                    <wa-icon name="ellipsis-v" label="Artifact actions"></wa-icon>
+                </wa-button>
+                <wa-dropdown-item value="share">
+                    <wa-icon slot="icon" name="share-nodes"></wa-icon>
+                    Share…
+                </wa-dropdown-item>
+            </wa-dropdown>
+            <AppTooltip v-if="sharingEnabled" :for="`bookmark-menu-trigger-${b.id}`">Share artifact</AppTooltip>
+            </div>
             </template>
         </div>
     </div>
@@ -367,13 +408,44 @@ defineExpose({ handleKeyNavigation })
     outline: none;
 }
 
+/* Row wrapper: positioning context for the absolutely-placed actions menu, and
+   the flex child that now carries the inter-row gap (moved off the button so the
+   menu overlays the row cleanly, mirroring SessionListItem). */
+.bookmark-item-wrapper {
+    position: relative;
+    width: 100%;
+}
+.bookmark-item-wrapper:not(.bookmark-item-wrapper--compact) {
+    margin-block: var(--wa-space-3xs);
+}
+
 .bookmark-item {
     width: 100%;
 }
 
-/* Gap between rows (non-compact only), matching the session list. */
-.bookmark-item:not(.bookmark-item--compact) {
-    margin-block: var(--wa-space-3xs);
+/* Actions menu, tucked into the row's top-right corner and revealed on hover
+   (or while open), exactly like the session list's row menu. */
+.bookmark-menu {
+    display: block;
+    position: absolute;
+    top: var(--wa-space-2xs);
+    right: var(--wa-space-xs);
+    z-index: 1;
+}
+.bookmark-item-wrapper--compact .bookmark-menu {
+    top: 0;
+}
+.bookmark-menu-trigger {
+    opacity: 0.4;
+    transition: opacity 0.15s;
+    font-size: var(--wa-font-size-2xs);
+}
+.bookmark-item-wrapper:hover .bookmark-menu-trigger,
+.bookmark-menu[open] .bookmark-menu-trigger {
+    opacity: 0.6;
+}
+.bookmark-menu-trigger:hover {
+    opacity: 1 !important;
 }
 
 .bookmark-item::part(base) {

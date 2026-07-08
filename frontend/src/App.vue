@@ -25,6 +25,7 @@ import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
 import ProjectTrustDialog from './components/project/ProjectTrustDialog.vue'
 import ProjectEditDialog from './components/project/ProjectEditDialog.vue'
 import WorktreeDialog from './components/project/WorktreeDialog.vue'
+import ShareManagerDialog from './components/share/ShareManagerDialog.vue'
 import TerminalPool from './components/terminal/TerminalPool.vue'
 import { registerTrustDialog, ensureProjectTrust } from './composables/useTrustGate'
 import { initStaticCommands } from './commands/staticCommands'
@@ -574,6 +575,14 @@ const globalProjectEditRef = ref(null)
 const globalEditingProject = ref(null)
 const worktreeDialogRef = ref(null)
 
+// Shared-links manager — opened from the command palette (and reachable from
+// Settings → Sharing, which owns its own instance). Global here so the palette
+// can open it from anywhere.
+const showShareManager = ref(false)
+function openShareManager() {
+    showShareManager.value = true
+}
+
 // Edit any project (current project, or one picked from a palette list).
 function openEditProjectDialog(e) {
     const projectId = e.detail?.projectId
@@ -612,6 +621,7 @@ onMounted(() => {
     registerTrustDialog(trustDialogRef.value)
     window.addEventListener('twicc:open-edit-project-dialog', openEditProjectDialog)
     window.addEventListener('twicc:open-worktree-dialog', openWorktreeDialog)
+    window.addEventListener('twicc:open-share-manager', openShareManager)
 })
 onBeforeUnmount(() => {
     document.removeEventListener('keydown', handleGlobalKeydown, { capture: true })
@@ -619,6 +629,7 @@ onBeforeUnmount(() => {
     window.removeEventListener('blur', handleWindowBlur)
     window.removeEventListener('twicc:open-edit-project-dialog', openEditProjectDialog)
     window.removeEventListener('twicc:open-worktree-dialog', openWorktreeDialog)
+    window.removeEventListener('twicc:open-share-manager', openShareManager)
 })
 
 // Notivue theme - inverted for contrast (dark theme when app is light, and vice-versa)
@@ -683,6 +694,8 @@ const toastTheme = computed(() => {
          project, or a session. -->
     <ProjectEditDialog ref="globalProjectEditRef" :project="globalEditingProject" />
     <WorktreeDialog ref="worktreeDialogRef" @resolved="handleWorktreeResolved" />
+    <!-- Shared-links manager (command palette: "Manage shared links"). -->
+    <ShareManagerDialog :open="showShareManager" @close="showShareManager = false" />
     <!-- Prevent browser default drop behavior (e.g. navigating to a dropped image).
          Our specific drop handlers in SessionItemsList call preventDefault themselves;
          this catches any drops that miss those zones. -->

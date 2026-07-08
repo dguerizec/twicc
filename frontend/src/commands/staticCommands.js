@@ -1262,6 +1262,18 @@ export function initStaticCommands(router) {
             },
         },
         {
+            id: 'ui.manage-shares',
+            label: 'Manage Shared Links',
+            icon: 'share-nodes',
+            category: 'ui',
+            // Only when a share host is configured (no host → no links to manage).
+            // Opens the globally-mounted ShareManagerDialog (App.vue) via event.
+            when: () => !!settings.getShareBaseUrl,
+            action: () => {
+                window.dispatchEvent(new CustomEvent('twicc:open-share-manager'))
+            },
+        },
+        {
             id: 'ui.edit-project',
             label: 'Edit Current Project',
             icon: 'pencil',
