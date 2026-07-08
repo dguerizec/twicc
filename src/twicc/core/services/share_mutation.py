@@ -35,7 +35,7 @@ _SESSION_OPTION_KEYS = frozenset({
     "mode", "frozen_at_line", "max_display_mode", "include_subagents",
     "show_timestamps", "show_title", "display_title",
 })
-_ARTIFACT_OPTION_KEYS = frozenset({"snapshot_at", "display_title"})
+_ARTIFACT_OPTION_KEYS = frozenset({"snapshot_at", "show_title", "display_title"})
 _DISPLAY_MODES = ("conversation", "simplified", "normal", "debug")
 
 
@@ -95,7 +95,9 @@ def _validate_artifact_options(opts: dict) -> tuple[dict, list[ShareError]]:
     unknown = set(opts) - _ARTIFACT_OPTION_KEYS
     if unknown:
         errors.append(ShareError("options", "unknown_keys", f"unknown option keys: {sorted(unknown)}"))
-    out: dict = {}
+    # show_title is the master switch (mirrors sessions): off ⇒ the viewer sees a
+    # generic label instead of the artifact name/override.
+    out: dict = {"show_title": bool(opts.get("show_title", True))}
     # Optional owner-set public display title (else the real bookmark name is used).
     title = (opts.get("display_title") or "").strip()
     if title:

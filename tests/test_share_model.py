@@ -123,3 +123,28 @@ def test_public_meta_display_title_used_when_shown(session):
         options={"mode": "live", "show_title": True, "display_title": "Public name"},
     )
     assert serialize_share_public_meta(share)["title"] == "Public name"
+
+
+def test_artifact_public_meta_uses_bookmark_name_by_default(bookmark):
+    share = Share.objects.create(
+        kind="artifact", token=mint_token(),
+        artifact_bookmark=bookmark, options={"show_title": True},
+    )
+    assert serialize_share_public_meta(share)["title"] == "Demo"
+
+
+def test_artifact_public_meta_hides_title_when_show_title_false(bookmark):
+    # show_title off ⇒ no title, even with a display_title override (master switch).
+    share = Share.objects.create(
+        kind="artifact", token=mint_token(), artifact_bookmark=bookmark,
+        options={"show_title": False, "display_title": "Public name"},
+    )
+    assert "title" not in serialize_share_public_meta(share)
+
+
+def test_artifact_public_meta_display_title_used_when_shown(bookmark):
+    share = Share.objects.create(
+        kind="artifact", token=mint_token(), artifact_bookmark=bookmark,
+        options={"show_title": True, "display_title": "Public name"},
+    )
+    assert serialize_share_public_meta(share)["title"] == "Public name"

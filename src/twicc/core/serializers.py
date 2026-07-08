@@ -368,11 +368,15 @@ def serialize_share_public_meta(share):
             display_title = (opts.get("display_title") or "").strip()
             data["title"] = display_title or (sess.title if sess else None)
         return data
-    # Artifact: owner override, else the real bookmark name.
-    display_title = (opts.get("display_title") or "").strip()
+    # Artifact: show_title is the master switch (as for sessions) — off ⇒ no title
+    # at all (the viewer sees the generic label). On ⇒ the owner's display_title
+    # override, else the real bookmark name.
     bookmark = share.artifact_bookmark
-    return {
+    data = {
         "kind": "artifact",
         "snapshot_at": opts.get("snapshot_at"),
-        "title": display_title or (bookmark.name if bookmark else None),
     }
+    if opts.get("show_title", True):
+        display_title = (opts.get("display_title") or "").strip()
+        data["title"] = display_title or (bookmark.name if bookmark else None)
+    return data

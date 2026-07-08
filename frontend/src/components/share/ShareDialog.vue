@@ -61,13 +61,14 @@ function sessionOptions() {
     }
 }
 
-// Options sent for both kinds: session config (session only) + the optional public
-// title override. A session title is only sent when "Show title" is on (off ⇒ the
-// viewer sees the generic label). Empty ⇒ omitted ⇒ viewers see the real name.
+// Options sent for both kinds: session config (session only) + show_title (the
+// master switch, both kinds) + the optional public title override. The title is
+// only sent when "Show title" is on (off ⇒ the viewer sees the generic label);
+// empty ⇒ omitted ⇒ viewers see the real session title / bookmark name.
 function buildOptions() {
-    const opts = isSession.value ? sessionOptions() : {}
+    const opts = isSession.value ? sessionOptions() : { show_title: form.show_title }
     const t = form.display_title.trim()
-    if (t && (!isSession.value || form.show_title)) opts.display_title = t
+    if (t && form.show_title) opts.display_title = t
     return opts
 }
 
@@ -141,9 +142,9 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
             <label>Title (shown to viewers)
                 <wa-input :value="form.display_title" @input="form.display_title = $event.target.value"
                           :placeholder="defaultTitle || 'Default title'"
-                          :disabled="isSession && !form.show_title"></wa-input>
+                          :disabled="!form.show_title"></wa-input>
             </label>
-            <wa-switch v-if="isSession" :checked="form.show_title"
+            <wa-switch :checked="form.show_title"
                        @change.stop="form.show_title = $event.target.checked">
                 Show title <span class="switch-hint">— off shows viewers a generic label</span>
             </wa-switch>

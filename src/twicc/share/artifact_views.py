@@ -49,10 +49,15 @@ async def share_artifact_page(request, ctx):
         raise Http404("File not found")
     ext = os.path.splitext(rel)[1].lower()
     ctype = _guess_raw_content_type(abs_root)
-    # Public display title (page header + recent-shares list): owner override, else
-    # the real bookmark name, else the file's basename.
-    display_title = (ctx.options.get("display_title") or "").strip()
-    art_title = display_title or (ctx.bookmark.name if ctx.bookmark else None) or rel
+    # Public display title (browser tab + recent-shares list): show_title is the
+    # master switch (mirrors sessions) — off ⇒ empty (the viewer falls back to the
+    # generic "Shared artifact"), never leaking the name/path. On ⇒ owner override,
+    # else the real bookmark name, else the file's basename.
+    if ctx.options.get("show_title", True):
+        display_title = (ctx.options.get("display_title") or "").strip()
+        art_title = display_title or (ctx.bookmark.name if ctx.bookmark else None) or rel
+    else:
+        art_title = ""
 
     if ctype == "text/html":
         token_path = f"/share/{ctx.share.token}"

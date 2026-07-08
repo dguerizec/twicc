@@ -99,10 +99,17 @@ def test_artifact_options_rejects_unknown_key():
     assert any(e.code == "unknown_keys" for e in errors)
 
 
-def test_artifact_options_keeps_display_title_only():
+def test_artifact_options_keeps_display_title_and_show_title():
     out, errors = _validate_artifact_options({"display_title": "Report"})
     assert not errors
-    assert out == {"display_title": "Report"}
+    # show_title defaults to True (master switch, mirrors sessions).
+    assert out == {"show_title": True, "display_title": "Report"}
+
+
+def test_artifact_options_show_title_false_kept():
+    out, errors = _validate_artifact_options({"show_title": False, "display_title": "Report"})
+    assert not errors
+    assert out == {"show_title": False, "display_title": "Report"}
 
 
 # ── create_share ────────────────────────────────────────────────────────────
