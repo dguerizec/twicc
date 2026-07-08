@@ -15,12 +15,16 @@ export function useReconciliation() {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Called when WebSocket reconnects.
+     * Called when WebSocket connects or reconnects.
      * Orchestrates the reconciliation process with retry logic.
      * @param {string|null} currentProjectId - Current project being viewed
      * @param {string|null} currentSessionId - Current session being viewed
+     * @param {boolean} isReconnection - True for a real reconnect (was connected,
+     *   socket dropped), false on the first connect. Gates auto-opening the
+     *   focused session's outage edits: on first connect the "new" tail is just
+     *   the initial load, which must NOT auto-open every historical diff.
      */
-    async function onReconnected(currentProjectId, currentSessionId) {
+    async function onReconnected(currentProjectId, currentSessionId, isReconnection = false) {
         if (isReconciling) {
             // A reconciliation is already in progress, mark that we need another one after
             needsReconcileAfter = true
@@ -29,12 +33,12 @@ export function useReconciliation() {
 
         isReconciling = true
         try {
-            await reconcileWithRetry(currentProjectId, currentSessionId)
+            await reconcileWithRetry(currentProjectId, currentSessionId, isReconnection)
 
             // If a reconnection happened while we were reconciling, do it again
             while (needsReconcileAfter) {
                 needsReconcileAfter = false
-                await reconcileWithRetry(currentProjectId, currentSessionId)
+                await reconcileWithRetry(currentProjectId, currentSessionId, isReconnection)
             }
         } finally {
             isReconciling = false
@@ -62,7 +66,7 @@ export function useReconciliation() {
      * Retry reconciliation up to MAX_RETRIES times.
      * After all retries, unload any data that still failed to sync.
      */
-    async function reconcileWithRetry(currentProjectId, currentSessionId) {
+    async function reconcileWithRetry(currentProjectId, currentSessionId, isReconnection = false) {
         let lastResult = null
 
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -70,7 +74,7 @@ export function useReconciliation() {
             console.group(groupName)
 
             try {
-                lastResult = await reconcile(currentProjectId, currentSessionId)
+                lastResult = await reconcile(currentProjectId, currentSessionId, isReconnection)
 
                 if (!lastResult.hasErrors) {
                     console.groupEnd()
@@ -141,7 +145,7 @@ export function useReconciliation() {
      * Loads changed data with priority to current view.
      * @returns {Promise<{hasErrors: boolean, failedProjectIds: string[], failedSessions: Array<{projectId, sessionId}>}>}
      */
-    async function reconcile(currentProjectId, currentSessionId) {
+    async function reconcile(currentProjectId, currentSessionId, isReconnection = false) {
         let hasErrors = false
         const failedProjectIds = []
         const failedSessions = [] // [{ projectId, sessionId }, ...]
@@ -208,7 +212,12 @@ export function useReconciliation() {
                 if (currentSessionNeedsUpdate) {
                     try {
                         console.log('Updating current session')
-                        await loadNewItems(currentSessionId)
+                        // markNewLive only on a real reconnect and only for the
+                        // focused session, so edits written during the outage
+                        // auto-open (auto-open-diffs) like real-time ones — but
+                        // only where the user is looking, and never on first
+                        // connect (which would open every historical diff).
+                        await loadNewItems(currentSessionId, isReconnection)
                     } catch (error) {
                         console.error(`Failed to load items for current session:`, error)
                         failedSessions.push({ projectId: currentProjectId, sessionId: currentSessionId })
@@ -320,10 +329,20 @@ export function useReconciliation() {
      * (store.refreshAllLoadedToolStates() in onReconnected). Doing it per-item
      * here would only cover the focused + mtime-changed sessions and miss other
      * open panes whose dropped tool_state broadcasts also stranded spinners.
+     *
+     * @param {boolean} markNewLive - Flag the not-yet-recovered tail lines as
+     *   live (store.markNewTailItemsLive) so auto-open-diffs opens edits made
+     *   during the outage. Set only on a real reconnect, for the focused session.
      */
-    async function loadNewItems(sessionId) {
+    async function loadNewItems(sessionId, markNewLive = false) {
         const session = store.getSession(sessionId)
         if (!session) return
+
+        // Flag the not-yet-recovered tail lines as "live" BEFORE the load, so
+        // auto-open-diffs opens edits written during the outage — even if a
+        // concurrent gap-heal coalesces the coverage call below (see
+        // store.markNewTailItemsLive). Active session only (caller's flag).
+        if (markNewLive) store.markNewTailItemsLive(sessionId)
 
         const ok = await store.ensureSessionItemsCoverage(sessionId)
         if (!ok) {

@@ -2534,6 +2534,41 @@ export const useDataStore = defineStore('data', {
         },
 
         /**
+         * Flag the session's currently-missing tail-window lines as "live", so
+         * the auto-open-diffs setting opens edits that landed while the socket
+         * was down — those come back via reconciliation, not the live stream
+         * that normally sets the flag, so without this they stay collapsed.
+         *
+         * Computed up-front from the bare tail (same window as
+         * ``ensureSessionItemsCoverage``) and INDEPENDENT of it: a concurrent
+         * gap-heal (``ensureSessionItemsCoverage`` triggered by a post-reconnect
+         * live item extending over the outage gap) coalesces the coverage call,
+         * so tying the flag to "the lines this coverage loaded" would race and
+         * silently drop it. Marking the bare set here, before the load, is
+         * race-proof: the content fills in afterwards and the freshly-mounted
+         * edit cards read the flag as true.
+         *
+         * Only edits actually auto-open — ``isLive``'s sole consumer is the
+         * auto-open gate. The CALLER scopes this to the active session (auto-open
+         * fires only for the session on screen), and only on a real reconnect
+         * (never first connect, which would open every historical diff).
+         */
+        markNewTailItemsLive(sessionId) {
+            const session = this.sessions[sessionId]
+            if (!session || !this.localState.sessions[sessionId]?.itemsFetched) return
+            const serverLastLine = session.last_line || 0
+            if (!serverLastLine) return
+            const items = this.sessionItems[sessionId] || []
+            const isBare = (item) => !item || (item.display_level == null && !hasContent(item))
+            const windowStart = Math.max(1, serverLastLine - INITIAL_ITEMS_COUNT + 1)
+            const newLines = []
+            for (let line = windowStart; line <= serverLastLine; line++) {
+                if (isBare(items[line - 1])) newLines.push(line)
+            }
+            if (newLines.length) this.markItemsLive(sessionId, newLines)
+        },
+
+        /**
          * Merge freshly-fetched metadata into the items array without touching
          * loaded content. Fills bare placeholders (no display_level, no content)
          * so they become visible to the scroller's gap-fill; items that already

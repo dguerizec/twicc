@@ -1550,9 +1550,17 @@ export function useWebSocket() {
 
             const currentProjectId = route.params.projectId || null
             const currentSessionId = route.params.sessionId || null
-            const isReconnection = wasConnected && oldStatus === 'CLOSED'
+            // A reconnection is any OPEN once we'd already connected before. NOT
+            // `oldStatus === 'CLOSED'`: VueUse's socket goes CLOSED → CONNECTING →
+            // OPEN, and `onopen` (which sets OPEN) fires a tick after CONNECTING,
+            // so at this OPEN transition oldStatus is always 'CONNECTING', never
+            // 'CLOSED'. The old check left isReconnection permanently false,
+            // silently disabling every reconnect-only path (pane refresh, and the
+            // outage-edit auto-open). `wasConnected` (false only on the very first
+            // connect) is the correct, robust signal.
+            const isReconnection = wasConnected
             console.log(`WebSocket ${isReconnection ? 'reconnected' : 'connected'}, starting reconciliation...`)
-            onReconnected(currentProjectId, currentSessionId)
+            onReconnected(currentProjectId, currentSessionId, isReconnection)
             // After a real reconnection, the reconciliation re-syncs session
             // payloads (so presence flags like has_artifacts / has_plan are
             // fresh), but the transient tool-pane content events
