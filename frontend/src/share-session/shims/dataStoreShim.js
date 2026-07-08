@@ -75,11 +75,26 @@ export const useDataStore = defineStore('shareData', {
             catch { return null }
         },
         initSessionItemsFromMetadata(sessionId, metadata) {
-            this.sessionItems[sessionId] = metadata.map((m) => ({
-                line_num: m.line_num, display_level: m.display_level,
-                group_head: m.group_head, group_tail: m.group_tail,
-                kind: m.kind, timestamp: m.timestamp ?? null, content: null,
-            }))
+            // A server-filtered share delivers a SPARSE set of line_nums (the display
+            // ceiling drops debug/over-ceiling lines), so place each item at line_num-1
+            // to stay aligned with content-fill / getSessionItem (both line_num-1 keyed);
+            // holes are compacted away in recomputeVisualItems. The SPA can .map() densely
+            // only because its metadata covers every line — ours does not.
+            //
+            // MERGE, never replace: on a live share, WS items can land while the
+            // initial metadata fetch is in flight — both inside the snapshot (keep
+            // their content) and beyond its tail (keep the rows). A content-bearing
+            // entry is always at least as fresh as the metadata stub.
+            const arr = this.sessionItems[sessionId] || (this.sessionItems[sessionId] = [])
+            for (const m of metadata) {
+                const i = m.line_num - 1
+                if (arr[i] && arr[i].content != null) continue
+                arr[i] = {
+                    line_num: m.line_num, display_level: m.display_level,
+                    group_head: m.group_head, group_tail: m.group_tail,
+                    kind: m.kind, timestamp: m.timestamp ?? null, content: null,
+                }
+            }
             this.recomputeVisualItems(sessionId)
         },
         updateSessionItemsContent(sessionId, items) {
@@ -119,9 +134,38 @@ export const useDataStore = defineStore('shareData', {
         },
         areSessionItemsFetched(sessionId) { return !!this.sessionItems[sessionId] },
 
+        // ── Tool states (same shape as the SPA store: drives running spinners,
+        // error rendering and the extra-based helpers like Monitor/exec chains) ──
+        async fetchToolStates(_projectId, sessionId, parentSessionId = null) {
+            try {
+                const data = await shareApi().fetchToolStates(parentSessionId ? sessionId : null)
+                const map = this.toolStates[sessionId] || (this.toolStates[sessionId] = {})
+                for (const [toolUseId, st] of Object.entries(data.tools || {})) {
+                    // A WS share_tool_state may have landed while this snapshot was in
+                    // flight; never regress an entry to fewer results (a completed tool
+                    // never re-broadcasts, so a regression would stick until reload).
+                    const cur = map[toolUseId]
+                    if (cur && (cur.resultCount ?? 0) > (st.result_count ?? 0)) continue
+                    map[toolUseId] = {
+                        resultCount: st.result_count,
+                        completedAt: st.completed_at,
+                        error: st.error ?? null,
+                        extra: st.extra ?? null,
+                        toolResultLineNums: Array.isArray(st.tool_result_line_nums) ? st.tool_result_line_nums : [],
+                    }
+                }
+            } catch { /* keep as-is — frozen transcripts gate the spinners off anyway */ }
+        },
+        setToolState(sessionId, toolUseId, resultCount, completedAt, error = null, extra = null, toolResultLineNums = []) {
+            const map = this.toolStates[sessionId] || (this.toolStates[sessionId] = {})
+            map[toolUseId] = { resultCount, completedAt, error, extra, toolResultLineNums }
+        },
+
         // ── Visual items (simplified: no streaming/optimistic/working/failed) ──
         recomputeVisualItems(sessionId) {
-            const items = this.sessionItems[sessionId] || []
+            // Compact the sparse (line_num-1 keyed) array before computeVisualItems,
+            // which iterates with for..of and would choke on holes.
+            const items = (this.sessionItems[sessionId] || []).filter(Boolean)
             if (!items.length) { this.visualItems[sessionId] = []; this._cache[sessionId] = new Map(); return }
             const settings = useSettingsStore()
             const mode = settings.getDisplayMode
@@ -190,6 +234,5 @@ export const useDataStore = defineStore('shareData', {
         registerOutgoingSend() {}, removeFailedSend() {}, restoreDraftAttachments() {},
         setProcessState() {}, markItemsLive() {}, clearEndedStreamingBlocks() {},
         auditInflightSends() {}, ensureSessionItemsCoverage() { return Promise.resolve() },
-        fetchToolStates() { return Promise.resolve() },
     },
 })

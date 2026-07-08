@@ -44,7 +44,7 @@ class ShareConsumer(AsyncJsonWebsocketConsumer):
         self.max_display_mode = opts.get("max_display_mode", "normal")
         self.include_subagents = opts.get("include_subagents", True)
         self.ceiling = display_ceiling(self.max_display_mode)
-        self.descendant_ids = await self._load_descendants(share)
+        self.descendant_ids = await self._load_descendants()
         await self.channel_layer.group_add("updates", self.channel_name)
         await self.accept()
 
@@ -54,7 +54,7 @@ class ShareConsumer(AsyncJsonWebsocketConsumer):
         except Exception:
             pass
 
-    async def _load_descendants(self, share) -> set[str]:
+    async def _load_descendants(self) -> set[str]:
         if not self.include_subagents:
             return set()
         from twicc.core.models import Session
@@ -72,6 +72,26 @@ class ShareConsumer(AsyncJsonWebsocketConsumer):
         dl = item.get("display_level")
         if self.ceiling >= 3:
             return True
+        return dl is not None and dl <= self.ceiling
+
+    async def _tool_use_visible(self, session_id: str, tool_use_id: str) -> bool:
+        """Whether the tool_use item backing a ``tool_state`` broadcast is under the
+        ceiling (the broadcast itself carries no display_level — resolve via the
+        link's ``tool_use_line_num``)."""
+        if self.ceiling >= 3:
+            return True
+        from twicc.core.models import SessionItem, ToolResultLink
+
+        line = await sync_to_async(
+            lambda: ToolResultLink.objects.filter(session_id=session_id, tool_use_id=tool_use_id)
+            .values_list("tool_use_line_num", flat=True).first()
+        )()
+        if line is None:
+            return False
+        dl = await sync_to_async(
+            lambda: SessionItem.objects.filter(session_id=session_id, line_num=line)
+            .values_list("display_level", flat=True).first()
+        )()
         return dl is not None and dl <= self.ceiling
 
     async def broadcast(self, event):
@@ -95,6 +115,18 @@ class ShareConsumer(AsyncJsonWebsocketConsumer):
             })
             return
 
+        if mtype == "tool_state":
+            sid = data.get("session_id")
+            is_root = sid == self.session_id
+            is_sub = self.include_subagents and sid in self.descendant_ids
+            if not (is_root or is_sub):
+                return
+            # A hidden (over-ceiling) tool_use must not leak its error/extra.
+            if not await self._tool_use_visible(sid, data.get("tool_use_id")):
+                return
+            await self.send_json({**data, "type": "share_tool_state"})
+            return
+
         if mtype == "agent_link_created" and self.include_subagents:
             if data.get("parent_session_id") == self.session_id:
                 self.descendant_ids.add(data.get("agent_session_id"))
@@ -110,14 +142,29 @@ class ShareConsumer(AsyncJsonWebsocketConsumer):
             return
 
         if mtype in ("share_updated", "share_removed"):
-            # This share was revoked / expired / options-changed → close it out.
             sid = data.get("share_id") or (data.get("share") or {}).get("id")
-            if sid == self.share_id:
-                status = (data.get("share") or {}).get("status")
-                if mtype == "share_removed" or status in ("revoked", "expired") \
-                        or (data.get("share") or {}).get("options", {}).get("mode") == "snapshot":
-                    await self.send_json({"type": "share_closed"})
-                    await self.close(code=WS_CLOSE_SHARE_UNAVAILABLE)
+            if sid != self.share_id:
+                return
+            share = data.get("share") or {}
+            status = share.get("status")
+            if mtype == "share_removed" or status in ("revoked", "expired") \
+                    or share.get("options", {}).get("mode") == "snapshot":
+                # Revoked / expired / flipped to snapshot → close it out.
+                await self.send_json({"type": "share_closed"})
+                await self.close(code=WS_CLOSE_SHARE_UNAVAILABLE)
+                return
+            # Still live: re-resolve the connect-time filters from the fresh options.
+            # HTTP re-resolves per request, but this open socket would otherwise keep
+            # forwarding under its stale ceiling / subagent set (an owner tightening
+            # a share must apply to already-connected viewers immediately).
+            opts = share.get("options") or {}
+            self.max_display_mode = opts.get("max_display_mode", "normal")
+            self.ceiling = display_ceiling(self.max_display_mode)
+            self.include_subagents = opts.get("include_subagents", True)
+            self.descendant_ids = await self._load_descendants()
+            meta = await self._public_meta()
+            if meta is not None:
+                await self.send_json({"type": "share_meta", "meta": meta})
             return
 
     async def _public_meta(self):

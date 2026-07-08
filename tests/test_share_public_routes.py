@@ -110,6 +110,21 @@ def test_page_route_renders_html(client, session):
     assert res.status_code == 200
     assert res["Content-Type"].startswith("text/html")
     assert b"twicc-share-data" in res.content
+    # Document title carries the shared item's (real) title.
+    assert b"<title>TwiCC - Shared session - Routes session</title>" in res.content
+
+
+def test_page_title_hidden_and_escaped(client, session):
+    # show_title off → generic document title, nothing session-specific.
+    share = _share(session, options={"mode": "live", "show_title": False})
+    res = _run(client.get(f"/share/{share.token}/"))
+    assert b"<title>TwiCC - Shared session</title>" in res.content
+    assert b"Routes session" not in res.content.split(b"twicc-share-data")[0]
+    # display_title override is HTML-escaped in the <title>.
+    share2 = _share(session, options={"mode": "live", "show_title": True,
+                                      "display_title": "a <b> & 'c'"})
+    res2 = _run(client.get(f"/share/{share2.token}/"))
+    assert b"<title>TwiCC - Shared session - a &lt;b&gt; &amp;" in res2.content
 
 
 def test_recent_homepage_renders(client, transactional_db):
@@ -168,3 +183,61 @@ def test_subagents_hidden_when_include_subagents_false(client, session):
     share = _share(session, options={"mode": "live", "include_subagents": False})
     assert orjson.loads(_run(client.get(f"/share/{share.token}/api/subagents/")).content) == []
     assert _run(client.get(f"/share/{share.token}/api/subagent/sub-x/items/metadata/")).status_code == 404
+
+
+def _link(session, use_line, result_line, tool_id, **kw):
+    from twicc.core.models import ToolResultLink
+    return ToolResultLink.objects.create(
+        session=session, tool_use_line_num=use_line, tool_result_line_num=result_line,
+        tool_use_id=tool_id, tool_result_at=djtz.now(), **kw,
+    )
+
+
+def test_tool_states_aggregates_visible_tools(client, session):
+    _link(session, 2, 3, "tu-ok")
+    _link(session, 2, 5, "tu-ok")  # second result row for the same call
+    share = _share(session, options={"mode": "live", "max_display_mode": "normal"})
+    res = _run(client.get(f"/share/{share.token}/api/tool-states/"))
+    assert res.status_code == 200
+    tools = orjson.loads(res.content)["tools"]
+    assert tools["tu-ok"]["result_count"] == 2
+    assert tools["tu-ok"]["tool_result_line_nums"] == [3, 5]
+    assert tools["tu-ok"]["completed_at"] is not None
+
+
+def test_tool_states_excludes_over_ceiling_tool_use(client, session):
+    # Line 4 is DEBUG_ONLY: under a normal ceiling its state (incl. error text)
+    # must not leak through the endpoint.
+    _link(session, 4, 5, "tu-hidden", error="secret failure detail")
+    share = _share(session, options={"mode": "live", "max_display_mode": "normal"})
+    tools = orjson.loads(_run(client.get(f"/share/{share.token}/api/tool-states/")).content)["tools"]
+    assert "tu-hidden" not in tools
+    # Debug ceiling exposes it.
+    share_dbg = _share(session, options={"mode": "live", "max_display_mode": "debug"})
+    tools = orjson.loads(_run(client.get(f"/share/{share_dbg.token}/api/tool-states/")).content)["tools"]
+    assert tools["tu-hidden"]["error"] == "secret failure detail"
+
+
+def test_tool_states_snapshot_clamps_to_frozen_line(client, session):
+    # tool_use at line 2 with one pre-freeze and one post-freeze result: only the
+    # pre-freeze row counts. A post-freeze tool_use disappears entirely.
+    _link(session, 2, 3, "tu-mid")
+    _link(session, 2, 5, "tu-mid")
+    _link(session, 5, 5, "tu-post")
+    share = _share(session, options={"mode": "snapshot", "max_display_mode": "normal", "frozen_at_line": 3})
+    tools = orjson.loads(_run(client.get(f"/share/{share.token}/api/tool-states/")).content)["tools"]
+    assert tools["tu-mid"]["result_count"] == 1
+    assert tools["tu-mid"]["tool_result_line_nums"] == [3]
+    assert "tu-post" not in tools
+
+
+def test_subagent_tool_states(client, session):
+    sub = _make_subagent(session, "sub-ts", 2)
+    _link(sub, 1, 1, "tu-sub")
+    share = _share(session, options={"mode": "live", "include_subagents": True})
+    res = _run(client.get(f"/share/{share.token}/api/subagent/sub-ts/tool-states/"))
+    assert res.status_code == 200
+    assert orjson.loads(res.content)["tools"]["tu-sub"]["result_count"] == 1
+    # include_subagents off → 404.
+    share_off = _share(session, options={"mode": "live", "include_subagents": False})
+    assert _run(client.get(f"/share/{share_off.token}/api/subagent/sub-ts/tool-states/")).status_code == 404

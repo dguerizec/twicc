@@ -43,13 +43,25 @@ if (meta.include_subagents) {
     api.fetchSubagents().then((links) => store.setAgentLinks(meta.session_id, links)).catch(() => {})
 }
 provide('sessionActive', ref(true))
+// A snapshot (or a share closed under the viewer) is a frozen transcript: no tool
+// can be running, so the reused tree drops its running spinners / result polling.
+// Live shares keep the real state (tool-states fetch + WS share_tool_state).
+provide('transcriptFrozen', computed(() => meta.mode !== 'live' || revoked.value))
 
 onMounted(() => {
     if (meta.mode === 'live') {
         connectShareLive({
             tokenPath: props.tokenPath, sessionId: meta.session_id,
-            onItems: (items) => store.addSessionItems(meta.session_id, items),
-            onMeta: (m) => Object.assign(meta, m),
+            // The consumer forwards subagent traffic too — route by the message's
+            // own session_id, never assume the root.
+            onItems: (items, sid) => store.addSessionItems(sid || meta.session_id, items),
+            // Fresh meta can carry a TIGHTENED max_display_mode: re-clamp the
+            // viewer's current mode so the select never sits on a now-invalid value.
+            onMeta: (m) => { Object.assign(meta, m); settings.setDisplayMode(clampMode(settings.displayMode)) },
+            onToolState: (m) => store.setToolState(
+                m.session_id, m.tool_use_id, m.result_count, m.completed_at,
+                m.error ?? null, m.extra ?? null, m.tool_result_line_nums || [],
+            ),
             onClosed: () => { revoked.value = true },
         })
     }

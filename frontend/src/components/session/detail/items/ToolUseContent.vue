@@ -202,11 +202,13 @@ async function fetchResult() {
         //      chunk arrives carrying ``extra.is_terminated``.
         // Either condition unmet → keep polling so progressive output
         // (Codex's exec_command stream) keeps refreshing the body.
-        const stillRunning = toolHelpers.value?.isToolRunning(props.name, props.input, helperOptions.value) ?? false
+        const stillRunning = !transcriptFrozen.value
+            && (toolHelpers.value?.isToolRunning(props.name, props.input, helperOptions.value) ?? false)
         const haveAll = !stillRunning
             && data.results
             && data.results.length >= requiredDisplayCount.value
-        if (haveAll) {
+        // A frozen transcript never grows: whatever this fetch returned is final.
+        if (haveAll || transcriptFrozen.value) {
             stopPolling()
         } else if (!isPolling.value) {
             startPolling()
@@ -317,6 +319,11 @@ onUnmounted(() => {
 
 // KeepAlive active state (provided by SessionView)
 const sessionActive = inject('sessionActive', ref(true))
+
+// Frozen-transcript flag (provided by the read-only share viewer for snapshots /
+// closed shares): nothing can be running there, so the running spinners and the
+// result polling short-circuit off. The SPA never provides it.
+const transcriptFrozen = inject('transcriptFrozen', ref(false))
 
 // Request scroll-to-bottom from SessionItemsList (for auto-open expansion)
 const requestScrollToBottomIfNeeded = inject('requestScrollToBottomIfNeeded', null)
@@ -762,6 +769,7 @@ const requiredDisplayCount = computed(() => (
 ))
 
 const isToolRunning = computed(() => {
+    if (transcriptFrozen.value) return false
     if (isTask.value) return false
     if (isStaleToolUse.value) return false
     // Defer to the provider-level helper so a tool whose finished-ness
@@ -788,6 +796,7 @@ const agentCommentsCount = computed(() => {
 })
 
 const isAgentRunning = computed(() => {
+    if (transcriptFrozen.value) return false
     if (!isTask.value || !agentId.value) return false
     if (isStaleToolUse.value) return false
     const resultCount = toolState.value?.resultCount || 0
@@ -809,6 +818,7 @@ const isAgentRunning = computed(() => {
 // ``{agent_id, nickname}`` JSON ack) leaves the card stuck on the
 // spinner.
 const isAgentSpawnPending = computed(() => {
+    if (transcriptFrozen.value) return false
     if (!isTask.value) return false
     if (agentId.value) return false
     if (isStaleToolUse.value) return false

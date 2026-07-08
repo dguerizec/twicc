@@ -194,6 +194,49 @@ async def _tool_results(request, token, line_num, tool_id, subagent_id=None):
     return _json({"results": results})
 
 
+async def _tool_states(request, token, subagent_id=None):
+    """Mirror of the owner's ``views.tool_states`` aggregation, restricted to links
+    whose tool_use is a VISIBLE item (ceiling + frozen line) — a hidden tool_use
+    must not leak its ``error``/``extra`` through the state endpoint. In a frozen
+    snapshot, results landed after the freeze don't exist for viewers either."""
+    from django.db.models import Count, Max
+    from twicc.core.models import ToolResultLink
+
+    ctx, resp = await _ctx(request, token)
+    if resp:
+        return resp
+    session = ctx.session if subagent_id is None else await _resolve_shared_subagent(ctx, subagent_id)
+    kw = _ceiling_kwargs(ctx, session)
+    visible_lines = filtered_items_qs(session, **kw).values("line_num")
+    links_qs = ToolResultLink.objects.filter(session=session, tool_use_line_num__in=visible_lines)
+    if kw["max_line"] is not None:
+        links_qs = links_qs.filter(tool_result_line_num__lte=kw["max_line"])
+    links = await sync_to_async(list)(
+        links_qs.values("tool_use_id").annotate(
+            result_count=Count("id"),
+            completed_at=Max("tool_result_at"),
+            extra=Max("extra"),
+            error=Max("error"),
+        )
+    )
+    line_nums_by_tool: dict[str, list[int]] = {}
+    for tool_use_id, line_num in await sync_to_async(list)(
+        links_qs.order_by("tool_result_line_num").values_list("tool_use_id", "tool_result_line_num")
+    ):
+        line_nums_by_tool.setdefault(tool_use_id, []).append(line_num)
+    tools = {
+        entry["tool_use_id"]: {
+            "result_count": entry["result_count"],
+            "completed_at": entry["completed_at"].isoformat() if entry["completed_at"] else None,
+            "error": entry["error"],
+            "extra": entry["extra"],
+            "tool_result_line_nums": line_nums_by_tool.get(entry["tool_use_id"], []),
+        }
+        for entry in links
+    }
+    return _json({"tools": tools})
+
+
 async def share_session_subagents(request, token):
     from twicc.core.models import AgentLink, Session
 
@@ -242,6 +285,10 @@ async def api_tool_results(request, token, line_num, tool_id):
     return await _tool_results(request, token, line_num, tool_id)
 
 
+async def api_tool_states(request, token):
+    return await _tool_states(request, token)
+
+
 async def api_subagents(request, token):
     return await share_session_subagents(request, token)
 
@@ -256,6 +303,10 @@ async def api_subagent_items(request, token, subagent_id):
 
 async def api_subagent_tool_results(request, token, subagent_id, line_num, tool_id):
     return await _tool_results(request, token, line_num, tool_id, subagent_id)
+
+
+async def api_subagent_tool_states(request, token, subagent_id):
+    return await _tool_states(request, token, subagent_id)
 
 
 # ── Inline transcript media (design §6.2) ───────────────────────────────────

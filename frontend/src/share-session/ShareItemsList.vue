@@ -33,6 +33,9 @@ async function loadInitial() {
     const [metadata] = await Promise.all([
         store.loadSessionMetadata(props.projectId, props.sessionId, props.parentSessionId),
         store.loadSessionItemsRanges(props.projectId, props.sessionId, ranges, props.parentSessionId),
+        // Completion state of every visible tool call — without it every tool
+        // renders as running (resultCount 0). Live updates then flow via WS.
+        store.fetchToolStates(props.projectId, props.sessionId, props.parentSessionId),
     ])
     if (metadata) {
         // Metadata first initializes the array; the ranges call above already

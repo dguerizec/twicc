@@ -17,6 +17,8 @@ export function makeShareApi(tokenPath) {
             jget(subagentId
                 ? `${base}/api/subagent/${subagentId}/items/${lineNum}/tool-results/${toolId}/`
                 : `${base}/api/items/${lineNum}/tool-results/${toolId}/`),
+        fetchToolStates: (subagentId = null) =>
+            jget(subagentId ? `${base}/api/subagent/${subagentId}/tool-states/` : `${base}/api/tool-states/`),
         fetchSubagents: () => jget(`${base}/api/subagents/`),
         mediaUrl: (filename) => `${base}/media/${filename}`,
     }

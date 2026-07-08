@@ -109,6 +109,7 @@ function resolveResendText() {
     const helpers = getProviderHelpers(store.getSession(props.sessionId)?.provider)
     for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i]
+        if (!it) continue  // read-only shares back a sparse (line_num-keyed) array
         if (it.line_num >= props.lineNum) continue
         if (it.kind === 'user_message') {
             return (helpers?.extractUserMessageText(getParsedContent(it)) || '').trim()
