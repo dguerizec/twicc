@@ -136,6 +136,26 @@ def test_page_title_hidden_and_escaped(client, session):
     assert b"<title>TwiCC - Shared session - a &lt;b&gt; &amp;" in res2.content
 
 
+def test_page_route_unavailable_renders_friendly_404(client, session):
+    # A top-level page navigation to an unknown token renders the styled
+    # "no longer available" page (status 404), not Django's bare error.
+    res = _run(client.get("/share/nope-unknown-token-xyz/"))
+    assert res.status_code == 404
+    assert res["Content-Type"].startswith("text/html")
+    assert b"This share is no longer available" in res.content
+
+
+def test_page_route_unavailable_is_uniform_and_generic(client, session):
+    # Revoked and unknown render the SAME page (uniform-404, no oracle) and it never
+    # leaks the share's kind or the real title.
+    unknown = _run(client.get("/share/some-other-unknown-token/")).content
+    share = _share(session, options={"mode": "live"}, revoked_at=djtz.now())
+    revoked = _run(client.get(f"/share/{share.token}/")).content
+    assert unknown == revoked
+    assert b"Routes session" not in revoked
+    assert b"artifact" not in revoked.lower()
+
+
 def test_recent_homepage_renders(client, transactional_db):
     res = _run(client.get("/share/"))
     assert res.status_code == 200
