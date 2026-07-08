@@ -41,11 +41,12 @@ from typing import Any, ClassVar, NamedTuple
 import orjson
 from django.core.exceptions import MultipleObjectsReturned
 from django.db import transaction
-from django.db.models import Count, F, Max, QuerySet
+from django.db.models import F, QuerySet
 
 from twicc.context_injection import strip_context_blocks_in_place
 from twicc.core.enums import ItemDisplayLevel, ItemKind, Provider
 from twicc.core.models import AgentLink, Session, SessionItem, SessionType, ToolResultLink
+from twicc.core.session_queries import TOOL_STATE_ANNOTATIONS
 from twicc.git import is_git_root_related, read_head_branch, resolve_git_from_path
 from twicc.providers.goals import GoalEvent, apply_goal_event, preserve_dismissed_flags
 from twicc.providers.plan_docs import (
@@ -1829,12 +1830,7 @@ class BaseSessionCompute:
                     session_id=session_id,
                     tool_use_id=tool_use_id,
                 )
-                aggregated = links.aggregate(
-                    result_count=Count('id'),
-                    completed_at=Max('tool_result_at'),
-                    extra=Max('extra'),
-                    error=Max('error'),
-                )
+                aggregated = links.aggregate(**TOOL_STATE_ANNOTATIONS)
                 line_nums = tuple(
                     links.order_by('tool_result_line_num')
                     .values_list('tool_result_line_num', flat=True)

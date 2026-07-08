@@ -10,6 +10,12 @@ from twicc.core.serializers import (
     serialize_session_item,
     serialize_session_item_metadata,
 )
+from twicc.core.session_queries import (
+    aggregate_tool_states,
+    parse_line_ranges,
+    serialize_agent_links,
+    tool_results_payload,
+)
 from twicc.share.display import filtered_items_qs, is_descendant_of
 from twicc.share.headers import apply_share_headers
 from twicc.share.html import share_page_response
@@ -30,31 +36,6 @@ async def _ctx(request, token):
     if ctx.share.kind != "session":
         raise Http404("This link is not available.")
     return ctx, None
-
-
-def _parse_ranges(request):
-    q = []
-    from django.db.models import Q
-    for r in request.GET.getlist("range"):
-        try:
-            if ":" not in r:
-                q.append(Q(line_num=int(r)))
-            else:
-                lo, hi = r.split(":", 1)
-                lo = int(lo) if lo else None
-                hi = int(hi) if hi else None
-                if lo is not None and hi is not None:
-                    q.append(Q(line_num__gte=lo, line_num__lte=hi))
-                elif lo is not None:
-                    q.append(Q(line_num__gte=lo))
-                elif hi is not None:
-                    q.append(Q(line_num__lte=hi))
-        except ValueError:
-            continue
-    combined = None
-    for cond in q:
-        combined = cond if combined is None else (combined | cond)
-    return combined
 
 
 async def _snapshot_allowed_child_ids(ctx):
@@ -160,7 +141,7 @@ async def _items(request, token, subagent_id=None):
     ctx, resp = await _ctx(request, token)
     if resp:
         return resp
-    ranges = _parse_ranges(request)
+    ranges = parse_line_ranges(request.GET.getlist("range"))
     if ranges is None:
         return _json({"error": "At least one 'range' query parameter is required"}, safe=True)
     session = ctx.session if subagent_id is None else await _resolve_shared_subagent(ctx, subagent_id)
@@ -170,28 +151,15 @@ async def _items(request, token, subagent_id=None):
 
 
 async def _tool_results(request, token, line_num, tool_id, subagent_id=None):
-    from twicc.core.models import SessionItem, ToolResultLink
-    from twicc.providers.helpers import get_provider_helpers
-
     ctx, resp = await _ctx(request, token)
     if resp:
         return resp
     session = ctx.session if subagent_id is None else await _resolve_shared_subagent(ctx, subagent_id)
-    link_lines = await sync_to_async(list)(
-        ToolResultLink.objects.filter(session=session, tool_use_line_num=line_num, tool_use_id=tool_id)
-        .values_list("tool_result_line_num", flat=True)
-    )
-    if not link_lines:
-        return _json({"results": []})
-    kw = _ceiling_kwargs(ctx, session)
     # Tool-result rows are always at/under the ceiling for a visible tool_use, but
-    # clamp defensively so a frozen snapshot never leaks a post-freeze result.
-    qs = SessionItem.objects.filter(session=session, line_num__in=link_lines)
-    if kw["max_line"] is not None:
-        qs = qs.filter(line_num__lte=kw["max_line"])
-    items = await sync_to_async(list)(qs.order_by("line_num"))
-    results = get_provider_helpers(session.provider).get_tool_results(items, tool_id)
-    return _json({"results": results})
+    # clamp to the frozen line defensively so a snapshot never leaks a post-freeze result.
+    max_line = _ceiling_kwargs(ctx, session)["max_line"]
+    payload = await sync_to_async(tool_results_payload)(session, line_num, tool_id, max_line)
+    return _json(payload)
 
 
 # A tool_result line carrying an originalFile can be large; skip past this and the
@@ -232,7 +200,6 @@ async def _tool_states(request, token, subagent_id=None):
     whose tool_use is a VISIBLE item (ceiling + frozen line) — a hidden tool_use
     must not leak its ``error``/``extra`` through the state endpoint. In a frozen
     snapshot, results landed after the freeze don't exist for viewers either."""
-    from django.db.models import Count, Max
     from twicc.core.models import ToolResultLink
 
     ctx, resp = await _ctx(request, token)
@@ -244,34 +211,12 @@ async def _tool_states(request, token, subagent_id=None):
     links_qs = ToolResultLink.objects.filter(session=session, tool_use_line_num__in=visible_lines)
     if kw["max_line"] is not None:
         links_qs = links_qs.filter(tool_result_line_num__lte=kw["max_line"])
-    links = await sync_to_async(list)(
-        links_qs.values("tool_use_id").annotate(
-            result_count=Count("id"),
-            completed_at=Max("tool_result_at"),
-            extra=Max("extra"),
-            error=Max("error"),
-        )
-    )
-    line_nums_by_tool: dict[str, list[int]] = {}
-    for tool_use_id, line_num in await sync_to_async(list)(
-        links_qs.order_by("tool_result_line_num").values_list("tool_use_id", "tool_result_line_num")
-    ):
-        line_nums_by_tool.setdefault(tool_use_id, []).append(line_num)
-    tools = {
-        entry["tool_use_id"]: {
-            "result_count": entry["result_count"],
-            "completed_at": entry["completed_at"].isoformat() if entry["completed_at"] else None,
-            "error": entry["error"],
-            "extra": entry["extra"],
-            "tool_result_line_nums": line_nums_by_tool.get(entry["tool_use_id"], []),
-        }
-        for entry in links
-    }
+    tools = await sync_to_async(aggregate_tool_states)(links_qs)
     return _json({"tools": tools})
 
 
 async def share_session_subagents(request, token):
-    from twicc.core.models import AgentLink, Session
+    from twicc.core.models import AgentLink
 
     ctx, resp = await _ctx(request, token)
     if resp:
@@ -284,20 +229,7 @@ async def share_session_subagents(request, token):
     if frozen is not None:
         links_qs = links_qs.filter(tool_use_line_num__lte=frozen)
     links = await sync_to_async(list)(links_qs.order_by("id"))
-    slugs = dict(await sync_to_async(list)(
-        Session.objects.filter(id__in=[link.agent_id for link in links]).values_list("id", "slug")
-    ))
-    return _json([
-        {
-            "agent_id": link.agent_id,
-            "agent_slug": slugs.get(link.agent_id),
-            "tool_use_id": link.tool_use_id,
-            "tool_use_line_num": link.tool_use_line_num,
-            "is_background": link.is_background,
-            "started_at": link.started_at.isoformat() if link.started_at else None,
-        }
-        for link in links
-    ], safe=False)
+    return _json(await sync_to_async(serialize_agent_links)(links), safe=False)
 
 
 # Public entry points (URL-mapped). Method-guarded, delegating to the helpers above.
@@ -354,13 +286,11 @@ async def api_subagent_backend_patch(request, token, subagent_id, tool_id):
 
 async def share_session_media(request, token, filename):
     """Serve an inline artifact image referenced by the transcript, confined to the
-    shared session's artifacts dir + the extension allowlist (copied contract from
-    ``views.session_artifact``, keyed by token)."""
-    import stat
-
+    shared session's artifacts dir + the extension allowlist (same contract as
+    ``views.session_artifact``, keyed by token — both share ``safe_open_artifact``)."""
     from django.http import FileResponse
     from twicc.paths import get_session_artifacts_dir
-    from twicc.views import _classify_artifact_filename
+    from twicc.views import _classify_artifact_filename, safe_open_artifact
 
     if request.method not in ("GET", "HEAD"):
         return HttpResponseNotAllowed(["GET", "HEAD"])
@@ -371,26 +301,7 @@ async def share_session_media(request, token, filename):
     if content_type is None:
         raise Http404("Artifact not found")
     artifacts_dir = get_session_artifacts_dir(ctx.session.id)
-    target = artifacts_dir / filename
-
-    def _open():
-        try:
-            root = artifacts_dir.resolve(strict=True)
-            resolved = target.resolve(strict=True)
-        except (FileNotFoundError, RuntimeError, OSError):
-            return None
-        try:
-            resolved.relative_to(root)
-        except ValueError:
-            return None
-        try:
-            if not stat.S_ISREG(resolved.stat().st_mode):
-                return None
-            return resolved.open("rb")
-        except OSError:
-            return None
-
-    fp = await sync_to_async(_open)()
+    fp = await sync_to_async(safe_open_artifact)(artifacts_dir, filename)
     if fp is None:
         raise Http404("Artifact not found")
     return apply_share_headers(FileResponse(fp, content_type=content_type, as_attachment=False))

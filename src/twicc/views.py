@@ -27,6 +27,12 @@ from twicc.core.serializers import (
     serialize_session_item,
     serialize_session_item_metadata,
 )
+from twicc.core.session_queries import (
+    aggregate_tool_states,
+    parse_line_ranges,
+    serialize_agent_links,
+    tool_results_payload,
+)
 from twicc.core.services.project_mutation import clean_project_agent_defaults
 from twicc.paths import path_to_project_id
 from twicc.projects import register_project
@@ -1325,31 +1331,8 @@ async def session_items(request, project_id, session_id, parent_session_id=None)
             status=400,
         )
 
-    from django.db.models import Q
-
-    q_filter = Q()
-    for r in ranges:
-        try:
-            if ":" not in r:
-                # Single number = exact line
-                line_val = int(r)
-                q_filter |= Q(line_num=line_val)
-            else:
-                min_str, max_str = r.split(":", 1)
-                min_val = int(min_str) if min_str else None
-                max_val = int(max_str) if max_str else None
-
-                if min_val is not None and max_val is not None:
-                    q_filter |= Q(line_num__gte=min_val, line_num__lte=max_val)
-                elif min_val is not None:
-                    q_filter |= Q(line_num__gte=min_val)
-                elif max_val is not None:
-                    q_filter |= Q(line_num__lte=max_val)
-                # Both empty = invalid, skip
-        except ValueError:
-            continue  # Skip invalid ranges
-
-    if not q_filter:
+    q_filter = parse_line_ranges(ranges)
+    if q_filter is None:
         return JsonResponse(
             {"error": "No valid 'range' query parameter could be parsed"},
             status=400,
@@ -1390,27 +1373,8 @@ async def tool_results(request, project_id, session_id, line_num, tool_id, paren
     Uses ToolResultLink to find related tool_result items.
     """
     session = await _resolve_session_or_404(session_id, project_id, parent_session_id)
-
-    link_lines = await sync_to_async(list)(
-        ToolResultLink.objects.filter(
-            session=session,
-            tool_use_line_num=line_num,
-            tool_use_id=tool_id,
-        ).values_list("tool_result_line_num", flat=True)
-    )
-
-    if not link_lines:
-        return JsonResponse({"results": []})
-
-    items = await sync_to_async(list)(
-        SessionItem.objects.filter(
-            session=session,
-            line_num__in=link_lines,
-        ).order_by("line_num")
-    )
-
-    results = get_provider_helpers(session.provider).get_tool_results(items, tool_id)
-    return JsonResponse({"results": results})
+    payload = await sync_to_async(tool_results_payload)(session, line_num, tool_id)
+    return JsonResponse(payload)
 
 
 async def subagents_state(request, project_id, session_id):
@@ -1429,26 +1393,7 @@ async def subagents_state(request, project_id, session_id):
     links = await sync_to_async(list)(
         AgentLink.objects.filter(session=session).order_by("id")
     )
-    # Resolve every spawned subagent's slug (Codex's ``agent_nickname``)
-    # in a single query so the frontend can label tool cards / tabs
-    # without separately hydrating subagent Session rows. ``None`` when
-    # the subagent file hasn't been parsed yet (race) or when the
-    # provider doesn't carry a slug.
-    slugs_by_id = dict(await sync_to_async(list)(
-        Session.objects.filter(id__in=[link.agent_id for link in links])
-        .values_list("id", "slug")
-    ))
-    result = [
-        {
-            "agent_id": link.agent_id,
-            "agent_slug": slugs_by_id.get(link.agent_id),
-            "tool_use_id": link.tool_use_id,
-            "tool_use_line_num": link.tool_use_line_num,
-            "is_background": link.is_background,
-            "started_at": link.started_at.isoformat() if link.started_at else None,
-        }
-        for link in links
-    ]
+    result = await sync_to_async(serialize_agent_links)(links)
     return JsonResponse(result, safe=False)
 
 
@@ -1465,45 +1410,9 @@ async def tool_states(request, project_id, session_id):
     except Session.DoesNotExist:
         raise Http404("Session not found")
 
-    from django.db.models import Count, Max
-
-    links = await sync_to_async(list)(
+    tools = await sync_to_async(aggregate_tool_states)(
         ToolResultLink.objects.filter(session=session)
-        .values('tool_use_id')
-        .annotate(
-            result_count=Count('id'),
-            completed_at=Max('tool_result_at'),
-            extra=Max('extra'),
-            error=Max('error'),
-        )
     )
-
-    # Collect every link's tool_result_line_num grouped by tool_use_id
-    # so the API exposes the full set rather than just the max — Codex
-    # tools can have multiple ToolResultLink rows per call (apply_patch
-    # / MCP / web / image: function_call_output + event_msg.*_end;
-    # exec_command: the parent's row plus one row per write_stdin polling
-    # chunk rebound to the same tool_use_id) at non-adjacent line
-    # numbers, and helpers need to walk the chain directly.
-    line_nums_by_tool: dict[str, list[int]] = {}
-    for tool_use_id, line_num in await sync_to_async(list)(
-        ToolResultLink.objects.filter(session=session)
-        .order_by('tool_result_line_num')
-        .values_list('tool_use_id', 'tool_result_line_num')
-    ):
-        line_nums_by_tool.setdefault(tool_use_id, []).append(line_num)
-
-    tools = {}
-    for entry in links:
-        tool_use_id = entry['tool_use_id']
-        tools[tool_use_id] = {
-            'result_count': entry['result_count'],
-            'completed_at': entry['completed_at'].isoformat() if entry['completed_at'] else None,
-            'error': entry['error'],
-            'extra': entry['extra'],
-            'tool_result_line_nums': line_nums_by_tool.get(tool_use_id, []),
-        }
-
     return JsonResponse({"tools": tools})
 
 
@@ -3372,6 +3281,36 @@ def _classify_artifact_filename(filename: str) -> str | None:
     return ALLOWED_ARTIFACT_EXTENSIONS.get(ext)
 
 
+def safe_open_artifact(artifacts_dir, filename):
+    """Open ``artifacts_dir / filename`` for reading, or return ``None`` if it fails
+    the security envelope: the resolved target must be a regular file living inside
+    the resolved artifacts dir — no path traversal, no symlink escape, no
+    directory/fifo/device/socket. Synchronous filesystem work; async callers offload
+    it to a thread. Shared verbatim by :func:`session_artifact` and the public share
+    media view so the guard can never diverge."""
+    import stat
+
+    target = artifacts_dir / filename
+    try:
+        # ``strict=True`` raises if the path doesn't exist; the dir itself may be a
+        # symlink (e.g. worktree artifacts symlinked to the main data dir).
+        resolved_dir = artifacts_dir.resolve(strict=True)
+        resolved = target.resolve(strict=True)
+    except (FileNotFoundError, RuntimeError, OSError):
+        return None
+    # Defense in depth against symlinks pointing outside the artifacts dir.
+    try:
+        resolved.relative_to(resolved_dir)
+    except ValueError:
+        return None
+    try:
+        if not stat.S_ISREG(resolved.stat().st_mode):
+            return None
+        return resolved.open("rb")
+    except OSError:
+        return None
+
+
 async def session_artifact(request, session_id, artifact_file_name):
     """Serve a session-scoped artifact image.
 
@@ -3391,8 +3330,6 @@ async def session_artifact(request, session_id, artifact_file_name):
     3. the file name must pass :func:`_classify_artifact_filename` (extension
        and shape).
     """
-    import stat
-
     from django.http import FileResponse
 
     from twicc.paths import get_session_artifacts_dir
@@ -3405,37 +3342,7 @@ async def session_artifact(request, session_id, artifact_file_name):
         raise Http404("Artifact not found")
 
     artifacts_dir = get_session_artifacts_dir(session_id)
-    artifact_path = artifacts_dir / artifact_file_name
-
-    def _resolve_and_open():
-        # Resolve the artifacts dir (it may itself be a symlink — uncommon but possible).
-        # ``strict=True`` raises if the path does not exist.
-        try:
-            resolved_dir = artifacts_dir.resolve(strict=True)
-        except (FileNotFoundError, RuntimeError, OSError):
-            return None
-        try:
-            resolved = artifact_path.resolve(strict=True)
-        except (FileNotFoundError, RuntimeError, OSError):
-            return None
-        # Defense in depth against symlinks pointing outside the artifacts dir.
-        try:
-            resolved.relative_to(resolved_dir)
-        except ValueError:
-            return None
-        # Reject anything that isn't a plain file (no directories, fifos, devices, sockets).
-        try:
-            st = resolved.stat()
-        except OSError:
-            return None
-        if not stat.S_ISREG(st.st_mode):
-            return None
-        try:
-            return resolved.open("rb")
-        except OSError:
-            return None
-
-    fp = await asyncio.to_thread(_resolve_and_open)
+    fp = await asyncio.to_thread(safe_open_artifact, artifacts_dir, artifact_file_name)
     if fp is None:
         raise Http404("Artifact not found")
 
