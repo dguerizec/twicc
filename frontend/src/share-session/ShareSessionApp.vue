@@ -8,6 +8,7 @@ import { useSettingsStore } from '../stores/settings'
 import { getProviderIcon } from '../providers'
 import { makeShareApi, setShareApi } from './shims/shareApi'
 import { connectShareLive } from './shims/shareLive'
+import { loadViewerPrefs } from './viewerPrefs'
 
 const props = defineProps({ tokenPath: String, meta: Object })
 
@@ -27,8 +28,11 @@ store.setSession({
     created_at: meta.created_at, last_updated_at: meta.last_updated_at,
     compacted: meta.compacted === true,
 })
-settings.areMessageTimestampsShown = meta.show_timestamps !== false
-settings.setDisplayMode(clampMode(meta.max_display_mode || 'normal'))
+// Show-timestamps: the viewer's persisted choice wins (carries across shares);
+// otherwise fall back to this share's own default. Detail level is NOT persisted —
+// it's re-derived from the share's max on every load (see defaultDisplayMode).
+settings.areMessageTimestampsShown = loadViewerPrefs().showTimestamps ?? (meta.show_timestamps !== false)
+settings.setDisplayMode(defaultDisplayMode())
 
 const displayModes = computed(() => boundedModes(meta.max_display_mode || 'normal'))
 function boundedModes(max) {
@@ -36,6 +40,12 @@ function boundedModes(max) {
     return order.slice(0, order.indexOf(max) + 1)
 }
 function clampMode(m) { return boundedModes(meta.max_display_mode || 'normal').includes(m) ? m : 'normal' }
+// Default detail level = the share's max, but never open a viewer straight into
+// raw-JSON debug: cap the default at normal (debug stays selectable in the menu).
+function defaultDisplayMode() {
+    const max = meta.max_display_mode || 'normal'
+    return max === 'debug' ? 'normal' : max
+}
 const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1)
 
 const providerIcon = computed(() => getProviderIcon(meta.provider))
@@ -145,7 +155,10 @@ onUnmounted(() => window.removeEventListener('popstate', onPopState))
                         </wa-select>
                     </label>
                     <wa-switch size="small" :checked="settings.areMessageTimestampsShown"
-                               @change.stop="settings.areMessageTimestampsShown = $event.target.checked">Show timestamps</wa-switch>
+                               @change.stop="settings.setMessageTimestampsShown($event.target.checked)">Show timestamps</wa-switch>
+                    <!-- Above: per-share view options. Below: the viewer's own -->
+                    <!-- persisted preferences (carry across every share). -->
+                    <wa-divider></wa-divider>
                     <label class="share-menu-field">Color scheme
                         <wa-select size="small" :value="settings._colorScheme"
                                    @change.stop="settings.setColorScheme($event.target.value)">
@@ -153,6 +166,11 @@ onUnmounted(() => window.removeEventListener('popstate', onPopState))
                             <wa-option value="light">Light</wa-option>
                             <wa-option value="dark">Dark</wa-option>
                         </wa-select>
+                    </label>
+                    <label class="share-menu-field">Font size ({{ settings.getFontSize }}px)
+                        <wa-slider size="small" :min.prop="12" :max.prop="32" :step.prop="1"
+                                   :value.prop="settings.getFontSize"
+                                   @input.stop="settings.setFontSize($event.target.value)"></wa-slider>
                     </label>
                 </div>
             </wa-popover>
@@ -186,14 +204,36 @@ html, body { height: 100%; margin: 0; }
 .share-shell { max-width: 60rem; margin: 0 auto; padding: 0 1rem; height: 100%;
     display: flex; flex-direction: column; }
 .share-header { flex: 0 0 auto; display: flex; justify-content: space-between;
-    align-items: center; gap: 1rem; padding: .5rem 0; background: var(--wa-color-surface-default); }
-.share-title { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+    align-items: center; gap: 1rem; padding: .5rem 0;
+    position: relative; z-index: 1; }
+/* Full-bleed surface + shadow: the header content stays within the centered
+   .share-shell (max-width 60rem), but its background and drop shadow extend to
+   the viewport edges through a pseudo-element — margin-inline: calc(50% - 50vw)
+   pushes it out to the full width. The page never scrolls vertically (the
+   transcript scrolls internally), so 50vw has no scrollbar gap. */
+.share-header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    margin-inline: calc(50% - 50vw);
+    background: var(--wa-color-surface-default);
+    box-shadow: var(--wa-shadow-m);
+    z-index: -1;
+    pointer-events: none;
+}
+/* Indented to roughly line up with the transcript cards. Kept on the title, not
+   .share-header, so the header box stays centred and the full-bleed ::before
+   surface/shadow still reaches both viewport edges. */
+.share-title { display: flex; align-items: center; gap: .5rem; min-width: 0; padding-left: 1.5rem; }
 .share-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-menu-button { flex: 0 0 auto; }
 .share-menu-content { display: flex; flex-direction: column; gap: .75rem; min-width: 13rem; }
+/* Neutralise the divider's own block margin so only the flex gap spaces it. */
+.share-menu-content wa-divider { margin-block: 0; }
 .share-menu-field { display: flex; flex-direction: column; gap: .3rem;
     font-size: var(--wa-font-size-s); font-weight: 600; }
 .share-menu-field wa-select { font-weight: 400; }
+.share-menu-field wa-slider { margin-top: .5rem; }
 .share-banner { flex: 0 0 auto; }
 .share-items-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
     overflow: hidden; position: relative; }
