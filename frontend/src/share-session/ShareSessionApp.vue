@@ -90,7 +90,7 @@ onMounted(() => {
                         </wa-select>
                     </label>
                     <wa-switch size="small" :checked="settings.areMessageTimestampsShown"
-                               @change.stop="settings.areMessageTimestampsShown = $event.target.checked">Timestamps</wa-switch>
+                               @change.stop="settings.areMessageTimestampsShown = $event.target.checked">Show timestamps</wa-switch>
                     <label class="share-menu-field">Color scheme
                         <wa-select size="small" :value="settings._colorScheme"
                                    @change.stop="settings.setColorScheme($event.target.value)">
