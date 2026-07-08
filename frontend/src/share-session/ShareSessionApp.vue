@@ -22,12 +22,11 @@ const revoked = ref(false)
 // Seed a session-ish object the reused components read via getSession.
 store.setSession({
     id: meta.session_id, provider: meta.provider, project_id: 'share',
-    title: meta.title || 'Shared session', total_cost: meta.total_cost ?? null,
+    title: meta.title || 'Shared session',
     last_line: meta.last_line, git_directory: null, cwd: null, artifacts_dir: null,
     created_at: meta.created_at, last_updated_at: meta.last_updated_at,
 })
 settings.areMessageTimestampsShown = meta.show_timestamps !== false
-settings.areCostsShown = !!meta.total_cost
 settings.setDisplayMode(clampMode(meta.max_display_mode || 'normal'))
 
 const displayModes = computed(() => boundedModes(meta.max_display_mode || 'normal'))

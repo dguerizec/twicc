@@ -647,7 +647,6 @@ def _share_create_session(
     live: bool = typer.Option(True, "--live/--frozen", help="Live-follow or snapshot."),
     max_display: str = typer.Option("normal", "--max-display"),
     include_subagents: bool = typer.Option(True, "--include-subagents/--no-subagents"),
-    show_costs: bool = typer.Option(False, "--show-costs/--no-costs"),
     title: str = typer.Option(None, "--title", help="Public title shown to viewers (default: the session title)."),
     timeout: int = typer.Option(30, "--timeout"),
 ) -> None:
@@ -656,7 +655,7 @@ def _share_create_session(
         session_id=session_id, label=label, password=password, expires_at=expires,
         mode="live" if live else "snapshot",
         options={"max_display_mode": max_display, "include_subagents": include_subagents,
-                 "show_costs": show_costs, "display_title": title or ""},
+                 "display_title": title or ""},
         timeout=timeout,
     )
 

@@ -33,7 +33,7 @@ _MAX_SNAPSHOT_BYTES = 200 * 1024 * 1024
 # Option key allowlists per kind (design §5.2). Unknown keys are rejected.
 _SESSION_OPTION_KEYS = frozenset({
     "mode", "frozen_at_line", "max_display_mode", "include_subagents",
-    "show_costs", "show_timestamps", "show_title", "display_title",
+    "show_timestamps", "show_title", "display_title",
 })
 _ARTIFACT_OPTION_KEYS = frozenset({"snapshot_at", "display_title"})
 _DISPLAY_MODES = ("conversation", "simplified", "normal", "debug")
@@ -66,7 +66,6 @@ def _validate_session_options(opts: dict) -> tuple[dict, list[ShareError]]:
         "mode": opts.get("mode", "live"),
         "max_display_mode": opts.get("max_display_mode", "normal"),
         "include_subagents": bool(opts.get("include_subagents", True)),
-        "show_costs": bool(opts.get("show_costs", False)),
         "show_timestamps": bool(opts.get("show_timestamps", True)),
         "show_title": bool(opts.get("show_title", True)),
     }

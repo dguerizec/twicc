@@ -1,5 +1,7 @@
 // Viewer-local settings for the share bundle. Reactive display mode + color
-// scheme (viewer toggles), timestamps/costs seeded from the share options.
+// scheme (viewer toggles), timestamps seeded from the share options. Cost is
+// never shown in a share (areCostsShown stays false — the reused transcript
+// components read it).
 import { defineStore } from 'pinia'
 import { applyShareColorScheme, getShareColorScheme } from '../theme'
 

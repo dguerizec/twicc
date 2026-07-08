@@ -335,7 +335,8 @@ def serialize_share_public_meta(share):
     """Viewer-facing meta (design §6.2). Never label, never counters, never real
     bookmark/project ids. Session id IS included (needed for media URL rewriting;
     grants nothing — every real route is gated). Title = the `display_title` override,
-    else the real session title (per `show_title`) / bookmark name; costs per `show_costs`."""
+    else the real session title (per `show_title`) / bookmark name. Cost is never
+    exposed to viewers."""
     from twicc.core.enums import ShareKind
 
     opts = share.options or {}
@@ -363,8 +364,6 @@ def serialize_share_public_meta(share):
         if opts.get("show_title", True):
             display_title = (opts.get("display_title") or "").strip()
             data["title"] = display_title or (sess.title if sess else None)
-        if opts.get("show_costs", False):
-            data["total_cost"] = float(sess.total_cost) if sess and sess.total_cost else None
         return data
     # Artifact: owner override, else the real bookmark name.
     display_title = (opts.get("display_title") or "").strip()

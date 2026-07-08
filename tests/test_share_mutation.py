@@ -166,11 +166,11 @@ def test_patch_preserves_frozen_line(session):
     share = Share.objects.select_related("session").get(id=created.share_id)
     assert share.options["frozen_at_line"] == 17
     # Re-send options without frozen_at_line → the stored freeze is preserved.
-    result = _run(share_mutation.patch_share(share, {"options": {"mode": "snapshot", "show_costs": True}}))
+    result = _run(share_mutation.patch_share(share, {"options": {"mode": "snapshot", "show_timestamps": False}}))
     assert result.success
     share.refresh_from_db()
     assert share.options["frozen_at_line"] == 17
-    assert share.options["show_costs"] is True
+    assert share.options["show_timestamps"] is False
 
 
 def test_patch_live_to_snapshot_freezes(session):

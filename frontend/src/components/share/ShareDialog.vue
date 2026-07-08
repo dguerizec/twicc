@@ -24,7 +24,7 @@ const form = reactive({
     label: '', display_title: '', password: '', expires_at: '', notify_on_view: false,
     // session options
     mode: 'live', max_display_mode: 'normal', include_subagents: true,
-    show_costs: false, show_timestamps: true, show_title: true,
+    show_timestamps: true, show_title: true,
 })
 const error = ref('')
 const createdUrl = ref('')
@@ -45,7 +45,6 @@ function reset() {
         mode: e?.options?.mode || 'live',
         max_display_mode: e?.options?.max_display_mode || 'normal',
         include_subagents: e?.options?.include_subagents ?? true,
-        show_costs: e?.options?.show_costs ?? false,
         show_timestamps: e?.options?.show_timestamps ?? true,
         show_title: e?.options?.show_title ?? true,
     })
@@ -57,7 +56,7 @@ const allowedHostList = computed(() => Object.keys(props.allowedHosts || {}))
 function sessionOptions() {
     return {
         mode: form.mode, max_display_mode: form.max_display_mode,
-        include_subagents: form.include_subagents, show_costs: form.show_costs,
+        include_subagents: form.include_subagents,
         show_timestamps: form.show_timestamps, show_title: form.show_title,
     }
 }
@@ -165,7 +164,6 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
                     </wa-select>
                 </label>
                 <wa-switch :checked="form.include_subagents" @change.stop="form.include_subagents = $event.target.checked">Include subagents</wa-switch>
-                <wa-switch :checked="form.show_costs" @change.stop="form.show_costs = $event.target.checked">Show costs</wa-switch>
                 <wa-switch :checked="form.show_timestamps" @change.stop="form.show_timestamps = $event.target.checked">Show timestamps</wa-switch>
             </template>
 
