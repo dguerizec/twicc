@@ -97,22 +97,43 @@ function makeRouteIssue(before, detail = null, after = '') {
 }
 
 // Transient sibling of routeFileIssue: shown (same look) when a file the user
-// was viewing vanishes live — a commit or refresh drops it from the view. It
-// auto-dismisses after a few seconds and lives in its own ref so route resets
-// can't wipe it and it can't be requalified as a permanent dead-deep-link
-// callout. Posted in both the route-owner and docked (non-owner) paths so the
-// behaviour is identical whether or not the Git tab currently owns the URL.
+// was viewing vanishes live — a commit or refresh drops it from the view. Unlike
+// routeFileIssue it auto-dismisses, but only after the Git tab has actually been
+// VISIBLE for a while: the countdown is armed on visibility (props.active), not
+// when the file vanishes. A notice raised while the tab is hidden/off-screen
+// therefore waits, and only starts dismissing once the tab is shown — never spent
+// counting down where nobody can see it. It lives in its own ref so route resets
+// can't wipe it and it can't be requalified as a permanent dead-deep-link callout.
+// Posted in both the route-owner and docked (non-owner) paths so the behaviour is
+// identical whether or not the Git tab currently owns the URL.
 const TRANSIENT_FILE_NOTICE_MS = 5000
 const transientFileNotice = ref(null)
 let transientFileNoticeTimer = null
+// The file whose live disappearance we last flashed, kept until the dead path is
+// scrubbed from the route (or another file is selected). Lets the route-owner
+// resolver treat a later focus onto that now-dead path as a vanished-while-hidden
+// file (case B — transient) instead of a never-seen dead deep-link (case A —
+// permanent): the docked path flags the file here but can't scrub the route
+// itself. See the route-file watcher below.
+let lastVanishedFilePath = null
 
 function showTransientFileGone(filePath) {
-    if (transientFileNoticeTimer) clearTimeout(transientFileNoticeTimer)
+    lastVanishedFilePath = filePath
     transientFileNotice.value = makeRouteIssue('File ', filePath, ' is no longer available in this view.')
-    transientFileNoticeTimer = setTimeout(() => {
-        transientFileNotice.value = null
+    armTransientFileNoticeTimer()
+}
+
+// (Re)start the auto-dismiss countdown — but only while the panel is actually
+// visible. Hidden (docked in the background, not its region's active tab, minimized,
+// or in a non-active session) → stay disarmed and keep the notice; the props.active
+// watcher re-arms it the moment the tab becomes visible.
+function armTransientFileNoticeTimer() {
+    if (transientFileNoticeTimer) {
+        clearTimeout(transientFileNoticeTimer)
         transientFileNoticeTimer = null
-    }, TRANSIENT_FILE_NOTICE_MS)
+    }
+    if (!transientFileNotice.value || !props.active) return
+    transientFileNoticeTimer = setTimeout(clearTransientFileNotice, TRANSIENT_FILE_NOTICE_MS)
 }
 
 function clearTransientFileNotice() {
@@ -122,6 +143,17 @@ function clearTransientFileNotice() {
     }
     transientFileNotice.value = null
 }
+
+// Drive the countdown off real visibility: start/restart it when the tab becomes
+// visible, pause it (keeping the notice) when it goes hidden.
+watch(() => props.active, (active) => {
+    if (active) {
+        armTransientFileNoticeTimer()
+    } else if (transientFileNoticeTimer) {
+        clearTimeout(transientFileNoticeTimer)
+        transientFileNoticeTimer = null
+    }
+})
 
 const routeIssueMessage = computed(() =>
     routeRootIssue.value || routeCommitIssue.value || routeFileIssue.value || transientFileNotice.value
@@ -1040,6 +1072,7 @@ watch(
             if (routeFilePath === null) {
                 routeFileIssue.value = makeRouteIssue('Requested file path is invalid.')
             } else {
+                lastVanishedFilePath = null
                 routeFileIssue.value = null
             }
             return
@@ -1058,19 +1091,32 @@ watch(
                 syncingFromRoute = false
             }
             if (oldTree && fileExistsInTree(oldTree, routeFilePath)) {
-                // Case B: flash a self-dismissing notice, then drop the now-dead
-                // filePath from the route so a later refresh can't requalify it
-                // as case A and pin a permanent callout.
+                // Case B: the file vanished while on screen (present in the previous
+                // tree, dropped by a commit/refresh). Flash a self-dismissing notice,
+                // then drop the now-dead filePath from the route so a later refresh
+                // can't requalify it as case A and pin a permanent callout.
                 showTransientFileGone(routeFilePath)
                 routeFileIssue.value = null
                 emitNavigate({ filePath: undefined, replace: true })
+            } else if (routeFilePath === lastVanishedFilePath) {
+                // Case B, deferred: the file vanished live while the Git tab was hidden,
+                // so the docked path flashed the transient but couldn't scrub the route
+                // (non-owners don't navigate). Now that we own it, finish the job — drop
+                // the dead filePath — instead of misreading it as a never-seen dead
+                // deep-link. The transient, if still pending, is armed by the visibility
+                // watcher; if it was already shown and dismissed, nothing re-appears.
+                lastVanishedFilePath = null
+                routeFileIssue.value = null
+                emitNavigate({ filePath: undefined, replace: true })
             } else {
-                // Case A: persistent — it explains why nothing is selected.
+                // Case A: a dead deep-link to a file never shown — persistent, it
+                // explains why nothing is selected.
                 routeFileIssue.value = makeRouteIssue('File ', routeFilePath, ' is no longer available in this view.')
             }
             return
         }
 
+        lastVanishedFilePath = null
         routeFileIssue.value = null
         clearTransientFileNotice()
 
