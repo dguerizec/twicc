@@ -14,7 +14,7 @@
 ## Commit Conventions
 
 - When creating commits, include a descriptive commit body that explains the change, not only a subject line.
-- Add a `Co-Authored-By: Codex <codex@openai.com>` trailer for the agent that performed the work, matching the style used in recent commits.
+- Add a `Co-Authored-By: Codex MODEL <codex@openai.com>` trailer for the model that performed the work, matching the style used in recent commits. `MODEL` is the exact name of the Codex model you are currently running as, taken from your own environment at commit time — e.g. `GPT-5.5`. Do not hardcode a model name; use whichever one is actually running.
 
 ## Operations Reserved to User
 

@@ -10,6 +10,11 @@
 - **Git rebase:** never on remote branches (`origin/main`, …) unless explicitly asked. Always rebase on the local branch; if it exists, use it.
 - **Language:** all written artifacts — code, UI strings, comments, names, docs (incl. `docs/plans/`) — in English. French is reserved for live chat (and the dev's `CLAUDE.local.md`). Even when the user speaks French, write UI/code/docs in English.
 
+## Commit Conventions
+
+- When creating commits, include a descriptive commit body that explains the change, not only a subject line.
+- Add a `Co-Authored-By: Claude MODEL <noreply@anthropic.com>` trailer for the model that performed the work. `MODEL` is the exact name of the Claude model you are currently running as, taken from your own environment at commit time — e.g. `Opus 4.8 (1M context)`, `Fable 5`, `Sonnet 4.6`. Do not hardcode a model name; use whichever one is actually running.
+
 ## Operations Reserved to User
 
 Never run these on your own initiative. If the user explicitly asks, do it without confirmation. Otherwise notify at task end (or pause and ask if truly necessary mid-task):
