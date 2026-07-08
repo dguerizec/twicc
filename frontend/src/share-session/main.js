@@ -22,6 +22,7 @@ import '@awesome.me/webawesome/dist/components/option/option.js'
 import '@awesome.me/webawesome/dist/components/details/details.js'
 import '@awesome.me/webawesome/dist/components/dialog/dialog.js'
 import '@awesome.me/webawesome/dist/components/tooltip/tooltip.js'
+import '@awesome.me/webawesome/dist/components/popover/popover.js'
 
 import '../styles/transcript-tokens.css'
 import ShareSessionApp from './ShareSessionApp.vue'

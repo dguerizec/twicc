@@ -5,6 +5,7 @@ import SharedSubagentView from './SharedSubagentView.vue'
 import GlobalMediaPreview from '../components/media/GlobalMediaPreview.vue'
 import { useDataStore } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
+import { getProviderIcon } from '../providers'
 import { makeShareApi, setShareApi } from './shims/shareApi'
 import { connectShareLive } from './shims/shareLive'
 
@@ -35,6 +36,9 @@ function boundedModes(max) {
     return order.slice(0, order.indexOf(max) + 1)
 }
 function clampMode(m) { return boundedModes(meta.max_display_mode || 'normal').includes(m) ? m : 'normal' }
+const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1)
+
+const providerIcon = computed(() => getProviderIcon(meta.provider))
 
 // Subagent overlay stack (design §8.6).
 const subagentStack = ref([])
@@ -72,23 +76,32 @@ onMounted(() => {
     <div class="share-shell">
         <header class="share-header">
             <div class="share-title">
-                <wa-icon :name="meta.provider === 'codex' ? 'circle' : 'robot'"></wa-icon>
+                <wa-icon v-if="providerIcon" auto-width family="brands" :name="providerIcon"></wa-icon>
                 <strong>{{ meta.title || 'Shared session' }}</strong>
-                <wa-tag size="small" variant="neutral">Read-only</wa-tag>
-                <wa-tag v-if="meta.mode === 'live'" size="small" variant="success">Live</wa-tag>
             </div>
-            <div class="share-controls">
-                <wa-select size="small" :value="settings.displayMode"
-                           @change="settings.setDisplayMode($event.target.value)">
-                    <wa-option v-for="m in displayModes" :key="m" :value="m">{{ m }}</wa-option>
-                </wa-select>
-                <wa-switch size="small" :checked="settings.areMessageTimestampsShown"
-                           @change="settings.areMessageTimestampsShown = $event.target.checked">Times</wa-switch>
-                <wa-button size="small" appearance="plain"
-                           @click="settings.setColorScheme(settings._effectiveColorScheme === 'dark' ? 'light' : 'dark')">
-                    <wa-icon :name="settings._effectiveColorScheme === 'dark' ? 'sun' : 'moon'"></wa-icon>
-                </wa-button>
-            </div>
+            <wa-button id="share-menu-trigger" size="small" appearance="plain" class="share-menu-button">
+                <wa-icon name="bars" label="View options"></wa-icon>
+            </wa-button>
+            <wa-popover for="share-menu-trigger" placement="bottom-end" class="share-menu">
+                <div class="share-menu-content">
+                    <label class="share-menu-field">Detail level
+                        <wa-select size="small" :value="settings.displayMode"
+                                   @change.stop="settings.setDisplayMode($event.target.value)">
+                            <wa-option v-for="m in displayModes" :key="m" :value="m">{{ capitalize(m) }}</wa-option>
+                        </wa-select>
+                    </label>
+                    <wa-switch size="small" :checked="settings.areMessageTimestampsShown"
+                               @change.stop="settings.areMessageTimestampsShown = $event.target.checked">Timestamps</wa-switch>
+                    <label class="share-menu-field">Color scheme
+                        <wa-select size="small" :value="settings._colorScheme"
+                                   @change.stop="settings.setColorScheme($event.target.value)">
+                            <wa-option value="system">System</wa-option>
+                            <wa-option value="light">Light</wa-option>
+                            <wa-option value="dark">Dark</wa-option>
+                        </wa-select>
+                    </label>
+                </div>
+            </wa-popover>
         </header>
 
         <wa-callout v-if="revoked" variant="warning" class="share-banner">
@@ -120,8 +133,13 @@ html, body { height: 100%; margin: 0; }
     display: flex; flex-direction: column; }
 .share-header { flex: 0 0 auto; display: flex; justify-content: space-between;
     align-items: center; gap: 1rem; padding: .5rem 0; background: var(--wa-color-surface-default); }
-.share-title { display: flex; align-items: center; gap: .5rem; }
-.share-controls { display: flex; align-items: center; gap: .5rem; }
+.share-title { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.share-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-menu-button { flex: 0 0 auto; }
+.share-menu-content { display: flex; flex-direction: column; gap: .75rem; min-width: 13rem; }
+.share-menu-field { display: flex; flex-direction: column; gap: .3rem;
+    font-size: var(--wa-font-size-s); font-weight: 600; }
+.share-menu-field wa-select { font-weight: 400; }
 .share-banner { flex: 0 0 auto; }
 .share-items-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
     overflow: hidden; position: relative; }
@@ -133,6 +151,6 @@ html, body { height: 100%; margin: 0; }
 @media print {
     html, body, #app, .share-shell { height: auto; }
     .share-items-list, .share-items-list .session-items { overflow: visible; min-height: 0; }
-    .share-header, .share-controls, .share-footer { display: none; }
+    .share-header, .share-footer { display: none; }
 }
 </style>
