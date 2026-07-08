@@ -1,10 +1,15 @@
 <script setup>
 import { computed } from 'vue'
 import ShareItemsList from './ShareItemsList.vue'
+import { useDataStore } from '../stores/data'
+import { getAgentDisplayLabel } from '../utils/agentLabel'
 
 const props = defineProps({ stack: { type: Array, required: true } })
 const emit = defineEmits(['close', 'clear'])
+const store = useDataStore()
 const current = computed(() => props.stack[props.stack.length - 1])
+// Same label as the owner's subagent tabs: the session slug, else the short id.
+const agentLabel = (id) => getAgentDisplayLabel(id, store)
 </script>
 
 <template>
@@ -14,7 +19,7 @@ const current = computed(() => props.stack[props.stack.length - 1])
             <header class="subagent-head">
                 <nav class="crumbs">
                     <span v-for="(id, i) in stack" :key="id" class="crumb">
-                        Agent {{ i + 1 }}<span v-if="i < stack.length - 1"> ›</span>
+                        Agent "{{ agentLabel(id) }}"<span v-if="i < stack.length - 1"> ›</span>
                     </span>
                 </nav>
                 <wa-button size="small" appearance="plain" @click="emit('close')">

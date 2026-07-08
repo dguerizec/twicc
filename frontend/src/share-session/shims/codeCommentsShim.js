@@ -7,11 +7,22 @@ import { defineStore } from 'pinia'
 export const useCodeCommentsStore = defineStore('shareCodeComments', {
     getters: {
         getCommentsBySession: () => () => [],
+        // Read by the reused CodeEditor/DiffEditor at setup (per-context lookup +
+        // add/update/remove callbacks wired into the CodeMirror comment gutter).
+        // Missing here, it threw and froze the whole viewer when a diff mounted
+        // (e.g. opening a subagent whose transcript auto-expands an Edit).
+        getCommentsForContext: () => () => [],
         countBySession: () => () => 0,
         countByProjects: () => () => 0,
         countBySource: () => () => 0,
     },
-    actions: { hydrateComments() {} },
+    // Write surface never exercised in read-only shares — no-ops so the editor
+    // callbacks resolve.
+    actions: {
+        hydrateComments() {},
+        addComment() {}, updateComment() {}, removeComment() {},
+        removeAllSessionComments() {},
+    },
 })
 
 export function formatComment() { return '' }

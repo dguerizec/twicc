@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, provide, onMounted, computed } from 'vue'
+import { ref, reactive, provide, onMounted, onUnmounted, computed } from 'vue'
 import ShareItemsList from './ShareItemsList.vue'
 import SharedSubagentView from './SharedSubagentView.vue'
 import GlobalMediaPreview from '../components/media/GlobalMediaPreview.vue'
@@ -39,11 +39,46 @@ const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1)
 
 const providerIcon = computed(() => getProviderIcon(meta.provider))
 
-// Subagent overlay stack (design §8.6).
+// Subagent overlay stack (design §8.6). Opening one is reflected in the URL hash
+// (#agent=<id>[,<nested>…]) through the History API — the share bundle has no
+// router — so browser Back closes the drawer instead of leaving the share page.
 const subagentStack = ref([])
+
+function seedAgentSession(id, slug = null) {
+    // Seed the subagent as a store session so the reused SessionItem dispatch can
+    // resolve its provider (subagents inherit the root's) AND its display label.
+    // Without it getSession returns null → provider undefined → every item falls to
+    // UnknownEntry ("Unhandled event").
+    store.setSession({
+        id, provider: meta.provider, slug: slug || store.getSession(id)?.slug || null,
+        project_id: 'share', title: null, last_line: 0,
+        git_directory: null, cwd: null, artifacts_dir: null,
+    })
+}
+
+function agentUrl(stack) {
+    const base = location.pathname + location.search
+    return stack.length ? `${base}#agent=${stack.join(',')}` : base
+}
+function openSubagent(agentId) {
+    if (!store.getSession(agentId)) seedAgentSession(agentId)
+    subagentStack.value.push(agentId)
+    history.pushState({ shareAgentStack: [...subagentStack.value] }, '', agentUrl(subagentStack.value))
+}
+function closeSubagent() { history.back() }                                  // pop one → popstate syncs
+function clearSubagents() { if (subagentStack.value.length) history.go(-subagentStack.value.length) }
+function onPopState(e) {
+    subagentStack.value = Array.isArray(e.state?.shareAgentStack) ? e.state.shareAgentStack : []
+}
+
 if (meta.include_subagents) {
-    provide('openSubagent', (agentId) => subagentStack.value.push(agentId))
-    api.fetchSubagents().then((links) => store.setAgentLinks(meta.session_id, links)).catch(() => {})
+    provide('openSubagent', openSubagent)
+    api.fetchSubagents().then((links) => {
+        store.setAgentLinks(meta.session_id, links)
+        // Seed each subagent's slug so the drawer labels them like the owner UI
+        // (Agent <slug>, else Agent <shortId>) via getAgentDisplayLabel.
+        for (const l of links) if (l.agent_id) seedAgentSession(l.agent_id, l.agent_slug)
+    }).catch(() => {})
 }
 provide('sessionActive', ref(true))
 // A snapshot (or a share closed under the viewer) is a frozen transcript: no tool
@@ -52,6 +87,14 @@ provide('sessionActive', ref(true))
 provide('transcriptFrozen', computed(() => meta.mode !== 'live' || revoked.value))
 
 onMounted(() => {
+    window.addEventListener('popstate', onPopState)
+    // Anchor a base history entry (stack empty), then re-open any agents encoded in
+    // the URL on load/reload — so Back from a deep-linked agent returns to the session.
+    const hash = /#agent=([^&]*)/.exec(location.hash)
+    history.replaceState({ shareAgentStack: [] }, '', location.pathname + location.search)
+    if (meta.include_subagents && hash && hash[1]) {
+        for (const id of hash[1].split(',').filter(Boolean)) openSubagent(id)
+    }
     if (meta.mode === 'live') {
         connectShareLive({
             tokenPath: props.tokenPath, sessionId: meta.session_id,
@@ -69,6 +112,7 @@ onMounted(() => {
         })
     }
 })
+onUnmounted(() => window.removeEventListener('popstate', onPopState))
 </script>
 
 <template>
@@ -113,7 +157,7 @@ onMounted(() => {
         />
 
         <SharedSubagentView v-if="subagentStack.length"
-            :stack="subagentStack" @close="subagentStack.pop()" @clear="subagentStack = []" />
+            :stack="subagentStack" @close="closeSubagent" @clear="clearSubagents" />
 
         <GlobalMediaPreview />
         <footer class="share-footer">Shared with TwiCC</footer>
