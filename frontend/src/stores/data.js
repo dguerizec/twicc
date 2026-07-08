@@ -1395,6 +1395,19 @@ export const useDataStore = defineStore('data', {
                 session = { ...session, last_new_content_at: prev.last_new_content_at }
             }
             this.$patch({ sessions: { [session.id]: session } })
+            // A session that finishes (re)computing AFTER its items were already
+            // loaded now carries its ToolResultLink / AgentLink / workflow rows,
+            // but the tool_state / agent_link broadcasts that stop the spinners
+            // were dropped (emitted before the rows existed, or never emitted by
+            // the batch compute). Re-pull the link caches so spinners settle.
+            // Edge-guarded (false→true) + items already loaded: fires once, only
+            // where a spinner can show, and never overlaps SessionItemsList's
+            // first-load fetch (which runs only when items are NOT yet fetched).
+            if (prev && prev.compute_version_up_to_date === false &&
+                session.compute_version_up_to_date === true &&
+                this.localState.sessions[session.id]?.itemsFetched) {
+                this.refreshSessionToolStates(session.project_id, session.id).catch(() => {})
+            }
             // Re-seed the live layout working copy from the persisted Session.layout (initial load /
             // cross-device sync), unless we have an unsaved local edit in flight (guarded inside).
             this._hydrateSessionLayoutFromPersisted(session.id, session.layout)
@@ -4160,6 +4173,59 @@ export const useDataStore = defineStore('data', {
             } catch (error) {
                 console.error('Failed to fetch subagents state:', error)
             }
+        },
+
+        /**
+         * Re-hydrate the derived link caches (tool states, subagent links,
+         * workflow links) for a single already-loaded session.
+         *
+         * These caches are normally filled once on first load (SessionItemsList)
+         * and then kept live by the WS ``tool_state`` / ``agent_link_created`` /
+         * ``workflow_link_created`` broadcasts. Two situations leave them stale
+         * with no live signal to fix them, so a tool spinner keeps spinning even
+         * though the matching tool_result rows are present:
+         *   - a WebSocket outage drops the broadcasts (the watcher never replays
+         *     a line it already processed), and
+         *   - a session whose compute lagged behind its items had its links built
+         *     after the (dropped) broadcasts, or by the batch compute which does
+         *     not broadcast at all.
+         * Pulling the authoritative counts from the REST endpoints settles them.
+         *
+         * Order matters: ``fetchSubagentsState`` reads ``toolStates`` to decide
+         * whether an agent is still running, so tool states are refreshed first.
+         * Subagent / workflow links only exist on parent sessions — mirror the
+         * first-load gating in ``SessionItemsList``.
+         */
+        async refreshSessionToolStates(projectId, sessionId) {
+            await this.fetchToolStates(projectId, sessionId)
+            const session = this.sessions[sessionId]
+            if (session && !session.parent_session_id) {
+                await this.fetchSubagentsState(projectId, sessionId)
+                if (session.has_workflows) {
+                    await this.fetchWorkflowLinks(projectId, sessionId)
+                }
+            }
+        },
+
+        /**
+         * Refresh the link caches (see :meth:`refreshSessionToolStates`) for
+         * EVERY session whose items are currently loaded — the only sessions
+         * that can render a tool spinner. Called after a WebSocket reconnect so
+         * the ``tool_state`` / ``agent_link_created`` broadcasts dropped during
+         * the outage are recovered everywhere they matter, not just for the
+         * focused session (other open panes, or sessions whose mtime read
+         * unchanged because a concurrent ``session_updated`` refreshed it).
+         */
+        async refreshAllLoadedToolStates() {
+            const refs = []
+            for (const [sessionId, local] of Object.entries(this.localState.sessions)) {
+                if (!local?.itemsFetched) continue
+                const projectId = this.sessions[sessionId]?.project_id
+                if (projectId) refs.push({ projectId, sessionId })
+            }
+            await Promise.allSettled(
+                refs.map(({ projectId, sessionId }) => this.refreshSessionToolStates(projectId, sessionId)),
+            )
         },
 
         // Process state actions

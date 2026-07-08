@@ -40,6 +40,14 @@ export function useReconciliation() {
             isReconciling = false
         }
 
+        // Items are back in sync, but the tool_state / agent_link broadcasts
+        // that stop tool spinners were dropped while the socket was down and the
+        // watcher never replays a line it already processed. Re-pull the link
+        // caches for EVERY loaded session (the only ones that can show a
+        // spinner), not just the focused / mtime-changed ones, so
+        // officially-finished tools stop spinning.
+        await store.refreshAllLoadedToolStates()
+
         // Items are now in sync — audit in-flight sends whose error frame
         // may have been lost while the WebSocket was down (send-failure
         // recovery: resolve the delivered ones, surface the lost ones).
@@ -200,7 +208,7 @@ export function useReconciliation() {
                 if (currentSessionNeedsUpdate) {
                     try {
                         console.log('Updating current session')
-                        await loadNewItems(currentProjectId, currentSessionId)
+                        await loadNewItems(currentSessionId)
                     } catch (error) {
                         console.error(`Failed to load items for current session:`, error)
                         failedSessions.push({ projectId: currentProjectId, sessionId: currentSessionId })
@@ -275,7 +283,7 @@ export function useReconciliation() {
 
             const results = await Promise.allSettled(
                 remainingSessions.map(({ projectId, sessionId }) =>
-                    loadNewItems(projectId, sessionId)
+                    loadNewItems(sessionId)
                         .then(() => ({ projectId, sessionId, success: true }))
                         .catch(error => ({ projectId, sessionId, error, success: false }))
                 )
@@ -306,10 +314,14 @@ export function useReconciliation() {
      * extends the items array over the gap, hiding the missing lines.
      *
      * Throws when a fetch failed, so the retry logic re-runs it.
-     * Also re-fetches tool states and agent links that may have been missed
-     * during the disconnect (these are normally delivered via WS messages).
+     *
+     * Tool / agent / workflow link caches are NOT refreshed here: that runs in a
+     * single pass over every loaded session once items are settled
+     * (store.refreshAllLoadedToolStates() in onReconnected). Doing it per-item
+     * here would only cover the focused + mtime-changed sessions and miss other
+     * open panes whose dropped tool_state broadcasts also stranded spinners.
      */
-    async function loadNewItems(projectId, sessionId) {
+    async function loadNewItems(sessionId) {
         const session = store.getSession(sessionId)
         if (!session) return
 
@@ -317,11 +329,6 @@ export function useReconciliation() {
         if (!ok) {
             throw new Error(`Failed to load missing items for session ${sessionId}`)
         }
-
-        // Re-fetch tool states and agent links that may have arrived while disconnected.
-        // Order matters: fetchSubagentsState reads toolStates to determine if agents are done.
-        await store.fetchToolStates(projectId, sessionId)
-        await store.fetchSubagentsState(projectId, sessionId)
     }
 
     return {
