@@ -254,6 +254,105 @@ def tmux_socket_for(terminal_context: str) -> str:
     return HYBRID_TMUX_SOCKET_NAME if terminal_context.startswith("h:") else TMUX_SOCKET_NAME
 
 
+# ── Terminal environment sanitation ───────────────────────────────────────
+# Env vars that agent harnesses / CI set to force *non-interactive* behaviour.
+# In a human terminal they break things (a rebase that never opens an editor,
+# a dead pager, a swallowed credential prompt) or make tools believe they run
+# under an agent. We strip them from every human terminal PTY, on top of the
+# provider ``purge_env_vars``.
+#
+# Deliberately a NAMED list (+ the indexed ``GIT_CONFIG_*`` family), never a
+# blanket ``CLAUDE_``/``ANTHROPIC_``/``TWICC_`` wipe: those carry the user's
+# own config, model overrides and backend wiring, which must reach commands
+# run from the terminal untouched — the same narrow-purge rationale as the
+# Codex helper's ``_ENV_VAR_PREFIXES``. Unsetting is safe even for a var the
+# user legitimately defines: the login shell re-sources their profile after we
+# strip, so a profile-defined value comes back while the inherited agent one
+# stays gone.
+_TERMINAL_ENV_STRIP_NAMES: frozenset[str] = frozenset({
+    # git → forced non-interactive
+    "GIT_EDITOR",           # =true ⇒ `git rebase -i`/`commit`/`amend` never open an editor
+    "GIT_SEQUENCE_EDITOR",  # the rebase todo editor (wins over everything)
+    "GIT_PAGER",            # =cat ⇒ no pager for log/diff/show
+    "GIT_TERMINAL_PROMPT",  # =0 ⇒ HTTPS credential prompt fails instead of asking
+    "GIT_ASKPASS",          # redirects the password helper to a non-interactive stub
+    "GIT_CONFIG_GLOBAL",    # masks the real ~/.gitconfig
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_COUNT",     # drives the GIT_CONFIG_KEY_n/VALUE_n inline-config family
+    # agent / CI markers
+    "AI_AGENT",
+    "CLAUDE_AGENT_SDK_VERSION",
+    "CLAUDE_EFFORT",
+    "CI",
+    "CONTINUOUS_INTEGRATION",
+    "DEBIAN_FRONTEND",
+})
+
+# GIT_CONFIG_COUNT enables an indexed family of inline-config vars; strip them
+# all, whatever the count.
+_TERMINAL_ENV_STRIP_PREFIXES: tuple[str, ...] = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
+
+def _terminal_env_keys_to_strip(keys) -> list[str]:
+    """Return the subset of ``keys`` that are terminal-env noise to remove."""
+    return [
+        key for key in keys
+        if key in _TERMINAL_ENV_STRIP_NAMES or key.startswith(_TERMINAL_ENV_STRIP_PREFIXES)
+    ]
+
+
+def sanitize_terminal_env(env) -> None:
+    """Strip agent/CI non-interactive env vars from ``env`` in place.
+
+    Applied to every human terminal PTY (raw shell and tmux client) on top of
+    the provider ``purge_env_vars``. See ``_TERMINAL_ENV_STRIP_NAMES``.
+    """
+    for key in _terminal_env_keys_to_strip(list(env)):
+        del env[key]
+
+
+def purge_tmux_global_env(socket: str) -> None:
+    """Remove agent/CI noise from a tmux server's *global* environment.
+
+    A tmux server freezes the environment of whatever process first started it
+    and hands that to every new pane — so a stale ``GIT_EDITOR=true`` survives
+    backend restarts and keeps poisoning freshly opened terminals. Unsetting
+    the vars globally makes newly created sessions/panes clean (already-running
+    panes keep their env). A no-op when no server is running on ``socket``.
+
+    Only ever called on the main terminal socket, never the hybrid one — the
+    embedded Claude CLI there legitimately wants the agent environment.
+    """
+    tmux_path = get_tmux_path()
+    if tmux_path is None:
+        return
+    try:
+        result = subprocess.run(
+            [tmux_path, "-L", socket, "show-environment", "-g"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return
+    if result.returncode != 0:
+        return  # no server running on this socket
+
+    # show-environment -g prints "NAME=value" for set vars and "-NAME" for
+    # removed ones; only NAME=value lines are candidates to unset.
+    present = [
+        line.split("=", 1)[0]
+        for line in result.stdout.splitlines()
+        if line and not line.startswith("-")
+    ]
+    for name in _terminal_env_keys_to_strip(present):
+        try:
+            subprocess.run(
+                [tmux_path, "-L", socket, "set-environment", "-g", "-u", name],
+                capture_output=True, timeout=5,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+
 # ── PTY helpers (pure functions, no class needed) ─────────────────────────
 
 def set_winsize(fd: int, cols: int, rows: int) -> None:
@@ -306,6 +405,11 @@ def spawn_pty(cwd: str, cols: int = DEFAULT_COLS, rows: int = DEFAULT_ROWS) -> t
         # CLI launched from this terminal would think it's already
         # inside an SDK session.
         get_provider_helpers_registry().purge_env_vars(os.environ)
+
+        # Also strip agent/CI vars that force non-interactive behaviour
+        # (GIT_EDITOR=true, dead pagers, credential-prompt kill switches, …)
+        # so the terminal behaves like a normal human login shell.
+        sanitize_terminal_env(os.environ)
 
         # Exec the shell as a login shell (prefix argv[0] with -)
         os.execvp(shell, [f"-{os.path.basename(shell)}"])
@@ -372,8 +476,13 @@ def spawn_tmux_pty(
         os.environ["TERM"] = "xterm-256color"
         # Unset TMUX to avoid nesting issues if the server itself runs in tmux
         os.environ.pop("TMUX", None)
-        # Strip provider-specific env vars (same reason as in spawn_pty)
+        # Strip provider-specific env vars (same reason as in spawn_pty), then
+        # the agent/CI non-interactive vars. For a freshly created server this
+        # sanitized env becomes the server's global environment (clean panes);
+        # for an existing server the pane inherits the server's frozen global
+        # env instead — handled by purge_tmux_global_env before the spawn.
         get_provider_helpers_registry().purge_env_vars(os.environ)
+        sanitize_terminal_env(os.environ)
 
         if attach_only:
             os.execvp(tmux_path, [
@@ -869,6 +978,15 @@ async def terminal_application(scope, receive, send):
                 "Configured tmux config path is unreadable, falling back to default: %s",
                 configured_path,
             )
+
+    # A tmux server freezes the env of whatever first started it and hands it
+    # to every new pane; if a stale server carries agent/CI noise (e.g. a
+    # GIT_EDITOR=true from a backend once launched under an agent), purge its
+    # global env BEFORE we create the session, so the new pane's shell starts
+    # clean. No-op when no server exists yet — the sanitized child env then
+    # seeds a clean server. Never the hybrid socket (its CLI wants agent env).
+    if use_tmux and not hybrid_attach:
+        await asyncio.to_thread(purge_tmux_global_env, tmux_socket_for(terminal_context))
 
     try:
         if use_tmux:

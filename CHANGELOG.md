@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Table of contents** — markdown previews in the Files, Plan and Git tabs now show a collapsible outline to jump to any section, with a quick way back to the top.
 
+### Fixed
+
+- **Terminals** — interactive git commands (like `git rebase -i`) now open your editor as expected inside TwiCC terminals.
+
 ## [1.91.0] - 2026-07-07
 
 ### Summary
