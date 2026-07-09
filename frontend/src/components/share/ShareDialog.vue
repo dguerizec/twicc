@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch, nextTick } from 'vue'
+import { ref, reactive, computed, watch, nextTick, useId } from 'vue'
 import { useSharesStore } from '../../stores/shares'
 import { useSettingsStore } from '../../stores/settings'
 import { shareAbsoluteUrl } from '../../utils/shareUrl'
@@ -29,7 +29,14 @@ const form = reactive({
 const error = ref('')
 const createdUrl = ref('')
 const dialogRef = ref(null)
-const formId = 'share-dialog-form'
+const submitBtnRef = ref(null)
+// Unique per instance: several ShareDialogs coexist in the DOM (SessionHeader keeps
+// one mounted while a session is open; ProjectView mounts the global session and
+// artifact ones). A shared id made the footer submit button — associated by
+// `form=<id>` — resolve via getElementById to the FIRST matching form in document
+// order, so a click submitted a different (usually closed) dialog and the visible
+// one looked dead. Mirrors ProjectEditDialog's per-instance formId.
+const formId = `share-dialog-form-${useId()}`
 
 // `immediate` matters for the on-demand mounts (ProjectView's artifact/session
 // dialog, ShareManagerDialog's edit dialog): they are v-if'd in at the same tick
@@ -115,8 +122,9 @@ function onAfterShow(e) {
     // snap it shut (the classic nested-WA-event trap).
     if (e.target !== dialogRef.value) return
     nextTick(() => {
-        const submit = dialogRef.value?.querySelector(`button[type="submit"]`)
-        submit?.setAttribute('form', formId)
+        // Pin the submit button's form association (wa-button reflects `:form`, but
+        // set it explicitly too — same belt-and-suspenders as ProjectEditDialog).
+        submitBtnRef.value?.setAttribute('form', formId)
         dialogRef.value?.querySelector('#share-label-input')?.focus()
     })
 }
@@ -199,7 +207,7 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
         </form>
         <div slot="footer" class="dialog-footer">
             <wa-button @click="emit('close')">Close</wa-button>
-            <wa-button type="submit" variant="brand" :form="formId" :disabled="!sharingEnabled">{{ edit ? 'Save' : 'Create link' }}</wa-button>
+            <wa-button ref="submitBtnRef" type="submit" variant="brand" :form="formId" :disabled="!sharingEnabled">{{ edit ? 'Save' : 'Create link' }}</wa-button>
         </div>
     </wa-dialog>
 </template>
