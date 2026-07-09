@@ -12,7 +12,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- **Claude Agent SDK** — Upgrade from 0.2.111 to 0.2.114 (bundled Claude Code CLI: 2.1.202 → 2.1.205)
 - **Codex** — Update the vendored SDK to rust-v0.144.0; the Codex CLI runtime is now downloaded on first launch, since OpenAI stopped publishing stable Codex binaries to PyPI.
 
 ### Fixed
