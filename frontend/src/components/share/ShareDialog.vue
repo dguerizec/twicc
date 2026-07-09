@@ -96,8 +96,12 @@ async function handleSave() {
             const fields = { label: form.label.trim(), notify_on_view: form.notify_on_view, options: buildOptions() }
             if (form.password) fields.password = form.password
             fields.expires_at = form.expires_at || null
-            const share = await shares.patchShare(props.edit.id, fields)
-            createdUrl.value = shareAbsoluteUrl(share)
+            await shares.patchShare(props.edit.id, fields)
+            // Editing is a plain "apply my changes" action, so close on save (the URL
+            // is unchanged and already known). Creating instead keeps the dialog open
+            // to surface the freshly-minted link for copying.
+            toast.success('Share updated')
+            emit('close')
         } else {
             const body = {
                 kind: props.kind, label: form.label.trim(),
