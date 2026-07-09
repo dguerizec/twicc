@@ -4,6 +4,7 @@ import { useElementHover } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
+import { useSharesStore } from '../stores/shares'
 import { useWorkspacesStore } from '../stores/workspaces'
 import { COLOR_SCHEME } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
@@ -39,6 +40,7 @@ import SessionRenameDialog from '../components/session/detail/SessionRenameDialo
 import ProjectEditDialog from '../components/project/ProjectEditDialog.vue'
 import WorkspaceManageDialog from '../components/workspace/WorkspaceManageDialog.vue'
 import ShareDialog from '../components/share/ShareDialog.vue'
+import ShareTargetDialog from '../components/share/ShareTargetDialog.vue'
 import BulkArchiveConfirmDialog from '../components/sidebar/BulkArchiveConfirmDialog.vue'
 import { getUsageRingColor, formatRecentDelta } from '../utils/usage'
 import { buildProjectTree, flattenProjectTree } from '../utils/projectTree'
@@ -57,6 +59,7 @@ const route = useRoute()
 const router = useRouter()
 const store = useDataStore()
 const settingsStore = useSettingsStore()
+const sharesStore = useSharesStore()
 const { registerCommands, unregisterCommands } = useCommandRegistry()
 
 // Persistent-frame host. hostMounted must be true BEFORE any child mounts
@@ -408,15 +411,20 @@ function openRenameDialog(session, options = {}) {
 
 provide('openRenameDialog', openRenameDialog)
 
-// Single ShareDialog instance (per kind) driven by the twicc:open-share-dialog
-// window event — used by the sidebar session menu, the "Share Session…" command,
-// and every artifact entry point (browser-view header, bookmark-list row,
-// FilePane bookmark button). The session header and the bookmark-edit dialog own
-// their own instances for their currently-open target; everything else routes
-// here so there's one artifact dialog mount, not one per row.
-// Detail shape: { sessionId } for a session, or { bookmarkId, allowedHosts, title }
-// for an artifact.
+// Share entry points driven by the twicc:open-share-dialog window event — the
+// sidebar session menu, the "Share Session…" command, and every artifact entry
+// point (browser-view header, bookmark-list row, FilePane bookmark button). The
+// session header and the bookmark-edit dialog own their own instances for their
+// currently-open target; everything else routes here so there's one mount, not
+// one per row. Detail shape: { sessionId } for a session, or
+// { bookmarkId, allowedHosts, title } for an artifact.
+//
+// The target's existing links decide which surface opens: none yet → the create
+// ShareDialog directly; at least one (any status) → ShareTargetDialog, the
+// per-target manager (list + a "Create new share" button). Both read the same
+// target refs below.
 const shareDialogOpen = ref(false)
+const shareTargetOpen = ref(false)
 const shareDialogKind = ref('session')
 const shareDialogSessionId = ref(null)
 const shareDialogBookmarkId = ref(null)
@@ -424,18 +432,23 @@ const shareDialogAllowedHosts = ref({})
 const shareDialogTitle = ref('')
 function openShareDialog(e) {
     const d = e?.detail || {}
+    let hasShares = false
     if (d.bookmarkId != null) {
         shareDialogKind.value = 'artifact'
         shareDialogBookmarkId.value = d.bookmarkId
         shareDialogAllowedHosts.value = d.allowedHosts || {}
         shareDialogTitle.value = d.title || ''
-        shareDialogOpen.value = true
+        hasShares = sharesStore.forBookmark(d.bookmarkId).length > 0
     } else if (d.sessionId) {
         shareDialogKind.value = 'session'
         shareDialogSessionId.value = d.sessionId
         shareDialogTitle.value = store.getSession(d.sessionId)?.title || ''
-        shareDialogOpen.value = true
+        hasShares = sharesStore.forSession(d.sessionId).length > 0
+    } else {
+        return
     }
+    if (hasShares) shareTargetOpen.value = true
+    else shareDialogOpen.value = true
 }
 
 // Pending drop data: set when files/text are dropped on a session list item.
@@ -2468,9 +2481,10 @@ function updateSidebarClosedClass(closed) {
     <!-- Workspace management dialog -->
     <WorkspaceManageDialog ref="manageWorkspacesDialogRef" />
 
-    <!-- Global share dialog (sidebar menu + command palette + artifact entry
-         points), one mount per kind, both driven by the twicc:open-share-dialog
-         event. -->
+    <!-- Global share surfaces (sidebar menu + command palette + artifact entry
+         points), driven by the twicc:open-share-dialog event. The create
+         ShareDialog opens for a target with no links yet; ShareTargetDialog (the
+         per-target manager) opens when the target already has links. -->
     <ShareDialog v-if="shareDialogKind === 'session' && shareDialogSessionId"
                  :open="shareDialogOpen" kind="session"
                  :session-id="shareDialogSessionId" :default-title="shareDialogTitle"
@@ -2479,6 +2493,11 @@ function updateSidebarClosedClass(closed) {
                  :open="shareDialogOpen" kind="artifact"
                  :bookmark-id="shareDialogBookmarkId" :allowed-hosts="shareDialogAllowedHosts"
                  :default-title="shareDialogTitle" @close="shareDialogOpen = false" />
+    <ShareTargetDialog v-if="shareDialogKind === 'artifact' ? shareDialogBookmarkId != null : !!shareDialogSessionId"
+                       :open="shareTargetOpen" :kind="shareDialogKind"
+                       :session-id="shareDialogSessionId" :bookmark-id="shareDialogBookmarkId"
+                       :allowed-hosts="shareDialogAllowedHosts" :default-title="shareDialogTitle"
+                       @close="shareTargetOpen = false" />
 
     <!-- Bulk archive confirmation dialog -->
     <BulkArchiveConfirmDialog
