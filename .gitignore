@@ -223,14 +223,17 @@ Thumbs.db
 db/
 search-index/
 
-# Session artifacts and scratch space — data-dir subdirectories that surface
-# at the worktree root when the data dir is the worktree itself. Anchored to
-# the root (like /.worktrees/ below) so they only match there, never a source
-# directory that happens to share the name. No trailing slash: in worktree mode
-# devctl symlinks these to the main data dir, and git treats a symlink as a file
-# — a dir-only pattern (trailing /) would NOT ignore the link.
+# Session artifacts, scratch space and artifact-share snapshots — data-dir
+# subdirectories that surface at the worktree root when the data dir is the
+# worktree itself. Anchored to the root (like /.worktrees/ below) so they only
+# match there, never a source directory that happens to share the name. No
+# trailing slash: in worktree mode devctl symlinks artifacts/scratch to the main
+# data dir, and git treats a symlink as a file — a dir-only pattern (trailing /)
+# would NOT ignore the link. (shares/ is a real per-worktree dir, not symlinked,
+# but follows the same anchoring rule.)
 /artifacts
 /scratch
+/shares
 
 # SQLite database (legacy location, kept for safety)
 data.sqlite
