@@ -240,14 +240,13 @@ function openInSession() {
                     <wa-button
                         id="abv-share-button"
                         size="small"
-                        variant="neutral"
+                        :variant="activeShareCount > 0 ? 'brand' : 'neutral'"
                         appearance="plain"
-                        class="abv-share-button reduced-height"
+                        :class="['abv-share-button', 'reduced-height', { 'abv-share-button--active': activeShareCount > 0 }]"
                         :disabled="!sharingEnabled"
                         @click="openShare"
                     >
                         <wa-icon name="share-nodes" label="Share"></wa-icon>
-                        <wa-badge v-if="activeShareCount > 0" variant="brand" pill class="abv-share-badge">{{ activeShareCount }}</wa-badge>
                     </wa-button>
                     <AppTooltip for="abv-share-button">
                         {{ sharingEnabled
@@ -400,20 +399,12 @@ function openInSession() {
     flex-shrink: 0;
 }
 
-/* Relative anchor for the active-link count badge overlaid on the share icon. */
-.abv-share-button {
-    position: relative;
-}
-
-/* Compact active-link count tucked into the share icon's top-right corner
-   (mirrors SessionHeader's .share-count-badge). */
-.abv-share-badge {
-    position: absolute;
-    top: -0.15rem;
-    inset-inline-end: -0.2rem;
-    font-size: 0.6rem;
-    padding: 0.05rem 0.25rem;
-    pointer-events: none;
+/* Active share links → the button wears the brand colour (no count badge). */
+.abv-share-button--active {
+    opacity: 1;
+    &::part(base) {
+        color: var(--wa-color-brand-60);
+    }
 }
 
 .abv-content {

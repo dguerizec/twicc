@@ -514,15 +514,14 @@ defineExpose({
                 <wa-button
                     v-if="mode === 'session' && !session.draft"
                     :id="`session-header-${sessionId}-share-button`"
-                    variant="neutral"
+                    :variant="activeShareCount > 0 ? 'brand' : 'neutral'"
                     appearance="plain"
                     size="small"
-                    class="share-button reduced-height"
+                    :class="['share-button', 'reduced-height', { 'share-button--active': activeShareCount > 0 }]"
                     :disabled="!sharingEnabled"
                     @click="showShareDialog = true"
                 >
-                    <wa-icon :name="activeShareCount > 0 ? 'share-nodes' : 'share-nodes'" label="Share"></wa-icon>
-                    <wa-badge v-if="activeShareCount > 0" variant="brand" pill class="share-count-badge">{{ activeShareCount }}</wa-badge>
+                    <wa-icon name="share-nodes" label="Share"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="`session-header-${sessionId}-share-button`">
                     {{ sharingEnabled
@@ -1110,16 +1109,12 @@ wa-divider {
     opacity: 1;
 }
 
-/* Compact active-link count tucked into the share icon's top-right corner. A
-   default wa-badge pill is chunky next to a small plain icon button, so shrink
-   it and overlay it rather than letting it inflate the button width. */
-.share-count-badge {
-    position: absolute;
-    top: -0.15rem;
-    inset-inline-end: -0.2rem;
-    font-size: 0.6rem;
-    padding: 0.05rem 0.25rem;
-    pointer-events: none;
+/* Active share links → the button wears the brand colour (no count badge). */
+.share-button--active {
+    opacity: 1;
+    &::part(base) {
+        color: var(--wa-color-brand-60);
+    }
 }
 
 .pending-request-indicator {

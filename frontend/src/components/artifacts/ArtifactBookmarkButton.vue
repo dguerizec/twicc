@@ -126,12 +126,11 @@ function viewInArtifacts() {
         :id="shareButtonId"
         appearance="plain"
         size="small"
-        variant="neutral"
-        class="bookmark-button share-artifact-button reduced-height"
+        :variant="activeShareCount > 0 ? 'brand' : 'neutral'"
+        :class="['bookmark-button', 'reduced-height', { 'bookmark-button--active': activeShareCount > 0 }]"
         @click.stop="shareArtifact"
     >
         <wa-icon name="share-nodes" label="Share artifact"></wa-icon>
-        <wa-badge v-if="activeShareCount > 0" variant="brand" pill class="share-artifact-badge">{{ activeShareCount }}</wa-badge>
     </wa-button>
     <AppTooltip v-if="sharingEnabled" :for="shareButtonId">{{ shareTooltip }}</AppTooltip>
     <wa-button
@@ -163,19 +162,5 @@ function viewInArtifacts() {
     &::part(base) {
         color: var(--wa-color-brand-60);
     }
-}
-/* Relative anchor for the active-link count badge. */
-.share-artifact-button {
-    position: relative;
-}
-/* Compact active-link count tucked into the share icon's top-right corner
-   (mirrors SessionHeader's .share-count-badge). */
-.share-artifact-badge {
-    position: absolute;
-    top: -0.15rem;
-    inset-inline-end: -0.2rem;
-    font-size: 0.6rem;
-    padding: 0.05rem 0.25rem;
-    pointer-events: none;
 }
 </style>
