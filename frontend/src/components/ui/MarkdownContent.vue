@@ -1,7 +1,7 @@
 <script setup>
-import { ref, inject, watch, onMounted } from 'vue'
+import { ref, computed, inject, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { splitMarkdownBlocks, renderBlockToHtml } from '../../utils/markdown.js'
+import { splitMarkdownBlocks, renderBlockToHtml, extractHeadings } from '../../utils/markdown.js'
 import { useSettingsStore } from '../../stores/settings'
 import { vHighlight } from '../../directives/vHighlight.js'
 import { toast } from '../../composables/useToast'
@@ -26,6 +26,13 @@ const props = defineProps({
     tagSlashCommand: {
         type: Boolean,
         default: false
+    },
+    // Opt-in collapsible table of contents at the very top (closed by default).
+    // Enabled by the file-preview panes (Files / Plan / Git .md diffs) where the
+    // rendered document can be long; left off for chat, tips, changelog, etc.
+    showToc: {
+        type: Boolean,
+        default: false
     }
 })
 
@@ -46,6 +53,38 @@ const fileLinks = inject('markdownFileLinks', null)
 const blocks = ref([])
 const container = ref(null)
 const rendering = ref(true)
+
+// --- Table of contents (opt-in via showToc) --------------------------------
+// The heading outline, recomputed on source change (only when the TOC is on, so
+// there is zero parse cost for the many consumers that leave it off). Entries
+// are matched to the rendered <h*> elements positionally, so no ids are needed.
+const headings = ref([])
+watch(
+    [() => props.source, () => props.showToc],
+    ([src, on]) => {
+        headings.value = on ? extractHeadings(src) : []
+    },
+    { immediate: true },
+)
+// Shallowest heading level present, used as the indentation baseline so a doc
+// starting at h2 doesn't render its whole outline pushed one level in.
+const tocMinLevel = computed(() =>
+    headings.value.reduce((min, h) => Math.min(min, h.level), 6),
+)
+// The TOC only earns its place once there are at least two headings to jump
+// between.
+const showTocDetails = computed(() => props.showToc && headings.value.length >= 2)
+
+// Scroll the rendered heading at `index` to the top of the scroll viewport.
+// The NodeList is re-queried on each click (robust to theme/mermaid re-renders),
+// and scrollIntoView resolves the nearest scrollable ancestor on its own (the
+// preview container, fullscreen wrapper included).
+function scrollToHeading(index) {
+    const root = container.value
+    if (!root) return
+    const els = root.querySelectorAll('h1, h2, h3, h4, h5, h6')
+    els[index]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 // Per-block rendered-HTML cache, keyed by raw block source (content-addressed:
 // identical blocks share a render, and a key can never serve the wrong HTML).
@@ -388,6 +427,19 @@ function handleLinkClick(event) {
 
 <template>
     <div class="markdown-content-wrapper">
+        <wa-details v-if="showTocDetails" class="markdown-toc" summary="Table of contents">
+            <ul class="markdown-toc-list">
+                <li
+                    v-for="(h, i) in headings"
+                    :key="i"
+                    :style="{ paddingInlineStart: `${(h.level - tocMinLevel) * 1}rem` }"
+                >
+                    <button type="button" class="markdown-toc-link" @click="scrollToHeading(i)">
+                        {{ h.text || 'Untitled' }}
+                    </button>
+                </li>
+            </ul>
+        </wa-details>
         <div v-if="showToolbar" class="markdown-toolbar">
             <wa-button-group orientation="vertical" label="Markdown tools">
                 <wa-button
@@ -437,6 +489,48 @@ function handleLinkClick(event) {
    ------------------------------------------------------------------- */
 .markdown-content-wrapper {
     position: relative;
+}
+
+/* -- Table of contents (opt-in, preview panes) ----------------------- */
+.markdown-toc {
+    margin-bottom: 1rem;
+    font-size: var(--wa-font-size-s);
+}
+.markdown-toc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    /* Small gap for breathing room between entries (the row height itself stays
+       tight — see the line-height note below). */
+    gap: 0.45rem;
+    /* Tight line-height inherited by the <li>: since each entry is a
+       block-level button, the <li>'s own line-box strut (which uses this
+       inherited value, not the button's) is what sets the row height. */
+    line-height: 1.25;
+}
+.markdown-toc-link {
+    display: block;
+    width: 100%;
+    /* A global `button` rule forces a form-control height (~43px); reset it so
+       the row height follows the (tight) line-height instead. */
+    height: auto;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    line-height: 1.25;
+    text-align: start;
+    color: var(--wa-color-brand-fill-loud);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.markdown-toc-link:hover {
+    text-decoration: underline;
 }
 
 .markdown-body {

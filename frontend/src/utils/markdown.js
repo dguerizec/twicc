@@ -193,6 +193,46 @@ export function splitMarkdownBlocks(source) {
 }
 
 /**
+ * Extract the heading outline of a markdown document, in document order.
+ *
+ * A single parse pass (same mechanism as splitMarkdownBlocks) — for each
+ * `heading_open` token we record its level (1-6, from the h1..h6 tag) and a
+ * plain-text label built from the following inline token's text/code children,
+ * so inline markup (`**bold**`, `` `code` ``, links) is flattened to text.
+ *
+ * No ids or slugs are generated: consumers match this outline to the rendered
+ * <h1>..<h6> elements positionally (both are in source order), which sidesteps
+ * the block-level render cache (each block is rendered by a separate md call,
+ * so a cross-block slug counter — e.g. markdown-it-anchor — would not compose).
+ *
+ * @param {string} source - Raw markdown text
+ * @returns {Array<{level: number, text: string}>}
+ */
+export function extractHeadings(source) {
+    if (!source) return []
+    const tokens = md.parse(source, {})
+    const headings = []
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i]
+        if (token.type !== 'heading_open') continue
+        const level = Number(token.tag.slice(1))
+        const inline = tokens[i + 1]
+        let text = ''
+        if (inline?.type === 'inline' && inline.children) {
+            for (const child of inline.children) {
+                if (child.type === 'text' || child.type === 'code_inline') {
+                    text += child.content
+                }
+            }
+        }
+        // Keep every heading (even an empty-label one) so the positional match
+        // with the rendered <h*> elements stays aligned.
+        headings.push({ level, text: text.trim() })
+    }
+    return headings
+}
+
+/**
  * Render a single markdown block to sanitized HTML. Reuses the shared `env`
  * (from splitMarkdownBlocks) so cross-block link references resolve. Async
  * because shiki highlighting is async (same mechanism as renderMarkdown).

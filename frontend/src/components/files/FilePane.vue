@@ -122,6 +122,7 @@ const mermaidPreviewButtonId = useId()
 const viewInFilesButtonId = useId()
 const searchButtonId = useId()
 const editSwitchId = useId()
+const scrollTopButtonId = useId()
 
 // Injected from SessionView: function to switch to Files tab and reveal a file.
 // null when FilePane is not inside a SessionView (or no Files tab available).
@@ -968,6 +969,37 @@ onBeforeUnmount(() => {
     if (isPreviewFullscreen.value) expandPreviewHost?.(false)
 })
 
+// --- Scroll-to-top (markdown preview) ---------------------------------------
+// The markdown preview is the only natively-scrollable text preview
+// (.markdown-preview-container). A round button pinned to the preview's
+// bottom-right appears once the reader has scrolled down and jumps back to the
+// top — the quick way back to the table of contents (or the document head).
+// It lives in the non-scrolling .file-pane-preview wrapper (a sibling of the
+// scroll container), so it stays put over the visible area instead of scrolling
+// away with the content.
+const markdownScrollRef = ref(null)
+const showScrollTop = ref(false)
+
+function onMarkdownScroll() {
+    const el = markdownScrollRef.value
+    if (el) showScrollTop.value = el.scrollTop > 200
+}
+
+// Bind/unbind the scroll listener as the markdown-preview container mounts and
+// unmounts (it's behind a v-if). flush:'post' so the element exists.
+watch(markdownScrollRef, (el, _oldEl, onCleanup) => {
+    showScrollTop.value = false
+    if (el) {
+        el.addEventListener('scroll', onMarkdownScroll, { passive: true })
+        onMarkdownScroll()
+        onCleanup(() => el.removeEventListener('scroll', onMarkdownScroll))
+    }
+}, { flush: 'post' })
+
+function scrollMarkdownToTop() {
+    markdownScrollRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
 /**
  * Check if a file is writable without fetching its content.
  * Used in diff mode where content comes from props....
@@ -1638,10 +1670,11 @@ function goToNextDiff() {
                 :class="{ 'file-pane-preview--fullscreen': isPreviewFullscreen }"
             >
                 <!-- Markdown preview (when toggled on for .md files) -->
-                <div v-if="showMarkdownPreview && isMarkdownFile" class="markdown-preview-container">
+                <div v-if="showMarkdownPreview && isMarkdownFile" ref="markdownScrollRef" class="markdown-preview-container">
                     <MarkdownContent
                         :source="diffMode ? (modifiedContent ?? '') : currentContent"
                         :show-toolbar="false"
+                        :show-toc="true"
                     />
                 </div>
 
@@ -1866,6 +1899,29 @@ function goToNextDiff() {
                     </div>
                 </div>
                 </Teleport>
+
+                <!-- Floating "scroll to top", bottom-right of the markdown
+                     preview. Fades in once scrolled down; jumps back to the top
+                     (and thus the table of contents). Markdown is the only
+                     natively-scrollable text preview, so it's gated to it. -->
+                <Transition name="scroll-top-fade">
+                    <wa-button
+                        v-if="showMarkdownPreview && isMarkdownFile && showScrollTop"
+                        :id="scrollTopButtonId"
+                        class="preview-action-btn preview-scroll-top-btn"
+                        size="small"
+                        variant="neutral"
+                        appearance="filled"
+                        @click="scrollMarkdownToTop"
+                    >
+                        <wa-icon name="arrow-up"></wa-icon>
+                    </wa-button>
+                </Transition>
+                <AppTooltip
+                    v-if="showMarkdownPreview && isMarkdownFile && showScrollTop"
+                    :for="scrollTopButtonId"
+                    placement="left"
+                >Scroll to top</AppTooltip>
             </div>
 
             <!-- CodeMirror diff editor (diff mode) -->
@@ -2137,6 +2193,31 @@ function goToNextDiff() {
    target is that layer, not .file-pane-preview. */
 .frame-overlay-layer:hover .preview-action-btn {
     opacity: 1;
+}
+
+/* Floating "scroll to top": a round FAB pinned to the preview's bottom-right,
+   mirroring the top-right actions' subtle-at-rest / solid-on-hover look
+   (inherited from .preview-action-btn). */
+.preview-scroll-top-btn {
+    position: absolute;
+    bottom: var(--wa-space-s);
+    right: var(--wa-space-s);
+    z-index: 2;
+    pointer-events: auto;
+}
+.preview-scroll-top-btn::part(base) {
+    border-radius: 50%;
+    aspect-ratio: 1;
+    padding: 0;
+}
+/* Fade in/out on scroll (the rest opacity is 0.6, from .preview-action-btn). */
+.scroll-top-fade-enter-active,
+.scroll-top-fade-leave-active {
+    transition: opacity 0.2s ease;
+}
+.scroll-top-fade-enter-from,
+.scroll-top-fade-leave-to {
+    opacity: 0 !important;
 }
 
 /* Mode toggles (responsive / select): fully opaque + brand icon while active. */
