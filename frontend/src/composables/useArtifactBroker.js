@@ -14,7 +14,7 @@ import { mountBrokerHost } from '../artifact-broker/host'
 
 /**
  * @param {import('vue').Ref<HTMLIFrameElement|null>} iframeRef  The artifact iframe.
- * @param {() => ({ documentUrl: string, getBookmarkId: () => (number|null), allowedHosts: object, persistAllow?: Function }) | null} getConfig
+ * @param {() => ({ documentUrl: string, getBookmarkId: () => (number|null), allowedHosts: object, persistAllow?: Function, onBlocked?: Function }) | null} getConfig
  *        Evaluated at each (re)mount; return `null` to mount nothing (inactive).
  *        `getBookmarkId` is kept as a getter (not a snapshot) so the host reflects
  *        the live bookmark — created/removed without a re-mount — for "Forever".
@@ -82,6 +82,7 @@ export function useArtifactBroker(iframeRef, getConfig, watchSources) {
             persistAllow: config.persistAllow,
             mode: config.mode ?? 'owner',
             proxyUrl: config.proxyUrl,
+            onBlocked: config.onBlocked,
         })
         boundWindow = win
     }

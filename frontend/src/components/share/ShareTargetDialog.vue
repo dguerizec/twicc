@@ -17,6 +17,7 @@ const props = defineProps({
     sessionId: { type: String, default: null },
     bookmarkId: { type: Number, default: null },
     allowedHosts: { type: Object, default: () => ({}) },  // artifact: hosts viewers reach
+    sessionGrants: { type: Object, default: () => ({}) }, // artifact: session-only broker grants
     defaultTitle: { type: String, default: '' },     // target session title / bookmark name
 })
 const emit = defineEmits(['close'])
@@ -80,7 +81,8 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
         <ShareListPanel :shares="shares" @edit="openEdit" />
         <ShareDialog v-if="childOpen" :open="childOpen" :kind="kind"
                      :session-id="sessionId" :bookmark-id="bookmarkId"
-                     :allowed-hosts="allowedHosts" :default-title="defaultTitle"
+                     :allowed-hosts="allowedHosts" :session-grants="sessionGrants"
+                     :default-title="defaultTitle"
                      :edit="editing" @close="closeChild" />
         <div slot="footer" class="dialog-footer">
             <wa-button variant="brand" @click="openCreate">

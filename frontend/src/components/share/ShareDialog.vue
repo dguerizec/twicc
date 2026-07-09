@@ -3,6 +3,7 @@ import { ref, reactive, computed, watch, nextTick, useId } from 'vue'
 import { useSharesStore } from '../../stores/shares'
 import { useSettingsStore } from '../../stores/settings'
 import { shareAbsoluteUrl } from '../../utils/shareUrl'
+import { apiFetch } from '../../utils/api'
 import { toast } from '../../composables/useToast'
 
 const props = defineProps({
@@ -11,6 +12,7 @@ const props = defineProps({
     sessionId: { type: String, default: null },
     bookmarkId: { type: Number, default: null },
     allowedHosts: { type: Object, default: () => ({}) },  // artifact: hosts viewers reach
+    sessionGrants: { type: Object, default: () => ({}) }, // artifact: "This session" broker grants
     defaultTitle: { type: String, default: '' },     // real session title / bookmark name (placeholder)
     edit: { type: Object, default: null },          // existing serialized share when editing
 })
@@ -38,6 +40,18 @@ const submitBtnRef = ref(null)
 // one looked dead. Mirrors ProjectEditDialog's per-instance formId.
 const formId = `share-dialog-form-${useId()}`
 
+// "This session" broker grants not yet on the bookmark's persisted allowlist.
+// The share proxy only honours the PERSISTED list, so these hosts are invisible
+// to viewers — offer to promote them at creation (checked = saved permanently
+// on the artifact, the same write as the prompt's "Forever"). Create-only: the
+// promotion belongs to "make this link work", not to editing link settings.
+const promotableHosts = computed(() =>
+    props.kind === 'artifact' && !props.edit && props.bookmarkId != null
+        ? Object.entries(props.sessionGrants || {}).filter(([key]) => !(props.allowedHosts || {})[key])
+        : []
+)
+const promote = reactive({}) // host key -> checked
+
 // `immediate` matters for the on-demand mounts (ProjectView's artifact/session
 // dialog, ShareManagerDialog's edit dialog): they are v-if'd in at the same tick
 // `open` becomes true, so the component mounts with `open` already true and a
@@ -47,6 +61,8 @@ const formId = `share-dialog-form-${useId()}`
 watch(() => props.open, (o) => { if (o) reset() }, { immediate: true })
 function reset() {
     error.value = ''; createdUrl.value = ''
+    Object.keys(promote).forEach((k) => delete promote[k])
+    for (const [key] of promotableHosts.value) promote[key] = true
     const e = props.edit
     Object.assign(form, {
         // Pre-fill the title field with the real session title / bookmark name so it's
@@ -103,6 +119,19 @@ async function handleSave() {
             toast.success('Share updated')
             emit('close')
         } else {
+            // Promote the checked session-only grants onto the bookmark's
+            // allowlist BEFORE minting the link: the share proxy reads it live,
+            // so the link works from its first view. A failure aborts creation
+            // (the link would ship broken).
+            for (const [key, entry] of promotableHosts.value) {
+                if (!promote[key]) continue
+                const res = await apiFetch(`/api/artifact-bookmarks/${props.bookmarkId}/allowed-hosts/`, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ url: key, kind: entry.kind }),
+                })
+                if (!res.ok) throw await res.json().catch(() => ({ error: `failed to allow ${key}` }))
+            }
             const body = {
                 kind: props.kind, label: form.label.trim(),
                 password: form.password || null, expires_at: form.expires_at || null,
@@ -191,6 +220,34 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
                     Viewers will be able to reach these hosts (already allowed on this artifact):
                     <ul><li v-for="h in allowedHostList" :key="h"><code>{{ h }}</code></li></ul>
                 </wa-callout>
+                <wa-callout v-if="promotableHosts.length" variant="warning">
+                    These hosts are allowed only for your current session — viewers won't reach
+                    them unless you allow them on this artifact. Checked hosts are saved
+                    permanently when the link is created:
+                    <ul class="promote-list">
+                        <li v-for="[h] in promotableHosts" :key="h">
+                            <wa-checkbox :checked="promote[h]"
+                                         @change.stop="promote[h] = $event.target.checked">
+                                <code>{{ h }}</code>
+                            </wa-checkbox>
+                        </li>
+                    </ul>
+                </wa-callout>
+                <!-- Network guidance (create only): viewers only reach the PERSISTED
+                     allowlist, so tell the owner what to do when it's (or may be)
+                     incomplete — full callout when nothing is allowed anywhere, a
+                     quiet one-liner when some hosts already are. -->
+                <wa-callout v-if="!edit && !allowedHostList.length && !promotableHosts.length"
+                            variant="neutral">
+                    No network access is allowed on this artifact — any request it makes
+                    will be refused for viewers. If it needs the network, open the
+                    artifact first, approve its hosts when prompted (choose "Forever"),
+                    then create the link.
+                </wa-callout>
+                <p v-else-if="!edit" class="net-hint">
+                    Requests to hosts not listed above will be refused for viewers. To allow
+                    more, open the artifact and approve them when prompted (choose "Forever").
+                </p>
             </template>
 
             <label>Password (optional)
@@ -226,6 +283,19 @@ label { display: block; font-size: var(--wa-font-size-s); font-weight: 600; }
 label wa-input, label wa-select { margin-top: 0.3rem; font-weight: 400; }
 wa-switch { display: block; }
 .switch-hint { font-weight: 400; color: var(--wa-color-text-quiet); }
+.promote-list {
+    list-style: none;
+    padding-left: 0;
+    margin: 0.5rem 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.net-hint {
+    margin: 0;
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+}
 .share-url { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.8rem; }
 .share-url wa-input { flex: 1; }
 .dialog-footer {

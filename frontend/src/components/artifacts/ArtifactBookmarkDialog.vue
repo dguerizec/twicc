@@ -4,6 +4,7 @@
 import { ref, computed, nextTick, useId } from 'vue'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
+import { getSessionGrantsForBookmark } from '../../artifact-broker/host'
 import ShareDialog from '../share/ShareDialog.vue'
 
 const props = defineProps({
@@ -17,7 +18,14 @@ const settingsStore = useSettingsStore()
 // Share entry point (edit mode only — an existing bookmark id is required).
 const showShareDialog = ref(false)
 const existingAllowedHosts = ref({})
+const shareSessionGrants = ref({})
 const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+function openShareDialog() {
+    // Snapshot the artifact's session-only broker grants at open, like
+    // ProjectView's global handler — the create dialog offers to promote them.
+    shareSessionGrants.value = getSessionGrantsForBookmark(existingId.value)
+    showShareDialog.value = true
+}
 
 const dialogRef = ref(null)
 const nameInputRef = ref(null)
@@ -178,7 +186,7 @@ defineExpose({ open, close })
                 appearance="outlined"
                 :disabled="!sharingEnabled"
                 :title="sharingEnabled ? 'Share this artifact' : 'Configure a share host in Settings → Sharing'"
-                @click="showShareDialog = true"
+                @click="openShareDialog"
             >
                 <wa-icon name="share-nodes" slot="start"></wa-icon>
                 Share…
@@ -190,6 +198,7 @@ defineExpose({ open, close })
         </div>
         <ShareDialog v-if="isEditMode" :open="showShareDialog" kind="artifact"
                      :bookmark-id="existingId" :allowed-hosts="existingAllowedHosts"
+                     :session-grants="shareSessionGrants"
                      :default-title="localName" @close="showShareDialog = false" />
     </wa-dialog>
 </template>

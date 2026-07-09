@@ -35,6 +35,14 @@ async function persistAllow(url, kind) {
 
 // documentUrl is the inner doc; its own relative assets resolve to
 // /artifacts/<id>/<asset>, so the artifact's directory is the inner doc's parent.
+// Share mode: hosts the artifact tried to reach that the owner never allowed
+// (the proxy answered `not_allowed`). A viewer can't grant anything, so show an
+// honest, dismissible notice instead of letting the page fail mysteriously.
+const blockedHosts = ref([])
+function noteBlockedHost(hostKey) {
+    if (!blockedHosts.value.includes(hostKey)) blockedHosts.value.push(hostKey)
+}
+
 const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
     iframeRef,
     () => ({
@@ -44,6 +52,7 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
         persistAllow: props.mode === 'share' ? undefined : persistAllow,
         mode: props.mode,
         proxyUrl: props.proxyUrl,
+        onBlocked: props.mode === 'share' ? noteBlockedHost : undefined,
     }),
     [iframeRef],
 )
@@ -78,6 +87,12 @@ onMounted(() => {
     ></iframe>
     <!-- Share mode never prompts (server enforces the owner allowlist, D6). -->
     <ArtifactBrokerPrompt v-if="mode !== 'share'" :prompt="brokerPrompt" @decision="onBrokerDecision" />
+    <div v-if="blockedHosts.length" class="share-blocked-banner">
+        This artifact tried to reach <code>{{ blockedHosts.join(', ') }}</code> —
+        {{ blockedHosts.length > 1 ? 'these hosts are' : 'this host is' }} not authorized
+        by the share owner, so parts of the page may not work.
+        <a href="#" @click.prevent="blockedHosts = []">Dismiss</a>
+    </div>
 </template>
 
 <style>
@@ -111,5 +126,26 @@ body {
 .share-update-banner a {
     color: #fff;
     text-decoration: underline;
+}
+/* Bottom-anchored so it never fights the top "updated — reload" banner. */
+.share-blocked-banner {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    padding: 0.5rem 1rem;
+    text-align: center;
+    background: #b45309;
+    color: #fff;
+    font: 500 0.9rem system-ui, -apple-system, sans-serif;
+}
+.share-blocked-banner code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.share-blocked-banner a {
+    color: #fff;
+    text-decoration: underline;
+    margin-left: 0.5rem;
 }
 </style>

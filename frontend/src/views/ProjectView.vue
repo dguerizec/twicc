@@ -41,6 +41,7 @@ import ProjectEditDialog from '../components/project/ProjectEditDialog.vue'
 import WorkspaceManageDialog from '../components/workspace/WorkspaceManageDialog.vue'
 import ShareDialog from '../components/share/ShareDialog.vue'
 import ShareTargetDialog from '../components/share/ShareTargetDialog.vue'
+import { getSessionGrantsForBookmark } from '../artifact-broker/host'
 import BulkArchiveConfirmDialog from '../components/sidebar/BulkArchiveConfirmDialog.vue'
 import { getUsageRingColor, formatRecentDelta } from '../utils/usage'
 import { buildProjectTree, flattenProjectTree } from '../utils/projectTree'
@@ -429,6 +430,7 @@ const shareDialogKind = ref('session')
 const shareDialogSessionId = ref(null)
 const shareDialogBookmarkId = ref(null)
 const shareDialogAllowedHosts = ref({})
+const shareDialogSessionGrants = ref({})
 const shareDialogTitle = ref('')
 function openShareDialog(e) {
     const d = e?.detail || {}
@@ -437,11 +439,16 @@ function openShareDialog(e) {
         shareDialogKind.value = 'artifact'
         shareDialogBookmarkId.value = d.bookmarkId
         shareDialogAllowedHosts.value = d.allowedHosts || {}
+        // Session-only broker grants of the (currently/last) open artifact,
+        // resolved from the broker host registry — the create dialog offers to
+        // promote them so viewers aren't left with an empty allowlist.
+        shareDialogSessionGrants.value = getSessionGrantsForBookmark(d.bookmarkId)
         shareDialogTitle.value = d.title || ''
         hasShares = sharesStore.forBookmark(d.bookmarkId).length > 0
     } else if (d.sessionId) {
         shareDialogKind.value = 'session'
         shareDialogSessionId.value = d.sessionId
+        shareDialogSessionGrants.value = {}
         shareDialogTitle.value = store.getSession(d.sessionId)?.title || ''
         hasShares = sharesStore.forSession(d.sessionId).length > 0
     } else {
@@ -2492,11 +2499,13 @@ function updateSidebarClosedClass(closed) {
     <ShareDialog v-if="shareDialogKind === 'artifact' && shareDialogBookmarkId != null"
                  :open="shareDialogOpen" kind="artifact"
                  :bookmark-id="shareDialogBookmarkId" :allowed-hosts="shareDialogAllowedHosts"
+                 :session-grants="shareDialogSessionGrants"
                  :default-title="shareDialogTitle" @close="shareDialogOpen = false" />
     <ShareTargetDialog v-if="shareDialogKind === 'artifact' ? shareDialogBookmarkId != null : !!shareDialogSessionId"
                        :open="shareTargetOpen" :kind="shareDialogKind"
                        :session-id="shareDialogSessionId" :bookmark-id="shareDialogBookmarkId"
-                       :allowed-hosts="shareDialogAllowedHosts" :default-title="shareDialogTitle"
+                       :allowed-hosts="shareDialogAllowedHosts" :session-grants="shareDialogSessionGrants"
+                       :default-title="shareDialogTitle"
                        @close="shareTargetOpen = false" />
 
     <!-- Bulk archive confirmation dialog -->

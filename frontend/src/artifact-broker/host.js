@@ -75,6 +75,34 @@ function artifactKeyFor(documentUrl) {
     return u.origin + u.pathname
 }
 
+// Owner hosts, artifactKey -> the host's live `getBookmarkId` getter. Lets the
+// owner UI (the share dialog) look up an open artifact's "This session" grants
+// from just a bookmark id, whichever entry point asked — no per-component
+// plumbing. Entries are overwritten per mount and deliberately never removed:
+// a getter from a torn-down host still resolves the live bookmark, and the
+// grants it points at outlive the host by design (module cache above).
+const hostBookmarkGetters = new Map() // artifactKey -> () => (number|null)
+
+/**
+ * The "This session" broker grants of the artifact(s) bound to this bookmark:
+ * `{ "scheme://host:port": { kind } }`. Feeds the share dialog's "allow for
+ * viewers" promotion list — the share proxy only honours the PERSISTED
+ * allowlist, so session-only grants are invisible to viewers until promoted.
+ * Empty when the artifact hasn't run in this tab since the last page load
+ * (the cache is in-memory only).
+ */
+export function getSessionGrantsForBookmark(bookmarkId) {
+    if (bookmarkId == null) return {}
+    const out = {}
+    for (const [key, getBookmarkId] of hostBookmarkGetters) {
+        let id = null
+        try { id = getBookmarkId() } catch { continue } // stale getter
+        if (id !== bookmarkId) continue
+        Object.assign(out, sessionGrants.get(key))
+    }
+    return out
+}
+
 /**
  * Build the broker host core.
  *
@@ -84,8 +112,9 @@ function artifactKeyFor(documentUrl) {
  * @param {object} opts.allowedHosts  The persisted allowlist `{ "scheme://host:port": { kind } }`.
  * @param {(target: {host: string, ip: string, kind: string, canRemember: boolean}) => Promise<'session'|'forever'|'deny'>} opts.showPrompt
  * @param {(url: string, kind: string) => Promise<void>} [opts.persistAllow]  Persist "allow forever" (bookmarked only).
+ * @param {(hostKey: string) => void} [opts.onBlocked]  Share mode only: called with the normalized host key when the server proxy refuses a host the owner never allowed (`not_allowed`).
  */
-export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, showPrompt, persistAllow, mode = 'owner', proxyUrl = DEFAULT_PROXY_URL }) {
+export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, showPrompt, persistAllow, mode = 'owner', proxyUrl = DEFAULT_PROXY_URL, onBlocked }) {
     // Per-artifact "This session" grants persist across host re-mounts via the
     // module cache. Seed the live set from them PLUS the persisted "Forever"
     // grants (from the DB, passed in `allowedHosts`).
@@ -98,6 +127,9 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
     const allowed = { ...(allowedHosts || {}), ...sessionGranted }
     const canPersist = typeof persistAllow === 'function'
     const currentBookmarkId = () => (typeof getBookmarkId === 'function' ? getBookmarkId() : null)
+    // Owner hosts register for the bookmark-id grant lookup above (a share page
+    // has no bookmark and nothing to promote).
+    if (mode !== 'share') hostBookmarkGetters.set(artifactKey, currentBookmarkId)
     // The directory the artifact lives under; its own assets resolve below it.
     const ownDir = new URL('.', documentUrl).href
 
@@ -177,7 +209,13 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
         // targets are still brokered (never host-direct) — a viewer holds no cookie.
         if (mode === 'share') {
             const res = await callProxy(proxyUrl, { mode: 'fetch', request: req })
-            if (res.error) throw new Error(`broker: ${res.reason || res.error}`)
+            if (res.error) {
+                // "The owner never allowed this host" is worth surfacing to the
+                // shell: the viewer can't grant anything and the artifact may
+                // swallow the rejection. Other errors stay plain fetch failures.
+                if (res.reason === 'not_allowed') onBlocked?.(normalizeHostKey(req.url))
+                throw new Error(`broker: ${res.reason || res.error}`)
+            }
             return res
         }
 
