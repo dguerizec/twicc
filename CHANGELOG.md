@@ -6,17 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.91.1] - 2026-07-10
+
+### Summary
+
+- **v1.91.1: Codex GPT-5.6** — the new GPT-5.6 family (Sol, Terra and Luna), a table of contents for markdown previews, cheaper cache reuse when you return to a session, and a round of fixes.
+
 ### Added
 
+- **GPT-5.6 on Codex** — OpenAI's new GPT-5.6 family is selectable as three tiers — Sol, Terra and Luna — with higher reasoning-effort levels than before; new Codex sessions now start on Terra.
 - **Table of contents** — markdown previews in the Files, Plan and Git tabs now show a collapsible outline to jump to any section, with a quick way back to the top.
 
 ### Changed
 
-- **Codex** — Update the vendored SDK to rust-v0.144.0; the Codex CLI runtime is now downloaded on first launch, since OpenAI stopped publishing stable Codex binaries to PyPI.
+- **Codex runtime** — Update the vendored SDK to rust-v0.144.0; the Codex CLI runtime is now downloaded on first launch, since OpenAI stopped publishing stable Codex binaries to PyPI.
+- **Returning to a session** — coming back to an idle session within the hour now reuses its prompt cache instead of rebuilding it, so the next turn is faster and cheaper.
 
 ### Fixed
 
 - **Terminals** — interactive git commands (like `git rebase -i`) now open your editor as expected inside TwiCC terminals.
+- **Artifact network prompt** — the network-access consent prompt no longer becomes unclickable when it opens over an artifact's HTML preview in the Files tab.
+- **Reconnect** — diffs written while you were disconnected now auto-open, and stuck tool spinners stop.
 
 ## [1.91.0] - 2026-07-07
 
