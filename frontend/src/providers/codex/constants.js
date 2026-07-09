@@ -37,10 +37,17 @@ export const UNTRUSTED_PERMISSION_MODES = [
 
 /**
  * Effort level values for Codex sessions.
+ *
+ * ``MAX`` and ``ULTRA`` arrived with GPT-5.6 and are model-gated: the registry
+ * entry's ``provider_extra.supports_effort_{max,ultra}`` says which models take
+ * them (Sol and Terra take both, Luna takes ``max`` only). Mirrors the backend
+ * ``AGENT_SETTINGS_CHOICES`` in ``providers/codex/helpers.py`` — keep in sync.
  */
 export const EFFORT = {
     LOW: 'low',
     MEDIUM: 'medium',
     HIGH: 'high',
     X_HIGH: 'xhigh',
+    MAX: 'max',
+    ULTRA: 'ultra',
 }

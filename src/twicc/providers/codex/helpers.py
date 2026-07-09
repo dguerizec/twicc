@@ -11,7 +11,7 @@ import logging
 from collections.abc import Iterable
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import orjson
 from django.conf import settings
@@ -20,6 +20,7 @@ from twicc.core.enums import ItemKind, Provider
 from twicc.pricing import FamilyPrices
 from twicc.providers.helpers import (
     AgentSettingCategory,
+    AgentSettings,
     BaseProviderHelpers,
     IndexableMessage,
     ModelVersion,
@@ -74,7 +75,9 @@ if TYPE_CHECKING:
 
 
 AGENT_SETTINGS_CHOICES: dict[str, list] = {
-    "effort": ["low", "medium", "high", "xhigh"],
+    # ``max`` and ``ultra`` are model-gated (see ``CONSTRAINT_FLAG_MAPPING``):
+    # this catalogue is model-agnostic, the constraints narrow it per model.
+    "effort": ["low", "medium", "high", "xhigh", "max", "ultra"],
     "permission_mode": ["read_only", "strict", "auto", "autonomous", "yolo"],
     "context_max": [272_000],
 }
@@ -144,15 +147,32 @@ class CodexHelpers(BaseProviderHelpers):
 
     OPENROUTER_MODEL_PREFIX: ClassVar[str | None] = "openai/"
 
+    # Per-(field, value) capability flag in :class:`CodexModelExtra` gating the
+    # value. Values not listed here are universally available. GPT-5.6's two
+    # extra effort levels are the only model-gated values Codex has; the exact
+    # per-model set comes from the CLI (``model/list``), not from the tier name.
+    CONSTRAINT_FLAG_MAPPING: ClassVar[dict[tuple[str, Any], str]] = {
+        ("effort", "ultra"): "supports_effort_ultra",
+        ("effort", "max"):   "supports_effort_max",
+    }
+
     # Per-family default prices (USD per million tokens) — fallback when no
     # ``ModelPrice`` row matches and no other version of the same family is
-    # in the DB. Restricted to the families actually observed in Codex CLI
-    # JSONLs (``gpt`` / ``gpt-codex`` / ``gpt-codex-max``); other OpenAI
-    # families (``gpt-mini``, ``gpt-pro``, …) get parsed correctly by
+    # in the DB. Covers the families Codex CLI actually runs: the pre-5.6
+    # ``gpt`` / ``gpt-codex`` / ``gpt-codex-max``, plus one bucket per GPT-5.6
+    # tier (each tier is its own family, and each is priced differently). Other
+    # OpenAI families (``gpt-pro``, …) get parsed correctly by
     # :meth:`extract_family_and_version` but rely entirely on the synced
-    # OpenRouter rows since Codex CLI doesn't run them today. OpenRouter
-    # doesn't expose a separate ``input_cache_write`` price for OpenAI
-    # models, so the cache-write defaults are zero.
+    # OpenRouter rows since Codex CLI doesn't run them today.
+    #
+    # Cache writes: OpenRouter exposes no ``input_cache_write`` price for the
+    # pre-5.6 OpenAI models (hence their zeros), but does for the GPT-5.6 tiers
+    # — 1.25x the uncached input rate, with no 5m/1h split (that distinction is
+    # Anthropic's). The figures below mirror the synced rows. They stay inert
+    # either way: :func:`codex.pricing.to_token_usage` always reports zero
+    # cache-write tokens, because OpenAI's Responses counters have no such
+    # bucket. Keep them honest anyway, so the fallback never understates a cost
+    # if those tokens ever start being counted.
     DEFAULT_FAMILY_PRICES: ClassVar[dict[str, FamilyPrices]] = {
         "gpt": FamilyPrices(  # baseline gpt-5.4 pricing as of 2026-05
             input_price=Decimal("2.50"),
@@ -174,6 +194,27 @@ class CodexHelpers(BaseProviderHelpers):
             cache_read_price=Decimal("0.125"),
             cache_write_5m_price=Decimal("0"),
             cache_write_1h_price=Decimal("0"),
+        ),
+        "gpt-sol": FamilyPrices(  # gpt-5.6-sol pricing
+            input_price=Decimal("5.00"),
+            output_price=Decimal("30.00"),
+            cache_read_price=Decimal("0.50"),
+            cache_write_5m_price=Decimal("6.25"),
+            cache_write_1h_price=Decimal("6.25"),
+        ),
+        "gpt-terra": FamilyPrices(  # gpt-5.6-terra pricing
+            input_price=Decimal("2.50"),
+            output_price=Decimal("15.00"),
+            cache_read_price=Decimal("0.25"),
+            cache_write_5m_price=Decimal("3.125"),
+            cache_write_1h_price=Decimal("3.125"),
+        ),
+        "gpt-luna": FamilyPrices(  # gpt-5.6-luna pricing
+            input_price=Decimal("1.00"),
+            output_price=Decimal("6.00"),
+            cache_read_price=Decimal("0.10"),
+            cache_write_5m_price=Decimal("1.25"),
+            cache_write_1h_price=Decimal("1.25"),
         ),
     }
 
@@ -356,6 +397,96 @@ class CodexHelpers(BaseProviderHelpers):
         selected_model = self.sdk_model_safety_net(selected_model)
         mv = self.find_model(selected_model)
         return mv.full_name if mv else selected_model
+
+    # ------------------------------------------------------------------
+    # Model capabilities — the ``max`` / ``ultra`` effort gate
+    # ------------------------------------------------------------------
+
+    def _resolve_to_default_model_version(self) -> ModelVersion | None:
+        """Return the :class:`ModelVersion` for the synced default model.
+
+        Defensive fallback for the capability checks below, used when the
+        caller passes ``None`` or a model the registry doesn't know. Returns
+        ``None`` when the synced default is itself missing or unknown.
+        """
+        from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS, read_synced_settings
+
+        default_model = (
+            read_synced_settings().get("codexDefaultModel")
+            or SYNCED_SETTINGS_DEFAULTS.get("codexDefaultModel")
+        )
+        if not default_model:
+            return None
+        return self.find_model(default_model)
+
+    def selected_model_supports_effort_max(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model (or default fallback) unlocks the ``"max"`` effort."""
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra and mv.provider_extra.supports_effort_max)
+
+    def selected_model_supports_effort_ultra(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model (or default fallback) unlocks the ``"ultra"`` effort."""
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra and mv.provider_extra.supports_effort_ultra)
+
+    def serialize_model_extra(self, mv: ModelVersion) -> dict:
+        """Expose Codex's :class:`CodexModelExtra` flags on the wire."""
+        return mv.provider_extra._asdict() if mv.provider_extra else {}
+
+    def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
+        """Substitute an unavailable model, then demote an unsupported effort.
+
+        Pipeline:
+        1. Delegates to :meth:`BaseProviderHelpers.enforce_agent_settings_consistency`
+           to substitute a disabled/retired ``selected_model`` with the
+           nearest-by-weight available model.
+        2. Demotes ``effort == "ultra"`` to ``"max"`` (or straight to ``"xhigh"``
+           when the model unlocks neither), then ``effort == "max"`` to
+           ``"xhigh"``. Every Codex model takes ``xhigh`` and below, so the
+           cascade stops there. Luna is what makes the two steps distinct: it
+           takes ``max`` but not ``ultra``, so ``ultra`` lands on ``max`` rather
+           than falling all the way down.
+        """
+        settings = super().enforce_agent_settings_consistency(settings)
+
+        model = settings.selected_model
+        effort = settings.effort
+
+        if effort == "ultra" and not self.selected_model_supports_effort_ultra(model):
+            effort = "max" if self.selected_model_supports_effort_max(model) else "xhigh"
+        if effort == "max" and not self.selected_model_supports_effort_max(model):
+            effort = "xhigh"
+
+        if effort == settings.effort:
+            return settings
+        return settings._replace(effort=effort)
+
+    def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
+        """Re-clamp ``codexDefaultEffort`` against ``codexDefaultModel``.
+
+        Either key is a pivot: choosing a default model that doesn't unlock the
+        stored default effort — or raising the effort past what the current
+        default model takes — would otherwise leave a global default that every
+        new session silently demotes. Only writes back keys the client actually
+        sent, per the base contract.
+        """
+        if "codexDefaultModel" not in changes and "codexDefaultEffort" not in changes:
+            return
+        candidate = AgentSettings(
+            selected_model=synced.get(
+                "codexDefaultModel", self.SYNCED_SETTINGS_DEFAULTS["codexDefaultModel"],
+            ),
+            effort=synced.get(
+                "codexDefaultEffort", self.SYNCED_SETTINGS_DEFAULTS["codexDefaultEffort"],
+            ),
+        )
+        adjusted = self.enforce_agent_settings_consistency(candidate)
+        if "codexDefaultEffort" in changes and adjusted.effort != candidate.effort:
+            synced["codexDefaultEffort"] = adjusted.effort
 
     async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
         """Run a short gpt-5.4-mini SDK query to suggest a title for ``prompt``."""

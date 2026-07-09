@@ -192,7 +192,7 @@ def test_provider_patch_model_alias_resolves(temp_settings):
     cx_patch, cx_errors = build_provider_patch(
         "codex", _empty_provider_flags(model="max"))
     assert cx_errors == []
-    assert cx_patch == {"codexDefaultModel": "gpt"}
+    assert cx_patch == {"codexDefaultModel": "gpt-sol"}
 
 
 @pytest.mark.django_db

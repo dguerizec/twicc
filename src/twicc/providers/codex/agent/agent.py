@@ -292,13 +292,24 @@ class CodexAgent(BaseAgent):
         Unknown values fall through to ``None`` so Codex CLI picks its own
         default rather than crashing the turn — the dropdown only ever
         produces validated values today, this is a defensive guard.
+
+        It is logged at ``error`` level, not ``warning``: reaching it means our
+        effort catalogue and the SDK enum have drifted apart, and the user
+        silently gets the CLI's default instead of the level they picked. The
+        running CLI is the source of truth — ``model/list`` reports each model's
+        ``supportedReasoningEfforts``.
         """
         if not effort:
             return None
         try:
             return ReasoningEffort(effort)
         except ValueError:
-            logger.warning("Unknown Codex effort %r, falling back to CLI default", effort)
+            logger.error(
+                "Unknown Codex effort %r: not in the SDK ReasoningEffort enum, so the CLI will "
+                "silently apply its own default. The effort catalogue and the vendored SDK have "
+                "drifted — reconcile against the CLI's model/list supportedReasoningEfforts.",
+                effort,
+            )
             return None
 
     # ------------------------------------------------------------------

@@ -113,9 +113,20 @@ def to_token_usage(last: dict) -> TokenUsage:
     separately. To avoid double-billing we subtract the cached subset
     before storing it.
 
-    OpenAI has no explicit cache-write tier today (cache writes are
-    absorbed in the regular input price, with 5-minute TTL behaviour
-    managed server-side), so both cache-write counters stay at zero.
+    Cache writes were free before GPT-5.6 (absorbed in the regular input
+    price). **They are not free from GPT-5.6 on**: OpenAI bills prompt
+    tokens written to cache at 1.25x the uncached input rate and reports
+    them in a ``cache_write_tokens`` usage field.
+
+    Codex does not pass that counter through. Its own ``TokenUsageBreakdown``
+    schema declares only the five fields above, and no rollout carries it —
+    checked on a real ``gpt-5.6-luna`` session. So both cache-write counters
+    stay at zero here, not because the tier doesn't exist but because the
+    number is absent at the source. Consequence: for GPT-5.6 models the
+    per-line cost UNDERSTATES the true bill by up to 25% of its fresh-input
+    component (pre-5.6 models are exact). Wire the counter in as soon as
+    Codex emits it — the 1.25x prices are already in the synced OpenRouter
+    rows and in :attr:`CodexHelpers.DEFAULT_FAMILY_PRICES`.
     """
     cached = last.get("cached_input_tokens", 0) or 0
     total_input = last.get("input_tokens", 0) or 0

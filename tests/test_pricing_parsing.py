@@ -168,6 +168,13 @@ CODEX_MODEL_CASES: list[ModelCase] = [
     ModelCase("gpt", "5.4", ("openai/gpt-5.4",), ("gpt-5.4",)),
     ModelCase("gpt", "5.5", ("openai/gpt-5.5",), ("gpt-5.5",)),
 
+    # gpt-5.6 capability tiers (Sol / Terra / Luna). The tier name is a variant
+    # suffix, so each tier folds into its own pricing family — they are priced
+    # differently, unlike a dated snapshot of the same model.
+    ModelCase("gpt-sol",   "5.6", ("openai/gpt-5.6-sol",),   ("gpt-5.6-sol",)),
+    ModelCase("gpt-terra", "5.6", ("openai/gpt-5.6-terra",), ("gpt-5.6-terra",)),
+    ModelCase("gpt-luna",  "5.6", ("openai/gpt-5.6-luna",),  ("gpt-5.6-luna",)),
+
     # gpt-codex (Codex CLI's main model)
     ModelCase("gpt-codex", "5",   ("openai/gpt-5-codex",),   ("gpt-5-codex",)),
     ModelCase("gpt-codex", "5.1", ("openai/gpt-5.1-codex",), ("gpt-5.1-codex",)),

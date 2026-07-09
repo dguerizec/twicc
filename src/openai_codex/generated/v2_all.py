@@ -2723,6 +2723,13 @@ class ReasoningEffort(Enum):
     medium = "medium"
     high = "high"
     xhigh = "xhigh"
+    # Local patch: the rust-v0.144.0 schema lags its own binary, which reports
+    # and accepts these two levels for the GPT-5.6 tiers (``model/list`` returns
+    # them in ``supportedReasoningEfforts``). Without them, pydantic rejects the
+    # model list and ``ReasoningEffort("ultra")`` raises. Re-check at the next
+    # vendoring: drop this patch once upstream regenerates the schema.
+    max = "max"
+    ultra = "ultra"
 
 
 class ReasoningEffortOption(BaseModel):

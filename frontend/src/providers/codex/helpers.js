@@ -116,6 +116,8 @@ const AGENT_SETTINGS_CHOICES = {
         { value: EFFORT.MEDIUM, label: 'Medium', display_label: 'Medium effort' },
         { value: EFFORT.HIGH,   label: 'High',   display_label: 'High effort' },
         { value: EFFORT.X_HIGH, label: 'xHigh',  display_label: 'xHigh effort' },
+        { value: EFFORT.MAX,    label: 'Max',    display_label: 'Max effort' },
+        { value: EFFORT.ULTRA,  label: 'Ultra',  display_label: 'Ultra effort' },
     ],
     context_max: [
         { value: CONTEXT_MAX.DEFAULT, label: '272K' },
@@ -299,6 +301,62 @@ export class CodexHelpers extends BaseProviderHelpers {
 
     getModelRegistry() {
         return useCodexStore().modelRegistry
+    }
+
+    // ─── Model capabilities ──────────────────────────────────────────────
+    // Mirrors the backend ``selected_model_supports_*`` helpers: when the
+    // explicit ``selectedModel`` is unknown to the registry, fall back to the
+    // current synced default model. The conservative last-resort answer is
+    // ``false`` so an effort isn't advertised before the registry is seeded.
+
+    _resolveRegistryEntry(selectedModel) {
+        const store = useCodexStore()
+        const registry = store.modelRegistry
+        let entry = selectedModel ? registry.find(e => e.selected_model === selectedModel) : undefined
+        if (!entry) {
+            const defaultModel = store.defaultModel
+            if (defaultModel) entry = registry.find(e => e.selected_model === defaultModel)
+        }
+        return entry
+    }
+
+    modelSupportsEffortMax(selectedModel) {
+        const entry = this._resolveRegistryEntry(selectedModel)
+        return entry ? !!entry.provider_extra?.supports_effort_max : false
+    }
+
+    modelSupportsEffortUltra(selectedModel) {
+        const entry = this._resolveRegistryEntry(selectedModel)
+        return entry ? !!entry.provider_extra?.supports_effort_ultra : false
+    }
+
+    /**
+     * Pipeline mirroring the backend ``CodexHelpers.enforce_agent_settings_consistency``:
+     * substitute a retired model (``super``), then demote ``ultra`` → ``max`` →
+     * ``xhigh`` against the resolved model. Called by ``useSessionAgentSettings``
+     * whenever the model or effort changes, so the popover selection follows the
+     * model immediately instead of waiting for the backend to correct it.
+     */
+    enforceAgentSettingsConsistency(settings) {
+        const result = super.enforceAgentSettingsConsistency(settings)
+        const model = result.selectedModel
+
+        if (result.effort === EFFORT.ULTRA && !this.modelSupportsEffortUltra(model)) {
+            result.effort = this.modelSupportsEffortMax(model) ? EFFORT.MAX : EFFORT.X_HIGH
+        }
+        if (result.effort === EFFORT.MAX && !this.modelSupportsEffortMax(model)) {
+            result.effort = EFFORT.X_HIGH
+        }
+        return result
+    }
+
+    isChoiceDisabled(field, choiceValue, context) {
+        if (super.isChoiceDisabled(field, choiceValue, context)) return true
+        if (field === 'effort') {
+            if (choiceValue === EFFORT.MAX) return !this.modelSupportsEffortMax(context?.effectiveModel)
+            if (choiceValue === EFFORT.ULTRA) return !this.modelSupportsEffortUltra(context?.effectiveModel)
+        }
+        return false
     }
 
     // ─── Usage quota tracking ────────────────────────────────────────────

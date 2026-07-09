@@ -1782,8 +1782,6 @@ function getSessionGateState() {
         isStarting: settings.isStarting.value,
         isContextMaxForced: settings.isContextMaxForced.value,
         isContextMaxForcedByModel: !helpers?.modelSupports1m?.(model),
-        isEffortXhighAvailable: helpers?.modelSupportsEffortXhigh?.(model) ?? false,
-        isEffortMaxAvailable: helpers?.modelSupportsEffortMax?.(model) ?? false,
         effectiveModel: model,
     }
 }

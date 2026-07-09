@@ -7,6 +7,8 @@ the motivation (Django-free re-use by lightweight callers like
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettingCategory, ModelVersion, assert_unique_weights
 
@@ -19,7 +21,7 @@ from twicc.providers.helpers import AgentSettingCategory, ModelVersion, assert_u
 # ``build_provider_show`` to appear in the bare read. Mirror the change in the
 # Claude Code constants.
 SYNCED_SETTINGS_DEFAULTS: dict = {
-    "codexDefaultModel": "gpt",
+    "codexDefaultModel": "gpt-terra",
     "codexDefaultEffort": "medium",
     "codexDefaultPermissionMode": "read_only",
     "codexDefaultUntrustedPermissionMode": "read_only",
@@ -90,11 +92,14 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
 AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
     "selected_model": {
         "min": "gpt-mini", "fastest": "gpt-mini", "cheapest": "gpt-mini",
-        "medium": "gpt-5.4", "balanced": "gpt-5.4",
-        "max": "gpt", "strongest": "gpt",
+        "medium": "gpt-terra", "balanced": "gpt-terra",
+        "max": "gpt-sol", "strongest": "gpt-sol",
     },
+    # ``max`` is a native effort since GPT-5.6, so native-first keeps it as-is
+    # and this entry is a no-op kept for symmetry (same shape as Claude Code).
+    # ``ultra`` sits above it but is reached only by naming it explicitly.
     "effort": {
-        "min": "low", "max": "xhigh",
+        "min": "low", "max": "max",
     },
     "context_max": {
         "min": "272k", "max": "272k",
@@ -115,12 +120,63 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
 }
 
 
-# Codex CLI models the bundled binary accepts (verified at startup time
-# via ``codex.models()``). ``selected_model_value`` returns the bare
-# alias for ``latest=True`` entries (``"gpt"``, ``"gpt-mini"``) and the
-# versioned alias for the rest (``"gpt-5.4"``), matching the Claude
-# Code convention of bare-alias-for-latest / versioned-alias.
+class CodexModelExtra(NamedTuple):
+    """Capability flags carried in :attr:`ModelVersion.provider_extra` for Codex.
+
+    GPT-5.6 added two reasoning-effort levels above ``xhigh``: ``max`` (deepest
+    single-agent reasoning) and ``ultra`` (subagent parallelisation). They are
+    NOT uniform across the family, and not Sol-only as the launch coverage
+    claimed — the CLI is the source of truth and reports the per-model set in
+    ``model/list`` under ``supportedReasoningEfforts``. As of Codex 0.144.0:
+    Sol and Terra expose both, Luna exposes ``max`` only, and every pre-5.6
+    model exposes neither. Mirrors ``claude_code.constants.ClaudeCodeModelExtra``.
+    """
+    supports_effort_max: bool
+    supports_effort_ultra: bool
+
+
+# Codex CLI models the bundled binary accepts, cross-checked against the CLI's
+# own ``model/list`` response. ``selected_model_value`` returns the bare alias
+# for ``latest=True`` entries (``"gpt"``, ``"gpt-sol"``, ``"gpt-mini"``) and the
+# versioned alias for the rest (``"gpt-5.4"``), matching the Claude Code
+# convention of bare-alias-for-latest / versioned-alias.
+#
+# With GPT-5.6 the name denotes a durable capability tier (Sol/Terra/Luna)
+# rather than a size suffix, so each tier is its own family here. That family is
+# also the pricing-equivalence key ``extract_model_info`` derives from the
+# ``full_name`` (``gpt-5.6-sol`` → family ``gpt-sol``), which keeps the registry
+# and the price table in agreement without a second mapping.
 MODEL_VERSIONS: list[ModelVersion] = [
+    ModelVersion(
+        provider=Provider.CODEX,
+        model="gpt-sol",
+        version="5.6",
+        full_name="gpt-5.6-sol",
+        retirement_date=None,
+        latest=True,
+        weight=130,
+        provider_extra=CodexModelExtra(supports_effort_max=True, supports_effort_ultra=True),
+    ),
+    ModelVersion(
+        provider=Provider.CODEX,
+        model="gpt-terra",
+        version="5.6",
+        full_name="gpt-5.6-terra",
+        retirement_date=None,
+        latest=True,
+        weight=120,
+        provider_extra=CodexModelExtra(supports_effort_max=True, supports_effort_ultra=True),
+    ),
+    ModelVersion(
+        provider=Provider.CODEX,
+        model="gpt-luna",
+        version="5.6",
+        full_name="gpt-5.6-luna",
+        retirement_date=None,
+        latest=True,
+        weight=110,
+        provider_extra=CodexModelExtra(supports_effort_max=True, supports_effort_ultra=False),
+    ),
     ModelVersion(
         provider=Provider.CODEX,
         model="gpt",
@@ -129,7 +185,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=True,
         weight=100,
-        provider_extra=None,
+        provider_extra=CodexModelExtra(supports_effort_max=False, supports_effort_ultra=False),
     ),
     ModelVersion(
         provider=Provider.CODEX,
@@ -139,7 +195,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=False,
         weight=90,
-        provider_extra=None,
+        provider_extra=CodexModelExtra(supports_effort_max=False, supports_effort_ultra=False),
     ),
     ModelVersion(
         provider=Provider.CODEX,
@@ -149,7 +205,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=True,
         weight=50,
-        provider_extra=None,
+        provider_extra=CodexModelExtra(supports_effort_max=False, supports_effort_ultra=False),
     ),
 ]
 
