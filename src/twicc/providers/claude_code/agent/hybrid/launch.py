@@ -113,9 +113,13 @@ def build_argv(
     if settings.effort:
         argv += ["--effort", settings.effort]
     # Mirror the SDK thinking mapping: True → adaptive, False → disabled,
-    # None → omit (CLI default).
+    # None → omit (CLI default). ``--thinking-display summarized`` is required
+    # on the True branch — the SDK sets it via ``ThinkingConfigAdaptive(
+    # display="summarized")`` and the CLI defaults to ``omitted``, which strips
+    # the thinking summary and leaves an empty thinking block. (No display on
+    # the disabled branch — the SDK's ``ThinkingConfigDisabled`` carries none.)
     if settings.thinking_enabled is True:
-        argv += ["--thinking", "adaptive"]
+        argv += ["--thinking", "adaptive", "--thinking-display", "summarized"]
     elif settings.thinking_enabled is False:
         argv += ["--thinking", "disabled"]
     permission_mode = settings.permission_mode
