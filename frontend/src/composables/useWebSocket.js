@@ -17,6 +17,16 @@ import { truncateTitle } from '../utils/truncate'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { compareVersions } from '../utils/version'
 
+// A burst of artifact file edits doesn't carry fresh share "outdated" state
+// (source_updated_at is computed server-side only when a share is serialized), so
+// debounce-refresh the shares once edits settle — gated on an artifact share
+// actually existing, to avoid an idle refetch. Keeps the per-row "outdated" tag,
+// the "Push update to all" banner and the warning-tinted share buttons live.
+const refreshSharesOnArtifactChange = useDebounceFn(() => {
+    const shares = useSharesStore()
+    if (shares.list.some((s) => s.kind === 'artifact')) shares.loadShares()
+}, 1500)
+
 // WebSocket close code sent by backend when authentication fails
 const WS_CLOSE_AUTH_FAILURE = 4001
 
@@ -1050,6 +1060,9 @@ export function useWebSocket() {
                 window.dispatchEvent(new CustomEvent('twicc:artifact-files-changed', {
                     detail: { sessionId: msg.session_id, paths: msg.paths || [] },
                 }))
+                // Refresh shares so an artifact edit re-marks its links as outdated
+                // (badge + warning-tinted share button) without a reconnect.
+                refreshSharesOnArtifactChange()
                 break
             }
             case 'plan_available': {

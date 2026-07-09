@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { useSharesStore } from '../../stores/shares'
+import { isShareOutdated } from '../../utils/shareStatus'
 import { toast } from '../../composables/useToast'
 import ArtifactBookmarkDialog from './ArtifactBookmarkDialog.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -60,8 +61,19 @@ const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
 const activeShareCount = computed(() =>
     bookmark.value ? sharesStore.activeCountForBookmark(bookmark.value.id) : 0
 )
+// Links serving a stale copy (the live files changed after their snapshot): the
+// share button warns so the owner remembers to push the update.
+const outdatedShareCount = computed(() =>
+    bookmark.value ? sharesStore.forBookmark(bookmark.value.id).filter(isShareOutdated).length : 0
+)
+const shareVariant = computed(() =>
+    outdatedShareCount.value > 0 ? 'warning' : (activeShareCount.value > 0 ? 'brand' : 'neutral')
+)
 const shareTooltip = computed(() => {
     if (!sharingEnabled.value) return 'Configure a share host in Settings → Sharing to create links'
+    if (outdatedShareCount.value > 0) {
+        return `Share artifact — ${outdatedShareCount.value} update${outdatedShareCount.value > 1 ? 's' : ''} to push`
+    }
     if (activeShareCount.value > 0) {
         return `Share artifact (${activeShareCount.value} active link${activeShareCount.value > 1 ? 's' : ''})`
     }
@@ -126,8 +138,10 @@ function viewInArtifacts() {
         :id="shareButtonId"
         appearance="plain"
         size="small"
-        :variant="activeShareCount > 0 ? 'brand' : 'neutral'"
-        :class="['bookmark-button', 'reduced-height', { 'bookmark-button--active': activeShareCount > 0 }]"
+        :variant="shareVariant"
+        :class="['bookmark-button', 'reduced-height', {
+            'bookmark-button--active': activeShareCount > 0 && outdatedShareCount === 0,
+            'bookmark-button--attention': outdatedShareCount > 0 }]"
         @click.stop="shareArtifact"
     >
         <wa-icon name="share-nodes" label="Share artifact"></wa-icon>
@@ -161,6 +175,14 @@ function viewInArtifacts() {
     opacity: 1;
     &::part(base) {
         color: var(--wa-color-brand-60);
+    }
+}
+/* Share button with pending updates to push → warning tint (mirrors the
+   per-target "Push update to all" banner). */
+.bookmark-button--attention {
+    opacity: 1;
+    &::part(base) {
+        color: var(--wa-color-warning-60);
     }
 }
 </style>

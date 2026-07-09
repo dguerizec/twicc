@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useSharesStore } from '../../stores/shares'
 import { shareAbsoluteUrl } from '../../utils/shareUrl'
+import { isShareOutdated } from '../../utils/shareStatus'
 import { toast } from '../../composables/useToast'
 
 defineProps({ shares: { type: Array, required: true } })
@@ -10,11 +11,6 @@ const store = useSharesStore()
 
 // Per-share expanded "Recent views" panel: id -> accesses[] (null = loading).
 const accesses = ref({})
-
-function isOutdated(s) {
-    return s.kind === 'artifact' && s.source_updated_at && s.options?.snapshot_at
-        && s.source_updated_at > s.options.snapshot_at
-}
 function copy(s) {
     const url = shareAbsoluteUrl(s)
     if (!url) { toast.error?.('Configure a share host in Settings → Sharing first.'); return }
@@ -41,12 +37,12 @@ function when(iso) { try { return new Date(iso).toLocaleString() } catch { retur
                 </wa-tag>
                 <span class="share-label">{{ s.label || '(no label)' }}</span>
                 <wa-tag v-if="s.has_password" size="small" variant="neutral"><wa-icon name="lock"></wa-icon></wa-tag>
-                <wa-tag v-if="isOutdated(s)" size="small" variant="warning">outdated</wa-tag>
+                <wa-tag v-if="isShareOutdated(s)" size="small" variant="warning">outdated</wa-tag>
                 <button class="share-views" type="button" @click="toggleViews(s)">{{ s.view_count }} views</button>
             </div>
             <div class="share-row-actions">
                 <wa-button size="small" appearance="plain" @click="copy(s)"><wa-icon name="copy"></wa-icon></wa-button>
-                <wa-button v-if="isOutdated(s)" size="small" variant="warning" @click="store.propagateShare(s.id)">Propagate</wa-button>
+                <wa-button v-if="isShareOutdated(s)" size="small" variant="warning" @click="store.propagateShare(s.id)">Push update</wa-button>
                 <wa-button size="small" appearance="plain" @click="emit('edit', s)"><wa-icon name="pen"></wa-icon></wa-button>
                 <wa-button v-if="s.status !== 'revoked'" size="small" appearance="plain" @click="store.revokeShare(s.id, true)">Revoke</wa-button>
                 <wa-button v-else size="small" appearance="plain" @click="store.revokeShare(s.id, false)">Unrevoke</wa-button>

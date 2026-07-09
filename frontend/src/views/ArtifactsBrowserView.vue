@@ -14,6 +14,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useSharesStore } from '../stores/shares'
+import { isShareOutdated } from '../utils/shareStatus'
 import { buildFilesRouteParams } from '../utils/granularRoutes'
 import FilePane from '../components/files/FilePane.vue'
 import ArtifactBookmarkDialog from '../components/artifacts/ArtifactBookmarkDialog.vue'
@@ -50,6 +51,13 @@ const bookmark = computed(() =>
 const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
 const activeShareCount = computed(() =>
     bookmark.value ? sharesStore.activeCountForBookmark(bookmark.value.id) : 0
+)
+// Links serving a stale copy → the share button warns so the owner pushes the update.
+const outdatedShareCount = computed(() =>
+    bookmark.value ? sharesStore.forBookmark(bookmark.value.id).filter(isShareOutdated).length : 0
+)
+const shareVariant = computed(() =>
+    outdatedShareCount.value > 0 ? 'warning' : (activeShareCount.value > 0 ? 'brand' : 'neutral')
 )
 function openShare() {
     if (!bookmark.value || !sharingEnabled.value) return
@@ -240,20 +248,24 @@ function openInSession() {
                     <wa-button
                         id="abv-share-button"
                         size="small"
-                        :variant="activeShareCount > 0 ? 'brand' : 'neutral'"
+                        :variant="shareVariant"
                         appearance="plain"
-                        :class="['abv-share-button', 'reduced-height', { 'abv-share-button--active': activeShareCount > 0 }]"
+                        :class="['abv-share-button', 'reduced-height', {
+                            'abv-share-button--active': activeShareCount > 0 && outdatedShareCount === 0,
+                            'abv-share-button--attention': outdatedShareCount > 0 }]"
                         :disabled="!sharingEnabled"
                         @click="openShare"
                     >
                         <wa-icon name="share-nodes" label="Share"></wa-icon>
                     </wa-button>
                     <AppTooltip for="abv-share-button">
-                        {{ sharingEnabled
-                            ? (activeShareCount > 0
-                                ? `Share artifact (${activeShareCount} active link${activeShareCount > 1 ? 's' : ''})`
-                                : 'Share artifact')
-                            : 'Configure a share host in Settings → Sharing to create links' }}
+                        {{ !sharingEnabled
+                            ? 'Configure a share host in Settings → Sharing to create links'
+                            : outdatedShareCount > 0
+                                ? `Share artifact — ${outdatedShareCount} update${outdatedShareCount > 1 ? 's' : ''} to push`
+                                : activeShareCount > 0
+                                    ? `Share artifact (${activeShareCount} active link${activeShareCount > 1 ? 's' : ''})`
+                                    : 'Share artifact' }}
                     </AppTooltip>
                     <wa-button
                         id="abv-open-session-button"
@@ -404,6 +416,13 @@ function openInSession() {
     opacity: 1;
     &::part(base) {
         color: var(--wa-color-brand-60);
+    }
+}
+/* Pending updates to push → warning tint (mirrors the "Push update to all" banner). */
+.abv-share-button--attention {
+    opacity: 1;
+    &::part(base) {
+        color: var(--wa-color-warning-60);
     }
 }
 

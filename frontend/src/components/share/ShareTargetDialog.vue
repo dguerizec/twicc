@@ -6,6 +6,8 @@
 // and hosts a nested ShareDialog for both create and edit.
 import { ref, computed, watch } from 'vue'
 import { useSharesStore } from '../../stores/shares'
+import { isShareOutdated } from '../../utils/shareStatus'
+import { toast } from '../../composables/useToast'
 import ShareListPanel from './ShareListPanel.vue'
 import ShareDialog from './ShareDialog.vue'
 
@@ -30,6 +32,21 @@ const shares = computed(() => {
     return [...list].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
 })
 
+// Links serving a stale copy (artifact only): the target's live files changed
+// after their snapshot. "Push update to all" re-propagates them in one go.
+const outdated = computed(() => shares.value.filter(isShareOutdated))
+const pushingAll = ref(false)
+async function pushAll() {
+    if (!outdated.value.length || pushingAll.value) return
+    pushingAll.value = true
+    try {
+        await Promise.all(outdated.value.map((s) => store.propagateShare(s.id)))
+        toast.success('Update pushed to all outdated links')
+    } finally {
+        pushingAll.value = false
+    }
+}
+
 // The nested ShareDialog serves both creating a new link and editing an existing
 // one — `editing` holds the share being edited (null = create mode).
 const childOpen = ref(false)
@@ -50,6 +67,16 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
     <wa-dialog ref="dialogRef" :open="open"
                :label="defaultTitle ? `Shared links — ${defaultTitle}` : 'Shared links'"
                style="--width: min(720px, calc(100vw - 2rem))" @wa-hide="onHide">
+        <wa-callout v-if="outdated.length" variant="warning" class="outdated-banner">
+            <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
+            <div class="outdated-banner__row">
+                <span>{{ outdated.length }} link{{ outdated.length > 1 ? 's' : '' }}
+                    {{ outdated.length > 1 ? 'are' : 'is' }} behind the current files.</span>
+                <wa-button size="small" variant="warning" :loading="pushingAll" @click="pushAll">
+                    Push update to all
+                </wa-button>
+            </div>
+        </wa-callout>
         <ShareListPanel :shares="shares" @edit="openEdit" />
         <ShareDialog v-if="childOpen" :open="childOpen" :kind="kind"
                      :session-id="sessionId" :bookmark-id="bookmarkId"
@@ -65,6 +92,14 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
 </template>
 
 <style scoped>
+.outdated-banner { margin-bottom: 0.75rem; }
+.outdated-banner__row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.outdated-banner__row span { flex: 1; min-width: 14ch; }
 .dialog-footer {
     display: flex;
     gap: var(--wa-space-s);
