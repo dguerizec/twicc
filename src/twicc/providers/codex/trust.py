@@ -89,14 +89,12 @@ async def _write_value(root: str, value: str | None) -> None:
     failed projection degrades (Codex won't load project layers) but never
     blocks the session.
     """
-    from openai_codex import CodexConfig
     from openai_codex.async_client import AsyncCodexClient
     from openai_codex.generated.v2_all import ConfigWriteResponse
 
-    from twicc.providers.codex.bin import resolve_bundled_binary
+    from twicc.providers.codex.bin import make_codex_config
 
-    bundled = resolve_bundled_binary()
-    config = CodexConfig(codex_bin=str(bundled), cwd=str(Path.home()))
+    config = await make_codex_config(cwd=str(Path.home()))
     try:
         async with _write_lock:
             async with AsyncCodexClient(config=config) as client:

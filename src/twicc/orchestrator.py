@@ -198,6 +198,9 @@ class OrchestratorRegistry:
         # producer. Each task removes itself via a done-callback.
         self._inflight_hot_toggle_tasks: set[asyncio.Task[None]] = set()
 
+        # Background task pre-downloading the Codex CLI runtime (see start_all).
+        self._codex_runtime_task: asyncio.Task | None = None
+
     def get(self, provider: Provider) -> BaseOrchestrator:
         """Return the orchestrator for ``provider``."""
         return self._orchestrators[provider]
@@ -243,6 +246,16 @@ class OrchestratorRegistry:
         self._shutdown_event = shutdown_event
         self._search_index_ready = search_index_ready
 
+        # Pre-download the Codex CLI runtime unconditionally, in the background.
+        # NOT gated on Codex being enabled: the user can enable Codex live from
+        # the UI and must not wait ~1 min for the binary at that point. Best-
+        # effort — a failure here only means Codex features degrade until the
+        # next attempt; TwiCC and Claude Code keep running.
+        self._codex_runtime_task = asyncio.create_task(
+            self._predownload_codex_runtime(),
+            name="codex-runtime-predownload",
+        )
+
         enabled = get_enabled_providers()
         if not enabled:
             return
@@ -262,6 +275,22 @@ class OrchestratorRegistry:
                     "Orchestrator for %s failed to start: %s",
                     provider.value, result, exc_info=result,
                 )
+
+    async def _predownload_codex_runtime(self) -> None:
+        """Fetch the Codex CLI runtime in the background (best-effort).
+
+        Scheduled unconditionally by :meth:`start_all` so a later live enable
+        of the Codex provider doesn't have to wait for the ~110 MB download.
+        Any failure is logged and swallowed — the runtime is re-fetched on
+        first real use via ``make_codex_config`` → ``ensure_codex_runtime``.
+        """
+        try:
+            from twicc.providers.codex.runtime import ensure_codex_runtime
+            await ensure_codex_runtime()
+        except Exception:
+            logger.exception(
+                "Codex runtime pre-download failed; it will be retried on first use"
+            )
 
     async def wait_initial_sync_done(self) -> None:
         """Block until every enabled provider's initial sync has reported completion.
@@ -700,6 +729,12 @@ class OrchestratorRegistry:
                 "shutdown_all: awaiting %d in-flight hot-toggle task(s)", len(inflight),
             )
             await asyncio.gather(*inflight, return_exceptions=True)
+
+        # Cancel the background Codex runtime pre-download if it's still going
+        # (scheduled unconditionally by start_all, independent of the enabled
+        # set below).
+        if self._codex_runtime_task is not None and not self._codex_runtime_task.done():
+            self._codex_runtime_task.cancel()
 
         enabled = get_enabled_providers()
         if not enabled:

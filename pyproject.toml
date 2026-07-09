@@ -35,7 +35,6 @@ dependencies = [
     "json-repair~=0.59.5",
     "keyring~=25.7.0; sys_platform == 'darwin'",
     "mcp>=1.27,<2",
-    "openai-codex-cli-bin==0.136.0",
     "orjson~=3.11.8",
     "pillow>=12.2.0",
     "psutil~=7.2.2",
@@ -67,13 +66,14 @@ twicc = "twicc:main"
 
 [tool.hatch.build.targets.wheel]
 # Two top-level packages ship inside the wheel: the TwiCC app itself, and the
-# vendored Codex Python SDK (extracted from openai/codex tag rust-v0.136.0 —
+# vendored Codex Python SDK (extracted from openai/codex tag rust-v0.144.0 —
 # see hatch_build.py). The SDK is vendored rather than pulled from PyPI
 # because the PyPI release `openai-codex` pins an older runtime version and
 # we want to ride a known-good combination with the matching upstream tag.
-# The Codex CLI binary itself comes from `openai-codex-cli-bin` on PyPI,
-# which now publishes manylinux wheels — so TwiCC ships as a single
-# platform-agnostic `py3-none-any` wheel again.
+# The Codex CLI binary itself is downloaded at first launch from the matching
+# GitHub Release (see src/twicc/providers/codex/runtime.py) — OpenAI stopped
+# publishing stable Codex binaries to PyPI — so TwiCC still ships as a single
+# platform-agnostic `py3-none-any` wheel.
 packages = ["src/twicc", "src/openai_codex"]
 artifacts = [
     "src/twicc/static/**",

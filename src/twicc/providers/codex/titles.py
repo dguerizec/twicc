@@ -17,12 +17,12 @@ import asyncio
 import logging
 from typing import NamedTuple
 
-from openai_codex import CodexConfig, AsyncCodex
+from openai_codex import AsyncCodex
 from django.db import transaction
 
 from twicc.core.enums import Provider
 
-from .bin import resolve_bundled_binary
+from .bin import make_codex_config
 
 logger = logging.getLogger(__name__)
 
@@ -115,8 +115,7 @@ async def rename_thread_via_sdk(thread_id: str, title: str) -> None:
     rename endpoint currently swallows the error (the DB title is
     already updated; the watcher / next session reload will reconcile).
     """
-    bundled_bin = resolve_bundled_binary()
-    config = CodexConfig(codex_bin=str(bundled_bin))
+    config = await make_codex_config()
     try:
         async with AsyncCodex(config=config) as codex:
             thread = await codex.thread_resume(thread_id)
@@ -148,8 +147,7 @@ async def read_title_from_codex(thread_id: str) -> str | None:
     Returns ``None`` if the thread is not found, has no name, or on
     any error (logged at WARNING).
     """
-    bundled_bin = resolve_bundled_binary()
-    config = CodexConfig(codex_bin=str(bundled_bin))
+    config = await make_codex_config()
     try:
         async with AsyncCodex(config=config) as codex:
             cursor: str | None = None
@@ -179,8 +177,7 @@ async def bulk_sync_titles_from_codex() -> dict[str, str]:
     threads, but the call is cheap because ``use_state_db_only=True``
     skips JSONL rollout scanning.
     """
-    bundled_bin = resolve_bundled_binary()
-    config = CodexConfig(codex_bin=str(bundled_bin))
+    config = await make_codex_config()
     titles: dict[str, str] = {}
     try:
         async with AsyncCodex(config=config) as codex:

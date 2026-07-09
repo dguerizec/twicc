@@ -17,8 +17,6 @@ import asyncio
 import logging
 from typing import Any, ClassVar
 
-from openai_codex import CodexConfig
-
 from asgiref.sync import sync_to_async
 
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager, SendDeliveryError
@@ -28,7 +26,7 @@ from twicc.logging_context import provider_log_context
 from twicc.pending_session_attributes import get_pending_session_attributes
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
-from ..bin import resolve_bundled_binary
+from ..bin import make_codex_config
 from ..permission_modes import resolve_codex_policy
 from ..sdk_wrappers import TwiccAsyncCodex
 from .agent import CodexAgent
@@ -536,8 +534,7 @@ class CodexAgentManager(BaseAgentManager):
         resolved through the helpers; the rest of the live/idle/startup
         categories carry no hot-applicable values in this v1.
         """
-        bundled_bin = resolve_bundled_binary()
-        config = CodexConfig(codex_bin=str(bundled_bin), cwd=cwd)
+        config = await make_codex_config(cwd=cwd)
         codex = TwiccAsyncCodex(config=config)
 
         # ``thread_start`` / ``thread_resume`` lazy-init the transport via

@@ -18,7 +18,7 @@ When the user asks to make a new release, follow these steps in order:
    - `dist/twicc-{version}.tar.gz` (sdist, platform-agnostic — both this and the wheel get published to PyPI in step 11)
    - `dist/twicc-{version}-py3-none-any.whl` (single platform-agnostic wheel)
 
-   The Codex CLI binary comes from `openai-codex-cli-bin` on PyPI (manylinux/macOS/Windows wheels since 0.133.0), so TwiCC itself does not need per-platform wheels anymore. The sdist embeds the pre-built frontend assets so `pip install` from source does not need npm. See `hatch_build.py` and `docs/codex-vendoring.md`.
+   The Codex CLI binary is downloaded at first launch from the matching GitHub Release (see `src/twicc/providers/codex/runtime.py`) — OpenAI stopped publishing stable Codex binaries to PyPI after 0.136.0 — so TwiCC itself does not need per-platform wheels. The sdist embeds the pre-built frontend assets so `pip install` from source does not need npm. See `hatch_build.py` and `docs/codex-vendoring.md`.
 
    **Fresh frontend, always:** `build-release.sh` deletes `src/twicc/static/frontend/` before `uv build`. The `hatch_build.py` hook skips the npm build whenever that directory already holds an `index.html` (needed for the sdist→wheel and pip-install-from-sdist paths). Without the wipe, a stale dev build sitting there would be packaged as-is, silently shipping an outdated UI — exactly how 1.7.1 went out with a frontend missing its latest changes. Never package a release without that clean rebuild.
 
@@ -54,4 +54,4 @@ When the user asks to make a new release, follow these steps in order:
     ```
     uvx uv-publish /home/twidi/dev/twicc-poc/dist/twicc-{version}*
     ```
-    The glob picks up both `twicc-{version}-py3-none-any.whl` and `twicc-{version}.tar.gz`. The sdist is now safe to publish — it embeds the pre-built frontend assets, and the Codex CLI binary comes from the `openai-codex-cli-bin` PyPI dependency, so `pip install` from source needs no npm and no extra fetch. **Do not run `uv-publish` yourself** unless the user explicitly asks you to.
+    The glob picks up both `twicc-{version}-py3-none-any.whl` and `twicc-{version}.tar.gz`. The sdist is now safe to publish — it embeds the pre-built frontend assets, so `pip install` from source needs no npm. (The Codex CLI binary is fetched from the matching GitHub Release at first launch, not bundled — see `docs/codex-vendoring.md`.) **Do not run `uv-publish` yourself** unless the user explicitly asks you to.

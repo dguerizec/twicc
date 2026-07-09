@@ -60,7 +60,6 @@ async def ensure_twicc_plugin_installed() -> None:
         )
         return
 
-    from openai_codex import CodexConfig
     from openai_codex.async_client import AsyncCodexClient
     from openai_codex.errors import InvalidRequestError
     from openai_codex.generated.v2_all import (
@@ -74,17 +73,13 @@ async def ensure_twicc_plugin_installed() -> None:
         PLUGIN_NAME,
         get_marketplace_dir,
     )
-    from twicc.providers.codex.bin import resolve_bundled_binary
+    from twicc.providers.codex.bin import make_codex_config
 
     marketplace_dir = get_marketplace_dir().resolve()
 
-    bundled_bin = resolve_bundled_binary()
     # ``cwd`` here is the app-server's own working directory — it has no
     # bearing on plugin install, which writes to ``$CODEX_HOME``.
-    config = CodexConfig(
-        codex_bin=str(bundled_bin),
-        cwd=str(Path.home()),
-    )
+    config = await make_codex_config(cwd=str(Path.home()))
 
     try:
         async with AsyncCodexClient(config=config) as client:

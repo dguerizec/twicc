@@ -31,10 +31,10 @@ from pathlib import Path
 from typing import NamedTuple
 
 import orjson
-from openai_codex import CodexConfig, TextInput
+from openai_codex import TextInput
 from openai_codex.generated.v2_all import AskForApproval, ReasoningEffort, SandboxMode
 
-from .bin import resolve_bundled_binary
+from .bin import make_codex_config
 from .sdk_wrappers import TwiccAsyncCodex
 
 logger = logging.getLogger(__name__)
@@ -301,8 +301,7 @@ async def _codex_sdk_throwaway_call() -> None:
     store. We drain the stream so the turn completes cleanly and the
     transport closes without leaking the subprocess.
     """
-    bundled_bin = resolve_bundled_binary()
-    config = CodexConfig(codex_bin=str(bundled_bin))
+    config = await make_codex_config()
     async with TwiccAsyncCodex(config=config) as codex:
         thread = await codex.thread_start_with_policy(
             model=_REFRESH_MODEL,
@@ -344,8 +343,7 @@ async def probe_auth_via_codex_sdk() -> bool | None:
 
     async def _execute() -> None:
         nonlocal result
-        bundled_bin = resolve_bundled_binary()
-        config = CodexConfig(codex_bin=str(bundled_bin))
+        config = await make_codex_config()
         async with TwiccAsyncCodex(config=config) as codex:
             thread = await codex.thread_start_with_policy(
                 model=_REFRESH_MODEL,

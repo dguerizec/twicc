@@ -775,19 +775,6 @@ wheels = [
 ]
 
 [[package]]
-name = "openai-codex-cli-bin"
-version = "0.136.0"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/45/2e/09764338fcb104ebcb1ebf2490d71ab4b8339b5d6f8bdce19480adad5a99/openai_codex_cli_bin-0.136.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:9ded24a9977221f67173f49b8c3ba3a944787b7323dbd664dd8e8ae1a5efc0aa", size = 94036262, upload-time = "2026-06-01T19:28:13.291Z" },
-    { url = "https://files.pythonhosted.org/packages/44/46/10dea458f8ead97b6449a1c05b65883ffe28724204c05e6169439576ee48/openai_codex_cli_bin-0.136.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:8d194688c1afe87bf85705528cbcbdb762cb378d8c58c64162402babbd795436", size = 83713829, upload-time = "2026-06-01T19:28:17.39Z" },
-    { url = "https://files.pythonhosted.org/packages/7d/83/21402a805f3312196a4f4bef0b6a45d3dee301e3db3ddeee117b4b1e612b/openai_codex_cli_bin-0.136.0-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:bdbdfeeac5bb2e744bd810cb60c55313c280d0f6ff9e93699431bcfc2040c9c2", size = 82981863, upload-time = "2026-06-01T19:28:21.246Z" },
-    { url = "https://files.pythonhosted.org/packages/33/79/1617e008381345391def39254404c0248a425739bd13c95d9fbe3e63d16f/openai_codex_cli_bin-0.136.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:37b353435f354c6d1bcc32e3b83e40ef9d1ef7294c8adedd229fbaedc82a6f74", size = 90187224, upload-time = "2026-06-01T19:28:24.89Z" },
-    { url = "https://files.pythonhosted.org/packages/f4/bc/a591d4464f999e0fab6abb5ba369463eee99a82e7c298e2cff257d80b849/openai_codex_cli_bin-0.136.0-py3-none-win_amd64.whl", hash = "sha256:c91ffbb1d903970e74b65958f7d1fa548fac8abdfe9b3a098f3da7f47dbb2575", size = 91137642, upload-time = "2026-06-01T19:28:28.512Z" },
-    { url = "https://files.pythonhosted.org/packages/89/f3/e8ccd644e7a87a25229022088abf4d724d3d608fcda7123f9a11515409ca/openai_codex_cli_bin-0.136.0-py3-none-win_arm64.whl", hash = "sha256:9073f7283c47ad3e585e23598ebbef554e85d280cabb637b6cb9a078c5e7086a", size = 83623904, upload-time = "2026-06-01T19:28:32.734Z" },
-]
-
-[[package]]
 name = "orjson"
 version = "3.11.8"
 source = { registry = "https://pypi.org/simple" }
@@ -1480,7 +1467,6 @@ dependencies = [
     { name = "json-repair" },
     { name = "keyring", marker = "sys_platform == 'darwin'" },
     { name = "mcp" },
-    { name = "openai-codex-cli-bin" },
     { name = "orjson" },
     { name = "pillow" },
     { name = "psutil" },
@@ -1520,7 +1506,6 @@ requires-dist = [
     { name = "json-repair", specifier = "~=0.59.5" },
     { name = "keyring", marker = "sys_platform == 'darwin'", specifier = "~=25.7.0" },
     { name = "mcp", specifier = ">=1.27,<2" },
-    { name = "openai-codex-cli-bin", specifier = "==0.136.0" },
     { name = "orjson", specifier = "~=3.11.8" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "psutil", specifier = "~=7.2.2" },

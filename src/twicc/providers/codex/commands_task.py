@@ -165,13 +165,12 @@ async def _sync_to_database() -> dict[str, int]:
     # startup, but the module itself may be imported earlier).
     from asgiref.sync import sync_to_async
 
-    from openai_codex import CodexConfig
     from openai_codex.async_client import AsyncCodexClient
     from openai_codex.generated.v2_all import SkillsListResponse
 
     from twicc.core.enums import Provider
     from twicc.core.models import Project
-    from twicc.providers.codex.bin import resolve_bundled_binary
+    from twicc.providers.codex.bin import make_codex_config
     from twicc.providers.db_writer import _ApplyDesiredCommandsJob, submit_async_job
 
     # --- 1. Pick every Codex project we can scan ---
@@ -192,14 +191,10 @@ async def _sync_to_database() -> dict[str, int]:
     # --- 2. Ask the app-server for the current skill catalogue ---
     # A throwaway client per cycle is fine at the 5-min cadence and
     # avoids us holding a stdio pipe open between syncs.
-    bundled_bin = resolve_bundled_binary()
     # ``cwd`` here is the app-server's own working directory, not a
     # skill scan path — those are passed via ``cwds``. ``Path.home()``
     # is a safe neutral choice that exists on every platform.
-    config = CodexConfig(
-        codex_bin=str(bundled_bin),
-        cwd=str(Path.home()),
-    )
+    config = await make_codex_config(cwd=str(Path.home()))
 
     async with AsyncCodexClient(config=config) as client:
         await client.initialize()
