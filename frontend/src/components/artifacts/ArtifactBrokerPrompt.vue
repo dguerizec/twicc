@@ -100,6 +100,15 @@ const calloutText = computed(() => {
 </template>
 
 <style scoped>
+/* wa-dialog uses a native <dialog> with showModal(): the rest of the document
+   goes inert while it's open, so the dialog MUST stay interactive. In FilePane's
+   HTML preview this prompt is teleported into the frame-overlay layer, which is
+   pointer-events:none by contract (each teleported piece opts back in itself);
+   that none would otherwise inherit into the modal and its backdrop, leaving
+   nothing clickable at all. Opt back in explicitly — a no-op everywhere else. */
+wa-dialog {
+    pointer-events: auto;
+}
 .broker-prompt-host {
     word-break: break-all;
     font-size: 1.05em;
