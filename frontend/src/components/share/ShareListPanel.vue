@@ -1,5 +1,5 @@
 <script setup>
-import { ref, useId } from 'vue'
+import { ref, computed, useId } from 'vue'
 import { useSharesStore } from '../../stores/shares'
 import { shareAbsoluteUrl } from '../../utils/shareUrl'
 import { isShareOutdated } from '../../utils/shareStatus'
@@ -7,13 +7,32 @@ import { toast } from '../../composables/useToast'
 import AppTooltip from '../ui/AppTooltip.vue'
 import AccessLogList from './AccessLogList.vue'
 
-defineProps({ shares: { type: Array, required: true } })
+const props = defineProps({ shares: { type: Array, required: true } })
 const emit = defineEmits(['edit'])
 const store = useSharesStore()
 
 // Per-instance prefix so row-action tooltip ids stay unique even if two panels
 // (the global manager and a per-target dialog) render the same share at once.
 const uid = useId()
+
+// This panel always renders one object's links, so a bulk "revoke all active"
+// belongs here — it surfaces in both the per-target dialog and each group of the
+// global manager. Only offered past a single active link (one link → its own row
+// button is enough).
+const activeShares = computed(() => props.shares.filter((s) => s.status === 'active'))
+const revokingAll = ref(false)
+async function revokeAll() {
+    const active = activeShares.value
+    if (active.length < 1 || revokingAll.value) return
+    if (!confirm(`Revoke all ${active.length} active link${active.length > 1 ? 's' : ''}? They stop working until unrevoked.`)) return
+    revokingAll.value = true
+    try {
+        await Promise.all(active.map((s) => store.revokeShare(s.id, true)))
+        toast.success('Active links revoked')
+    } finally {
+        revokingAll.value = false
+    }
+}
 
 // Per-share expanded "Recent views" panel: id -> accesses[] (null = loading).
 const accesses = ref({})
@@ -35,6 +54,11 @@ async function toggleViews(s) {
 
 <template>
     <div class="share-list">
+        <div v-if="activeShares.length >= 2" class="share-list-toolbar">
+            <wa-button size="small" appearance="plain" variant="warning" :loading="revokingAll" @click="revokeAll">
+                <wa-icon slot="start" name="ban"></wa-icon>Revoke all ({{ activeShares.length }})
+            </wa-button>
+        </div>
         <div v-for="s in shares" :key="s.id" class="share-row">
             <div class="share-row-main">
                 <wa-tag size="small" :variant="s.status === 'active' ? 'success' : (s.status === 'expired' ? 'warning' : 'neutral')">
@@ -71,6 +95,7 @@ async function toggleViews(s) {
 </template>
 
 <style scoped>
+.share-list-toolbar { display: flex; justify-content: flex-end; padding-bottom: 0.25rem; }
 .share-row { padding: 0.5rem 0; border-bottom: 1px solid var(--wa-color-surface-border); }
 .share-row-main { display: flex; align-items: center; gap: 0.5rem; }
 .share-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
