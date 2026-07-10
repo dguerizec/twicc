@@ -6,9 +6,17 @@
 
 /**
  * Context window size values exposed by the Codex provider.
+ *
+ * Unlike Claude's 200K/1M these are not a user choice: the window is a fixed
+ * per-model property (the registry entry's ``provider_extra.context_window``),
+ * pinned by ``enforceAgentSettingsConsistency``. ``DEFAULT`` (272K, the
+ * pre-5.6 window) doubles as the last-resort fallback for legacy sessions;
+ * ``LARGE`` (372K) is the GPT-5.6 tiers' window. Mirrors the backend
+ * ``AGENT_SETTINGS_CHOICES`` in ``providers/codex/helpers.py`` — keep in sync.
  */
 export const CONTEXT_MAX = {
     DEFAULT: 272_000,
+    LARGE: 372_000,
 }
 
 /**

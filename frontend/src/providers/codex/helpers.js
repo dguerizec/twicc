@@ -119,8 +119,12 @@ const AGENT_SETTINGS_CHOICES = {
         { value: EFFORT.MAX,    label: 'Max',    display_label: 'Max effort' },
         { value: EFFORT.ULTRA,  label: 'Ultra',  display_label: 'Ultra effort' },
     ],
+    // Not a user choice: the window is fixed by the model (272K pre-5.6,
+    // 372K for the GPT-5.6 tiers) — the non-matching option is disabled and
+    // ``enforceAgentSettingsConsistency`` pins the value to the model's.
     context_max: [
         { value: CONTEXT_MAX.DEFAULT, label: '272K' },
+        { value: CONTEXT_MAX.LARGE, label: '372K' },
     ],
 }
 
@@ -267,23 +271,29 @@ export class CodexHelpers extends BaseProviderHelpers {
     /**
      * Effective context window for a Codex session.
      *
-     * Codex CLI exposes a single context_max bucket today (272K, the
-     * gpt-5 family window), so the override is just the standard
-     * fallback chain: the persisted ``session.context_max`` first, then
-     * the synced default the user chose in their global settings, then
-     * the hard-coded ``CONTEXT_MAX.DEFAULT`` baked into Codex CLI.
+     * The window is a fixed per-model property (272K pre-5.6, 372K for the
+     * GPT-5.6 tiers — the registry's ``provider_extra.context_window``), so
+     * when the session names a model the registry knows, that window wins
+     * over the persisted ``session.context_max``: rows written before the
+     * per-model split (or by an out-of-date client) may carry the other
+     * bucket, and the ring must reflect what Codex actually runs.
      *
-     * The last fallback is what makes this override matter in practice:
-     * sessions imported from a JSONL file have ``context_max`` set to
-     * ``NULL`` in the DB (the compute pipeline doesn't populate it —
-     * Codex doesn't write the window into its JSONL anywhere we could
-     * read it), and would otherwise surface as ``null`` in the
-     * progress ring → ``Infinity%`` divide-by-zero in
-     * ``SessionHeader.vue``.
+     * The persisted value is the first fallback — it covers sessions whose
+     * ``selected_model`` is null (imported JSONL rollouts, where the compute
+     * pipeline derived ``context_max`` from ``task_started`` and it is
+     * therefore trustworthy). The default model's window, then the
+     * hard-coded ``CONTEXT_MAX.DEFAULT``, close the chain so the progress
+     * ring never divides by ``null``.
      */
-    getEffectiveContextMax(session) {
+    getEffectiveContextMax(session, overrideModel = undefined) {
         const store = useCodexStore()
-        return session?.context_max ?? store.defaultContextMax ?? CONTEXT_MAX.DEFAULT
+        const model = overrideModel !== undefined ? overrideModel : session?.selected_model
+        if (model) {
+            const entry = store.modelRegistry.find(e => e.selected_model === model)
+            const windowSize = entry?.provider_extra?.context_window
+            if (windowSize) return windowSize
+        }
+        return session?.context_max ?? this.modelContextWindow(null) ?? CONTEXT_MAX.DEFAULT
     }
 
     /**
@@ -331,11 +341,26 @@ export class CodexHelpers extends BaseProviderHelpers {
     }
 
     /**
+     * The model's fixed Codex input window (272K pre-5.6, 372K for the
+     * GPT-5.6 tiers), from the registry's ``provider_extra.context_window``.
+     * Falls back to the default model when ``selectedModel`` is unknown
+     * (same convention as the effort capability checks); ``null`` when
+     * nothing resolves (registry not seeded yet). Mirrors the backend
+     * ``selected_model_context_window``.
+     */
+    modelContextWindow(selectedModel) {
+        const entry = this._resolveRegistryEntry(selectedModel)
+        return entry?.provider_extra?.context_window ?? null
+    }
+
+    /**
      * Pipeline mirroring the backend ``CodexHelpers.enforce_agent_settings_consistency``:
-     * substitute a retired model (``super``), then demote ``ultra`` → ``max`` →
-     * ``xhigh`` against the resolved model. Called by ``useSessionAgentSettings``
-     * whenever the model or effort changes, so the popover selection follows the
-     * model immediately instead of waiting for the backend to correct it.
+     * substitute a retired model (``super``), demote ``ultra`` → ``max`` →
+     * ``xhigh`` against the resolved model, then pin ``contextMax`` to the
+     * model's fixed window (not a user choice on Codex — both directions).
+     * Called by ``useSessionAgentSettings`` whenever the model or effort
+     * changes, so the popover selection follows the model immediately instead
+     * of waiting for the backend to correct it.
      */
     enforceAgentSettingsConsistency(settings) {
         const result = super.enforceAgentSettingsConsistency(settings)
@@ -347,6 +372,11 @@ export class CodexHelpers extends BaseProviderHelpers {
         if (result.effort === EFFORT.MAX && !this.modelSupportsEffortMax(model)) {
             result.effort = EFFORT.X_HIGH
         }
+
+        const windowSize = this.modelContextWindow(model)
+        if (result.contextMax != null && windowSize && result.contextMax !== windowSize) {
+            result.contextMax = windowSize
+        }
         return result
     }
 
@@ -356,7 +386,29 @@ export class CodexHelpers extends BaseProviderHelpers {
             if (choiceValue === EFFORT.MAX) return !this.modelSupportsEffortMax(context?.effectiveModel)
             if (choiceValue === EFFORT.ULTRA) return !this.modelSupportsEffortUltra(context?.effectiveModel)
         }
+        if (field === 'context_max') {
+            const windowSize = this.modelContextWindow(context?.effectiveModel)
+            if (windowSize) return choiceValue !== windowSize
+        }
         return false
+    }
+
+    getChoiceDisabledReason(field, choiceValue, context) {
+        if (field === 'context_max') {
+            const windowSize = this.modelContextWindow(context?.effectiveModel)
+            if (windowSize && choiceValue !== windowSize) {
+                return 'The context window is fixed by the model.'
+            }
+        }
+        return super.getChoiceDisabledReason(field, choiceValue, context)
+    }
+
+    getFieldHelpText(field, context) {
+        if (field === 'context_max') {
+            return super.getFieldHelpText(field, context)
+                ?? 'Fixed by the model: 272K up to GPT 5.5, 372K for the 5.6 tiers.'
+        }
+        return super.getFieldHelpText(field, context)
     }
 
     // ─── Usage quota tracking ────────────────────────────────────────────

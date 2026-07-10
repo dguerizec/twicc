@@ -79,7 +79,12 @@ AGENT_SETTINGS_CHOICES: dict[str, list] = {
     # this catalogue is model-agnostic, the constraints narrow it per model.
     "effort": ["low", "medium", "high", "xhigh", "max", "ultra"],
     "permission_mode": ["read_only", "strict", "auto", "autonomous", "yolo"],
-    "context_max": [272_000],
+    # One entry per distinct ``CodexModelExtra.context_window`` value. Unlike
+    # Claude's 200K/1M these are not a user choice: the window is pinned to
+    # the model by ``enforce_agent_settings_consistency`` (272K pre-5.6, 372K
+    # for the GPT-5.6 tiers); the catalogue only tells validation which
+    # concrete values exist.
+    "context_max": [272_000, 372_000],
 }
 
 
@@ -433,12 +438,48 @@ class CodexHelpers(BaseProviderHelpers):
             mv = self._resolve_to_default_model_version()
         return bool(mv and mv.provider_extra and mv.provider_extra.supports_effort_ultra)
 
+    def selected_model_context_window(self, selected_model: str | None) -> int | None:
+        """Return the model's Codex input window (or the default fallback's).
+
+        The window is a fixed per-model property (272K pre-5.6, 372K for the
+        GPT-5.6 tiers — see :class:`CodexModelExtra`), not a user choice.
+        Returns ``None`` when neither the given model nor the synced default
+        resolves in the registry, so callers can leave ``context_max``
+        untouched rather than guess.
+        """
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return mv.provider_extra.context_window if mv and mv.provider_extra else None
+
     def serialize_model_extra(self, mv: ModelVersion) -> dict:
         """Expose Codex's :class:`CodexModelExtra` flags on the wire."""
         return mv.provider_extra._asdict() if mv.provider_extra else {}
 
+    def get_agent_settings_constraints(self) -> dict[str, dict]:
+        """Add per-model ``context_max`` restrictions to the flag-based base.
+
+        ``CONSTRAINT_FLAG_MAPPING`` only expresses boolean capability flags;
+        the context window is a *valued* per-model property
+        (``CodexModelExtra.context_window``), so each catalogue value gets its
+        ``restricted_to`` list built here instead: the models whose fixed
+        window IS that value. Same output shape as the base
+        (``{field: {value: [supported_identifiers]}}``), consumed by
+        ``twicc info agent-settings``.
+        """
+        result = super().get_agent_settings_constraints()
+        for value in AGENT_SETTINGS_CHOICES["context_max"]:
+            supported: list = []
+            for mv in self.MODEL_VERSIONS:
+                if mv.provider_extra and mv.provider_extra.context_window == value:
+                    supported.append(f"{mv.model}-{mv.version}")
+                    if mv.latest:
+                        supported.append(mv.model)
+            result.setdefault("context_max", {})[value] = supported
+        return result
+
     def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
-        """Substitute an unavailable model, then demote an unsupported effort.
+        """Substitute an unavailable model, then normalise capability rules.
 
         Pipeline:
         1. Delegates to :meth:`BaseProviderHelpers.enforce_agent_settings_consistency`
@@ -450,31 +491,45 @@ class CodexHelpers(BaseProviderHelpers):
            cascade stops there. Luna is what makes the two steps distinct: it
            takes ``max`` but not ``ultra``, so ``ultra`` lands on ``max`` rather
            than falling all the way down.
+        3. Pins ``context_max`` to the (post-substitution) model's fixed
+           window (272K pre-5.6, 372K for the GPT-5.6 tiers). Unlike Claude's
+           1M cap this is bidirectional — the window is not a user choice, so
+           any stored value that diverges (stale row, cross-model preset) is
+           replaced, in both directions. A ``None`` ``context_max`` stays
+           ``None`` (resolution to defaults is the caller's job), and an
+           unresolvable model leaves the value untouched.
         """
         settings = super().enforce_agent_settings_consistency(settings)
 
         model = settings.selected_model
         effort = settings.effort
+        context_max = settings.context_max
 
         if effort == "ultra" and not self.selected_model_supports_effort_ultra(model):
             effort = "max" if self.selected_model_supports_effort_max(model) else "xhigh"
         if effort == "max" and not self.selected_model_supports_effort_max(model):
             effort = "xhigh"
 
-        if effort == settings.effort:
+        if context_max is not None:
+            window = self.selected_model_context_window(model)
+            if window is not None:
+                context_max = window
+
+        if effort == settings.effort and context_max == settings.context_max:
             return settings
-        return settings._replace(effort=effort)
+        return settings._replace(effort=effort, context_max=context_max)
 
     def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
-        """Re-clamp ``codexDefaultEffort`` against ``codexDefaultModel``.
+        """Re-clamp ``codexDefaultEffort`` / ``codexDefaultContextMax`` against ``codexDefaultModel``.
 
-        Either key is a pivot: choosing a default model that doesn't unlock the
-        stored default effort — or raising the effort past what the current
-        default model takes — would otherwise leave a global default that every
-        new session silently demotes. Only writes back keys the client actually
-        sent, per the base contract.
+        Any of the three keys is a pivot: choosing a default model that doesn't
+        unlock the stored default effort — or raising the effort past what the
+        current default model takes, or storing a context window that isn't the
+        default model's fixed one — would otherwise leave a global default that
+        every new session silently corrects. Only writes back keys the client
+        actually sent, per the base contract.
         """
-        if "codexDefaultModel" not in changes and "codexDefaultEffort" not in changes:
+        if not {"codexDefaultModel", "codexDefaultEffort", "codexDefaultContextMax"} & changes.keys():
             return
         candidate = AgentSettings(
             selected_model=synced.get(
@@ -483,10 +538,15 @@ class CodexHelpers(BaseProviderHelpers):
             effort=synced.get(
                 "codexDefaultEffort", self.SYNCED_SETTINGS_DEFAULTS["codexDefaultEffort"],
             ),
+            context_max=synced.get(
+                "codexDefaultContextMax", self.SYNCED_SETTINGS_DEFAULTS["codexDefaultContextMax"],
+            ),
         )
         adjusted = self.enforce_agent_settings_consistency(candidate)
         if "codexDefaultEffort" in changes and adjusted.effort != candidate.effort:
             synced["codexDefaultEffort"] = adjusted.effort
+        if "codexDefaultContextMax" in changes and adjusted.context_max != candidate.context_max:
+            synced["codexDefaultContextMax"] = adjusted.context_max
 
     async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
         """Run a short gpt-5.4-mini SDK query to suggest a title for ``prompt``."""

@@ -25,7 +25,10 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
     "codexDefaultEffort": "medium",
     "codexDefaultPermissionMode": "read_only",
     "codexDefaultUntrustedPermissionMode": "read_only",
-    "codexDefaultContextMax": 272_000,
+    # Matches ``codexDefaultModel``'s window (gpt-terra → 372K). Mostly inert:
+    # the window is a per-model property and ``enforce_agent_settings_consistency``
+    # re-pins it against whichever model actually runs.
+    "codexDefaultContextMax": 372_000,
     "codexUsageReadFileEnabled": False,
     "codexUsageReadFilePath": "",
     "codexUsageDumpFileEnabled": False,
@@ -102,7 +105,7 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
         "min": "low", "max": "max",
     },
     "context_max": {
-        "min": "272k", "max": "272k",
+        "min": "272k", "max": "372k",
     },
     "permission_mode": {
         "min": "strict", "safe": "strict",
@@ -130,9 +133,21 @@ class CodexModelExtra(NamedTuple):
     ``model/list`` under ``supportedReasoningEfforts``. As of Codex 0.144.1:
     Sol and Terra expose both, Luna exposes ``max`` only, and every pre-5.6
     model exposes neither. Mirrors ``claude_code.constants.ClaudeCodeModelExtra``.
+
+    ``context_window`` is the model's nominal INPUT window when run inside
+    Codex — a fixed property of the model, not a user choice (unlike Claude's
+    1M opt-in). It is well below the API-advertised window: Codex reserves
+    128K for output and publishes 95% of the input part in
+    ``task_started.model_context_window`` (see ``compute.py``'s
+    ``_TASK_STARTED_WINDOW_HEADROOM_FACTOR``). Empirically: 272K for the
+    pre-5.6 models (400K total = 272K input + 128K output, published as
+    258_400) and 372K for the GPT-5.6 tiers (published as 353_400).
+    ``enforce_agent_settings_consistency`` pins ``context_max`` to this value,
+    so the stored/displayed window always matches what Codex actually runs.
     """
     supports_effort_max: bool
     supports_effort_ultra: bool
+    context_window: int
 
 
 # Codex CLI models the bundled binary accepts, cross-checked against the CLI's
@@ -155,7 +170,9 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=True,
         weight=130,
-        provider_extra=CodexModelExtra(supports_effort_max=True, supports_effort_ultra=True),
+        provider_extra=CodexModelExtra(
+            supports_effort_max=True, supports_effort_ultra=True, context_window=372_000,
+        ),
     ),
     ModelVersion(
         provider=Provider.CODEX,
@@ -165,7 +182,9 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=True,
         weight=120,
-        provider_extra=CodexModelExtra(supports_effort_max=True, supports_effort_ultra=True),
+        provider_extra=CodexModelExtra(
+            supports_effort_max=True, supports_effort_ultra=True, context_window=372_000,
+        ),
     ),
     ModelVersion(
         provider=Provider.CODEX,
@@ -175,7 +194,9 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=True,
         weight=110,
-        provider_extra=CodexModelExtra(supports_effort_max=True, supports_effort_ultra=False),
+        provider_extra=CodexModelExtra(
+            supports_effort_max=True, supports_effort_ultra=False, context_window=372_000,
+        ),
     ),
     ModelVersion(
         provider=Provider.CODEX,
@@ -185,7 +206,9 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=True,
         weight=100,
-        provider_extra=CodexModelExtra(supports_effort_max=False, supports_effort_ultra=False),
+        provider_extra=CodexModelExtra(
+            supports_effort_max=False, supports_effort_ultra=False, context_window=272_000,
+        ),
     ),
     ModelVersion(
         provider=Provider.CODEX,
@@ -195,7 +218,9 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=False,
         weight=90,
-        provider_extra=CodexModelExtra(supports_effort_max=False, supports_effort_ultra=False),
+        provider_extra=CodexModelExtra(
+            supports_effort_max=False, supports_effort_ultra=False, context_window=272_000,
+        ),
     ),
     ModelVersion(
         provider=Provider.CODEX,
@@ -205,7 +230,9 @@ MODEL_VERSIONS: list[ModelVersion] = [
         retirement_date=None,
         latest=True,
         weight=50,
-        provider_extra=CodexModelExtra(supports_effort_max=False, supports_effort_ultra=False),
+        provider_extra=CodexModelExtra(
+            supports_effort_max=False, supports_effort_ultra=False, context_window=272_000,
+        ),
     ),
 ]
 

@@ -217,12 +217,13 @@ _PAYLOAD_TOKEN_COUNT = "token_count"
 # That value is **not** the nominal input window of the model: Codex
 # CLI publishes its internal compaction threshold instead — 95% of the
 # nominal input window, the rest left as headroom for the auto-compact
-# logic. For ``gpt-5.x`` the nominal input window is 272K (the
-# advertised 400K total = 272K input + 128K output reserved), so the
-# JSONL reports 272_000 × 0.95 = 258_400 on every ``task_started``.
-# We divide back by the factor below to recover the nominal window
-# the user expects to see in the UI (and to keep the ring meaningful
-# across the auto-compact step). Read by
+# logic. The nominal input window is per-model (mirrored in
+# ``CodexModelExtra.context_window``): 272K for the pre-5.6 models
+# (advertised 400K total = 272K input + 128K output reserved, so the
+# JSONL reports 272_000 × 0.95 = 258_400) and 372K for the GPT-5.6
+# tiers (reported as 353_400). We divide back by the factor below to
+# recover the nominal window the user expects to see in the UI (and
+# to keep the ring meaningful across the auto-compact step). Read by
 # :meth:`CodexSessionCompute.extract_runtime_fields` to populate
 # ``Session.context_max`` for sessions imported from JSONL.
 _PAYLOAD_TASK_STARTED = "task_started"
@@ -1779,13 +1780,13 @@ class CodexSessionCompute(BaseSessionCompute):
         #   compaction threshold, equal to 95% of the model's nominal
         #   input window. We divide it back by
         #   :data:`_TASK_STARTED_WINDOW_HEADROOM_FACTOR` and snap to the
-        #   nearest 1000 to recover the nominal window (272K for
-        #   ``gpt-5.x``: advertised 400K total = 272K input + 128K
-        #   output reserved), then surface it as ``context_max`` so the
-        #   base loop can write it onto ``Session.context_max``. This
-        #   gives us a real window value for sessions imported from
-        #   JSONL (and a tracking value if the user switches to a model
-        #   with a different window mid-session).
+        #   nearest 1000 to recover the nominal window — per-model, see
+        #   ``CodexModelExtra.context_window`` (272K pre-5.6, 372K for
+        #   the GPT-5.6 tiers) — then surface it as ``context_max`` so
+        #   the base loop can write it onto ``Session.context_max``.
+        #   This gives us a real window value for sessions imported
+        #   from JSONL (and a tracking value if the user switches to a
+        #   model with a different window mid-session).
         cwd: str | None = None
         cwd_git_branch: str | None = None
         model: str | None = None
