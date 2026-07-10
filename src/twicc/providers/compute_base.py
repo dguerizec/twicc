@@ -1923,10 +1923,22 @@ class BaseSessionCompute:
             # ack must upgrade such a link to background, otherwise
             # ``check_agent_naturally_stopped`` counts this very ack as the
             # single result of a foreground agent and stops it immediately.
+            #
+            # Restricted to the link's own tool_use: a SendMessage
+            # continuation of a finished agent resumes it in the background,
+            # and its terminal task-notification (rewritten with
+            # ``isAsync: true``) carries the SendMessage tool_use_id, not
+            # the launching one. That must NOT flip the original link: the
+            # launch really was synchronous and already complete, and the
+            # flip's re-broadcast resurrects the subagent's synthetic
+            # "running" state in the frontend with no removal path — the
+            # second result the background rule then waits for lands on the
+            # SendMessage tool_use, never on the link's.
             if is_async:
                 link = AgentLink.objects.filter(
                     session_id=session_id,
                     agent_id=agent_id,
+                    tool_use_id=tool_use_id,
                     is_background=False,
                 ).first()
                 if link is not None:

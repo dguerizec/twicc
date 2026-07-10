@@ -60,14 +60,22 @@ const projectIdSet = computed(() => {
     return set
 })
 
-/** Aggregated process info: scans all process states for relevant projects. */
+/**
+ * Aggregated process info: scans all process states for relevant projects.
+ * Only real session processes count: synthetic subagent states are display
+ * plumbing (a subagent is not a session), and hidden sessions must stay out
+ * of every user-facing counter (the backend already keeps them out of the
+ * process broadcasts; the guard covers hidden sessions explicitly loaded
+ * into the store via show_hidden).
+ */
 const processInfo = computed(() => {
     let processCount = 0
     let pendingRequestCount = 0
     let hasAssistantTurn = false
     let activeCronCount = 0
 
-    for (const ps of Object.values(dataStore.processStates)) {
+    for (const [sessionId, ps] of Object.entries(dataStore.processStates)) {
+        if (ps.synthetic || dataStore.sessions[sessionId]?.hidden) continue
         if (!projectIdSet.value.has(ps.project_id)) continue
         processCount++
         pendingRequestCount += ps.pending_requests?.length || 0
@@ -86,6 +94,7 @@ const unreadCount = computed(() => {
     if (dataStore.isStartupInProgress) return 0
     let count = 0
     for (const session of Object.values(dataStore.sessions)) {
+        if (session.hidden) continue
         if (!projectIdSet.value.has(session.project_id)) continue
         if (isSessionUnread(session, dataStore.processStates[session.id])) count++
     }

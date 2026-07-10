@@ -972,6 +972,7 @@ export const useDataStore = defineStore('data', {
                 const scope = new Set(this.getProjectIndicatorScopeIds(projectId))
                 let count = 0
                 for (const session of Object.values(this.sessions)) {
+                    if (session.hidden) continue
                     if (!scope.has(session.project_id)) continue
                     if (isSessionUnread(session, this.processStates[session.id])) count++
                 }
@@ -982,11 +983,15 @@ export const useDataStore = defineStore('data', {
         /**
          * Whether any session globally is in assistant_turn state.
          * Used by the dynamic favicon to show a blue activity dot.
+         * Synthetic subagent states are skipped (a subagent is not a session,
+         * and a stale synthetic must not pin the favicon "active"), as are
+         * hidden sessions (kept out of every user-facing indicator).
          * @returns {boolean}
          */
         hasGlobalAssistantTurn: (state) => {
-            for (const processState of Object.values(state.processStates)) {
-                if (processState.state === 'assistant_turn') return true
+            for (const [sessionId, ps] of Object.entries(state.processStates)) {
+                if (ps.synthetic || state.sessions[sessionId]?.hidden) continue
+                if (ps.state === 'assistant_turn') return true
             }
             return false
         },
@@ -994,11 +999,15 @@ export const useDataStore = defineStore('data', {
         /**
          * Whether at least one session of the given provider has a live (non-dead) process.
          * Dead processes are removed from processStates entirely, so any entry means alive.
+         * Synthetic subagent states are skipped: they are display plumbing, not
+         * real processes (hidden sessions DO count here — this is a safety guard,
+         * not a user-facing counter, and their processes are just as live).
          * Used by the Settings panel to prevent disabling a provider that is still in use.
          * @returns {function(string): boolean}
          */
         hasActiveSessionForProvider: (state) => (provider) => {
             for (const ps of Object.values(state.processStates)) {
+                if (ps?.synthetic) continue
                 if (ps?.provider === provider) return true
             }
             return false
@@ -1038,6 +1047,7 @@ export const useDataStore = defineStore('data', {
             if (hasActiveStartupPhase(state.startupProgress)) return 0
             let count = 0
             for (const session of Object.values(state.sessions)) {
+                if (session.hidden) continue
                 if (isSessionUnread(session, state.processStates[session.id])) count++
             }
             return count
@@ -1386,6 +1396,17 @@ export const useDataStore = defineStore('data', {
             if (prev && (prev.last_started_at !== session.last_started_at ||
                          prev.last_stopped_at !== session.last_stopped_at)) {
                 this._cleanStaleChildSynthetics(session)
+            }
+            // Safety net: a subagent reported stopped clears its own synthetic
+            // "running" state. The timestamp guard keeps a fresh synthetic (agent
+            // relaunched) safe from a stale session_updated of a previous run.
+            const ownSynthetic = this.processStates[session.id]
+            if (ownSynthetic?.synthetic && session.last_stopped_at) {
+                const stoppedMs = Date.parse(session.last_stopped_at)
+                const startedMs = ownSynthetic.started_at ? ownSynthetic.started_at * 1000 : 0
+                if (!Number.isNaN(stoppedMs) && stoppedMs >= startedMs) {
+                    this.removeSyntheticProcessState(session.id)
+                }
             }
             // Never let last_new_content_at regress — an optimistic value (set when
             // process_state exits assistant_turn) can be overwritten by a stale
