@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Claude Agent SDK** — Upgrade from 0.2.111 to 0.2.115 (bundled Claude Code CLI: 2.1.202 → 2.1.206)
+
 ## [1.91.1] - 2026-07-10
 
 ### Summary
