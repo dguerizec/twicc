@@ -5,6 +5,7 @@ import { shareAbsoluteUrl } from '../../utils/shareUrl'
 import { isShareOutdated } from '../../utils/shareStatus'
 import { toast } from '../../composables/useToast'
 import AppTooltip from '../ui/AppTooltip.vue'
+import AccessLogList from './AccessLogList.vue'
 
 defineProps({ shares: { type: Array, required: true } })
 const emit = defineEmits(['edit'])
@@ -30,16 +31,6 @@ async function toggleViews(s) {
     accesses.value[s.id] = null
     accesses.value[s.id] = await store.fetchAccesses(s.id)
 }
-function when(iso) { try { return new Date(iso).toLocaleString() } catch { return '' } }
-
-// Per-access user-agent expansion (key `${shareId}-${index}`): the UA is
-// truncated to one line by default; clicking it toggles the full wrapped,
-// selectable text.
-const expandedUa = ref({})
-function toggleUa(shareId, i) {
-    const key = `${shareId}-${i}`
-    expandedUa.value[key] = !expandedUa.value[key]
-}
 </script>
 
 <template>
@@ -58,17 +49,7 @@ function toggleUa(shareId, i) {
             <div v-if="s.id in accesses" class="share-views-panel">
                 <p v-if="accesses[s.id] === null" class="muted">Loading…</p>
                 <p v-else-if="!accesses[s.id].length" class="muted">No views yet.</p>
-                <ul v-else>
-                    <li v-for="(a, i) in accesses[s.id]" :key="i">
-                        <span class="when">{{ when(a.at) }}</span>
-                        <code v-if="a.ip">{{ a.ip }}</code>
-                        <span v-if="a.user_agent" class="ua"
-                              :class="{ 'ua--expanded': expandedUa[`${s.id}-${i}`] }"
-                              role="button" tabindex="0"
-                              :title="expandedUa[`${s.id}-${i}`] ? '' : 'Click to show the full user agent'"
-                              @click="toggleUa(s.id, i)" @keydown.enter="toggleUa(s.id, i)">{{ a.user_agent }}</span>
-                    </li>
-                </ul>
+                <AccessLogList v-else :entries="accesses[s.id]" />
             </div>
             <div class="share-row-actions">
                 <wa-button :id="`${uid}-copy-${s.id}`" size="small" appearance="plain" @click="copy(s)"><wa-icon name="copy"></wa-icon></wa-button>
@@ -95,32 +76,8 @@ function toggleUa(shareId, i) {
 .share-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-views { background: none; border: none; color: var(--wa-color-text-quiet); cursor: pointer; font-size: 0.85rem; text-decoration: underline dotted; }
 .share-row-actions { display: flex; gap: 0.25rem; margin-top: 0.35rem; flex-wrap: wrap; }
+/* The fetched log is capped server-side (newest 200); AccessLogList itself
+   caps the panel height so a busy link scrolls instead of blowing up the dialog. */
 .share-views-panel { margin-top: 0.4rem; font-size: 0.8rem; }
-/* The fetched log is capped server-side (newest 200); cap the panel height so a
-   busy link scrolls instead of blowing up the dialog. */
-.share-views-panel ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    max-height: 14rem;
-    overflow-y: auto;
-}
-.share-views-panel li { display: flex; gap: 0.6rem; align-items: baseline; }
-.when { color: var(--wa-color-text-quiet); white-space: nowrap; }
-.ua {
-    flex: 1;
-    min-width: 5rem;
-    color: var(--wa-color-text-quiet);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    cursor: pointer;
-}
-.ua:hover { color: var(--wa-color-text); }
-/* Expanded: reveal the full user agent, wrapped and selectable. */
-.ua--expanded { overflow: visible; white-space: normal; word-break: break-word; }
 .muted { color: var(--wa-color-text-quiet); }
 </style>

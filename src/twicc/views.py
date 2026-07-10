@@ -19,9 +19,10 @@ import orjson
 from twicc import search
 from twicc.agent.registry import get_agent_manager_registry
 from twicc.core.enums import ItemKind, Provider
-from twicc.core.models import AgentLink, ArtifactBookmark, Command, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, ToolResultLink, UsageSnapshot, WeeklyActivity, Workflow
+from twicc.core.models import AgentLink, ArtifactBookmark, ArtifactNetworkDenial, Command, DailyActivity, PinMode, Project, Session, SessionItem, SessionType, ToolResultLink, UsageSnapshot, WeeklyActivity, Workflow
 from twicc.core.serializers import (
     serialize_artifact_bookmark,
+    serialize_network_denial,
     serialize_project,
     serialize_session,
     serialize_session_item,
@@ -3517,6 +3518,92 @@ async def artifact_bookmark_allowed_hosts(request, bookmark_id):
     return JsonResponse(serialize_artifact_bookmark(bookmark))
 
 
+async def artifact_bookmark_denied_hosts(request, bookmark_id):
+    """POST   /api/artifact-bookmarks/<id>/denied-hosts/ — mark a host denied.
+    DELETE /api/artifact-bookmarks/<id>/denied-hosts/ — un-deny one.
+
+    The explicit owner "deny" decision (design N5), symmetric to allowed-hosts.
+    Body {"url": ..., "kind": ...} on POST ({"url": ...} on DELETE); a stored
+    host_key is a valid url value (normalize_host_key is idempotent on keys).
+    Browser-host only (human decision) — no CLI/MCP surface. Returns the
+    updated bookmark."""
+    if request.method not in ("POST", "DELETE"):
+        return HttpResponseNotAllowed(["POST", "DELETE"])
+    try:
+        bookmark = await ArtifactBookmark.objects.aget(id=bookmark_id)
+    except ArtifactBookmark.DoesNotExist:
+        raise Http404("Bookmark not found")
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    url = (data.get("url") or "").strip()
+    if not url:
+        return JsonResponse({"error": "url is required"}, status=400)
+
+    from twicc.core.services.artifact_bookmark_mutation import (
+        add_artifact_denied_host,
+        remove_artifact_denied_host,
+    )
+
+    try:
+        if request.method == "POST":
+            kind = data.get("kind")
+            if kind not in ("public", "loopback", "lan"):
+                return JsonResponse({"error": "kind must be one of public/loopback/lan"}, status=400)
+            await add_artifact_denied_host(bookmark=bookmark, url=url, kind=kind)
+        else:  # DELETE
+            await remove_artifact_denied_host(bookmark=bookmark, url=url)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse(serialize_artifact_bookmark(bookmark))
+
+
+async def artifact_bookmark_network_denials(request, bookmark_id):
+    """GET  /api/artifact-bookmarks/<id>/network-denials/ — denial provenance
+    rows (newest last_at first).
+    POST /api/artifact-bookmarks/<id>/network-denials/ — record one owner-side
+    preview denial event {"url", "kind"} (share=NULL, no ip/ua).
+
+    Feeds the bookmark dialog's Network access list. Human-only; viewer-side
+    rows are written by the share proxy, never here."""
+    if request.method not in ("GET", "POST"):
+        return HttpResponseNotAllowed(["GET", "POST"])
+    try:
+        bookmark = await ArtifactBookmark.objects.aget(id=bookmark_id)
+    except ArtifactBookmark.DoesNotExist:
+        raise Http404("Bookmark not found")
+
+    if request.method == "GET":
+        rows = await sync_to_async(lambda: list(
+            ArtifactNetworkDenial.objects.filter(bookmark_id=bookmark.id)
+            .select_related("share").order_by("-last_at", "-id")
+        ))()
+        return JsonResponse({"denials": [serialize_network_denial(d) for d in rows]})
+
+    # POST
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    url = (data.get("url") or "").strip()
+    if not url:
+        return JsonResponse({"error": "url is required"}, status=400)
+    kind = data.get("kind")
+    if kind not in ("public", "loopback", "lan"):
+        return JsonResponse({"error": "kind must be one of public/loopback/lan"}, status=400)
+
+    from twicc.artifacts.denial_tracking import record_owner_denial
+
+    try:
+        await record_owner_denial(bookmark=bookmark, url=url, kind=kind)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse({"ok": True})
+
+
 async def artifact_redirect_to_slash(request, bookmark_id):
     """Redirect ``/artifacts/<id>`` → ``/artifacts/<id>/`` so the page's relative
     assets resolve under the bookmark's own directory rather than ``/artifacts/``."""
@@ -3552,7 +3639,11 @@ async def artifact_serve(request, bookmark_id, asset=""):
         # behaves exactly like the in-SPA preview (design §5/§9). A non-HTML
         # artifact has no broker need → served directly, unchanged.
         if abs_root is not None and _guess_raw_content_type(abs_root) == "text/html":
-            return artifact_shell_response(bookmark_id=bookmark.id, allowed_hosts=bookmark.allowed_hosts)
+            return artifact_shell_response(
+                bookmark_id=bookmark.id,
+                allowed_hosts=bookmark.allowed_hosts,
+                denied_hosts=bookmark.denied_hosts,
+            )
         abs_path, as_document = abs_root, True
     elif asset == ARTIFACT_INNER_DOC_PATH:
         # The shell's iframe target: the artifact document itself, wrapped (shim

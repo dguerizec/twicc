@@ -12,6 +12,7 @@ const props = defineProps({
     innerDocUrl: { type: String, required: true },
     bookmarkId: { type: Number, default: null },
     allowedHosts: { type: Object, default: () => ({}) },
+    deniedHosts: { type: Object, default: () => ({}) },
     mode: { type: String, default: 'owner' },
     proxyUrl: { type: String, default: undefined },
     snapshotAt: { type: [String, null], default: null },
@@ -33,6 +34,17 @@ async function persistAllow(url, kind) {
     })
 }
 
+// Record a prompt denial server-side (fire-and-forget), same POST pattern.
+function onDenied(url, kind) {
+    if (props.bookmarkId == null) return
+    fetch(`/api/artifact-bookmarks/${props.bookmarkId}/network-denials/`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ url, kind }),
+    }).catch(() => {})
+}
+
 // documentUrl is the inner doc; its own relative assets resolve to
 // /artifacts/<id>/<asset>, so the artifact's directory is the inner doc's parent.
 // Share mode: hosts the artifact tried to reach that the owner never allowed
@@ -48,8 +60,12 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
     () => ({
         documentUrl: new URL(props.innerDocUrl, location.href).href,
         getBookmarkId: () => props.bookmarkId,
-        allowedHosts: props.allowedHosts,
+        // The island is static, so these getters are reload-only (accepted by
+        // design — unlike the SPA preview there is no live store behind them).
+        getAllowedHosts: () => props.allowedHosts,
+        getDeniedHosts: () => props.deniedHosts,
         persistAllow: props.mode === 'share' ? undefined : persistAllow,
+        onDenied: props.mode === 'share' ? undefined : onDenied,
         mode: props.mode,
         proxyUrl: props.proxyUrl,
         onBlocked: props.mode === 'share' ? noteBlockedHost : undefined,

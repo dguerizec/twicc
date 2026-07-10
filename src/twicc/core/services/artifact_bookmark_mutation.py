@@ -111,6 +111,18 @@ async def broadcast_artifact_bookmark_removed(bookmark_id) -> None:
     })
 
 
+async def broadcast_artifact_network_denials_updated(bookmark_id: int) -> None:
+    """Lightweight ping: this bookmark's denial rows changed; an open dialog
+    refetches the list. The dicts travel via artifact_bookmark_updated."""
+    channel_layer = get_channel_layer()
+    if channel_layer is None:
+        return
+    await channel_layer.group_send("updates", {
+        "type": "broadcast",
+        "data": {"type": "artifact_bookmark_denials_updated", "bookmark_id": bookmark_id},
+    })
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Write helpers (shared by REST + drop-request)
 # ──────────────────────────────────────────────────────────────────────────
@@ -172,21 +184,35 @@ async def delete_artifact_bookmark(*, bookmark) -> None:
 # the only caller. The write still goes through this service (lock + broadcast)
 # to stay aligned with the rest of the bookmark surface.
 
+_DENIABLE_KINDS = ("public", "loopback", "lan")
+
+
 async def add_artifact_allowed_host(*, bookmark, url: str, kind: str) -> str:
     """Approve ``url``'s ``scheme://host:port`` (normalized) for this artifact,
     recording the consented ``kind``. Idempotent on the normalized key (port-by-
     port — §6.4). Returns the normalized key. Raises ``ValueError`` for an
-    unsupported scheme (via :func:`normalize_host_key`)."""
+    unsupported scheme (via :func:`normalize_host_key`).
+
+    Allowing also clears any explicit deny for the key and purges its denial
+    rows — the pending list is an inbox, not an audit log (design N2)."""
     from twicc.artifacts.proxy import normalize_host_key
+    from twicc.core.models import ArtifactNetworkDenial
 
     key = normalize_host_key(url)
     allowed = dict(bookmark.allowed_hosts or {})
     allowed[key] = {"kind": kind}
     bookmark.allowed_hosts = allowed
-    await run_under_db_write_lock(
-        lambda: bookmark.asave(update_fields=["allowed_hosts", "updated_at"])
-    )
+    denied = dict(bookmark.denied_hosts or {})
+    denied.pop(key, None)
+    bookmark.denied_hosts = denied
+
+    async def _write():
+        await bookmark.asave(update_fields=["allowed_hosts", "denied_hosts", "updated_at"])
+        await ArtifactNetworkDenial.objects.filter(bookmark=bookmark, host_key=key).adelete()
+
+    await run_under_db_write_lock(_write)
     await broadcast_artifact_bookmark_updated(bookmark)
+    await broadcast_artifact_network_denials_updated(bookmark.id)
     return key
 
 
@@ -204,6 +230,47 @@ async def remove_artifact_allowed_host(*, bookmark, url: str) -> bool:
     bookmark.allowed_hosts = allowed
     await run_under_db_write_lock(
         lambda: bookmark.asave(update_fields=["allowed_hosts", "updated_at"])
+    )
+    await broadcast_artifact_bookmark_updated(bookmark)
+    return True
+
+
+async def add_artifact_denied_host(*, bookmark, url: str, kind: str) -> str:
+    """Mark ``url``'s normalized key as explicitly denied (design N5): the owner
+    preview auto-refuses it without prompting and the pending list remembers the
+    decision. Denial rows are KEPT (abuse stays visible). Removes the key from
+    allowed_hosts if present (the dicts are mutually exclusive)."""
+    from twicc.artifacts.proxy import normalize_host_key
+
+    if kind not in _DENIABLE_KINDS:
+        raise ValueError(f"kind must be one of {_DENIABLE_KINDS}; got {kind!r}")
+    key = normalize_host_key(url)
+    denied = dict(bookmark.denied_hosts or {})
+    denied[key] = {"kind": kind}
+    bookmark.denied_hosts = denied
+    allowed = dict(bookmark.allowed_hosts or {})
+    allowed.pop(key, None)
+    bookmark.allowed_hosts = allowed
+    await run_under_db_write_lock(
+        lambda: bookmark.asave(update_fields=["allowed_hosts", "denied_hosts", "updated_at"])
+    )
+    await broadcast_artifact_bookmark_updated(bookmark)
+    return key
+
+
+async def remove_artifact_denied_host(*, bookmark, url: str) -> bool:
+    """Un-deny: drop the key from denied_hosts (back to pending if it still has
+    rows). Returns whether an entry was removed."""
+    from twicc.artifacts.proxy import normalize_host_key
+
+    key = normalize_host_key(url)
+    denied = dict(bookmark.denied_hosts or {})
+    if key not in denied:
+        return False
+    del denied[key]
+    bookmark.denied_hosts = denied
+    await run_under_db_write_lock(
+        lambda: bookmark.asave(update_fields=["denied_hosts", "updated_at"])
     )
     await broadcast_artifact_bookmark_updated(bookmark)
     return True

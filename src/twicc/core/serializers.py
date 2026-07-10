@@ -68,8 +68,25 @@ def serialize_artifact_bookmark(bookmark):
         "root": str(get_session_artifacts_dir(bookmark.session_id)),
         "file_ext": os.path.splitext(rel)[1].lstrip(".").lower(),
         "allowed_hosts": bookmark.allowed_hosts,
+        "denied_hosts": bookmark.denied_hosts,
         "created_at": bookmark.created_at.isoformat() if bookmark.created_at else None,
         "updated_at": bookmark.updated_at.isoformat() if bookmark.updated_at else None,
+    }
+
+
+def serialize_network_denial(denial):
+    """Serialize an ArtifactNetworkDenial. Callers must select_related("share")
+    (pure-serializer convention: no queries here)."""
+    share = denial.share
+    return {
+        "host_key": denial.host_key,
+        "kind": denial.kind,
+        "share": {"id": share.id, "label": share.label or "", "status": share.status()} if share else None,
+        "ip": denial.ip,
+        "user_agent": denial.user_agent,
+        "count": denial.count,
+        "first_at": denial.first_at.isoformat() if denial.first_at else None,
+        "last_at": denial.last_at.isoformat() if denial.last_at else None,
     }
 
 

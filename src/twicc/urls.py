@@ -44,6 +44,8 @@ urlpatterns = [
     path("api/artifact-bookmarks/", views.artifact_bookmark_list),
     path("api/artifact-bookmarks/<int:bookmark_id>/", views.artifact_bookmark_detail),
     path("api/artifact-bookmarks/<int:bookmark_id>/allowed-hosts/", views.artifact_bookmark_allowed_hosts),
+    path("api/artifact-bookmarks/<int:bookmark_id>/denied-hosts/", views.artifact_bookmark_denied_hosts),
+    path("api/artifact-bookmarks/<int:bookmark_id>/network-denials/", views.artifact_bookmark_network_denials),
     path("api/artifact-proxy/", artifact_proxy),
     path("api/browser-frame-check/", browser_frame_check),
     path("_twicc/artifact-broker-shim.js", views.artifact_broker_shim),

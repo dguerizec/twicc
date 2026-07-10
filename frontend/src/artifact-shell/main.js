@@ -29,6 +29,7 @@ createApp(ArtifactShellApp, {
     innerDocUrl: shellData.innerDocUrl,
     bookmarkId: shellData.bookmarkId ?? null,
     allowedHosts: shellData.allowedHosts ?? {},
+    deniedHosts: shellData.deniedHosts ?? {},
     // Share mode: no bookmark id, no persistence, proxy through the share token.
     mode: shellData.mode === 'share' ? 'share' : 'owner',
     proxyUrl: shellData.mode === 'share' ? `${shellData.tokenPath}/api/proxy/` : undefined,

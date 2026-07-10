@@ -1112,6 +1112,14 @@ export function useWebSocket() {
                 store.removeArtifactBookmark(msg.bookmark_id)
                 break
             }
+            case 'artifact_bookmark_denials_updated': {
+                // Denial rows changed for this bookmark; an open bookmark dialog
+                // refetches its Network access list (nothing stored globally).
+                window.dispatchEvent(new CustomEvent('twicc:network-denials-updated', {
+                    detail: { bookmarkId: msg.bookmark_id },
+                }))
+                break
+            }
             case 'shares_updated': {
                 useSharesStore().setShares(msg.shares || [])
                 break

@@ -114,6 +114,12 @@ def test_artifact_shell_response_embeds_inner_doc_and_allowlist():
     assert data["allowedHosts"] == allowed
 
 
+def test_artifact_shell_response_embeds_denied_hosts():
+    denied = {"http://localhost:9000": {"kind": "loopback"}}
+    resp = artifact_shell_response(bookmark_id=1, allowed_hosts={}, denied_hosts=denied)
+    assert _shell_data(resp)["deniedHosts"] == denied
+
+
 def test_artifact_shell_response_escapes_script_breakout():
     # A value containing "</script>" must not terminate the data <script> tag.
     resp = artifact_shell_response(

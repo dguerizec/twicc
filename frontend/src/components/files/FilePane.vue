@@ -357,11 +357,23 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
         isHtmlPreviewActive.value && htmlPreviewSrc.value
             ? {
                   documentUrl: new URL(htmlPreviewSrc.value, location.href).href,
-                  // Getter, not a snapshot: bookmarking / un-bookmarking while the
-                  // preview stays open must change whether "Forever" is offered.
+                  // Getters, not snapshots: bookmarking / un-bookmarking while the
+                  // preview stays open must change whether "Forever" is offered,
+                  // and a dialog-side allow/deny edit must apply live.
                   getBookmarkId: () => artifactBookmark.value?.id ?? null,
-                  allowedHosts: artifactBookmark.value?.allowed_hosts ?? {},
+                  getAllowedHosts: () => artifactBookmark.value?.allowed_hosts ?? {},
+                  getDeniedHosts: () => artifactBookmark.value?.denied_hosts ?? {},
                   persistAllow: persistBrokerAllow,
+                  // Record a prompt denial server-side (fire-and-forget).
+                  onDenied: (url, kind) => {
+                      const id = artifactBookmark.value?.id
+                      if (id == null) return
+                      apiFetch(`/api/artifact-bookmarks/${id}/network-denials/`, {
+                          method: 'POST',
+                          headers: { 'content-type': 'application/json' },
+                          body: JSON.stringify({ url, kind }),
+                      }).catch(() => {})
+                  },
               }
             : null,
     [previewIframeRef, htmlPreviewSrc, isHtmlPreviewActive],

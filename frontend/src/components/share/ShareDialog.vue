@@ -1,11 +1,16 @@
 <script setup>
-import { ref, reactive, computed, watch, nextTick, useId } from 'vue'
+import { ref, reactive, computed, watch, nextTick, useId, defineAsyncComponent } from 'vue'
 import { useSharesStore } from '../../stores/shares'
 import { useSettingsStore } from '../../stores/settings'
+import { useDataStore } from '../../stores/data'
 import { shareAbsoluteUrl } from '../../utils/shareUrl'
 import { apiFetch } from '../../utils/api'
 import { toast } from '../../composables/useToast'
 import AppTooltip from '../ui/AppTooltip.vue'
+
+// Async: ArtifactBookmarkDialog.vue statically imports ShareDialog.vue, so this
+// back-reference must be lazy to avoid a circular-import HMR break (project rule).
+const ArtifactBookmarkDialog = defineAsyncComponent(() => import('../artifacts/ArtifactBookmarkDialog.vue'))
 
 const props = defineProps({
     open: Boolean,
@@ -20,6 +25,15 @@ const props = defineProps({
 const emit = defineEmits(['close'])
 const shares = useSharesStore()
 const settings = useSettingsStore()
+const dataStore = useDataStore()
+
+const bookmarkDialogRef = ref(null)
+// Relies on the invariant that bookmarkId always comes from an already-loaded
+// bookmark (the store lookup can only miss transiently).
+function openBookmarkDialog() {
+    const bm = dataStore.artifactBookmarks[props.bookmarkId]
+    if (bm) bookmarkDialogRef.value?.open(bm)
+}
 
 const sharingEnabled = computed(() => !!settings.getShareBaseUrl)
 
@@ -264,13 +278,15 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
                 <wa-callout v-if="!edit && !allowedHostList.length && !promotableHosts.length"
                             variant="neutral">
                     No network access is allowed on this artifact — any request it makes
-                    will be refused for viewers. If it needs the network, open the
-                    artifact first, approve its hosts when prompted (choose "Forever"),
-                    then create the link.
+                    will be refused for viewers. If it needs the network, manage its
+                    allowed hosts from the bookmark settings.
                 </wa-callout>
                 <p v-else-if="!edit" class="net-hint">
-                    Requests to hosts not listed above will be refused for viewers. To allow
-                    more, open the artifact and approve them when prompted (choose "Forever").
+                    Requests to hosts not listed above will be refused for viewers.
+                </p>
+                <p class="net-hint">
+                    Network access (allowed and refused hosts) is managed in the bookmark settings.
+                    <wa-button size="small" appearance="outlined" @click="openBookmarkDialog">Manage network access…</wa-button>
                 </p>
             </template>
 
@@ -304,6 +320,7 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
             <wa-button @click="emit('close')">Close</wa-button>
             <wa-button ref="submitBtnRef" type="submit" variant="brand" :form="formId" :disabled="!sharingEnabled">{{ edit ? 'Save' : 'Create link' }}</wa-button>
         </div>
+        <ArtifactBookmarkDialog v-if="kind === 'artifact'" ref="bookmarkDialogRef" hide-share-entry />
     </wa-dialog>
 </template>
 

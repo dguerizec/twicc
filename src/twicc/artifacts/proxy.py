@@ -271,10 +271,12 @@ def _decode_request_body(req: dict) -> bytes | str | None:
     return body
 
 
-async def artifact_proxy(request, *, enforced_allowlist: set[str] | None = None):
+async def artifact_proxy(request, *, enforced_allowlist: set[str] | None = None, on_not_allowed=None):
     # ``enforced_allowlist`` is set ONLY by the share proxy (design §9.3/D6): the
     # normalized scheme://host:port must be in it or the fetch is refused 403.
     # The owner path passes None and deliberately does NOT re-check (broker §6.4).
+    # ``on_not_allowed`` is called with ``(host_key, kind)`` when a share fetch is
+    # refused as not_allowed; used for denial recording — design 2026-07-10 §4.1.
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     try:
@@ -338,6 +340,8 @@ async def artifact_proxy(request, *, enforced_allowlist: set[str] | None = None)
         if enforced_allowlist is not None:
             key = normalize_host_key(url)
             if key not in enforced_allowlist:
+                if on_not_allowed is not None:
+                    on_not_allowed(key, kind)
                 return JsonResponse({"error": "blocked", "reason": "not_allowed"})
 
         try:

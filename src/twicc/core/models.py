@@ -689,6 +689,12 @@ class ArtifactBookmark(models.Model):
     # Empty = nothing approved. Mutated only via the browser host (human
     # consent) — never agent/CLI-facing, so there is no drop-request kind for it.
     allowed_hosts = models.JSONField(default=dict, blank=True)
+    # Explicit owner "deny" decisions, symmetric to allowed_hosts: {host_key: {kind}}.
+    # A denied host is auto-refused (no prompt) in the owner preview and stays
+    # refused for viewers; its ArtifactNetworkDenial rows are kept (provenance).
+    # Mutually exclusive with allowed_hosts (the services enforce it). Human-only,
+    # same as allowed_hosts. Design: 2026-07-10-artifact-network-access-design.md.
+    denied_hosts = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1600,3 +1606,26 @@ class ShareAccess(models.Model):
 
     def __str__(self):
         return f"ShareAccess {self.share_id} @ {self.at.isoformat()}"
+
+
+class ArtifactNetworkDenial(models.Model):
+    """One aggregated network-denial provenance: the broker refused ``host_key``
+    for this bookmark, seen from one ``(share, ip, user_agent)`` origin. NULL
+    ``share`` = the owner's own preview (prompt "Deny"; ip/ua left empty).
+    App-level upsert with ``count`` (no DB unique constraint: SQLite treats NULL
+    shares as distinct); pruned to the newest 500 rows per bookmark. Purged when
+    the host is allowed; kept when it is explicitly denied."""
+
+    bookmark = models.ForeignKey(ArtifactBookmark, on_delete=models.CASCADE, related_name="network_denials")
+    share = models.ForeignKey(Share, on_delete=models.CASCADE, null=True, blank=True, related_name="network_denials")
+    host_key = models.CharField(max_length=255)  # normalized scheme://host:port
+    kind = models.CharField(max_length=16)  # public | loopback | lan (server-resolved)
+    ip = models.CharField(max_length=64, blank=True, default="")
+    user_agent = models.CharField(max_length=255, blank=True, default="")
+    count = models.PositiveIntegerField(default=1)
+    first_at = models.DateTimeField(auto_now_add=True)
+    last_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_at"]
+        indexes = [models.Index(fields=["bookmark", "-last_at"], name="idx_netdenial_bookmark_at")]

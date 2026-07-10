@@ -14,10 +14,11 @@ import { mountBrokerHost } from '../artifact-broker/host'
 
 /**
  * @param {import('vue').Ref<HTMLIFrameElement|null>} iframeRef  The artifact iframe.
- * @param {() => ({ documentUrl: string, getBookmarkId: () => (number|null), allowedHosts: object, persistAllow?: Function, onBlocked?: Function }) | null} getConfig
+ * @param {() => ({ documentUrl: string, getBookmarkId: () => (number|null), getAllowedHosts: () => object, getDeniedHosts: () => object, persistAllow?: Function, onDenied?: Function, onBlocked?: Function }) | null} getConfig
  *        Evaluated at each (re)mount; return `null` to mount nothing (inactive).
- *        `getBookmarkId` is kept as a getter (not a snapshot) so the host reflects
- *        the live bookmark — created/removed without a re-mount — for "Forever".
+ *        `getBookmarkId`/`getAllowedHosts`/`getDeniedHosts` are kept as getters
+ *        (not snapshots) so the host reflects the live bookmark state —
+ *        created/removed/edited without a re-mount.
  * @param {Array} [watchSources]  Reactive sources whose change re-binds the host
  *        (defaults to `[iframeRef]`). Pass the caller's own activation deps so the
  *        (re)bind triggers match its context exactly. The host ALSO re-binds on the
@@ -77,9 +78,11 @@ export function useArtifactBroker(iframeRef, getConfig, watchSources) {
         brokerConnection = mountBrokerHost(iframe, {
             documentUrl: config.documentUrl,
             getBookmarkId: config.getBookmarkId ?? (() => null),
-            allowedHosts: config.allowedHosts ?? {},
+            getAllowedHosts: config.getAllowedHosts,
+            getDeniedHosts: config.getDeniedHosts,
             showPrompt: showBrokerPrompt,
             persistAllow: config.persistAllow,
+            onDenied: config.onDenied,
             mode: config.mode ?? 'owner',
             proxyUrl: config.proxyUrl,
             onBlocked: config.onBlocked,

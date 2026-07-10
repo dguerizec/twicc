@@ -103,13 +103,15 @@ def artifact_html_response(html: bytes) -> HttpResponse:
     return response
 
 
-def _shell_html(bookmark_id: int, allowed_hosts: dict | None) -> bytes:
+def _shell_html(bookmark_id: int, allowed_hosts: dict | None, denied_hosts: dict | None) -> bytes:
     """The trusted shell page's markup. It carries, for its Vue bundle to read,
-    the inner-doc URL to iframe, the bookmark id, and the persisted allowlist."""
+    the inner-doc URL to iframe, the bookmark id, and the persisted allow/deny
+    lists."""
     data = {
         "innerDocUrl": f"/artifacts/{bookmark_id}/{ARTIFACT_INNER_DOC_PATH}",
         "bookmarkId": bookmark_id,
         "allowedHosts": allowed_hosts or {},
+        "deniedHosts": denied_hosts or {},
     }
     # Embed as JSON in a <script type="application/json">. Escaping '<' to its
     # JSON unicode form is enough to neutralize a "</script>" breakout while
@@ -132,7 +134,9 @@ def _shell_html(bookmark_id: int, allowed_hosts: dict | None) -> bytes:
     ).encode()
 
 
-def artifact_shell_response(*, bookmark_id: int, allowed_hosts: dict | None) -> HttpResponse:
+def artifact_shell_response(
+    *, bookmark_id: int, allowed_hosts: dict | None, denied_hosts: dict | None = None
+) -> HttpResponse:
     """Build the trusted **shell** page for the dedicated artifact tab
     (``/artifacts/<id>/``). The shell is TwiCC's own code: it iframes the
     artifact's inner document (served, sandboxed + strict-CSP, at the
@@ -142,7 +146,9 @@ def artifact_shell_response(*, bookmark_id: int, allowed_hosts: dict | None) -> 
 
     No artifact CSP here and no shim injection: this page runs trusted TwiCC code
     only; the untrusted artifact stays locked down in its own iframe."""
-    response = HttpResponse(_shell_html(bookmark_id, allowed_hosts), content_type="text/html; charset=utf-8")
+    response = HttpResponse(
+        _shell_html(bookmark_id, allowed_hosts, denied_hosts), content_type="text/html; charset=utf-8"
+    )
     response["X-Content-Type-Options"] = "nosniff"
     add_never_cache_headers(response)
     response["CDN-Cache-Control"] = "no-store"

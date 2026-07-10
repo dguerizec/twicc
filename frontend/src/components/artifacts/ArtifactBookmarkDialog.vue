@@ -1,15 +1,21 @@
 <script setup>
 // ArtifactBookmarkDialog.vue — create/edit (and remove) an artifact bookmark.
 // Mirrors ProjectEditDialog.vue's form/submit/focus/guard patterns.
-import { ref, computed, nextTick, useId } from 'vue'
+import { ref, computed, reactive, nextTick, useId, onMounted, onBeforeUnmount } from 'vue'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { getSessionGrantsForBookmark } from '../../artifact-broker/host'
+import { apiFetch } from '../../utils/api'
 import ShareDialog from '../share/ShareDialog.vue'
+import AccessLogList from '../share/AccessLogList.vue'
 
 const props = defineProps({
     sessionId: { type: String, default: null },
     relativePath: { type: String, default: null },
+    // When mounted as a network-access helper from a ShareDialog, the share entry
+    // point is suppressed to avoid share→bookmark→share recursion (the user is
+    // already in a share dialog).
+    hideShareEntry: { type: Boolean, default: false },
 })
 const emit = defineEmits(['saved', 'removed'])
 const store = useDataStore()
@@ -25,6 +31,169 @@ function openShareDialog() {
     // ProjectView's global handler — the create dialog offers to promote them.
     shareSessionGrants.value = getSessionGrantsForBookmark(existingId.value)
     showShareDialog.value = true
+}
+
+// Network access (edit mode): denial rows + the bookmark's live dicts. The
+// store copy refreshes via the artifact_bookmark_updated WS broadcast; the
+// snapshot ref is only a fallback until it lands.
+const denials = ref(null) // null = loading; [] = none
+const liveBookmark = computed(() => store.artifactBookmarks[existingId.value] || null)
+const allowedHosts = computed(() => liveBookmark.value?.allowed_hosts || existingAllowedHosts.value || {})
+const deniedHosts = computed(() => liveBookmark.value?.denied_hosts || {})
+
+async function fetchDenials() {
+    if (!isEditMode.value) return
+    const id = existingId.value
+    let next = []
+    try {
+        const res = await apiFetch(`/api/artifact-bookmarks/${id}/network-denials/`)
+        if (res.ok) next = (await res.json()).denials
+    } catch {
+        /* network failure — show "no activity" rather than loading forever */
+    }
+    if (existingId.value !== id) return // reopened on another bookmark meanwhile
+    denials.value = next
+}
+function onDenialsPing(e) {
+    if (e.detail?.bookmarkId === existingId.value && dialogRef.value?.open) fetchDenials()
+}
+onMounted(() => window.addEventListener('twicc:network-denials-updated', onDenialsPing))
+onBeforeUnmount(() => window.removeEventListener('twicc:network-denials-updated', onDenialsPing))
+
+// One entry per host, ordered pending → denied → allowed, then by host.
+// Allowed/denied are seeded FIRST: a denial row for such a host only adds
+// provenance detail, it never flips the stored state or kind.
+const hostRows = computed(() => {
+    const rows = new Map()
+    const ensure = (host, kind, state) => {
+        let row = rows.get(host)
+        if (!row) {
+            row = { host, kind, state, total: 0, provenances: new Map() }
+            rows.set(host, row)
+        }
+        return row
+    }
+    for (const [host, entry] of Object.entries(allowedHosts.value)) ensure(host, entry.kind, 'allowed')
+    for (const [host, entry] of Object.entries(deniedHosts.value)) ensure(host, entry.kind, 'denied')
+    for (const d of denials.value || []) {
+        const row = ensure(d.host_key, d.kind, 'pending')
+        row.total += d.count
+        const pkey = d.share ? d.share.id : '__owner__'
+        let prov = row.provenances.get(pkey)
+        if (!prov) {
+            prov = { label: d.share ? d.share.label || d.share.id : 'You, in preview', count: 0, entries: [] }
+            row.provenances.set(pkey, prov)
+        }
+        prov.count += d.count
+        // GET returns rows newest-first, so entries stay sorted by `at` desc.
+        prov.entries.push({ at: d.last_at, ip: d.ip, user_agent: d.user_agent, count: d.count })
+    }
+    const order = { pending: 0, denied: 1, allowed: 2 }
+    return [...rows.values()].sort((a, b) => order[a.state] - order[b.state] || a.host.localeCompare(b.host))
+})
+
+const checked = reactive({}) // pending host -> bool
+const selectedHosts = computed(() => Object.keys(checked).filter((h) => checked[h]))
+const expandedHosts = reactive({}) // host -> bool (level 2: provenances)
+const expandedProvs = reactive({}) // `${host}|${pkey}` -> bool (level 3: log detail)
+function toggleHost(host) {
+    expandedHosts[host] = !expandedHosts[host]
+}
+function toggleProv(host, pkey) {
+    const k = `${host}|${pkey}`
+    expandedProvs[k] = !expandedProvs[k]
+}
+const confirmAllow = reactive({ armed: false, hosts: [] })
+const sectionError = ref('')
+
+function resetNetworkSection() {
+    denials.value = null
+    sectionError.value = ''
+    confirmAllow.armed = false
+    confirmAllow.hosts = []
+    for (const k of Object.keys(checked)) delete checked[k]
+    for (const k of Object.keys(expandedHosts)) delete expandedHosts[k]
+    for (const k of Object.keys(expandedProvs)) delete expandedProvs[k]
+}
+
+function kindOf(host) {
+    return hostRows.value.find((r) => r.host === host)?.kind
+}
+
+// Adaptive non-public confirm copy — mirrors ArtifactBrokerPrompt's sentences.
+const NON_PUBLIC_TARGET = {
+    loopback: 'the machine TwiCC runs on (localhost)',
+    lan: 'an address on the local network of the machine TwiCC runs on',
+}
+const confirmNonPublic = computed(() =>
+    confirmAllow.hosts.map((h) => ({ host: h, kind: kindOf(h) })).filter((e) => e.kind && e.kind !== 'public'),
+)
+
+async function postHost(pathSuffix, method, body) {
+    sectionError.value = ''
+    const res = await apiFetch(`/api/artifact-bookmarks/${existingId.value}/${pathSuffix}/`, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        sectionError.value = err.error || `Request failed (${res.status})`
+        throw new Error(sectionError.value)
+    }
+}
+async function performAllow(hosts) {
+    try {
+        for (const h of hosts) await postHost('allowed-hosts', 'POST', { url: h, kind: kindOf(h) })
+    } catch {
+        return
+    }
+    hosts.forEach((h) => delete checked[h])
+    fetchDenials()
+}
+function allowHosts(hosts) {
+    // Non-public gate (design N7): allowing from this list bypasses the consent
+    // prompt, so loopback/lan hosts ALWAYS go through the confirm callout —
+    // re-arming replaces any previous pending confirm, so the callout always
+    // describes the latest request. Only "Allow anyway" (confirmAllowNow)
+    // performs a non-public allow.
+    const nonPublic = hosts.filter((h) => kindOf(h) !== 'public')
+    if (nonPublic.length) {
+        confirmAllow.hosts = hosts
+        confirmAllow.armed = true
+        return
+    }
+    performAllow(hosts)
+}
+function confirmAllowNow() {
+    // Snapshot before disarming; drop hosts whose row vanished meanwhile
+    // (e.g. a cross-tab change) — their kind is unknown now.
+    const hosts = confirmAllow.hosts.filter((h) => kindOf(h) !== undefined)
+    confirmAllow.armed = false
+    confirmAllow.hosts = []
+    if (hosts.length) performAllow(hosts)
+}
+async function denyHost(h) {
+    try {
+        await postHost('denied-hosts', 'POST', { url: h, kind: kindOf(h) })
+    } catch {
+        return
+    }
+    delete checked[h]
+}
+async function undenyHost(h) {
+    try {
+        await postHost('denied-hosts', 'DELETE', { url: h })
+    } catch {
+        /* error shown via sectionError */
+    }
+}
+async function removeAllowed(h) {
+    try {
+        await postHost('allowed-hosts', 'DELETE', { url: h })
+    } catch {
+        /* error shown via sectionError */
+    }
 }
 
 const dialogRef = ref(null)
@@ -70,11 +239,13 @@ function handleDialogAfterShow(e) {
 function open(existing = null) {
     errorMessage.value = ''
     isSaving.value = false
+    resetNetworkSection()
     if (existing) {
         existingId.value = existing.id
         localName.value = existing.name || ''
         localScope.value = existing.scope || 'project'
         existingAllowedHosts.value = existing.allowed_hosts || {}
+        fetchDenials()
     } else {
         existingId.value = null
         localName.value = ''
@@ -167,6 +338,103 @@ defineExpose({ open, close })
                 </wa-select>
                 <div class="form-hint">Where this bookmark shows in the Artifacts sidebar.</div>
             </div>
+            <div v-if="isEditMode" class="form-group network-section">
+                <label class="form-label">Network access</label>
+                <p v-if="denials === null" class="muted">Loading…</p>
+                <p v-else-if="!hostRows.length" class="muted">No network activity on this artifact.</p>
+                <template v-else>
+                    <div v-for="row in hostRows" :key="row.host" class="host-row">
+                        <div class="host-row-main">
+                            <wa-checkbox
+                                v-if="row.state === 'pending'"
+                                :checked="!!checked[row.host]"
+                                @change.stop="checked[row.host] = $event.target.checked"
+                            ></wa-checkbox>
+                            <wa-tag
+                                size="small"
+                                :variant="row.state === 'allowed' ? 'success' : row.state === 'denied' ? 'danger' : 'warning'"
+                            >{{ row.state }}</wa-tag>
+                            <code class="host-key">{{ row.host }}</code>
+                            <wa-tag v-if="row.kind !== 'public'" size="small" variant="warning">{{ row.kind }}</wa-tag>
+                            <button v-if="row.total" class="denial-count" type="button" @click="toggleHost(row.host)">
+                                {{ row.total }} refused
+                            </button>
+                            <span class="host-actions">
+                                <wa-button
+                                    v-if="row.state !== 'allowed'"
+                                    size="small"
+                                    appearance="outlined"
+                                    @click="allowHosts([row.host])"
+                                >Allow</wa-button>
+                                <wa-button
+                                    v-if="row.state === 'pending'"
+                                    size="small"
+                                    appearance="outlined"
+                                    @click="denyHost(row.host)"
+                                >Deny</wa-button>
+                                <wa-button
+                                    v-if="row.state === 'denied'"
+                                    size="small"
+                                    appearance="plain"
+                                    @click="undenyHost(row.host)"
+                                >Un-deny</wa-button>
+                                <wa-button
+                                    v-if="row.state === 'allowed'"
+                                    size="small"
+                                    appearance="plain"
+                                    variant="danger"
+                                    @click="removeAllowed(row.host)"
+                                >Remove</wa-button>
+                            </span>
+                        </div>
+                        <!-- Level 2: provenances (share links / owner preview). -->
+                        <ul v-if="expandedHosts[row.host]" class="prov-list">
+                            <li v-for="[pkey, p] in row.provenances" :key="pkey">
+                                <div class="prov-row">
+                                    <span class="prov-label">{{ p.label }}</span>
+                                    <button class="denial-count" type="button" @click="toggleProv(row.host, pkey)">
+                                        {{ p.count }}×
+                                    </button>
+                                </div>
+                                <!-- Level 3: date/ip/ua detail. -->
+                                <AccessLogList v-if="expandedProvs[`${row.host}|${pkey}`]" :entries="p.entries" />
+                            </li>
+                        </ul>
+                    </div>
+                    <wa-button
+                        v-if="selectedHosts.length"
+                        size="small"
+                        variant="brand"
+                        @click="allowHosts(selectedHosts)"
+                    >
+                        Allow selected ({{ selectedHosts.length }})
+                    </wa-button>
+                    <wa-callout v-if="confirmAllow.armed" variant="warning">
+                        <ul class="confirm-hosts">
+                            <li v-for="e in confirmNonPublic" :key="e.host">
+                                <code>{{ e.host }}</code> ({{ e.kind }}) resolves to {{ NON_PUBLIC_TARGET[e.kind] }}
+                            </li>
+                        </ul>
+                        <p class="confirm-text">
+                            TwiCC's server makes these requests from there, not the viewer's browser — and anonymous
+                            viewers of every share of this artifact will be able to reach these hosts.
+                        </p>
+                        <div class="confirm-actions">
+                            <wa-button size="small" variant="warning" @click="confirmAllowNow">
+                                Allow anyway
+                            </wa-button>
+                            <wa-button size="small" appearance="plain" @click="confirmAllow.armed = false">
+                                Cancel
+                            </wa-button>
+                        </div>
+                    </wa-callout>
+                    <wa-callout v-if="sectionError" variant="danger" size="small">{{ sectionError }}</wa-callout>
+                </template>
+                <div class="form-hint">
+                    Hosts this artifact may reach — for you in preview and for the viewers of every share. Refused
+                    requests are listed with who triggered them.
+                </div>
+            </div>
             <wa-callout v-if="errorMessage" variant="danger" size="small">{{ errorMessage }}</wa-callout>
         </form>
         <div slot="footer" class="dialog-footer">
@@ -181,7 +449,7 @@ defineExpose({ open, close })
                 Remove
             </wa-button>
             <wa-button
-                v-if="isEditMode"
+                v-if="isEditMode && !hideShareEntry"
                 variant="neutral"
                 appearance="outlined"
                 :disabled="!sharingEnabled"
@@ -196,8 +464,8 @@ defineExpose({ open, close })
                 {{ isEditMode ? 'Save' : 'Bookmark' }}
             </wa-button>
         </div>
-        <ShareDialog v-if="isEditMode" :open="showShareDialog" kind="artifact"
-                     :bookmark-id="existingId" :allowed-hosts="existingAllowedHosts"
+        <ShareDialog v-if="isEditMode && !hideShareEntry" :open="showShareDialog" kind="artifact"
+                     :bookmark-id="existingId" :allowed-hosts="allowedHosts"
                      :session-grants="shareSessionGrants"
                      :default-title="localName" @close="showShareDialog = false" />
     </wa-dialog>
@@ -205,7 +473,7 @@ defineExpose({ open, close })
 
 <style scoped>
 .artifact-bookmark-dialog {
-    --width: min(440px, calc(100vw - 2rem));
+    --width: min(560px, calc(100vw - 2rem));
 }
 .dialog-content {
     display: flex;
@@ -235,5 +503,77 @@ defineExpose({ open, close })
 }
 .footer-remove {
     margin-right: auto;
+}
+/* Network access section — visually quiet, mirrors ShareListPanel's rows. */
+.network-section {
+    font-size: 0.85rem;
+}
+.muted {
+    margin: 0;
+    color: var(--wa-color-text-quiet);
+}
+.host-row {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--wa-color-surface-border);
+}
+.host-row-main {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.host-key {
+    flex: 1;
+    min-width: 3rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* WA's native.css sizes bare <button>s like form controls — reset to a quiet
+   inline button, same idiom as ShareListPanel's .share-views. */
+.denial-count {
+    display: inline;
+    height: auto;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--wa-color-text-quiet);
+    cursor: pointer;
+    font-size: 0.85rem;
+    text-decoration: underline dotted;
+    white-space: nowrap;
+}
+.host-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 0.25rem;
+}
+.prov-list {
+    list-style: none;
+    margin: 0.35rem 0 0;
+    padding: 0 0 0 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.8rem;
+}
+.prov-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+.prov-label {
+    color: var(--wa-color-text-quiet);
+}
+.confirm-hosts {
+    margin: 0 0 0.35rem;
+    padding-left: 1.1rem;
+}
+.confirm-text {
+    margin: 0;
+}
+.confirm-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
 }
 </style>

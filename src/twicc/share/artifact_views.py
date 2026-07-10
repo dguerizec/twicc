@@ -130,4 +130,19 @@ async def share_artifact_proxy(request, token):
     if resp:
         return resp
     allowed = set((ctx.bookmark.allowed_hosts or {}).keys())
-    return await artifact_proxy_mod.artifact_proxy(request, enforced_allowlist=allowed)
+
+    def _on_not_allowed(host_key: str, kind: str) -> None:
+        # Record the refusal with full provenance (design 2026-07-10 §4.1): the
+        # flush task persists + pings; nothing blocks the proxy response.
+        from twicc.artifacts.denial_tracking import note_denial
+        from twicc.auth.views import _get_client_ip
+
+        note_denial(
+            bookmark_id=ctx.bookmark.id, share_id=ctx.share.id, host_key=host_key,
+            kind=kind, ip=_get_client_ip(request),
+            user_agent=request.headers.get("User-Agent") or "",
+        )
+
+    return await artifact_proxy_mod.artifact_proxy(
+        request, enforced_allowlist=allowed, on_not_allowed=_on_not_allowed,
+    )

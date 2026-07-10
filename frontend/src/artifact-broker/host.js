@@ -1,8 +1,9 @@
 // Artifact network-broker HOST (design §9). The trusted side of the penpal RPC
 // whose other end is the injected shim (shim.js). It owns the broker decision:
 // serve the artifact's own assets locally, gate cross-origin requests behind the
-// per-artifact allowlist + an honest user prompt, and call the server proxy —
-// which pins the resolved IP and blocks the cloud metadata address.
+// per-artifact allow/deny lists (read live through getters, so a dialog change
+// applies to an open preview) + an honest user prompt, and call the server
+// proxy — which pins the resolved IP and blocks the cloud metadata address.
 //
 // Framework-agnostic on purpose: both mounts (the SPA's FilePane wrapper and the
 // dedicated shell page, phase 5) call `mountBrokerHost`, passing a `showPrompt`
@@ -109,22 +110,26 @@ export function getSessionGrantsForBookmark(bookmarkId) {
  * @param {object} opts
  * @param {string} opts.documentUrl  The artifact document's URL (to recognize its own same-origin assets).
  * @param {() => (number|null)} opts.getBookmarkId  Returns the *current* bookmark id (or null). Evaluated per prompt / per call — a bookmark can be created or removed while the artifact stays open (the host is not re-created on a bookmark change), and "Forever" must reflect the live state.
- * @param {object} opts.allowedHosts  The persisted allowlist `{ "scheme://host:port": { kind } }`.
+ * @param {() => object} opts.getAllowedHosts  Returns the *current* persisted allowlist `{ "scheme://host:port": { kind } }`. A getter, not a snapshot: an allowlist edit in the bookmark dialog must apply to an open preview without a re-mount.
+ * @param {() => object} opts.getDeniedHosts  Returns the *current* persisted denylist, same shape. Read live per request for the same reason.
  * @param {(target: {host: string, ip: string, kind: string, canRemember: boolean}) => Promise<'session'|'forever'|'deny'>} opts.showPrompt
  * @param {(url: string, kind: string) => Promise<void>} [opts.persistAllow]  Persist "allow forever" (bookmarked only).
+ * @param {(url: string, kind: string) => void} [opts.onDenied]  Owner mode: called (fire-and-forget) when the user denies a prompt, so the caller can record the denial server-side.
  * @param {(hostKey: string) => void} [opts.onBlocked]  Share mode only: called with the normalized host key when the server proxy refuses a host the owner never allowed (`not_allowed`).
  */
-export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, showPrompt, persistAllow, mode = 'owner', proxyUrl = DEFAULT_PROXY_URL, onBlocked }) {
+export function createBrokerHost({ documentUrl, getBookmarkId, getAllowedHosts, getDeniedHosts, showPrompt, persistAllow, onDenied, mode = 'owner', proxyUrl = DEFAULT_PROXY_URL, onBlocked }) {
     // Per-artifact "This session" grants persist across host re-mounts via the
-    // module cache. Seed the live set from them PLUS the persisted "Forever"
-    // grants (from the DB, passed in `allowedHosts`).
+    // module cache. They pair with the LIVE persisted lists below (never merged
+    // into a snapshot): the DB-backed grants are re-read through the getters on
+    // every check, so a dialog-side allow/deny applies to an open preview.
     const artifactKey = artifactKeyFor(documentUrl)
     let sessionGranted = sessionGrants.get(artifactKey)
     if (!sessionGranted) {
         sessionGranted = {}
         sessionGrants.set(artifactKey, sessionGranted)
     }
-    const allowed = { ...(allowedHosts || {}), ...sessionGranted }
+    const allowedNow = () => (typeof getAllowedHosts === 'function' ? getAllowedHosts() : {}) || {}
+    const deniedNow = () => (typeof getDeniedHosts === 'function' ? getDeniedHosts() : {}) || {}
     const canPersist = typeof persistAllow === 'function'
     const currentBookmarkId = () => (typeof getBookmarkId === 'function' ? getBookmarkId() : null)
     // Owner hosts register for the bookmark-id grant lookup above (a share page
@@ -133,13 +138,13 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
     // The directory the artifact lives under; its own assets resolve below it.
     const ownDir = new URL('.', documentUrl).href
 
-    // `allowed[key]` covers a host iff it still resolves to the kind it was
-    // approved for (a rebind → re-prompt). It is seeded from `allowedHosts` (the
-    // persisted "Forever" grants) plus this artifact's `sessionGranted` cache
-    // (the "This session" grants, which survive a host re-mount — same shape,
-    // just not written to the DB).
+    // A host is covered iff a grant still resolves to the kind it was approved
+    // for (a rebind → re-prompt). Grants come from two places checked in order:
+    // this artifact's `sessionGranted` cache (the "This session" grants, which
+    // survive a host re-mount — same shape, just not written to the DB) and the
+    // live persisted "Forever" allowlist read through `allowedNow()`.
     function isAllowed(key, kind) {
-        const entry = allowed[key]
+        const entry = sessionGranted[key] || allowedNow()[key]
         return !!(entry && entry.kind === kind)
     }
 
@@ -148,7 +153,7 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
     // prompt is pending (or in-flight requests are awaiting it), every request to
     // that host shares the one outcome — allow or deny — instead of each raising
     // its own prompt. Cleared once settled, so a later request re-evaluates fresh
-    // (an approved host hits `allowed`; a denied one re-asks).
+    // (an approved host passes `isAllowed`; a denied one re-asks).
     let gateChain = Promise.resolve()
     const pendingGate = {}
     function gate(key, target, url) {
@@ -163,12 +168,15 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
             const decision = await showPrompt({
                 host: key, ip: target.ip, kind: target.kind, canRemember,
             })
-            if (decision === 'deny') throw new Error('denied by user')
+            if (decision === 'deny') {
+                // Fire-and-forget: the caller records the denial server-side.
+                onDenied?.(url, target.kind)
+                throw new Error('denied by user')
+            }
             // "Forever" additionally persists onto the bookmark (survives a tab
             // close); every grant is also recorded in the module cache so it
             // survives the artifact reloading (but not a page reload / tab close).
             if (decision === 'forever' && canRemember) await persistAllow(url, target.kind)
-            allowed[key] = { kind: target.kind }
             sessionGranted[key] = { kind: target.kind }
         })
         gateChain = run.then(() => {}, () => {}) // keep the chain alive on either outcome
@@ -219,6 +227,15 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
             return res
         }
 
+        // Persisted deny (design 2026-07-10 §5): checked first among egress
+        // paths and read live, so a Deny in the bookmark dialog applies to an
+        // open preview immediately and overrides an earlier session grant.
+        const key = normalizeHostKey(req.url)
+        if (deniedNow()[key]) {
+            delete sessionGranted[key]
+            throw new Error('denied by owner')
+        }
+
         // Everything else is brokered the same way — cross-origin AND any other
         // same-origin target (e.g. TwiCC's own API). No target is special-cased:
         // only the cloud metadata address is ever blocked; everything else is
@@ -227,7 +244,6 @@ export function createBrokerHost({ documentUrl, getBookmarkId, allowedHosts, sho
         const pre = await callProxy(proxyUrl, { bookmark_id: currentBookmarkId(), mode: 'preflight', request: req })
         if (pre.error) throw new Error(`blocked: ${pre.reason || pre.error}`)
         const target = pre.target // { ip, kind }
-        const key = normalizeHostKey(req.url)
 
         // Already allowed (a persisted "Forever" or a prior "This session" grant)
         // and still the same kind → no prompt, no queue. Otherwise gate it through
