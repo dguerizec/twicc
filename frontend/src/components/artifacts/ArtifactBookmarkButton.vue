@@ -9,6 +9,7 @@ import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { useSharesStore } from '../../stores/shares'
 import { isShareOutdated } from '../../utils/shareStatus'
+import { useNetworkDenials } from '../../composables/useNetworkDenials'
 import { toast } from '../../composables/useToast'
 import ArtifactBookmarkDialog from './ArtifactBookmarkDialog.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -38,16 +39,24 @@ const shareButtonId = `artifact-share-${useId()}`
 
 const bookmark = computed(() => store.artifactBookmarkFor(props.sessionId, props.relativePath))
 
+// Broker hosts a shared/previewed artifact tried to reach that the owner hasn't
+// allowed or denied yet → the bookmark toggle (which opens the edit dialog's
+// Network access section) warns + pulses so the owner acts.
+const { pendingCount } = useNetworkDenials(bookmark)
+
 const BOOKMARK_TOOLTIP = {
     project: 'Bookmarked in project',
     workspace: 'Bookmarked in workspace',
     all: 'Bookmarked everywhere',
 }
-const bookmarkTooltip = computed(() =>
-    bookmark.value
+const bookmarkTooltip = computed(() => {
+    if (pendingCount.value > 0) {
+        return `${pendingCount.value} network host${pendingCount.value > 1 ? 's' : ''} awaiting your decision`
+    }
+    return bookmark.value
         ? (BOOKMARK_TOOLTIP[bookmark.value.scope] || 'Bookmarked')
-        : 'Bookmark this artifact',
-)
+        : 'Bookmark this artifact'
+})
 
 function openDialog() {
     dialogRef.value?.open(bookmark.value)
@@ -152,8 +161,10 @@ function viewInArtifacts() {
         :id="buttonId"
         appearance="plain"
         size="small"
-        :variant="bookmark ? 'brand' : 'neutral'"
-        :class="['bookmark-button', 'reduced-height', { 'bookmark-button--active': bookmark }]"
+        :variant="pendingCount > 0 ? 'warning' : (bookmark ? 'brand' : 'neutral')"
+        :class="['bookmark-button', 'reduced-height', {
+            'bookmark-button--active': bookmark && pendingCount === 0,
+            'bookmark-button--attention': pendingCount > 0 }]"
         @click.stop="openDialog"
     >
         <wa-icon name="bookmark" :variant="bookmark ? 'solid' : 'regular'" label="Bookmark"></wa-icon>
@@ -177,12 +188,18 @@ function viewInArtifacts() {
         color: var(--wa-color-brand-60);
     }
 }
-/* Share button with pending updates to push → warning tint (mirrors the
-   per-target "Push update to all" banner). */
+/* Something needs the owner's attention → warning tint + pulse (matches the
+   pending-request indicators elsewhere). Shared by the share button (updates to
+   push) and the bookmark toggle (network hosts awaiting a decision). */
 .bookmark-button--attention {
     opacity: 1;
+    animation: pending-pulse 1.5s ease-in-out infinite;
     &::part(base) {
         color: var(--wa-color-warning-60);
     }
+}
+@keyframes pending-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
 }
 </style>

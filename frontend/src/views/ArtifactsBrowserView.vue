@@ -15,6 +15,7 @@ import { useDataStore } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useSharesStore } from '../stores/shares'
 import { isShareOutdated } from '../utils/shareStatus'
+import { useNetworkDenials } from '../composables/useNetworkDenials'
 import { buildFilesRouteParams } from '../utils/granularRoutes'
 import FilePane from '../components/files/FilePane.vue'
 import ArtifactBookmarkDialog from '../components/artifacts/ArtifactBookmarkDialog.vue'
@@ -59,6 +60,9 @@ const outdatedShareCount = computed(() =>
 const shareVariant = computed(() =>
     outdatedShareCount.value > 0 ? 'warning' : (activeShareCount.value > 0 ? 'brand' : 'neutral')
 )
+// Broker hosts awaiting an allow/deny decision → the edit button (which opens the
+// Network access section) warns + pulses.
+const { pendingCount } = useNetworkDenials(bookmark)
 function openShare() {
     if (!bookmark.value || !sharingEnabled.value) return
     window.dispatchEvent(new CustomEvent('twicc:open-share-dialog', {
@@ -223,14 +227,18 @@ function openInSession() {
                     <wa-button
                         id="abv-edit-button"
                         size="small"
-                        variant="neutral"
+                        :variant="pendingCount > 0 ? 'warning' : 'neutral'"
                         appearance="plain"
-                        class="abv-title-btn reduced-height"
+                        :class="['abv-title-btn', 'reduced-height', { 'abv-title-btn--attention': pendingCount > 0 }]"
                         @click="openEdit"
                     >
                         <wa-icon name="pencil" label="Edit artifact bookmark"></wa-icon>
                     </wa-button>
-                    <AppTooltip for="abv-edit-button">Edit artifact bookmark</AppTooltip>
+                    <AppTooltip for="abv-edit-button">
+                        {{ pendingCount > 0
+                            ? `${pendingCount} network host${pendingCount > 1 ? 's' : ''} awaiting your decision`
+                            : 'Edit artifact bookmark' }}
+                    </AppTooltip>
                     <wa-button
                         v-if="isHtml"
                         id="abv-refresh-button"
@@ -418,12 +426,20 @@ function openInSession() {
         color: var(--wa-color-brand-60);
     }
 }
-/* Pending updates to push → warning tint (mirrors the "Push update to all" banner). */
-.abv-share-button--attention {
+/* Something needs the owner's attention → warning tint + pulse (matches the
+   pending-request indicators elsewhere). The share button uses it for updates to
+   push; the edit button for network hosts awaiting an allow/deny decision. */
+.abv-share-button--attention,
+.abv-title-btn--attention {
     opacity: 1;
+    animation: pending-pulse 1.5s ease-in-out infinite;
     &::part(base) {
         color: var(--wa-color-warning-60);
     }
+}
+@keyframes pending-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
 }
 
 .abv-content {
