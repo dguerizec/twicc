@@ -59,6 +59,10 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
 
 // Share mode: poll the snapshot freshness (D7) for the "updated — reload" banner.
 const updated = ref(false)
+// `window` isn't in scope inside a Vue template (name lookup targets the
+// component instance), so reload through a real method rather than an inline
+// `location.reload()` — which resolved to `undefined.reload()` and threw.
+function reloadPage() { window.location.reload() }
 onMounted(() => {
     if (props.mode !== 'share' || !props.tokenPath) return
     setInterval(async () => {
@@ -76,7 +80,7 @@ onMounted(() => {
          navigation, popups and modals do not. Same-origin kept (localStorage
          works; design §13). -->
     <div v-if="updated" class="share-update-banner">
-        This artifact was updated — <a href="#" @click.prevent="location.reload()">Reload</a>
+        This artifact was updated — <a href="#" @click.prevent="reloadPage">Reload</a>
     </div>
     <iframe
         ref="iframeRef"
