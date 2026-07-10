@@ -549,6 +549,12 @@ function onCompanionIconClick() {
     showHelp('browser-tab', { showDontShowAgain: false })
 }
 
+// Open the Browser tab's help page from the blank-state callout (reference
+// open — no dismiss switch, same as the companion icon).
+function openBrowserHelp() {
+    showHelp('browser-tab', { showDontShowAgain: false })
+}
+
 // ── Select-area mode: toggled from the companion menu; the actual picking
 // (interaction-blocking overlay + outline on the hovered/tapped element)
 // happens inside the embedded page, driven by the companion. The flag only
@@ -822,7 +828,11 @@ function onHomeSelect(event) {
                 <wa-icon v-else slot="start" name="globe"></wa-icon>
             </wa-input>
 
-            <div class="browser-toolbar-right">
+            <!-- All right-side controls act on a loaded page (save it, open it,
+                 expand it, companion, responsive) — hidden on the blank state
+                 where there is no page yet; only the address bar and its nav
+                 buttons remain. -->
+            <div v-if="currentUrl" class="browser-toolbar-right">
                 <!-- Save current URL as a project / workspace default. WA custom
                      events are stopped from bubbling (a nested dropdown's wa-show /
                      wa-hide would otherwise reach same-named ancestor handlers). -->
@@ -1081,9 +1091,17 @@ function onHomeSelect(event) {
                     <wa-icon name="globe" class="browser-empty-icon"></wa-icon>
                     <p>Enter a URL above to preview your project — e.g. your dev server.</p>
                     <p class="browser-empty-hint">
-                        Use the <wa-icon name="bookmark"></wa-icon> menu to save it as the
+                        Once a page is loaded, the toolbar lets you save it as the
                         default for this project or one of its workspaces.
                     </p>
+                    <wa-callout variant="neutral" size="small" class="browser-empty-callout">
+                        <wa-icon slot="icon" name="circle-info"></wa-icon>
+                        Getting your dev server to display here often needs a few
+                        dev-only settings (allow framing, cookies, the companion
+                        script). It's worth reading the
+                        <a href="#" class="browser-empty-help-link" @click.prevent="openBrowserHelp">Browser tab guide</a>
+                        first.
+                    </wa-callout>
                 </div>
             </template>
         </ViewportStage>
@@ -1296,5 +1314,20 @@ function onHomeSelect(event) {
 
 .browser-empty-hint {
     font-size: var(--wa-font-size-s);
+}
+
+/* Dev-server setup reminder: constrained width + left-aligned text (the
+   surrounding placeholder centers everything), pointing at the Browser tab
+   help page. */
+.browser-empty-callout {
+    max-width: 32rem;
+    text-align: start;
+    font-size: var(--wa-font-size-s);
+}
+
+.browser-empty-help-link {
+    color: var(--wa-color-brand-fill-loud);
+    text-decoration: underline;
+    cursor: pointer;
 }
 </style>
