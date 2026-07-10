@@ -169,9 +169,17 @@ async def patch_artifact_bookmark(*, bookmark, name: str | None = None, scope: s
 
 
 async def delete_artifact_bookmark(*, bookmark) -> None:
-    """Delete a bookmark under the lock, then broadcast its removal."""
+    """Delete a bookmark under the lock, then broadcast its removal. The bookmark's
+    artifact shares cascade away in the DB, but their on-disk snapshots would be
+    orphaned (``remove_snapshot`` runs only in ``delete_share``, which the cascade
+    bypasses), so drop those explicitly."""
+    from twicc.core.services.share_mutation import remove_snapshot
+
     bookmark_id = bookmark.id
+    share_ids = await sync_to_async(lambda: list(bookmark.shares.values_list("id", flat=True)))()
     await run_under_db_write_lock(lambda: bookmark.adelete())
+    for share_id in share_ids:
+        await sync_to_async(remove_snapshot)(share_id)
     await broadcast_artifact_bookmark_removed(bookmark_id)
 
 

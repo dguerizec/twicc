@@ -16,6 +16,13 @@ export const useSharesStore = defineStore('shares', {
         setShares(list) { const next = {}; for (const s of list || []) next[s.id] = s; this.shares = next },
         upsertShare(share) { this.shares[share.id] = share },
         removeShare(id) { delete this.shares[id] },
+        // Drop a deleted bookmark's cascaded shares (the backend CASCADE removes the
+        // rows but broadcasts only the bookmark removal, so the store would keep them).
+        removeForBookmark(bookmarkId) {
+            for (const s of Object.values(this.shares)) {
+                if (s.kind === 'artifact' && s.bookmark_id === bookmarkId) delete this.shares[s.id]
+            }
+        },
         async loadShares() {
             const res = await apiFetch('/api/shares/')
             if (res.ok) this.setShares((await res.json()).shares)

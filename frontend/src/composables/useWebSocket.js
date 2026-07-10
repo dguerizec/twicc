@@ -1110,6 +1110,9 @@ export function useWebSocket() {
             }
             case 'artifact_bookmark_removed': {
                 store.removeArtifactBookmark(msg.bookmark_id)
+                // The bookmark's shares cascaded away server-side; drop them locally
+                // too (only the bookmark removal is broadcast).
+                useSharesStore().removeForBookmark(msg.bookmark_id)
                 break
             }
             case 'artifact_bookmark_denials_updated': {
