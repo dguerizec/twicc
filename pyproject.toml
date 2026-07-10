@@ -99,7 +99,15 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 testpaths = ["tests"]
-addopts = "-v"
+# --ds duplicates DJANGO_SETTINGS_MODULE above on purpose: pytest-django ranks the
+# --ds flag ABOVE the DJANGO_SETTINGS_MODULE env var, which itself outranks this
+# ini key. Running the suite from inside a TwiCC session inherits
+# DJANGO_SETTINGS_MODULE=twicc.settings (prod) from the backend process, which
+# would otherwise silently shadow the ini and run every test under the developer's
+# real .env (password protection on, prod compute version, real secret key). The
+# flag makes this file authoritative regardless of the inherited environment; an
+# explicit `pytest --ds=...` on the command line still wins over it.
+addopts = "-v --ds=twicc.settings_test"
 
 [dependency-groups]
 dev = [
