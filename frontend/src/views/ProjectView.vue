@@ -449,7 +449,7 @@ function openShareDialog(e) {
         shareDialogKind.value = 'session'
         shareDialogSessionId.value = d.sessionId
         shareDialogSessionGrants.value = {}
-        shareDialogTitle.value = store.getSession(d.sessionId)?.title || ''
+        shareDialogTitle.value = store.getSession(d.sessionId)?.title || d.title || ''
         hasShares = sharesStore.forSession(d.sessionId).length > 0
     } else {
         return

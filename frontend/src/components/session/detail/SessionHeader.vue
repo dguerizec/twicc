@@ -15,7 +15,6 @@ import CodeCommentsIndicator from '../../ui/CodeCommentsIndicator.vue'
 import ProcessDuration from '../../ui/ProcessDuration.vue'
 import CostDisplay from '../../ui/CostDisplay.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
-import ShareDialog from '../../share/ShareDialog.vue'
 import { useSharesStore } from '../../../stores/shares'
 
 const props = defineProps({
@@ -35,9 +34,17 @@ const settingsStore = useSettingsStore()
 const sharesStore = useSharesStore()
 
 // Share entry point (main session only). Disabled when no share host is configured.
-const showShareDialog = ref(false)
+// Routes through the globally-mounted dialogs in ProjectView (via the shared
+// window event) so an already-shared session opens the manager list first, exactly
+// like the artifact entry points — rather than jumping straight to create.
 const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
 const activeShareCount = computed(() => sharesStore.activeCountForSession(props.sessionId))
+function openShare() {
+    if (!sharingEnabled.value) return
+    window.dispatchEvent(new CustomEvent('twicc:open-share-dialog', {
+        detail: { sessionId: props.sessionId, title: session.value?.title || displayName.value },
+    }))
+}
 
 // Costs setting
 const showCosts = computed(() => settingsStore.areCostsShown)
@@ -519,7 +526,7 @@ defineExpose({
                     size="small"
                     :class="['share-button', 'reduced-height', { 'share-button--active': activeShareCount > 0 }]"
                     :disabled="!sharingEnabled"
-                    @click="showShareDialog = true"
+                    @click="openShare"
                 >
                     <wa-icon name="share-nodes" label="Share"></wa-icon>
                 </wa-button>
@@ -538,10 +545,6 @@ defineExpose({
                 ></wa-icon>
                 <AppTooltip v-if="store.getPendingRequests(sessionId).length > 0" :for="`session-header-${sessionId}-pending-request`">Waiting for your response</AppTooltip>
             </div>
-
-            <ShareDialog v-if="mode === 'session'" :open="showShareDialog" kind="session"
-                         :session-id="sessionId" :default-title="session?.title || displayName"
-                         @close="showShareDialog = false" />
 
             <!-- Clickable zone: title + project + context ring + chevron toggle compact mode -->
             <div class="compact-toggle-zone" @click="isCompactExpanded = !isCompactExpanded">
