@@ -5,6 +5,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { shareAbsoluteUrl } from '../../utils/shareUrl'
 import { apiFetch } from '../../utils/api'
 import { toast } from '../../composables/useToast'
+import AppTooltip from '../ui/AppTooltip.vue'
 
 const props = defineProps({
     open: Boolean,
@@ -52,6 +53,25 @@ const promotableHosts = computed(() =>
 )
 const promote = reactive({}) // host key -> checked
 
+// Password removal: an empty field means "unchanged" on edit, so removing an
+// existing password needs an explicit intent. The clear button arms it; typing
+// a replacement disarms it. (In create mode the same button just empties a
+// typed value — `removePassword` never arms without an existing password.)
+const removePassword = ref(false)
+const clearPwId = `share-clear-pw-${useId()}`
+const passwordPlaceholder = computed(() => {
+    if (removePassword.value) return 'will be removed on save'
+    return props.edit?.has_password ? 'unchanged — type to replace' : 'no password'
+})
+function onPasswordInput(e) {
+    form.password = e.target.value
+    if (form.password) removePassword.value = false
+}
+function clearOrRemovePassword() {
+    if (form.password) form.password = ''
+    else if (props.edit?.has_password) removePassword.value = !removePassword.value
+}
+
 // `immediate` matters for the on-demand mounts (ProjectView's artifact/session
 // dialog, ShareManagerDialog's edit dialog): they are v-if'd in at the same tick
 // `open` becomes true, so the component mounts with `open` already true and a
@@ -61,6 +81,7 @@ const promote = reactive({}) // host key -> checked
 watch(() => props.open, (o) => { if (o) reset() }, { immediate: true })
 function reset() {
     error.value = ''; createdUrl.value = ''
+    removePassword.value = false
     Object.keys(promote).forEach((k) => delete promote[k])
     for (const [key] of promotableHosts.value) promote[key] = true
     const e = props.edit
@@ -110,7 +131,10 @@ async function handleSave() {
     try {
         if (props.edit) {
             const fields = { label: form.label.trim(), notify_on_view: form.notify_on_view, options: buildOptions() }
+            // Present + truthy → set a new password; present + empty → clear it;
+            // absent → leave unchanged.
             if (form.password) fields.password = form.password
+            else if (removePassword.value) fields.password = ''
             fields.expires_at = form.expires_at || null
             await shares.patchShare(props.edit.id, fields)
             // Editing is a plain "apply my changes" action, so close on save (the URL
@@ -251,9 +275,19 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
             </template>
 
             <label>Password (optional)
-                <wa-input type="password" :value="form.password"
-                          @input="form.password = $event.target.value"
-                          :placeholder="edit?.has_password ? 'unchanged — type to replace' : 'no password'"></wa-input>
+                <div class="password-row">
+                    <wa-input type="password" :value="form.password"
+                              @input="onPasswordInput"
+                              :placeholder="passwordPlaceholder"></wa-input>
+                    <wa-button v-if="form.password || edit?.has_password" :id="clearPwId"
+                               appearance="plain" :variant="removePassword ? 'danger' : 'neutral'"
+                               class="pw-clear" @click.stop="clearOrRemovePassword">
+                        <wa-icon :name="removePassword ? 'arrow-rotate-left' : 'xmark'"></wa-icon>
+                    </wa-button>
+                    <AppTooltip v-if="form.password || edit?.has_password" :for="clearPwId">
+                        {{ form.password ? 'Clear' : (removePassword ? 'Keep the password' : 'Remove the password') }}
+                    </AppTooltip>
+                </div>
             </label>
             <label>Expires (optional)
                 <wa-input type="datetime-local" :value="form.expires_at"
@@ -283,6 +317,8 @@ label { display: block; font-size: var(--wa-font-size-s); font-weight: 600; }
 label wa-input, label wa-select { margin-top: 0.3rem; font-weight: 400; }
 wa-switch { display: block; }
 .switch-hint { font-weight: 400; color: var(--wa-color-text-quiet); }
+.password-row { display: flex; gap: 0.3rem; align-items: center; margin-top: 0.3rem; }
+.password-row wa-input { flex: 1; margin-top: 0; }
 .promote-list {
     list-style: none;
     padding-left: 0;
