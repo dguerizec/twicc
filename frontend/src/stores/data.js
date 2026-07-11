@@ -1717,6 +1717,26 @@ export const useDataStore = defineStore('data', {
                 this.recomputeVisualItems(sessionId)
             }
 
+            // Rehome the optimistic ``starting`` process state onto the canonical
+            // key. The send path sets it under the only id it has — the draft id
+            // (see ``setProcessState(sessionId, …, STARTING)`` in the send flow) —
+            // but the backend broadcasts every real state (starting → … → dead)
+            // under the canonical id the provider mints. When the two differ
+            // (Codex), the draft-keyed entry is never updated nor removed: no
+            // ``dead`` ever arrives for it, and nothing else here touches
+            // ``processStates``. It then lingers as a phantom that inflates every
+            // active-process count until the next full reload. Move it to the
+            // canonical key if the backend's own entry has not landed yet (keeps
+            // the "starting" feedback flicker-free), else just drop it — the
+            // backend entry is authoritative.
+            const draftProcessState = this.processStates[draftId]
+            if (draftProcessState) {
+                if (!this.processStates[sessionId]) {
+                    this.processStates[sessionId] = { ...draftProcessState }
+                }
+                delete this.processStates[draftId]
+            }
+
             // Same rekey for an already-arrived title suggestion. The
             // ``suggest_title`` request was sent under the draft id (only id
             // known at request time), so a fast response can have landed in
