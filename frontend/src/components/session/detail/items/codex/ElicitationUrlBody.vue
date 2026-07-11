@@ -231,7 +231,7 @@ watch(() => props.pendingRequest?.request_id, focusDone)
     cursor: pointer;
 }
 
-.elicitation-url-code:hover {
+.elicitation-url-code:not(.elicitation-url-inert):hover {
     background: var(--wa-color-neutral-fill-normal);
 }
 
