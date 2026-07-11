@@ -17,9 +17,10 @@ The 5 approval methods Codex sends as ``server requests`` (i.e. with an
   - a URL elicitation (``mode=url``) → ``elicitationUrl``, surfaced as
     ``ask_user_question``
 - ``item/tool/requestUserInput`` — Codex's generic "ask the user a
-  question" fallback (used e.g. when an MCP tool call needs approval but the
-  server hasn't opted into elicitations) → ``toolRequestUserInput``,
-  surfaced as ``ask_user_question``
+  question" form (used for MCP tool approvals when Codex's
+  ``ToolCallMcpElicitation`` feature is disabled — it is enabled by
+  default — and for generic agent question forms) →
+  ``toolRequestUserInput``, surfaced as ``ask_user_question``
 
 Other server requests (``item/tool/call``, ``account/chatgptAuthTokens/refresh``)
 are NOT ours to handle — the wiring in :class:`CodexAgent` delegates them to
@@ -94,18 +95,22 @@ def resolve_tool_name(method: str, params: dict | None) -> str:
     (a genuine MCP-server-initiated form). Unknown/missing params fall back to
     the generic form so a schema drift degrades to a visible (if plain)
     prompt, never a silent drop.
+
+    ``method`` must satisfy :func:`is_approval_method` (caller must gate
+    first); unlike the sibling helpers, an unknown method raises ``KeyError``
+    rather than ``ValueError``.
     """
     base = APPROVAL_METHODS[method]
     if method != ELICITATION_METHOD:
         return base
     if not isinstance(params, dict):
-        return "elicitationForm"
+        return base
     if params.get("mode") == "url":
         return "elicitationUrl"
     meta = params.get("_meta")
     if isinstance(meta, dict) and meta.get(_APPROVAL_KIND_KEY) == _APPROVAL_KIND_MCP_TOOL_CALL:
         return "mcpToolCall"
-    return "elicitationForm"
+    return base
 
 
 def derive_request_id(params: dict | None) -> str:
@@ -164,10 +169,10 @@ def default_response_for(method: str) -> dict:
     through ``resolve_pending_request`` with the real wire decision).
 
     Returns a freshly-built dict valid for the requested ``method``:
-    - command / file:      ``{"decision": "decline"}``
-    - permissions:         ``{"permissions": {}, "scope": "turn"}``
-    - elicitation:          ``{"action": "cancel"}``
-    - requestUserInput:    ``{"answers": {}}``
+    - command / file:   ``{"decision": "decline"}``
+    - permissions:      ``{"permissions": {}, "scope": "turn"}``
+    - elicitation:      ``{"action": "cancel"}``
+    - requestUserInput: ``{"answers": {}}``
 
     Raises:
         ValueError: if ``method`` is not one of the Codex approval methods

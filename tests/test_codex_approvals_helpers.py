@@ -160,10 +160,11 @@ class TestDefaultResponseFor:
         with pytest.raises(ValueError):
             default_response_for("item/unknown/requestApproval")
 
-    @pytest.mark.parametrize("method", KNOWN_METHODS)
+    @pytest.mark.parametrize("method", KNOWN_METHODS + NEW_METHODS)
     def test_returns_fresh_dict_per_call(self, method):
         # Defensive copy: mutating one return value must not leak into
-        # the next call (no module-level cached dict).
+        # the next call (no module-level cached dict). Covers the new
+        # methods too — {"answers": {}} carries a nested mutable dict.
         first = default_response_for(method)
         sentinel = object()
         key = next(iter(first))
