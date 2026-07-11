@@ -28,6 +28,13 @@ const emit = defineEmits(['submit'])
 const dismissButtonId = useId()
 const submitButtonId = useId()
 
+// Base id for the per-question text elements, referenced by each question
+// group's aria-labelledby.
+const questionTextIdBase = useId()
+function questionTextId(qIndex) {
+    return `${questionTextIdBase}-q${qIndex}`
+}
+
 // Wire params.
 const questions = computed(() => {
     const qs = props.pendingRequest.tool_input?.questions
@@ -54,8 +61,10 @@ function setPrimaryRef(el, isPrimary) {
     if (isPrimary) primaryRef.value = el
 }
 
-// Template refs for "Other" / bare text inputs, keyed by question index —
-// used to move focus into the field right after it's activated.
+// Template refs for the "Other" free-text inputs, keyed by question index —
+// used to move focus into the field when its Other card is clicked. Bare
+// free-text questions (no options) don't register here: they have no card
+// to activate them.
 const textInputRefs = ref({})
 function setTextInputRef(idx, el) {
     if (el) textInputRefs.value[idx] = el
@@ -141,15 +150,17 @@ function dismiss() {
 </script>
 
 <template>
-    <div class="codex-pending-body">
+    <div class="request-user-input-body">
         <div class="questions-container">
             <div
                 v-for="(question, qIndex) in questions"
                 :key="question.id ?? qIndex"
                 class="codex-pending-section"
+                role="group"
+                :aria-labelledby="questionTextId(qIndex)"
             >
                 <span v-if="question.header" class="codex-summary-label">{{ question.header }}</span>
-                <div class="question-text">{{ question.question }}</div>
+                <div :id="questionTextId(qIndex)" class="question-text">{{ question.question }}</div>
 
                 <!-- Option cards, keyboard-accessible via native <button> semantics. -->
                 <div v-if="hasOptions(question)" class="question-options">
@@ -189,6 +200,7 @@ function dismiss() {
                     <wa-input
                         :ref="el => setTextInputRef(qIndex, el)"
                         :type="question.isSecret ? 'password' : 'text'"
+                        :aria-label="question.question"
                         placeholder="Type your answer..."
                         size="small"
                         :value.prop="otherTexts[qIndex] || ''"
@@ -203,6 +215,7 @@ function dismiss() {
                         :ref="el => setPrimaryRef(el, qIndex === 0)"
                         :class="{ 'auto-focused': qIndex === 0 }"
                         :type="question.isSecret ? 'password' : 'text'"
+                        :aria-label="question.question"
                         placeholder="Type your answer..."
                         size="small"
                         :value.prop="otherTexts[qIndex] || ''"
@@ -243,13 +256,12 @@ function dismiss() {
 </template>
 
 <style scoped>
-.codex-pending-body {
+.request-user-input-body {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-s);
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
 }
 
 .codex-pending-section {
@@ -297,7 +309,11 @@ function dismiss() {
 }
 
 /* Plain <button> styled as a card — native focus/keyboard semantics (Tab,
-   Enter, Space) come for free, no custom keydown handling needed. */
+   Enter, Space) come for free, no custom keydown handling needed.
+   Two-layer variable indirection (like the Claude question form): the
+   `-base` layer carries the state colors (default vs .selected), and the
+   derived layer is what's painted — hover lightens the derived layer FROM
+   the current base, so hovering a selected card keeps its selected colors. */
 .option-card {
     flex: 1 1 0;
     min-width: min-content;
@@ -312,18 +328,20 @@ function dismiss() {
     transition: border-color 0.15s, background-color 0.15s;
     padding: var(--wa-space-s);
     border-radius: var(--wa-border-radius-m);
-    border: 1px solid var(--border-color-base, var(--wa-color-surface-border));
-    background: var(--background-color-base, var(--wa-color-surface-raised));
 
     --border-color-base: var(--wa-color-surface-border);
     --background-color-base: var(--wa-color-surface-raised);
+    --border-color: var(--border-color-base);
+    --background-color: var(--background-color-base);
 
-    box-shadow: var(--wa-shadow-offset-x-s) var(--wa-shadow-offset-y-s) 0 0 var(--border-color-base);
+    border: 1px solid var(--border-color);
+    background: var(--background-color);
+    box-shadow: var(--wa-shadow-offset-x-s) var(--wa-shadow-offset-y-s) 0 0 var(--border-color);
 }
 
 .option-card:hover:not(:disabled) {
-    --border-color-base: oklch(from var(--wa-color-surface-border) calc(l + 0.025) c h);
-    --background-color-base: oklch(from var(--wa-color-surface-raised) calc(l + 0.025) c h);
+    --border-color: oklch(from var(--border-color-base) calc(l + 0.025) c h);
+    --background-color: oklch(from var(--background-color-base) calc(l + 0.025) c h);
 }
 
 .option-card.selected {
