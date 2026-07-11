@@ -29,9 +29,11 @@ const submitButtonId = useId()
 
 // Base id for the per-field label elements of multiselect groups, referenced
 // by each group's aria-labelledby (same pattern as RequestUserInputBody).
+// Keyed by field index, not property name: a name containing whitespace
+// would yield an invalid HTML id and break the space-separated reference.
 const fieldLabelIdBase = useId()
-function fieldLabelId(name) {
-    return `${fieldLabelIdBase}-${name}`
+function fieldLabelId(fieldIndex) {
+    return `${fieldLabelIdBase}-f${fieldIndex}`
 }
 
 // Wire params.
@@ -229,7 +231,10 @@ function collectContent() {
         }
         if (raw === undefined || raw === null || raw === '') continue
         if (field.kind === 'number') {
-            const num = field.spec.type === 'integer' ? parseInt(raw, 10) : Number(raw)
+            // Number(), not parseInt(): fieldValid already guarantees
+            // integerness for type:"integer", and parseInt mis-parses
+            // scientific notation ('1e2' → 1 instead of 100).
+            const num = Number(raw)
             if (Number.isFinite(num)) content[field.name] = num
         } else {
             content[field.name] = raw
@@ -265,7 +270,7 @@ function cancel() {
         </div>
 
         <div v-if="fields.length" class="codex-elicit-fields">
-            <div v-for="field in fields" :key="field.name" class="codex-elicit-field">
+            <div v-for="(field, fieldIndex) in fields" :key="field.name" class="codex-elicit-field">
                 <!-- Text / number / select use Web Awesome's own label/hint
                      attributes (associated to the control inside its shadow
                      DOM) and its native required asterisk semantics. -->
@@ -329,9 +334,9 @@ function cancel() {
                     v-else-if="field.kind === 'multiselect'"
                     class="codex-elicit-multiselect-group"
                     role="group"
-                    :aria-labelledby="fieldLabelId(field.name)"
+                    :aria-labelledby="fieldLabelId(fieldIndex)"
                 >
-                    <span :id="fieldLabelId(field.name)" class="codex-elicit-label">
+                    <span :id="fieldLabelId(fieldIndex)" class="codex-elicit-label">
                         {{ field.label }}<span v-if="field.required" class="codex-elicit-required" aria-hidden="true"> *</span>
                     </span>
                     <div class="codex-elicit-multiselect">
