@@ -138,6 +138,13 @@ class TestBuildPermissionsResponse:
             "permissions": {}, "scope": "forever",
         }) is None
 
+    def test_unhashable_scope_returns_none(self, handler):
+        # Regression: a set-membership check on an unhashable value raised
+        # TypeError through the WS layer instead of returning None.
+        assert handler._build_permissions_response({
+            "permissions": {}, "scope": ["turn"],
+        }) is None
+
     def test_non_dict_permissions_returns_none(self, handler):
         assert handler._build_permissions_response({
             "permissions": "not a dict", "scope": "turn",
@@ -256,15 +263,32 @@ class TestBuildElicitationResponse:
         )
         assert result == {"action": "accept", "content": content, "_meta": None}
 
+    def test_mcp_tool_call_accept_with_content(self, handler):
+        # content is deliberately NOT gated per tool_name — an accepted
+        # mcpToolCall may carry one (pins the builder's documented looseness).
+        content = {"note": "why not"}
+        result = handler._build_codex_response(
+            "mcpToolCall", {"action": "accept", "content": content},
+        )
+        assert result == {"action": "accept", "content": content, "_meta": None}
+
     @pytest.mark.parametrize("payload", [
         {"action": "approve"},                                  # unknown action
         {"action": None}, {},                                   # missing action
+        {"action": ["accept"]},                                 # unhashable action
         {"action": "accept", "persist": "forever"},             # bad persist value
+        {"action": "accept", "persist": ["session"]},           # unhashable persist
         {"action": "decline", "persist": "session"},            # persist without accept
         {"action": "accept", "content": "not-a-dict"},          # non-dict content
     ])
     def test_invalid_payloads(self, handler, payload):
         assert handler._build_codex_response("mcpToolCall", payload) is None
+
+    @pytest.mark.parametrize("tool_name", ["elicitationForm", "elicitationUrl"])
+    def test_invalid_payload_routed_through_other_sub_kinds(self, handler, tool_name):
+        # Routing pin: the other two sub-kinds go through the same builder
+        # and reject invalid payloads the same way.
+        assert handler._build_codex_response(tool_name, {"action": "approve"}) is None
 
     def test_persist_rejected_outside_mcp_tool_call(self, handler):
         assert handler._build_codex_response(
@@ -285,9 +309,16 @@ class TestBuildRequestUserInputResponse:
             "toolRequestUserInput", {"answers": {}},
         ) == {"answers": {}}
 
+    def test_extra_entry_keys_stripped(self, handler):
+        result = handler._build_codex_response(
+            "toolRequestUserInput", {"answers": {"q1": {"answers": ["a"], "extra": 9}}},
+        )
+        assert result == {"answers": {"q1": {"answers": ["a"]}}}
+
     @pytest.mark.parametrize("answers", [
         None, "nope", ["list"],                       # not a dict
         {"q1": "Allow"},                              # entry not a dict
+        {"q1": {}},                                   # entry missing "answers" key
         {"q1": {"answers": "Allow"}},                 # answers not a list
         {"q1": {"answers": [1, 2]}},                  # non-string answers
     ])

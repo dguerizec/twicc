@@ -92,7 +92,7 @@ class CodexWSHandler:
                 "scope": "turn" | "session",  // permissions only
                 "action": "accept" | "decline" | "cancel",  // elicitations only
                 "persist": "session" | "always",  // mcpToolCall accept only
-                "content": {...},  // elicitationForm accept only
+                "content": {...},  // accept only (form values; sent by elicitationForm)
                 "answers": {...},  // toolRequestUserInput only
             }
 
@@ -254,7 +254,7 @@ class CodexWSHandler:
     def _build_permissions_response(self, content: dict) -> dict | None:
         scope = content.get("scope")
         permissions = content.get("permissions")
-        if scope not in self._PERMISSIONS_SCOPES:
+        if not isinstance(scope, str) or scope not in self._PERMISSIONS_SCOPES:
             logger.error(
                 "codex permissions: invalid scope=%r (expected %r)",
                 scope, self._PERMISSIONS_SCOPES,
@@ -285,7 +285,7 @@ class CodexWSHandler:
         the looseness keeps the builder simple.
         """
         action = content.get("action")
-        if action not in self._ELICITATION_ACTIONS:
+        if not isinstance(action, str) or action not in self._ELICITATION_ACTIONS:
             logger.error("codex %s: invalid action=%r", tool_name, action)
             return None
         persist = content.get("persist")
@@ -306,7 +306,11 @@ class CodexWSHandler:
                 return None
             response["content"] = form_content
         if persist is not None:
-            if tool_name != "mcpToolCall" or persist not in self._ELICITATION_PERSIST_VALUES:
+            if (
+                tool_name != "mcpToolCall"
+                or not isinstance(persist, str)
+                or persist not in self._ELICITATION_PERSIST_VALUES
+            ):
                 logger.error(
                     "codex %s: invalid persist=%r", tool_name, persist,
                 )
@@ -346,10 +350,10 @@ class CodexWSHandler:
     def _safe_default_for(self, tool_name: str) -> dict:
         """Wire-safe fallback when the frontend response failed validation.
 
-        Elicitations default to a "cancel" (not decline — Codex's elicitation
-        action set has no "decline for safety" equivalent semantics beyond
-        cancel/decline, and cancel is the least presumptive). requestUserInput
-        defaults to an empty answer map, which Codex treats as a cancel too.
+        Elicitations default to "cancel" rather than "decline": a validation
+        failure is not a user refusal, so dismissal (cancel) beats rejection
+        (decline). requestUserInput defaults to an empty answer map, which
+        Codex treats as a cancel too.
         """
         if tool_name == "permissions":
             return {"permissions": {}, "scope": "turn"}
