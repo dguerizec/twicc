@@ -40,8 +40,12 @@ const hasApproveMenu = computed(() => canPersistSession.value || canPersistAlway
 const toolTitle = computed(() => meta.value.tool_title)
 const toolDescription = computed(() => meta.value.tool_description)
 // Pre-rendered params: [{name, value, displayName}] — preferred display.
-const paramsDisplay = computed(() =>
-    Array.isArray(meta.value.tool_params_display) ? meta.value.tool_params_display : [])
+// Malformed (null / non-object) entries are dropped so they can't throw at render.
+const paramsDisplay = computed(() => {
+    const list = meta.value.tool_params_display
+    if (!Array.isArray(list)) return []
+    return list.filter((p) => p && typeof p === 'object')
+})
 // Raw arguments fallback when no rendered display is provided.
 const rawParams = computed(() => {
     if (paramsDisplay.value.length) return null
@@ -75,7 +79,7 @@ watch(() => props.pendingRequest?.request_id, focusApprove)
 </script>
 
 <template>
-    <div class="codex-pending-body">
+    <div class="mcp-approval-body">
         <div class="codex-pending-section">
             <div class="codex-pending-summary">
                 <span class="codex-summary-label">MCP tool call</span>
@@ -89,9 +93,9 @@ watch(() => props.pendingRequest?.request_id, focusApprove)
             <div v-if="toolDescription" class="mcp-description">{{ toolDescription }}</div>
 
             <ul v-if="paramsDisplay.length" class="mcp-param-list">
-                <li v-for="(param, idx) in paramsDisplay" :key="idx" class="codex-permission-row">
-                    <code class="codex-permission-key">{{ param.displayName || param.name }}</code>
-                    <span class="codex-permission-value">{{ displayValue(param.value) }}</span>
+                <li v-for="(param, idx) in paramsDisplay" :key="idx" class="mcp-param-row">
+                    <code class="mcp-param-name">{{ param.displayName || param.name }}</code>
+                    <span class="mcp-param-value">{{ displayValue(param.value) }}</span>
                 </li>
             </ul>
             <details v-else-if="rawParams" class="mcp-raw-params">
@@ -141,17 +145,17 @@ watch(() => props.pendingRequest?.request_id, focusApprove)
                     </wa-button>
                     <AppTooltip :for="approveMenuId">More approve options.</AppTooltip>
 
-                    <wa-dropdown-item :id="approveOnceId" @click="approve()">
+                    <wa-dropdown-item :id="approveOnceId" :disabled="isResponding" @click="approve()">
                         <wa-icon slot="icon" name="check" variant="classic"></wa-icon>
                         Once
                     </wa-dropdown-item>
                     <AppTooltip placement="left" :for="approveOnceId">Approve only this call.</AppTooltip>
-                    <wa-dropdown-item v-if="canPersistSession" :id="approveSessionId" @click="approve('session')">
+                    <wa-dropdown-item v-if="canPersistSession" :id="approveSessionId" :disabled="isResponding" @click="approve('session')">
                         <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
                         For this session
                     </wa-dropdown-item>
                     <AppTooltip v-if="canPersistSession" placement="left" :for="approveSessionId">Approve and remember for the rest of the session.</AppTooltip>
-                    <wa-dropdown-item v-if="canPersistAlways" :id="approveAlwaysId" @click="approve('always')">
+                    <wa-dropdown-item v-if="canPersistAlways" :id="approveAlwaysId" :disabled="isResponding" @click="approve('always')">
                         <wa-icon slot="icon" name="infinity" variant="classic"></wa-icon>
                         Always
                     </wa-dropdown-item>
@@ -163,7 +167,7 @@ watch(() => props.pendingRequest?.request_id, focusApprove)
 </template>
 
 <style scoped>
-.codex-pending-body {
+.mcp-approval-body {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-s);
@@ -228,19 +232,19 @@ watch(() => props.pendingRequest?.request_id, focusApprove)
     gap: var(--wa-space-2xs);
 }
 
-.codex-permission-row {
+.mcp-param-row {
     display: flex;
     align-items: center;
     gap: var(--wa-space-s);
 }
 
-.codex-permission-key {
+.mcp-param-name {
     font-family: var(--wa-font-family-mono);
     font-size: var(--wa-font-size-s);
     word-break: break-all;
 }
 
-.codex-permission-value {
+.mcp-param-value {
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
 }
