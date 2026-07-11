@@ -2,16 +2,27 @@
 Codex approval helpers — pure functions translating between the Codex
 JSON-RPC wire format and TwiCC's provider-neutral ``PendingRequest``.
 
-The 3 approval methods Codex sends as ``server requests`` (i.e. with an
-``id``, requiring a synchronous response):
+The 5 approval methods Codex sends as ``server requests`` (i.e. with an
+``id``, requiring a synchronous response) that this bridge owns:
 
 - ``item/commandExecution/requestApproval`` — shell exec / sub-exec / network
 - ``item/fileChange/requestApproval`` — ApplyPatch (one or more file changes)
 - ``item/permissions/requestApproval`` — model asks for extra filesystem / network permissions
+- ``mcpServer/elicitation/request`` — MCP elicitation; 3 sub-kinds distinguished
+  by :func:`resolve_tool_name` from the params, not the method:
+  - an MCP-tool-call approval (``mode=form`` + ``_meta.codex_approval_kind ==
+    "mcp_tool_call"``) → ``mcpToolCall``, surfaced as a ``tool_approval``
+  - a generic form elicitation (``mode=form``, any other/missing ``_meta``)
+    → ``elicitationForm``, surfaced as ``ask_user_question``
+  - a URL elicitation (``mode=url``) → ``elicitationUrl``, surfaced as
+    ``ask_user_question``
+- ``item/tool/requestUserInput`` — Codex's generic "ask the user a
+  question" fallback (used e.g. when an MCP tool call needs approval but the
+  server hasn't opted into elicitations) → ``toolRequestUserInput``,
+  surfaced as ``ask_user_question``
 
-Other server requests (``item/tool/call``, ``account/chatgptAuthTokens/refresh``,
-``item/tool/requestUserInput``, ``mcpServer/elicitation/request``) are NOT
-ours to handle in PR2a — the wiring in :class:`CodexAgent` delegates them to
+Other server requests (``item/tool/call``, ``account/chatgptAuthTokens/refresh``)
+are NOT ours to handle — the wiring in :class:`CodexAgent` delegates them to
 the SDK's default sync handler (captured before we monkey-patch). See spec
 ``§1.6`` and ``§7-Q9``.
 
@@ -35,15 +46,66 @@ _SCOPED_COMMAND_ACTION_TYPES = frozenset({"read", "listFiles", "search"})
 # Method (wire) → human-readable tool_name we expose in PendingRequest.
 # The tool_name is what the frontend dispatches on (in a later PR) to pick
 # the right body component. Keeping it short and hyphen-free.
+# The elicitation entry is refined per-request by resolve_tool_name() (its
+# sub-kind depends on the params, not the method).
 APPROVAL_METHODS: dict[str, str] = {
     "item/commandExecution/requestApproval": "commandExecution",
     "item/fileChange/requestApproval":       "fileChange",
     "item/permissions/requestApproval":      "permissions",
+    "mcpServer/elicitation/request":         "elicitationForm",
+    "item/tool/requestUserInput":            "toolRequestUserInput",
 }
 
+ELICITATION_METHOD = "mcpServer/elicitation/request"
+REQUEST_USER_INPUT_METHOD = "item/tool/requestUserInput"
+
+# ``_meta`` discriminator marking a form elicitation as an MCP tool-call
+# approval (constants from codex-rs ``protocol/src/mcp_approval_meta.rs``).
+_APPROVAL_KIND_KEY = "codex_approval_kind"
+_APPROVAL_KIND_MCP_TOOL_CALL = "mcp_tool_call"
+
+# tool_names surfaced as questions rather than approvals — drives
+# ``PendingRequest.request_type`` and thus the frontend form header.
+_QUESTION_TOOL_NAMES = frozenset({
+    "elicitationForm", "elicitationUrl", "toolRequestUserInput",
+})
+
+# The only methods whose filesystem footprint can be enumerated for the
+# work-dir auto-approval. ``permissions`` is a privilege escalation with no
+# path footprint; elicitations / user-input forms have none either.
+_PATH_AUTO_APPROVABLE_METHODS = frozenset({
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+})
+
+
 def is_approval_method(method: str) -> bool:
-    """Return True if ``method`` is one of the 3 approval RPCs we own."""
+    """Return True if ``method`` is one of the 5 approval RPCs we own."""
     return method in APPROVAL_METHODS
+
+
+def resolve_tool_name(method: str, params: dict | None) -> str:
+    """Refine the wire method into the tool_name the frontend dispatches on.
+
+    Static for every method except the MCP elicitation, whose sub-kind lives
+    in the params: ``mode=url`` → ``elicitationUrl``; ``mode=form`` tagged
+    ``_meta.codex_approval_kind == "mcp_tool_call"`` → ``mcpToolCall`` (Codex
+    asking to approve an MCP tool call); any other form → ``elicitationForm``
+    (a genuine MCP-server-initiated form). Unknown/missing params fall back to
+    the generic form so a schema drift degrades to a visible (if plain)
+    prompt, never a silent drop.
+    """
+    base = APPROVAL_METHODS[method]
+    if method != ELICITATION_METHOD:
+        return base
+    if not isinstance(params, dict):
+        return "elicitationForm"
+    if params.get("mode") == "url":
+        return "elicitationUrl"
+    meta = params.get("_meta")
+    if isinstance(meta, dict) and meta.get(_APPROVAL_KIND_KEY) == _APPROVAL_KIND_MCP_TOOL_CALL:
+        return "mcpToolCall"
+    return "elicitationForm"
 
 
 def derive_request_id(params: dict | None) -> str:
@@ -69,16 +131,24 @@ def make_pending_request(method: str, params: dict | None) -> PendingRequest:
     ``fileChange`` (which carries the diff). See
     :meth:`CodexAgent._enrich_params_with_item_payload`.
 
+    ``request_type`` is ``tool_approval`` for the 3 legacy methods and the
+    MCP-tool-call elicitation sub-kind, and ``ask_user_question`` for the
+    other elicitation sub-kinds and ``requestUserInput`` — see
+    :data:`_QUESTION_TOOL_NAMES`.
+
     Raises:
         ValueError: if ``method`` is not one of the Codex approval methods
             (caller must gate with :func:`is_approval_method` first).
     """
     if method not in APPROVAL_METHODS:
         raise ValueError(f"Not a Codex approval method: {method!r}")
-    tool_name = APPROVAL_METHODS[method]
+    tool_name = resolve_tool_name(method, params)
+    request_type = (
+        "ask_user_question" if tool_name in _QUESTION_TOOL_NAMES else "tool_approval"
+    )
     return PendingRequest(
         request_id=derive_request_id(params),
-        request_type="tool_approval",  # Codex never uses ``ask_user_question``
+        request_type=request_type,
         tool_name=tool_name,
         tool_input=dict(params) if params else {},
         created_at=time.time(),
@@ -94,8 +164,10 @@ def default_response_for(method: str) -> dict:
     through ``resolve_pending_request`` with the real wire decision).
 
     Returns a freshly-built dict valid for the requested ``method``:
-    - command / file: ``{"decision": "decline"}``
-    - permissions:    ``{"permissions": {}, "scope": "turn"}``
+    - command / file:      ``{"decision": "decline"}``
+    - permissions:         ``{"permissions": {}, "scope": "turn"}``
+    - elicitation:          ``{"action": "cancel"}``
+    - requestUserInput:    ``{"answers": {}}``
 
     Raises:
         ValueError: if ``method`` is not one of the Codex approval methods
@@ -109,6 +181,15 @@ def default_response_for(method: str) -> dict:
         # grant to this turn only. Built inline on every call so callers
         # can mutate freely without leaking state across invocations.
         return {"permissions": {}, "scope": "turn"}
+    if method == ELICITATION_METHOD:
+        # ``cancel`` (not decline): a teardown is not a user decision. For an
+        # MCP tool-call approval Codex skips the call with "user cancelled";
+        # for a genuine elicitation ``cancel`` is the MCP "dismissed" action.
+        return {"action": "cancel"}
+    if method == REQUEST_USER_INPUT_METHOD:
+        # An empty answers map is a valid ToolRequestUserInputResponse; the
+        # MCP-approval parser maps a missing answer to Cancel.
+        return {"answers": {}}
     # Wire shape per spec ``§1.1.{a,b}``. We send ``decline`` rather than
     # ``cancel`` so the turn stays alive — the model can recover or pick
     # another approach instead of being aborted whole-cloth.
@@ -119,13 +200,16 @@ def auto_approve_response_for(method: str) -> dict:
     """Wire response approving an approval that targets only system work dirs.
 
     command / file: ``{"decision": "accept"}`` (this turn only; not persisted).
-    ``permissions`` is a privilege escalation with no path footprint and is
-    never path-auto-approved — asking for its response is a caller bug.
+    Only ``commandExecution`` and ``fileChange`` are path-auto-approvable
+    (see :data:`_PATH_AUTO_APPROVABLE_METHODS`): ``permissions`` is a
+    privilege escalation with no path footprint, and elicitations /
+    requestUserInput forms have none either — asking for their response is
+    a caller bug.
 
     Raises:
         ValueError: if ``method`` is not a command/file approval method.
     """
-    if method not in APPROVAL_METHODS or method == "item/permissions/requestApproval":
+    if method not in _PATH_AUTO_APPROVABLE_METHODS:
         raise ValueError(f"Not a path-auto-approvable Codex method: {method!r}")
     return {"decision": "accept"}
 
@@ -148,7 +232,9 @@ def extract_codex_approval_paths(
       no missing path). Network approvals (``command is None``) are not path
       based and are never auto-approvable.
 
-    ``permissions`` and anything unexpected → ``([], False)``.
+    ``permissions`` and anything unexpected (incl. the elicitation and
+    ``requestUserInput`` methods, which have no filesystem footprint) →
+    ``([], False)``.
     """
     if not enriched_params:
         return [], False

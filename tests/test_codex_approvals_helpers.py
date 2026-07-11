@@ -16,21 +16,32 @@ import pytest
 
 from twicc.providers.codex.agent.approvals import (
     APPROVAL_METHODS,
+    ELICITATION_METHOD,
+    REQUEST_USER_INPUT_METHOD,
+    auto_approve_response_for,
     default_response_for,
     derive_request_id,
     is_approval_method,
     make_pending_request,
+    resolve_tool_name,
 )
 
 
-# Single source of truth for the 3 known approval methods (mirrors
-# APPROVAL_METHODS keys; duplicated here so a future rename in the
-# production module fails the table-driven assertions immediately).
+# Single source of truth for the 3 legacy approval methods (mirrors
+# APPROVAL_METHODS keys minus the 2 new ones; duplicated here so a future
+# rename in the production module fails the table-driven assertions
+# immediately). These 3 all have a static tool_name and are always
+# ``tool_approval`` — the parametrized tests below rely on that.
 KNOWN_METHODS = [
     "item/commandExecution/requestApproval",
     "item/fileChange/requestApproval",
     "item/permissions/requestApproval",
 ]
+
+# The 2 new methods (MCP elicitation + requestUserInput), kept separate from
+# KNOWN_METHODS because their tool_name is params-dependent and their
+# request_type is "ask_user_question", not "tool_approval".
+NEW_METHODS = [ELICITATION_METHOD, REQUEST_USER_INPUT_METHOD]
 
 
 class TestIsApprovalMethod:
@@ -52,8 +63,10 @@ class TestApprovalMethodsConstant:
     def test_constant_keys_match_known_methods(self):
         # APPROVAL_METHODS is a dict[wire_method, tool_name]. The keys
         # are the wire methods; the values are the human-readable
-        # tool_names exposed in PendingRequest.tool_name.
-        assert set(APPROVAL_METHODS.keys()) == set(KNOWN_METHODS)
+        # tool_names exposed in PendingRequest.tool_name (static for the
+        # 3 legacy methods; the elicitation entry is refined per-request
+        # by resolve_tool_name()).
+        assert set(APPROVAL_METHODS.keys()) == set(KNOWN_METHODS) | set(NEW_METHODS)
 
     def test_tool_name_values_match_spec(self):
         # Source of truth for the (method → tool_name) mapping per spec
@@ -157,3 +170,117 @@ class TestDefaultResponseFor:
         first[key] = sentinel
         second = default_response_for(method)
         assert second[key] is not sentinel
+
+
+# ---------------------------------------------------------------------------
+# New methods: MCP elicitation + requestUserInput (PR: codex-mcp-approvals)
+# ---------------------------------------------------------------------------
+
+MCP_APPROVAL_PARAMS = {
+    "threadId": "t1", "turnId": "u1", "serverName": "chrome-devtools",
+    "mode": "form",
+    "_meta": {"codex_approval_kind": "mcp_tool_call", "persist": ["session", "always"]},
+    "message": 'Allow the chrome-devtools MCP server to run tool "navigate_page"?',
+    "requestedSchema": {"type": "object", "properties": {}},
+}
+GENERIC_FORM_PARAMS = {
+    "threadId": "t1", "turnId": None, "serverName": "some-server",
+    "mode": "form", "_meta": None, "message": "Fill this in",
+    "requestedSchema": {"type": "object", "properties": {"name": {"type": "string"}}},
+}
+URL_PARAMS = {
+    "threadId": "t1", "turnId": None, "serverName": "some-server",
+    "mode": "url", "_meta": None, "message": "Visit this",
+    "url": "https://example.com/auth", "elicitationId": "e1",
+}
+REQUEST_USER_INPUT_PARAMS = {
+    "threadId": "t1", "turnId": "u1", "itemId": "call_abc",
+    "questions": [{
+        "id": "mcp_tool_call_approval_call_abc", "header": "Approve app tool call?",
+        "question": "Allow?", "isOther": False, "isSecret": False,
+        "options": [{"label": "Allow", "description": "Run the tool and continue."}],
+    }],
+}
+
+
+class TestNewMethodRecognition:
+    @pytest.mark.parametrize("method", [ELICITATION_METHOD, REQUEST_USER_INPUT_METHOD])
+    def test_is_approval_method(self, method):
+        assert is_approval_method(method) is True
+
+    @pytest.mark.parametrize("params, expected", [
+        (MCP_APPROVAL_PARAMS, "mcpToolCall"),
+        (GENERIC_FORM_PARAMS, "elicitationForm"),
+        (URL_PARAMS, "elicitationUrl"),
+        (None, "elicitationForm"),          # defensive: no params → generic form
+        ({"mode": "form", "_meta": {"codex_approval_kind": "tool_suggestion"}},
+         "elicitationForm"),                # other approval kinds are NOT tool approvals
+    ])
+    def test_resolve_tool_name_elicitation(self, params, expected):
+        assert resolve_tool_name(ELICITATION_METHOD, params) == expected
+
+    def test_resolve_tool_name_request_user_input(self):
+        assert resolve_tool_name(REQUEST_USER_INPUT_METHOD, REQUEST_USER_INPUT_PARAMS) \
+            == "toolRequestUserInput"
+
+    def test_resolve_tool_name_static_methods_unchanged(self):
+        assert resolve_tool_name(
+            "item/commandExecution/requestApproval", {"anything": 1},
+        ) == "commandExecution"
+
+
+class TestNewMethodPendingRequests:
+    def test_mcp_tool_call_is_tool_approval(self):
+        req = make_pending_request(ELICITATION_METHOD, MCP_APPROVAL_PARAMS)
+        assert req.tool_name == "mcpToolCall"
+        assert req.request_type == "tool_approval"
+        assert req.tool_input["serverName"] == "chrome-devtools"
+        assert req.tool_input["_meta"]["persist"] == ["session", "always"]
+
+    @pytest.mark.parametrize("params, tool_name", [
+        (GENERIC_FORM_PARAMS, "elicitationForm"),
+        (URL_PARAMS, "elicitationUrl"),
+    ])
+    def test_elicitations_are_questions(self, params, tool_name):
+        req = make_pending_request(ELICITATION_METHOD, params)
+        assert req.tool_name == tool_name
+        assert req.request_type == "ask_user_question"
+
+    def test_request_user_input_is_question(self):
+        req = make_pending_request(REQUEST_USER_INPUT_METHOD, REQUEST_USER_INPUT_PARAMS)
+        assert req.tool_name == "toolRequestUserInput"
+        assert req.request_type == "ask_user_question"
+        # itemId doubles as the routing key (derive_request_id picks it up).
+        assert req.request_id == "call_abc"
+
+    def test_elicitation_request_id_is_uuid(self):
+        # Elicitation params carry no approvalId/itemId → uuid4 fallback.
+        req = make_pending_request(ELICITATION_METHOD, MCP_APPROVAL_PARAMS)
+        UUID(req.request_id)  # raises if not a valid UUID
+
+    def test_existing_methods_stay_tool_approval(self):
+        req = make_pending_request(
+            "item/commandExecution/requestApproval", {"itemId": "i1"},
+        )
+        assert req.request_type == "tool_approval"
+
+
+class TestNewMethodDefaults:
+    def test_elicitation_default_is_cancel(self):
+        assert default_response_for(ELICITATION_METHOD) == {"action": "cancel"}
+
+    def test_request_user_input_default_is_empty_answers(self):
+        assert default_response_for(REQUEST_USER_INPUT_METHOD) == {"answers": {}}
+
+    def test_defaults_are_fresh_dicts(self):
+        a = default_response_for(ELICITATION_METHOD)
+        b = default_response_for(ELICITATION_METHOD)
+        assert a is not b
+
+    @pytest.mark.parametrize("method", [
+        ELICITATION_METHOD, REQUEST_USER_INPUT_METHOD,
+        "item/permissions/requestApproval",
+    ])
+    def test_auto_approve_rejects_non_path_methods(self, method):
+        with pytest.raises(ValueError):
+            auto_approve_response_for(method)
