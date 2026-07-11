@@ -1490,7 +1490,8 @@ async function scrollToLineNum(lineNum) {
     let found = visItems.some(vi => vi.lineNum === lineNum)
 
     // Step 2: If not found and in conversation mode, expand the block
-    if (!found && settingsStore.getDisplayMode === DISPLAY_MODE.CONVERSATION) {
+    // (effective mode, so a per-session debug override is accounted for)
+    if (!found && store.getEffectiveDisplayMode(props.sessionId) === DISPLAY_MODE.CONVERSATION) {
         const rawItems = items.value
         const rawItem = rawItems.find(ri => ri.line_num === lineNum)
 

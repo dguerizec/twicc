@@ -3,7 +3,7 @@ import { ref, computed, watch, inject } from 'vue'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
-import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES } from '../../../constants'
+import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, DISPLAY_MODE } from '../../../constants'
 import { getProviderHelpers, getProviderLabel, getProviderIcon } from '../../../providers'
 import { getAgentDisplayLabel } from '../../../utils/agentLabel'
 import { stopSubagent, interruptSession } from '../../../composables/useWebSocket'
@@ -36,6 +36,14 @@ const showCosts = computed(() => settingsStore.areCostsShown)
 
 // Session data from store
 const session = computed(() => store.getSession(props.sessionId))
+
+// Debug display toggle (dev-mode only, main session): whether this session has
+// the debug view forced, and whether it effectively renders in debug mode.
+const isSessionDebugForced = computed(() => store.isSessionDebugForced(props.sessionId))
+const isEffectiveDebug = computed(() => store.getEffectiveDisplayMode(props.sessionId) === DISPLAY_MODE.DEBUG)
+function toggleSessionDebug() {
+    store.toggleSessionDebug(props.sessionId)
+}
 // Whether the session's project is a git worktree of another project — drives
 // the worktree-style title badge (parent name + branch icon + worktree folder),
 // matching the project home header.
@@ -394,7 +402,7 @@ defineExpose({
 </script>
 
 <template>
-    <header ref="headerRef" class="session-header" :class="{ 'compact-expanded': isCompactExpanded, 'compact-collapsed': !isCompactExpanded }" :data-session-type="mode" v-if="session">
+    <header ref="headerRef" class="session-header" :class="{ 'compact-expanded': isCompactExpanded, 'compact-collapsed': !isCompactExpanded, 'effective-debug': isEffectiveDebug }" :data-session-type="mode" v-if="session">
         <div v-if="mode === 'session'" class="session-title">
             <!-- Action buttons group: hidden in compact collapsed mode (revealed on expand) -->
             <div class="session-title-actions">
@@ -478,6 +486,21 @@ defineExpose({
                     <wa-icon name="pencil" label="Rename"></wa-icon>
                 </wa-button>
                 <AppTooltip :for="`session-header-${sessionId}-rename-button`">{{ isProviderEnabled ? 'Rename session' : 'Cannot rename: provider is disabled.' }}</AppTooltip>
+
+                <!-- Debug view toggle (dev mode only, main session): forces the debug
+                     display mode for this session without touching the global setting -->
+                <wa-button
+                    v-if="mode === 'session' && settingsStore.isDevMode"
+                    :id="`session-header-${sessionId}-debug-button`"
+                    :variant="isSessionDebugForced ? 'brand' : 'neutral'"
+                    appearance="plain"
+                    size="small"
+                    :class="['debug-button', 'reduced-height', { 'debug-button--active': isSessionDebugForced }]"
+                    @click="toggleSessionDebug"
+                >
+                    <wa-icon name="bug" label="Debug view"></wa-icon>
+                </wa-button>
+                <AppTooltip v-if="mode === 'session' && settingsStore.isDevMode" :for="`session-header-${sessionId}-debug-button`">{{ isSessionDebugForced ? 'Debug view forced for this session — click to restore the global mode' : 'Force the debug view for this session only' }}</AppTooltip>
 
                 <!-- Pending request indicator (shown when waiting for user response) -->
                 <wa-icon
@@ -903,8 +926,8 @@ defineExpose({
     color: var(--wa-color-text-quiet);
 }
 
-body:not([data-display-mode="debug"]) .nb_lines,
-body:not([data-display-mode="debug"]) .cost-breakdown-item {
+.session-header:not(.effective-debug) .nb_lines,
+.session-header:not(.effective-debug) .cost-breakdown-item {
     display: none;
 }
 
@@ -1014,13 +1037,18 @@ wa-divider {
 .pin-button,
 .archive-button,
 .rename-button,
-.search-button {
+.search-button,
+.debug-button {
     opacity: 0.6;
     transition: opacity 0.15s;
     flex-shrink: 0;
     margin-block: calc(-3 * var(--wa-space-2xs));
     position: relative;
     top: calc(-1 * var(--wa-space-2xs));
+}
+
+.debug-button.debug-button--active {
+    opacity: 1;
 }
 
 /* The pin button lives inside a wa-dropdown; the dropdown itself is the flex child. */
@@ -1043,7 +1071,8 @@ wa-divider {
 .pin-button:hover,
 .archive-button:hover,
 .rename-button:hover,
-.search-button:hover {
+.search-button:hover,
+.debug-button:hover {
     opacity: 1;
 }
 

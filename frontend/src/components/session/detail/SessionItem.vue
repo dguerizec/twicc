@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { PROVIDER, SYNTHETIC_ITEM } from '../../../constants'
+import { PROVIDER, SYNTHETIC_ITEM, DISPLAY_MODE } from '../../../constants'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import JsonViewer from '../../json/JsonViewer.vue'
@@ -109,6 +109,10 @@ const entryType = computed(() => props.content?.type || 'unknown')
 
 const sessionProvider = computed(() => dataStore.getSession(props.sessionId)?.provider)
 
+// Whether this item's session renders in debug mode (global mode or the
+// per-session dev-mode override) — drives the "show JSON" toggle visibility.
+const isEffectiveDebug = computed(() => dataStore.getEffectiveDisplayMode(props.sessionId) === DISPLAY_MODE.DEBUG)
+
 // Failed-send bubble (messaging pattern): shows the failure banner under the
 // regular user-message rendering.
 const isFailedSend = computed(() => props.syntheticKind === SYNTHETIC_ITEM.FAILED_USER_MESSAGE.kind)
@@ -142,7 +146,7 @@ function toggleJsonView() {
 </script>
 
 <template>
-    <div class="session-item" :data-kind="kind" :data-synthetic-kind="syntheticKind" :data-line-num="lineNum">
+    <div class="session-item" :class="{ 'effective-debug': isEffectiveDebug }" :data-kind="kind" :data-synthetic-kind="syntheticKind" :data-line-num="lineNum">
         <div><!-- all non-content stuff must be in this div for complex css rules of content stuff assuming they always start at 2nd place-->
             <!-- Detail toggle button for conversation mode (on assistant_message when collapsed,
                  or on first visible item of block when detailed) -->
@@ -375,7 +379,7 @@ function toggleJsonView() {
         opacity: 1 !important;
     }
 }
-body:not([data-display-mode="debug"]) .json-toggle {
+.session-item:not(.effective-debug) .json-toggle {
     display: none;
 }
 
@@ -483,6 +487,13 @@ body:not([data-display-mode="debug"]) .json-toggle {
     width: 6rem;
     display: flex;
     justify-content: flex-end;
+}
+
+/* Hide the floating markdown toolbar (raw toggle + copy) when the session
+   renders in debug view — global debug mode or the per-session override.
+   !important overrides the `display: flex` set by the positioning rules above. */
+.session-item.effective-debug .markdown-content-wrapper .markdown-toolbar {
+    display: none !important;
 }
 
 .session-items .session-item[data-kind="content_items"] {

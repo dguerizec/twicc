@@ -16,8 +16,9 @@ import UnknownEntry from '../UnknownEntry.vue'
 const store = useDataStore()
 const codeCommentsStore = useCodeCommentsStore()
 
-// Check if we're in simplified mode (only mode with collapsible groups)
-const isSimplifiedMode = computed(() => store.getDisplayMode === DISPLAY_MODE.SIMPLIFIED)
+// Check if we're in simplified mode (only mode with collapsible groups).
+// Uses the session's effective mode so a per-session debug override wins.
+const isSimplifiedMode = computed(() => store.getEffectiveDisplayMode(props.sessionId) === DISPLAY_MODE.SIMPLIFIED)
 
 const props = defineProps({
     items: {

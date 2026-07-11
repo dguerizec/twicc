@@ -482,6 +482,12 @@ export const useDataStore = defineStore('data', {
             // Ephemeral: not persisted, lost on page refresh.
             sessionDetailedBlocks: {},
 
+            // Debug display override — per session (dev-mode "force debug view"
+            // toggle in the session header). When set, the session renders in
+            // DISPLAY_MODE.DEBUG regardless of the global display mode.
+            // { sessionId: true }. Ephemeral: not persisted, lost on page refresh.
+            sessionDebugOverride: {},
+
             // Visual items - computed from sessionItems, display mode, and expanded groups
             // { sessionId: [{ lineNum, isGroupHead?, isExpanded? }, ...] }
             sessionVisualItems: {},
@@ -1134,6 +1140,17 @@ export const useDataStore = defineStore('data', {
             const blocks = state.localState.sessionDetailedBlocks[sessionId]
             return blocks ? blocks.includes(userMessageLineNum) : false
         },
+
+        // Effective display mode for a session: a per-session debug override
+        // (dev-mode header toggle) wins over the global display mode.
+        getEffectiveDisplayMode: (state) => (sessionId) =>
+            state.localState.sessionDebugOverride[sessionId]
+                ? DISPLAY_MODE.DEBUG
+                : useSettingsStore().getDisplayMode,
+
+        // Whether the session has the debug view forced (drives the header toggle's active state).
+        isSessionDebugForced: (state) => (sessionId) =>
+            !!state.localState.sessionDebugOverride[sessionId],
 
         // Get open tabs for a session
         getSessionOpenTabs: (state) => (sessionId) =>
@@ -2641,6 +2658,7 @@ export const useDataStore = defineStore('data', {
             }
             delete this.sessionItems[sessionId]
             delete this.localState.sessionExpandedGroups[sessionId]
+            delete this.localState.sessionDebugOverride[sessionId]
             delete this.localState.sessionInternalExpandedGroups[sessionId]
             delete this.localState.sessionVisualItems[sessionId]
             delete this.localState.visualItemCache[sessionId]
@@ -2707,9 +2725,12 @@ export const useDataStore = defineStore('data', {
                 return
             }
 
-            // Get effective display mode from settings store
+            // Get effective display mode from settings store, unless this session
+            // has the dev-mode debug override forced (header toggle), which wins.
             const settingsStore = useSettingsStore()
-            const mode = settingsStore.getDisplayMode
+            const mode = this.localState.sessionDebugOverride[sessionId]
+                ? DISPLAY_MODE.DEBUG
+                : settingsStore.getDisplayMode
             const expandedGroups = this.localState.sessionExpandedGroups[sessionId] || []
 
             // Detect assistant_turn (used by computeVisualItems for conversation mode
@@ -3591,6 +3612,21 @@ export const useDataStore = defineStore('data', {
                 blocks.push(userMessageLineNum)
             }
 
+            this.recomputeVisualItems(sessionId)
+        },
+
+        /**
+         * Toggle the per-session debug view override (dev-mode header button).
+         * When on, the session renders in DISPLAY_MODE.DEBUG regardless of the
+         * global display mode; toggling off restores the global mode.
+         * @param {string} sessionId
+         */
+        toggleSessionDebug(sessionId) {
+            if (this.localState.sessionDebugOverride[sessionId]) {
+                delete this.localState.sessionDebugOverride[sessionId]
+            } else {
+                this.localState.sessionDebugOverride[sessionId] = true
+            }
             this.recomputeVisualItems(sessionId)
         },
 
