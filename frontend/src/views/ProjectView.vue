@@ -2948,6 +2948,40 @@ wa-dropdown-item:hover .row-menu-trigger,
     align-items: center;
     gap: var(--wa-space-xs);
     max-width: 100%;
+   position: relative;
+}
+
+/* Hover-safe bridge for the interactive quota tooltips.
+ *
+ * These tooltips hold buttons ("View graph", the external link) on their last
+ * row, i.e. right at the ~8px gap wa-tooltip leaves between the anchor and the
+ * tooltip body (its `distance` default). To reach a button the pointer must
+ * cross that gap. wa-tooltip bridges it with its own "hover-bridge" — but that
+ * bridge is a `position: fixed` element clipped via `clip-path` to viewport
+ * coordinates from getBoundingClientRect(), while the tooltip body itself is
+ * rendered in the browser top layer (native popover). The two only line up when
+ * nothing displaces the fixed element: any ancestor establishing a containing
+ * block for fixed descendants (a page-level `filter`/`transform`, e.g. injected
+ * by an extension such as Dark Reader) or fractional display scaling shifts the
+ * bridge off the gap, so the tooltip is dismissed the instant the pointer leaves
+ * the ring — before it reaches the buttons. Reported by users on Chromium; not
+ * reproducible on a plain 100%/integer-DPR setup.
+ *
+ * Extending the anchor's own hit-area upward keeps `anchor:matches(':hover')`
+ * true across the gap (the condition wa-tooltip re-checks on mouseout),
+ * independent of that coordinate math. The strip is transparent, sits above the
+ * ring (never over it), and stays below the top-layer tooltip, so it never
+ * blocks the buttons. */
+.usage-quota::after,
+.quota-stale-icon::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    /* Slightly taller than the tooltip's 8px distance so it overlaps the
+       tooltip body with no bare pixel in between. */
+    height: 12px;
 }
 
 .usage-ring {
@@ -3050,6 +3084,8 @@ wa-dropdown-item:hover .row-menu-trigger,
 .quota-stale-icon {
     color: var(--wa-color-warning);
     font-size: var(--wa-font-size-l);
+    /* position: relative — see .usage-quota::after (hover-safe tooltip bridge). */
+    position: relative;
 }
 
 .quota-stale-header {
