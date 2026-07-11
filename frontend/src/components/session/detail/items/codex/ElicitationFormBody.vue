@@ -27,6 +27,13 @@ const cancelButtonId = useId()
 const declineButtonId = useId()
 const submitButtonId = useId()
 
+// Base id for the per-field label elements of multiselect groups, referenced
+// by each group's aria-labelledby (same pattern as RequestUserInputBody).
+const fieldLabelIdBase = useId()
+function fieldLabelId(name) {
+    return `${fieldLabelIdBase}-${name}`
+}
+
 // Wire params.
 const input = computed(() => props.pendingRequest.tool_input || {})
 const serverName = computed(() => input.value.serverName || 'unknown server')
@@ -46,26 +53,49 @@ function classify(spec) {
 // Normalised options for select/multiselect:
 // enum:[v] (+ enumNames:[n]) → [{value: v, label: n||v}]
 // oneOf/anyOf:[{const, title}] → [{value: const, label: title}]
+// Non-array variants and entries without a string ``const`` are treated as
+// absent — third-party schemas are untrusted input, never a crash source.
 function optionsFor(spec) {
-    if (spec.items?.enum) return spec.items.enum.map((v) => ({ value: v, label: v }))
-    if (spec.enum) return spec.enum.map((v, i) => ({ value: v, label: spec.enumNames?.[i] || v }))
-    return (spec.oneOf || spec.items?.anyOf || spec.items?.oneOf || [])
+    if (Array.isArray(spec.items?.enum)) {
+        return spec.items.enum.map((v) => ({ value: v, label: v }))
+    }
+    if (Array.isArray(spec.enum)) {
+        const names = Array.isArray(spec.enumNames) ? spec.enumNames : []
+        return spec.enum.map((v, i) => ({ value: v, label: names[i] || v }))
+    }
+    const variants = [spec.oneOf, spec.items?.anyOf, spec.items?.oneOf].find(Array.isArray) || []
+    return variants
+        .filter((o) => o && typeof o.const === 'string')
         .map((o) => ({ value: o.const, label: o.title || o.const }))
 }
 
 // One entry per schema property. ``options`` is precomputed for select/
 // multiselect kinds so the template and the submit mapping share the exact
-// same (index-stable) list.
+// same (index-stable) list. Each raw spec is normalised to a plain object
+// first (JSON Schema boolean schemas ``true``/``false``, null, arrays, and
+// other junk all fall through to 'unsupported' instead of crashing), and a
+// select/multiselect whose resolved options list is empty (free-form array,
+// malformed enum) is downgraded to 'unsupported' too — a required field
+// rendered as an empty group would otherwise dead-lock the Submit button.
 const fields = computed(() =>
-    Object.entries(schema.value.properties || {}).map(([name, spec]) => {
-        const kind = classify(spec)
+    Object.entries(schema.value.properties || {}).map(([name, rawSpec]) => {
+        const spec = rawSpec && typeof rawSpec === 'object' && !Array.isArray(rawSpec) ? rawSpec : {}
+        let kind = classify(spec)
+        let options = null
+        if (kind === 'select' || kind === 'multiselect') {
+            options = optionsFor(spec)
+            if (!options.length) {
+                kind = 'unsupported'
+                options = null
+            }
+        }
         return {
             name,
             spec,
             kind,
             label: spec.title || name,
             required: requiredSet.value.has(name),
-            options: kind === 'select' || kind === 'multiselect' ? optionsFor(spec) : null,
+            options,
         }
     }))
 
@@ -146,6 +176,7 @@ function fieldValid(field) {
             if (raw === '' || raw === undefined || raw === null) return !field.required
             const num = Number(raw)
             if (!Number.isFinite(num)) return false
+            if (field.spec.type === 'integer' && !Number.isInteger(num)) return false
             if (field.spec.minimum !== undefined && num < field.spec.minimum) return false
             if (field.spec.maximum !== undefined && num > field.spec.maximum) return false
             return true
@@ -235,53 +266,75 @@ function cancel() {
 
         <div v-if="fields.length" class="codex-elicit-fields">
             <div v-for="field in fields" :key="field.name" class="codex-elicit-field">
-                <template v-if="field.kind === 'boolean'">
-                    <wa-checkbox
-                        :checked="values[field.name]"
-                        :disabled="isResponding"
-                        @change="values[field.name] = $event.target.checked"
-                    >
+                <!-- Text / number / select use Web Awesome's own label/hint
+                     attributes (associated to the control inside its shadow
+                     DOM) and its native required asterisk semantics. -->
+                <wa-input
+                    v-if="field.kind === 'text'"
+                    size="small"
+                    :label="field.label"
+                    :hint="field.spec.description || ''"
+                    :required="field.required"
+                    :type="inputTypeFor(field.spec)"
+                    :minlength="field.spec.minLength"
+                    :maxlength="field.spec.maxLength"
+                    :value.prop="values[field.name]"
+                    :disabled="isResponding"
+                    @input="values[field.name] = $event.target.value"
+                ></wa-input>
+
+                <wa-input
+                    v-else-if="field.kind === 'number'"
+                    size="small"
+                    :label="field.label"
+                    :hint="field.spec.description || ''"
+                    :required="field.required"
+                    type="number"
+                    :step="field.spec.type === 'integer' ? 1 : 'any'"
+                    :min="field.spec.minimum"
+                    :max="field.spec.maximum"
+                    :value.prop="values[field.name]"
+                    :disabled="isResponding"
+                    @input="values[field.name] = $event.target.value"
+                ></wa-input>
+
+                <wa-select
+                    v-else-if="field.kind === 'select'"
+                    size="small"
+                    :label="field.label"
+                    :hint="field.spec.description || ''"
+                    :required="field.required"
+                    :value.prop="values[field.name]"
+                    :disabled="isResponding"
+                    @change="values[field.name] = $event.target.value"
+                >
+                    <wa-option v-for="(opt, idx) in field.options" :key="idx" :value="String(idx)">{{ opt.label }}</wa-option>
+                </wa-select>
+
+                <!-- Boolean: wa-checkbox renders its own label (default slot)
+                     and hint; keep our required marker in the label. -->
+                <wa-checkbox
+                    v-else-if="field.kind === 'boolean'"
+                    :hint="field.spec.description || ''"
+                    :checked="values[field.name]"
+                    :disabled="isResponding"
+                    @change="values[field.name] = $event.target.checked"
+                >
+                    {{ field.label }}<span v-if="field.required" class="codex-elicit-required" aria-hidden="true"> *</span>
+                </wa-checkbox>
+
+                <!-- Multiselect: checkbox group labelled via aria-labelledby
+                     (same pattern as RequestUserInputBody's question groups). -->
+                <div
+                    v-else-if="field.kind === 'multiselect'"
+                    class="codex-elicit-multiselect-group"
+                    role="group"
+                    :aria-labelledby="fieldLabelId(field.name)"
+                >
+                    <span :id="fieldLabelId(field.name)" class="codex-elicit-label">
                         {{ field.label }}<span v-if="field.required" class="codex-elicit-required" aria-hidden="true"> *</span>
-                    </wa-checkbox>
-                </template>
-                <template v-else>
-                    <label class="codex-elicit-label">
-                        {{ field.label }}<span v-if="field.required" class="codex-elicit-required" aria-hidden="true"> *</span>
-                    </label>
-
-                    <wa-input
-                        v-if="field.kind === 'text'"
-                        size="small"
-                        :type="inputTypeFor(field.spec)"
-                        :minlength="field.spec.minLength"
-                        :maxlength="field.spec.maxLength"
-                        :value="values[field.name]"
-                        :disabled="isResponding"
-                        @input="values[field.name] = $event.target.value"
-                    ></wa-input>
-
-                    <wa-input
-                        v-else-if="field.kind === 'number'"
-                        size="small"
-                        type="number"
-                        :min="field.spec.minimum"
-                        :max="field.spec.maximum"
-                        :value="values[field.name]"
-                        :disabled="isResponding"
-                        @input="values[field.name] = $event.target.value"
-                    ></wa-input>
-
-                    <wa-select
-                        v-else-if="field.kind === 'select'"
-                        size="small"
-                        :value="values[field.name]"
-                        :disabled="isResponding"
-                        @change="values[field.name] = $event.target.value"
-                    >
-                        <wa-option v-for="(opt, idx) in field.options" :key="idx" :value="String(idx)">{{ opt.label }}</wa-option>
-                    </wa-select>
-
-                    <div v-else-if="field.kind === 'multiselect'" class="codex-elicit-multiselect">
+                    </span>
+                    <div class="codex-elicit-multiselect">
                         <wa-checkbox
                             v-for="(opt, idx) in field.options"
                             :key="idx"
@@ -290,13 +343,15 @@ function cancel() {
                             @change="toggleMultiselect(field.name, opt.value, $event.target.checked)"
                         >{{ opt.label }}</wa-checkbox>
                     </div>
+                    <p v-if="field.spec.description" class="codex-elicit-help">{{ field.spec.description }}</p>
+                </div>
 
-                    <p v-else-if="field.kind === 'unsupported'" class="codex-elicit-unsupported">
+                <template v-else-if="field.kind === 'unsupported'">
+                    <p class="codex-elicit-unsupported">
                         Unsupported field type for "{{ field.name }}".
                     </p>
+                    <p v-if="field.spec.description" class="codex-elicit-help">{{ field.spec.description }}</p>
                 </template>
-
-                <p v-if="field.spec.description" class="codex-elicit-help">{{ field.spec.description }}</p>
             </div>
         </div>
 
@@ -412,6 +467,12 @@ function cancel() {
     margin: 0;
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
+}
+
+.codex-elicit-multiselect-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
 }
 
 .codex-elicit-multiselect {
