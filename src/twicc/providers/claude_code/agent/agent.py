@@ -1397,22 +1397,45 @@ class ClaudeCodeAgent(BaseAgent):
         await self._broadcast_process_label("")
 
     def _note_schedule_wakeup(self, tool_use_result: dict) -> None:
-        """Stamp the deadline of the latest ScheduleWakeup from its tool_result.
+        """Track the deadline of the latest ScheduleWakeup from its tool_result.
 
         ``tool_use_result`` is the tool_result payload of *any* tool; only a
-        ScheduleWakeup carries ``scheduledFor`` (epoch ms), so anything else is
-        ignored. That value is authoritative — the harness rounds the requested
-        ``delaySeconds`` up to the next whole minute, so recomputing from the
-        delay lands ~a minute early. The deadline is what the ResultMessage
-        handler compares against the clock to decide whether to hold
-        ASSISTANT_TURN. A new call always overwrites the previous deadline;
-        nothing else clears it (see ``self._pending_wakeup_at``).
+        ScheduleWakeup carries ``scheduledFor`` (epoch ms) / ``stopped``, so any
+        other tool's result is ignored (the existing deadline is untouched).
+
+        Two ScheduleWakeup shapes:
+        - a scheduling call carries ``scheduledFor`` (epoch ms). That value is
+          authoritative — the harness rounds the requested ``delaySeconds`` up
+          to the next whole minute, so recomputing from the delay lands ~a
+          minute early. The deadline is what the ResultMessage handler compares
+          against the clock to decide whether to hold ASSISTANT_TURN.
+        - a ``stop=true`` call cancels any pending wake-up; its result reports
+          ``stopped: true`` (and ``scheduledFor: 0``). We clear the deadline
+          rather than stamping the bogus epoch-0 one that would otherwise read
+          as "holding until 01:00" and never actually hold.
+
+        A new scheduling call always overwrites the previous deadline.
         """
+        # A stop cancels any pending wake-up. Handle it first, and off the
+        # ``stopped`` flag alone, so it works even if a future SDK omits
+        # ``scheduledFor`` from the stop result.
+        if tool_use_result.get("stopped"):
+            if self._pending_wakeup_at is not None:
+                logger.debug(
+                    "Session %s: ScheduleWakeup stopped — pending wake-up cleared",
+                    self.session_id,
+                )
+            self._pending_wakeup_at = None
+            return
         # Inner key is camelCase in the JSONL; tolerate snake_case defensively.
         scheduled_for_ms = tool_use_result.get("scheduledFor")
         if scheduled_for_ms is None:
             scheduled_for_ms = tool_use_result.get("scheduled_for")
         if not isinstance(scheduled_for_ms, (int, float)) or isinstance(scheduled_for_ms, bool):
+            return
+        # A non-positive deadline is a cancel / no-op, never a real fire time.
+        if scheduled_for_ms <= 0:
+            self._pending_wakeup_at = None
             return
         self._pending_wakeup_at = scheduled_for_ms / 1000.0
         logger.debug(
@@ -1580,6 +1603,16 @@ class ClaudeCodeAgent(BaseAgent):
         try:
             async for msg in self._client.receive_messages():
                 self.last_activity = time.time()
+
+                # ``parse_message`` returns None for unknown / forward-compat
+                # message types (e.g. ``command_lifecycle``). The unpatched SDK
+                # and the logging patch both drop these, but guard the loop
+                # regardless: a None carries no state, and letting it fall
+                # through to the ASSISTANT_TURN catch-all below would misread a
+                # lifecycle marker trailing the final ResultMessage as activity
+                # and pin a finished session in ASSISTANT_TURN forever.
+                if msg is None:
+                    continue
 
                 # Keep the live-background-agents set current on every task
                 # lifecycle event — consumed by the ResultMessage branch below

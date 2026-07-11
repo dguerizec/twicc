@@ -95,7 +95,14 @@ def patch_client(client: ClaudeSDKClient, session_id: str) -> None:
         # Access the internal query stream for raw dicts
         async for data in client._query.receive_messages():
             _write_log_line(log_path, "received", data)
-            yield parse_message(data)
+            # Mirror the unpatched SDK, which drops these: parse_message returns
+            # None for unknown / forward-compat message types (e.g.
+            # ``command_lifecycle``). Yielding None would inject a bogus
+            # "message" into the agent loop that its state machine misreads as
+            # activity — the logging patch must stay behaviourally transparent.
+            message = parse_message(data)
+            if message is not None:
+                yield message
 
     client.receive_messages = patched_receive_messages  # type: ignore[assignment]
 
