@@ -5,9 +5,9 @@ The 5 server-side approval methods Codex emits
 ``item/fileChange/requestApproval``,
 ``item/permissions/requestApproval``, ``mcpServer/elicitation/request``,
 ``item/tool/requestUserInput``) flow through this module on the way to
-``BaseAgent._await_pending_request``. The helpers covered here — plus
-``CodexAgent._record_decision_outcome`` (agent-level, see below) — are
-pure, synchronous, and easy to lock down.
+``BaseAgent._await_pending_request``. The helpers covered here are pure,
+synchronous, and easy to lock down; ``CodexAgent._record_decision_outcome``
+(agent-level, see below) is a state-mutating method locked down the same way.
 """
 
 from __future__ import annotations
