@@ -583,16 +583,20 @@ function findDiffPairs(obj) {
 
 /**
  * Detect if an object is a content block source with embedded data (image, document, etc.).
- * Matches the Claude SDK source structure: { type, media_type, data }.
+ * Matches two wire shapes carrying the media type under different keys:
+ * - Claude SDK sources: { type, media_type, data } (snake_case);
+ * - MCP CallToolResult content items: { type: "image"|..., data, mimeType }
+ *   (camelCase — surfaced by Codex `mcp_tool_call_end` events, direct or
+ *   code-mode nested).
  * Returns null if not a content block source, or an info object describing how to render the data field.
  * @param {Object} obj
  * @returns {{ kind: 'image', mediaType: string, data: string } | { kind: 'binary', mediaType: string } | null}
  */
 function detectContentBlockSource(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
-    if (!obj.media_type || !('data' in obj) || !obj.type) return null
+    const mediaType = obj.media_type ?? obj.mimeType
+    if (!mediaType || !('data' in obj) || !obj.type) return null
     if (obj.type === 'text') return null
-    const mediaType = obj.media_type
     if (typeof mediaType === 'string' && mediaType.startsWith('image/')) {
         return { kind: 'image', mediaType, data: obj.data }
     }

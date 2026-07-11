@@ -699,14 +699,34 @@ def _script_targets(script_input: object) -> CodeModeScriptTargets:
     return CodeModeScriptTargets(has_patch, frozenset(paths), frozenset(mcp_tools))
 
 
+def _normalize_code_mode_identifier(name: str) -> str:
+    """Mirror of codex-rs ``normalize_code_mode_identifier`` (description.rs).
+
+    Code mode exposes nested tools as JavaScript identifiers: every
+    character outside ``[A-Za-z0-9_$]`` (digits excluded at index 0) is
+    rewritten to ``_``. Applied to the event-side qualified name so it
+    compares against the identifiers the script actually uses — e.g.
+    server ``chrome-devtools`` is addressed as
+    ``tools.mcp__chrome_devtools__<tool>``.
+    """
+    chars = []
+    for index, ch in enumerate(name):
+        if ch == "_" or ch == "$" or (ch.isascii() and (ch.isalpha() or (index > 0 and ch.isdigit()))):
+            chars.append(ch)
+        else:
+            chars.append("_")
+    return "".join(chars) if chars else "_"
+
+
 def _mcp_end_qualified_name(payload: dict) -> str | None:
     """Qualified ``mcp__<server>__<tool>`` name of an ``mcp_tool_call_end``.
 
-    Built from the event's ``invocation`` field — the same shape the
-    code-mode script uses to address the tool (``tools.mcp__server__tool``),
-    so it compares directly against :attr:`CodeModeScriptTargets.mcp_tools`.
-    Returns ``None`` when the invocation is missing or malformed (the
-    matcher then falls back to recency).
+    Built from the event's ``invocation`` field and normalised like the
+    JS identifier the code-mode script uses to address the tool
+    (``tools.mcp__server__tool``), so it compares directly against
+    :attr:`CodeModeScriptTargets.mcp_tools`. Returns ``None`` when the
+    invocation is missing or malformed (the matcher then falls back to
+    recency).
     """
     invocation = payload.get("invocation")
     if not isinstance(invocation, dict):
@@ -715,7 +735,7 @@ def _mcp_end_qualified_name(payload: dict) -> str | None:
     tool = invocation.get("tool")
     if not isinstance(server, str) or not server or not isinstance(tool, str) or not tool:
         return None
-    return f"mcp__{server}__{tool}"
+    return _normalize_code_mode_identifier(f"mcp__{server}__{tool}")
 
 
 def _changes_match_declared(change_paths: list[str], declared: frozenset[str]) -> bool:

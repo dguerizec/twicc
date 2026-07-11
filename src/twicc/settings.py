@@ -312,7 +312,7 @@ LOGGING = {
 # rules change to trigger recomputation. ``None`` declares "no compute pipeline
 # yet" — sessions of that provider are reported up-to-date as-is.
 CLAUDE_CODE_COMPUTE_VERSION = 107  # 107: repair agent links wrongly flipped to background by SendMessage-continuation notifications (106 = plan_paths from subagent writes too, 105 = Session.plan_paths backfill, 104 = async-by-default agents + task-notification rerouting repair)
-CODEX_COMPUTE_VERSION = 38  # 38: code-mode nested mcp_tool_call_end paired to its exec (37: code-mode exec/wait chaining + nested patch pairing, 36: per-model context window)
+CODEX_COMPUTE_VERSION = 39  # 39: mcp end pairing normalises server/tool like the JS identifier (38: code-mode nested mcp_tool_call_end paired to its exec, 37: code-mode exec/wait chaining + nested patch pairing)
 
 # Search index version
 # Bumped when the schema or document layout changes — forces a full

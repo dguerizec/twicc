@@ -508,6 +508,31 @@ class TestCodeModeCompute:
         )
         assert event_link.tool_use_id == "call_exec_mcp_a"
 
+    def test_nested_mcp_dashed_server_matches_underscored_identifier(self, codex_session):
+        """The invocation's raw server name (``chrome-devtools``) must match
+        the JS identifier the script uses (``mcp__chrome_devtools__…`` —
+        code mode rewrites non-identifier chars to ``_``). Real shape from
+        session 019f4d27 line 215/216. Recency alone can't prove the match
+        here, so an unrelated MCP exec sits in between."""
+        _create_items(codex_session, [
+            _exec_call_line(
+                "call_exec_shot",
+                'const r = await tools.mcp__chrome_devtools__take_screenshot({format:"png"});',
+            ),
+            _custom_output_line("call_exec_shot", _RUNNING_CELL_2),
+            _exec_call_line("call_exec_other", "await tools.mcp__twicc__status({});"),
+            _custom_output_line("call_exec_other", _COMPLETED_ARRAY),
+            _mcp_end_line(
+                "exec-99999999-0000-1111-2222-333333333333", "chrome-devtools", "take_screenshot",
+            ),
+        ])
+        _run_batch_compute(codex_session)
+
+        event_link = ToolResultLink.objects.get(
+            session=codex_session, tool_result_line_num=5,
+        )
+        assert event_link.tool_use_id == "call_exec_shot"
+
     def test_failed_nested_mcp_surfaces_error_on_exec(self, codex_session):
         _create_items(codex_session, [
             _exec_call_line("call_exec_mcp_2", "await tools.mcp__twicc__status({});"),
@@ -699,6 +724,44 @@ class TestCodeModeLiveRemap:
             item=stdin_output_item,
         )
         assert remapped == "call_ec_1"
+
+
+class TestGetToolResults:
+    def test_rebound_nested_end_events_survive_the_call_id_check(self, codex_session):
+        """The API helper behind ``/tool-results/`` must return the nested
+        end events the link table rebound to the exec — their payload
+        ``call_id`` is the synthesized ``exec-<uuid>``, not the exec's
+        (regression: they were filtered out, so the front never switched
+        the Result to the structured MCP payload / patch event)."""
+        from twicc.providers.helpers import get_provider_helpers
+
+        items = [
+            SessionItem(
+                session=codex_session, line_num=2,
+                content=_mcp_end_line("exec-8256675a-50d5-41b7-aed0-621f3e4354eb", "chrome-devtools", "take_screenshot"),
+            ),
+            SessionItem(
+                session=codex_session, line_num=3,
+                content=_custom_output_line("call_exec_api_1", _COMPLETED_ARRAY),
+            ),
+        ]
+        helpers = get_provider_helpers(Provider.CODEX)
+        results = helpers.get_tool_results(items, "call_exec_api_1")
+        assert [r.get("type") for r in results] == ["mcp_tool_call_end", "custom_tool_call_output"]
+
+    def test_direct_end_event_call_id_check_still_enforced(self, codex_session):
+        """Defensive equality stays for direct calls: an event carrying a
+        foreign non-``exec-`` call_id is still dropped."""
+        from twicc.providers.helpers import get_provider_helpers
+
+        items = [
+            SessionItem(
+                session=codex_session, line_num=2,
+                content=_mcp_end_line("call_other", "twicc", "status"),
+            ),
+        ]
+        helpers = get_provider_helpers(Provider.CODEX)
+        assert helpers.get_tool_results(items, "call_mcp_direct_2") == []
 
 
 class TestCodeModeDocEdits:

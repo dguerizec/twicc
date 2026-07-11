@@ -695,8 +695,12 @@ class CodexHelpers(BaseProviderHelpers):
           ``tool_use_id`` on every chunk past the first).
         - ``event_msg`` lines whose sub-type is in
           :data:`_PERSISTED_END_EVENT_TYPES` (the structured End events
-          we still consume). These are never rebound, so the payload's
-          ``call_id`` always equals ``tool_use_id``.
+          we still consume). A direct call's event carries the call's
+          own ``call_id``; a code-mode nested call's event carries a
+          synthesized ``exec-<uuid>`` and is rebound DB-side to the
+          outer ``exec`` (see
+          :meth:`CodexSessionCompute._remap_orphan_end_event`), so its
+          ``call_id`` legitimately diverges from ``tool_use_id``.
         - ``response_item.message role=user`` whose text body opens with
           ``<subagent_notification>``: synthetic tool_result for the
           originating ``spawn_agent``, rebound by
@@ -708,11 +712,12 @@ class CodexHelpers(BaseProviderHelpers):
         :class:`ToolResultLink` for this ``tool_use_id``, which is the
         authoritative mapping once any DB-side rebind kicks in. We
         therefore trust the link table and skip a payload-level
-        ``call_id`` re-check on the rebound shapes; we keep it only on
-        the non-rebound ``event_msg`` shape as a defensive mirror of
-        :func:`_event_msg_call_id`. Each surviving payload is returned
-        as-is so the frontend can dispatch on the payload's own
-        ``type`` (the wrapper ``type`` is dropped).
+        ``call_id`` re-check on the rebound shapes — including
+        ``event_msg`` events carrying the nested ``exec-`` prefix; the
+        equality check is kept only for a direct call's event, as a
+        defensive mirror of :func:`_event_msg_call_id`. Each surviving
+        payload is returned as-is so the frontend can dispatch on the
+        payload's own ``type`` (the wrapper ``type`` is dropped).
         """
         results: list[dict] = []
         for item in items:
@@ -748,7 +753,10 @@ class CodexHelpers(BaseProviderHelpers):
                 event_call_id = payload.get("call_id")
                 if not isinstance(event_call_id, str) or not event_call_id:
                     continue
-                if event_call_id != tool_use_id:
+                # A code-mode nested call's event carries a synthesized
+                # ``exec-<uuid>`` — the DB-side rebind to the outer
+                # ``exec`` is authoritative, so no equality to enforce.
+                if event_call_id != tool_use_id and not event_call_id.startswith("exec-"):
                     continue
             else:
                 continue
