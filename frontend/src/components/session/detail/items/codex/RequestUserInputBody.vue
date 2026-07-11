@@ -137,6 +137,10 @@ function submit() {
     if (props.isResponding || !allAnswered.value) return
     const answers = {}
     for (const [idx, q] of questions.value.entries()) {
+        // The wire guarantees string question ids, but a pathological
+        // payload could send a missing/non-string id (→ key "undefined",
+        // silently overwriting any prior entry) — skip those defensively.
+        if (typeof q.id !== 'string' || !q.id) continue
         answers[q.id] = { answers: [answerFor(idx)] }
     }
     emit('submit', { tool_name: 'toolRequestUserInput', answers })

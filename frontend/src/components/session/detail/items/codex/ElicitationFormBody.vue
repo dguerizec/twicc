@@ -121,7 +121,10 @@ function inputTypeFor(spec) {
 const values = ref({})
 
 function resetState() {
-    const initial = {}
+    // Null-prototype: property names come from an untrusted schema, and a
+    // field literally named "__proto__" would otherwise hit the Object
+    // prototype accessor instead of storing a value.
+    const initial = Object.create(null)
     for (const field of fields.value) {
         if (field.kind === 'boolean') {
             initial[field.name] = field.spec.default === true
