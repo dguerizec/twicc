@@ -5,8 +5,9 @@ Minimal v1 implementation. Streaming partial output to the frontend is left
 out: the watcher picks up the JSONL file the Codex CLI writes and pushes it
 through the regular session_item path, so the UI catches up at end-of-turn
 granularity. Approvals: the agent installs a sync ↔ async bridge on the SDK's private
-``_client._sync._approval_handler`` slot and routes the 3 Codex approval
-methods (commandExecution, fileChange, permissions) through the shared
+``_client._sync._approval_handler`` slot and routes the 5 Codex approval
+method families (commandExecution, fileChange, permissions, MCP
+elicitations, requestUserInput) through the shared
 ``BaseAgent._await_pending_request`` plumbing. Whether approvals actually
 fire depends on the resolved ``permission_mode`` for the session — the
 default (``auto`` = ``workspace-write`` + ``on-request``) does emit them;
@@ -51,6 +52,8 @@ from ..permission_modes import resolve_codex_turn_overrides
 from ..sdk_wrappers import TwiccAsyncCodex, TwiccAsyncThread
 from ..streaming_registry import get_streamed_item_registry
 from .approvals import (
+    ELICITATION_METHOD,
+    REQUEST_USER_INPUT_METHOD,
     auto_approve_response_for,
     default_response_for,
     extract_codex_approval_paths,
@@ -274,7 +277,7 @@ class CodexAgent(BaseAgent):
         # it recognises and returns ``{}`` for others (see vendored
         # ``openai_codex/client.py``). We delegate to it for
         # server requests we don't own (item/tool/call,
-        # account/chatgptAuthTokens/refresh, …) — see spec §1.6, §7-Q9.
+        # account/chatgptAuthTokens/refresh) — see spec §1.6, §7-Q9.
         # PRIVATE SDK API — see memory ``reference_codex_sdk_update_procedure.md``
         # for the upgrade checklist (this attribute path must hold).
         self._sdk_default_approval_handler = (
@@ -1573,8 +1576,8 @@ class CodexAgent(BaseAgent):
         """Called by the SDK from a worker thread (via ``asyncio.to_thread``).
 
         Bridges the SDK's blocking expectation (``Callable -> dict``) to our
-        async ``_await_pending_request``. Approvals we don't own (MCP, OAuth
-        refresh, ...) delegate to the captured SDK default. Cancellation —
+        async ``_await_pending_request``. Approvals we don't own (dynamic
+        tool calls, OAuth refresh) delegate to the captured SDK default. Cancellation —
         typically from ``_cancel_all_pending_futures()`` on kill — is
         converted into a safe wire default so the SDK's read loop doesn't
         hang.
@@ -1740,11 +1743,22 @@ class CodexAgent(BaseAgent):
         - ``permissions`` with empty granted profile:
           mark just the current itemId.
 
+        ``ELICITATION_METHOD`` / ``REQUEST_USER_INPUT_METHOD`` are a no-op —
+        see the early return below.
+
         ``response`` is the dict the frontend sent through
         ``resolve_pending_request``; ``params`` are the original Codex
         request params that contain ``itemId``. No-op if either is missing
         an itemId we can route from.
         """
+        if method in (ELICITATION_METHOD, REQUEST_USER_INPUT_METHOD):
+            # No side-table marking: an MCP tool call the user declines or
+            # cancels surfaces in the JSONL as a ``mcp_tool_call_end`` with a
+            # ``{"Err": …}`` result, which the compute already converts into
+            # an errored ToolResultLink (``_mcp_tool_call_end_error``) — the
+            # spinner stops on its own. Generic elicitations / user-input
+            # forms have no tool item at all.
+            return
         if not params:
             return
         item_id = params.get("itemId")

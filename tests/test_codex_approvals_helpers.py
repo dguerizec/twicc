@@ -1,11 +1,13 @@
 """Unit tests for the Codex sync ↔ async approval bridge helpers.
 
-The 3 server-side approval methods Codex emits
+The 5 server-side approval methods Codex emits
 (``item/commandExecution/requestApproval``,
 ``item/fileChange/requestApproval``,
-``item/permissions/requestApproval``) flow through this module on
-the way to ``BaseAgent._await_pending_request``. The 4 helpers
-covered here are pure, synchronous, and easy to lock down.
+``item/permissions/requestApproval``, ``mcpServer/elicitation/request``,
+``item/tool/requestUserInput``) flow through this module on the way to
+``BaseAgent._await_pending_request``. The helpers covered here — plus
+``CodexAgent._record_decision_outcome`` (agent-level, see below) — are
+pure, synchronous, and easy to lock down.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from uuid import UUID
 
 import pytest
 
+from twicc.providers.codex.agent.agent import CodexAgent
 from twicc.providers.codex.agent.approvals import (
     APPROVAL_METHODS,
     ELICITATION_METHOD,
@@ -124,7 +127,9 @@ class TestMakePendingRequest:
         # tool_input is a dict copy of the original params.
         assert isinstance(pr.tool_input, dict)
         assert pr.tool_input == params
-        # request_type is always "tool_approval" for Codex (no ask_user_question).
+        # request_type is always "tool_approval" for these 3 legacy methods
+        # (the newer elicitation / requestUserInput methods can yield
+        # "ask_user_question" — see TestNewMethodPendingRequests below).
         assert pr.request_type == "tool_approval"
         # permission_suggestions is unused by Codex.
         assert pr.permission_suggestions is None
@@ -285,3 +290,30 @@ class TestNewMethodDefaults:
     def test_auto_approve_rejects_non_path_methods(self, method):
         with pytest.raises(ValueError):
             auto_approve_response_for(method)
+
+
+class TestRecordDecisionOutcomeNewMethods:
+    def _bare_agent(self) -> CodexAgent:
+        # ``_record_decision_outcome`` only touches these attributes — build a
+        # shell instance without running the (SDK-heavy) constructor.
+        agent = CodexAgent.__new__(CodexAgent)
+        agent.session_id = "s1"
+        agent._items_by_id = {}
+        agent._user_terminated_tool_ids = {}
+        return agent
+
+    def test_elicitation_decline_marks_nothing(self):
+        agent = self._bare_agent()
+        agent._record_decision_outcome(
+            ELICITATION_METHOD, MCP_APPROVAL_PARAMS, {"action": "decline"},
+        )
+        assert agent._user_terminated_tool_ids == {}
+
+    def test_request_user_input_marks_nothing(self):
+        # params DO carry an itemId — the early-return must fire before the
+        # legacy decision-reading branch misinterprets the answers shape.
+        agent = self._bare_agent()
+        agent._record_decision_outcome(
+            REQUEST_USER_INPUT_METHOD, REQUEST_USER_INPUT_PARAMS, {"answers": {}},
+        )
+        assert agent._user_terminated_tool_ids == {}
