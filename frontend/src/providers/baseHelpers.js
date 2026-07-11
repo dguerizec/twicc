@@ -1039,9 +1039,11 @@ export class BaseToolHelpers {
     /**
      * Per-tool overrides for ``JsonHumanView`` when rendering the input
      * fallback (e.g. force ``Bash.command`` to render as a code block).
+     * ``input`` lets helpers scope the overrides when one tool name
+     * covers several display shapes (Codex's code-mode ``exec``).
      * Default: no overrides.
      */
-    getInputOverrides(/* name */) {
+    getInputOverrides(/* name, input */) {
         return {}
     }
 

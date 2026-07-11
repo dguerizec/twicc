@@ -28,6 +28,7 @@ import { parseCommand } from './parseCommand'
 import { parseCodeModeOutput, parseCodeModeScript } from './parseCodeModeScript'
 import { parseApplyPatchEnvelope } from './parsePatch'
 import { getTodoDescription } from '../../utils/todoList'
+import { formatToolNameForHeader } from '../../utils/toolNames'
 
 import DescriptionSummary from '../../components/session/detail/items/summary/DescriptionSummary.vue'
 import GrepSummary from '../../components/session/detail/items/summary/GrepSummary.vue'
@@ -183,9 +184,10 @@ const CODE_MODE_EXEC_TOOL_NAME = 'exec'
  * Tier-1 detection for a code-mode script: return the single resolved
  * nested call when the script wraps exactly one and we know how to give
  * it a dedicated rendering (``exec_command`` with a string ``cmd``,
- * ``apply_patch`` with a string envelope). Returns ``null`` for
- * everything else — multi-call scripts, unresolved arguments, other
- * nested tools — which then flow through the tier-2/3 generic paths.
+ * ``apply_patch`` with a string envelope, ``mcp__*`` with an object —
+ * or no — argument). Returns ``null`` for everything else — multi-call
+ * scripts, unresolved arguments, other nested tools — which then flow
+ * through the tier-2/3 generic paths.
  *
  * ``input`` is the tool card's input wrapper: ``{ input: <JS source> }``
  * as set by ``ToolUse.vue`` for ``custom_tool_call`` (a bare string is
@@ -205,6 +207,14 @@ function resolveCodeModeCall(input) {
     }
     if (call.name === 'apply_patch') {
         if (typeof call.arg === 'string' && call.arg) return call
+        return null
+    }
+    if (call.name.startsWith(MCP_TOOL_NAME_PREFIX)) {
+        // MCP arguments are an object (``{}`` for none); a zero-arg call
+        // resolves to ``arg: null``. Anything else (array, scalar) is
+        // not a shape the MCP rendering knows — degrade to tier 2.
+        const arg = call.arg
+        if (arg === null || (arg && typeof arg === 'object' && !Array.isArray(arg))) return call
         return null
     }
     return null
@@ -546,6 +556,45 @@ function findCodexEndEventPayload(toolId, options) {
         return payload
     }
     return null
+}
+
+/**
+ * Pull the rich body out of an MCP call's result rows for the Result
+ * section — shared by direct MCP ``function_call``s and code-mode
+ * ``exec``s wrapping a single MCP call (whose ``mcp_tool_call_end`` the
+ * backend rebound onto the exec's chain).
+ *
+ * ``get_tool_results`` (Codex helpers) returns the JSONL ``payload``
+ * directly, so the wrapper key is ``mcp_tool_call_end``, not
+ * ``event_msg``. The event's ``result`` is a Rust
+ * `Result<CallToolResult, String>` (cf.
+ * `codex-rs/protocol/src/protocol.rs:McpToolCallEndEvent`), serialised
+ * as either `{"Ok": ...}` or `{"Err": "..."}` — never anything else.
+ * We unwrap each branch:
+ *  - `Ok.structuredContent` is the parsed JSON body when the server
+ *    provides a structured schema (most modern MCPs);
+ *  - `Ok` as-is otherwise — at minimum it carries
+ *    `content: [{type:"text", text:"..."}]` + `isError`;
+ *  - `Err` is the raw error string (JsonHumanView renders it as a
+ *    quoted string).
+ * Falls back to the whole row on any unexpected shape so we never drop
+ * content silently, and to ``undefined`` (= shell default behaviour)
+ * when no end event is in the rows yet.
+ */
+function mcpEndDisplayResult(resultData) {
+    if (!Array.isArray(resultData)) return undefined
+    const mcpEnd = resultData.find((row) => row?.type === 'mcp_tool_call_end')
+    if (!mcpEnd) return undefined
+    const result = mcpEnd.result
+    if (result && typeof result === 'object') {
+        if ('Ok' in result && result.Ok && typeof result.Ok === 'object') {
+            return result.Ok.structuredContent ?? result.Ok
+        }
+        if ('Err' in result) {
+            return result.Err
+        }
+    }
+    return mcpEnd
 }
 
 // Match the formatted trailer Codex emits on every exec_command /
@@ -1156,6 +1205,13 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 return this.getHeaderLabel('exec_command', nested.arg, options) ?? 'Shell'
             }
             if (nested?.name === 'apply_patch') return 'Edit'
+            if (nested?.name?.startsWith(MCP_TOOL_NAME_PREFIX)) {
+                // Same words a direct MCP call would show: direct calls
+                // have no headerLabel, so the shell formats the raw
+                // ``mcp__server__tool`` name — do the same here (the
+                // shell's fallback would format ``exec`` instead).
+                return formatToolNameForHeader(nested.name)
+            }
             return 'Run code'
         }
         // ``view_image`` loads a local image for the model — show the
@@ -1187,6 +1243,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
             if (nested?.name === 'apply_patch') {
                 return this.getSummaryRendering('apply_patch', { input: nested.arg }, baseDir, options)
             }
+            // Tier-1 MCP: a direct MCP call shows no summary (the
+            // formatted name is already the header) — mirror that.
+            if (nested?.name?.startsWith(MCP_TOOL_NAME_PREFIX)) return null
             // Tier 2: list the detected nested tools so the collapsed
             // card says what the script does. Tier 3 (nothing detected)
             // keeps the bare "Run code" header, no summary.
@@ -1483,6 +1542,20 @@ export class CodexToolHelpers extends BaseToolHelpers {
             if (nested?.name === 'exec_command') {
                 return this.getResultRendering('exec_command', result, nested.arg, options)
             }
+            // Tier-1 MCP with its rebound end event in the chain:
+            // ``transformDisplayResult`` already unwrapped the payload
+            // into ``result`` — return null so the default JsonHumanView
+            // renders it, exactly like a direct MCP call. Without the
+            // event (still running, script died before calling, stale
+            // pre-38 compute) fall through to the aggregated script
+            // output below.
+            if (
+                nested?.name?.startsWith(MCP_TOOL_NAME_PREFIX)
+                && Array.isArray(options?.resultsArray)
+                && options.resultsArray.some((row) => row?.type === 'mcp_tool_call_end')
+            ) {
+                return null
+            }
             const aggregated = options?.aggregatedExecOutput
             if (!aggregated || typeof aggregated.aggregatedOutput !== 'string') return null
             if (!aggregated.aggregatedOutput && !aggregated.isTerminated) return null
@@ -1551,28 +1624,18 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     /**
-     * Pull the rich body out of an MCP `function_call`'s result rows.
+     * Pull the rich body out of an MCP call's result rows.
      *
      * Codex emits two ToolResultLinks per MCP call: the LLM-facing
      * `function_call_output` (text trailer) and the structured
      * `event_msg.mcp_tool_call_end` carrying the actual server payload.
      * The latter is strictly richer, so we surface it instead of the
-     * raw two-row dump JsonHumanView would otherwise produce.
-     *
-     * `result` is a Rust `Result<CallToolResult, String>` (cf.
-     * `codex-rs/protocol/src/protocol.rs:McpToolCallEndEvent`),
-     * serialised as either `{"Ok": ...}` or `{"Err": "..."}` — never
-     * anything else. We unwrap each branch:
-     *  - `Ok.structuredContent` is the parsed JSON body when the
-     *    server provides a structured schema (most modern MCPs);
-     *  - `Ok` as-is otherwise — at minimum it carries
-     *    `content: [{type:"text", text:"..."}]` + `isError`;
-     *  - `Err` is the raw error string (JsonHumanView renders it as
-     *    a quoted string).
-     * Falls back to the whole row on any unexpected shape so we never
-     * drop content silently.
+     * raw two-row dump JsonHumanView would otherwise produce — see
+     * :func:`mcpEndDisplayResult` for the unwrap rules. Applies both to
+     * direct MCP `function_call`s and to code-mode ``exec``s wrapping a
+     * single MCP call.
      */
-    transformDisplayResult(name, resultData, _options) {
+    transformDisplayResult(name, resultData, options) {
         // ``spawn_agent`` collects up to two ToolResultLinks:
         //   1. the immediate ``function_call_output`` ack
         //      ``{agent_id, nickname}`` (always present on a successful
@@ -1635,31 +1698,38 @@ export class CodexToolHelpers extends BaseToolHelpers {
             }
             return undefined
         }
+        // Code-mode ``exec`` wrapping a single MCP call: the backend
+        // rebound the nested ``mcp_tool_call_end`` (synthesized
+        // ``exec-<uuid>`` call_id) onto this exec's chain — surface it
+        // exactly like a direct MCP call would (the script's own output
+        // only repeats the same payload as an opaque JSON string). When
+        // the event hasn't arrived (still running, or the script died
+        // before calling), fall through to the default so the shell
+        // keeps the aggregated script-output path.
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            const nested = resolveCodeModeCall(options?.input)
+            if (nested?.name?.startsWith(MCP_TOOL_NAME_PREFIX)) {
+                return mcpEndDisplayResult(resultData)
+            }
+            return undefined
+        }
         if (typeof name !== 'string' || !name.startsWith(MCP_TOOL_NAME_PREFIX)) {
             return undefined
         }
-        if (!Array.isArray(resultData)) return undefined
-        // ``get_tool_results`` (Codex helpers) returns the JSONL
-        // ``payload`` directly, so the wrapper key is ``mcp_tool_call_end``,
-        // not ``event_msg``. The earlier `row?.type === 'event_msg'`
-        // check could never match — the function silently returned
-        // ``undefined`` and JsonHumanView ended up dumping the raw two
-        // rows side by side.
-        const mcpEnd = resultData.find((row) => row?.type === 'mcp_tool_call_end')
-        if (!mcpEnd) return undefined
-        const result = mcpEnd.result
-        if (result && typeof result === 'object') {
-            if ('Ok' in result && result.Ok && typeof result.Ok === 'object') {
-                return result.Ok.structuredContent ?? result.Ok
-            }
-            if ('Err' in result) {
-                return result.Err
-            }
-        }
-        return mcpEnd
+        return mcpEndDisplayResult(resultData)
     }
 
-    getInputOverrides(name) {
+    getInputOverrides(name, input) {
+        // Tier-1 MCP through code-mode ``exec``: the displayed object is
+        // the MCP call's arguments, so the exec overrides (``cmd`` →
+        // bash block, ``input`` → JS block) must not capture same-named
+        // MCP argument keys.
+        if (
+            name === CODE_MODE_EXEC_TOOL_NAME
+            && resolveCodeModeCall(input)?.name?.startsWith(MCP_TOOL_NAME_PREFIX)
+        ) {
+            return {}
+        }
         return INPUT_OVERRIDES[name] ?? {}
     }
 
@@ -1680,6 +1750,13 @@ export class CodexToolHelpers extends BaseToolHelpers {
             // (yield_time_ms, …) and the full JS source stay reachable
             // through the ``</>`` raw toggle.
             if (nested?.name === 'exec_command') return { cmd: nested.arg.cmd }
+            // Tier-1 MCP: show the call's arguments object like a direct
+            // MCP call does (nothing when the call takes none — the full
+            // JS source stays reachable through the raw toggle).
+            if (nested?.name?.startsWith(MCP_TOOL_NAME_PREFIX)) {
+                const arg = nested.arg
+                return arg && Object.keys(arg).length > 0 ? arg : null
+            }
             // Tiers 2/3 fall through: ``{ input: <JS source> }`` rendered
             // as a fenced JS block by INPUT_OVERRIDES.exec.input.
         }

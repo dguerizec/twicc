@@ -652,23 +652,42 @@ def _code_mode_output_error(output: object) -> str | None:
 # ``*** Update File: <path>`` / ``*** Delete File: <path>``). Used to match
 # an orphan ``patch_apply_end`` back to the code-mode ``exec`` whose script
 # declared a patch on the same files — see
-# :meth:`CodexSessionCompute._remap_orphan_patch_apply_end`.
+# :meth:`CodexSessionCompute._remap_orphan_end_event`.
 _PATCH_ENVELOPE_PATH_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
 
 
-def _patch_paths_from_script(script_input: object) -> tuple[bool, frozenset[str]]:
-    """Inspect a code-mode script for nested ``apply_patch`` calls.
+class CodeModeScriptTargets(NamedTuple):
+    """What a code-mode script declares that later orphan end events can match.
 
-    Returns ``(has_apply_patch, declared_paths)``: whether the script
-    contains at least one ``tools.apply_patch(...)`` call, and the file
-    paths declared by every statically-resolved patch envelope (possibly
-    empty when the envelope isn't resolvable — the caller then falls back
-    to recency-only matching).
+    ``has_patch`` / ``patch_paths`` feed the ``patch_apply_end`` pairing
+    (paths possibly empty when the envelope isn't statically resolvable —
+    the matcher then falls back to recency); ``mcp_tools`` holds the
+    fully-qualified ``mcp__<server>__<tool>`` names of every nested MCP
+    call and feeds the ``mcp_tool_call_end`` pairing the same way.
+    """
+
+    has_patch: bool
+    patch_paths: frozenset[str]
+    mcp_tools: frozenset[str]
+
+
+def _script_targets(script_input: object) -> CodeModeScriptTargets:
+    """Inspect a code-mode script for nested calls orphan end events pair with.
+
+    Covers the two nested tool families whose handler emits a persisted
+    ``event_msg.*_end`` under a synthesized ``exec-<uuid>`` call_id:
+    ``apply_patch`` (→ ``patch_apply_end``) and ``mcp__*`` (→
+    ``mcp_tool_call_end``, whose ``invocation`` field carries the exact
+    server/tool pair to match against ``mcp_tools``).
     """
     script = parse_code_mode_script(script_input)
     has_patch = False
     paths: set[str] = set()
+    mcp_tools: set[str] = set()
     for call in script.calls:
+        if call.name.startswith("mcp__"):
+            mcp_tools.add(call.name)
+            continue
         if call.name != "apply_patch":
             continue
         has_patch = True
@@ -677,7 +696,26 @@ def _patch_paths_from_script(script_input: object) -> tuple[bool, frozenset[str]
                 path = match.group(1).strip()
                 if path:
                     paths.add(path)
-    return has_patch, frozenset(paths)
+    return CodeModeScriptTargets(has_patch, frozenset(paths), frozenset(mcp_tools))
+
+
+def _mcp_end_qualified_name(payload: dict) -> str | None:
+    """Qualified ``mcp__<server>__<tool>`` name of an ``mcp_tool_call_end``.
+
+    Built from the event's ``invocation`` field — the same shape the
+    code-mode script uses to address the tool (``tools.mcp__server__tool``),
+    so it compares directly against :attr:`CodeModeScriptTargets.mcp_tools`.
+    Returns ``None`` when the invocation is missing or malformed (the
+    matcher then falls back to recency).
+    """
+    invocation = payload.get("invocation")
+    if not isinstance(invocation, dict):
+        return None
+    server = invocation.get("server")
+    tool = invocation.get("tool")
+    if not isinstance(server, str) or not server or not isinstance(tool, str) or not tool:
+        return None
+    return f"mcp__{server}__{tool}"
 
 
 def _changes_match_declared(change_paths: list[str], declared: frozenset[str]) -> bool:
@@ -1257,16 +1295,17 @@ class CodexSessionCompute(BaseSessionCompute):
         # :meth:`remap_tool_result_id` (after the pairing read, like
         # write_stdin) — and lazily in :meth:`end_session_compute`.
         self._code_cell_maps: dict[str, dict[str, str]] = {}
-        # {session_id: [(exec_call_id, declared_patch_paths), ...]} in
-        # line order. One entry per code-mode ``exec`` whose script
-        # declares at least one nested ``apply_patch`` call. Populated
-        # by :meth:`analyze_content`; read by
-        # :meth:`_remap_orphan_patch_apply_end` to rebind the orphan
-        # ``patch_apply_end`` (whose ``call_id`` is the nested
-        # ``exec-<uuid>``) to the outer ``exec`` call — path match
-        # first, recency as fallback. Bounded (last 50 entries) and
-        # freed in :meth:`end_session_compute`.
-        self._patch_exec_maps: dict[str, list[tuple[str, frozenset[str]]]] = {}
+        # {session_id: [(exec_call_id, targets), ...]} in line order.
+        # One entry per code-mode ``exec`` whose script declares at
+        # least one nested call that later emits an orphan end event
+        # (``apply_patch`` → ``patch_apply_end``, ``mcp__*`` →
+        # ``mcp_tool_call_end``). Populated by :meth:`analyze_content`;
+        # read by :meth:`_remap_orphan_end_event` to rebind the orphan
+        # event (whose ``call_id`` is the nested ``exec-<uuid>``) to the
+        # outer ``exec`` call — declared-target match first (patch paths
+        # / MCP tool name), recency as fallback. Bounded (last 50
+        # entries) and freed in :meth:`end_session_compute`.
+        self._code_exec_targets: dict[str, list[tuple[str, CodeModeScriptTargets]]] = {}
         # {session_id: {agent_id: spawn_agent_call_id}}. Batch-only
         # side-table mirroring the inverse of the spawn ack: when
         # ``analyze_content`` sees a successful ``function_call_output``
@@ -1313,13 +1352,13 @@ class CodexSessionCompute(BaseSessionCompute):
         """
         return self._code_cell_maps.setdefault(session_id, {})
 
-    def _patch_exec_map(self, session_id: str) -> list[tuple[str, frozenset[str]]]:
-        """Return the per-session list of patch-wrapping ``exec`` records.
+    def _code_exec_target_map(self, session_id: str) -> list[tuple[str, CodeModeScriptTargets]]:
+        """Return the per-session list of end-event-emitting ``exec`` records.
 
         Lazily creates the list on first access for the same reason as
         :meth:`_proc_map`.
         """
-        return self._patch_exec_maps.setdefault(session_id, [])
+        return self._code_exec_targets.setdefault(session_id, [])
 
     def _agent_id_map(self, session_id: str) -> dict[str, str]:
         """Return the per-session ``{agent_id: spawn_agent_call_id}`` map.
@@ -1338,7 +1377,7 @@ class CodexSessionCompute(BaseSessionCompute):
         # starting the running total at zero is correct.
         self._exec_command_maps[session_id] = {}
         self._code_cell_maps[session_id] = {}
-        self._patch_exec_maps[session_id] = []
+        self._code_exec_targets[session_id] = []
         self._agent_id_to_spawn_call_id[session_id] = {}
         self._prev_total_tokens[session_id] = 0
 
@@ -1351,7 +1390,7 @@ class CodexSessionCompute(BaseSessionCompute):
         # token-count map carries one int per active session.
         self._exec_command_maps.pop(session_id, None)
         self._code_cell_maps.pop(session_id, None)
-        self._patch_exec_maps.pop(session_id, None)
+        self._code_exec_targets.pop(session_id, None)
         self._agent_id_to_spawn_call_id.pop(session_id, None)
         self._prev_total_tokens.pop(session_id, None)
 
@@ -1433,10 +1472,11 @@ class CodexSessionCompute(BaseSessionCompute):
             return agent_map.get(naive_tool_use_id, naive_tool_use_id)
         parent = tool_use_map.get(naive_tool_use_id)
         if parent is None:
-            # A ``patch_apply_end`` from a code-mode nested apply_patch
-            # carries the synthesized ``exec-<uuid>`` call_id, matching
-            # no rollout tool_use — rebind it to the owning ``exec``.
-            return self._remap_orphan_patch_apply_end(
+            # A ``patch_apply_end`` / ``mcp_tool_call_end`` from a
+            # code-mode nested call carries the synthesized
+            # ``exec-<uuid>`` call_id, matching no rollout tool_use —
+            # rebind it to the owning ``exec``.
+            return self._remap_orphan_end_event(
                 parsed_json, naive_tool_use_id, session_id=session_id,
             )
         if parent.tool_name == _CODE_MODE_WAIT_TOOL:
@@ -1466,32 +1506,37 @@ class CodexSessionCompute(BaseSessionCompute):
                 proc_map.pop(exec_command_id, None)
         return parent_call_id
 
-    def _remap_orphan_patch_apply_end(
+    def _remap_orphan_end_event(
         self,
         parsed_json: dict,
         naive_tool_use_id: str,
         *,
         session_id: str,
     ) -> str:
-        """Rebind a nested-patch ``patch_apply_end`` to its ``exec`` call.
+        """Rebind a code-mode nested end event to its ``exec`` call.
 
-        When a code-mode script applies a patch, the nested handler emits
-        the same ``patch_apply_end`` event as a direct apply_patch — with
-        all its riches (structured ``changes``, the live-captured
-        ``original_files`` splice) — but under a synthesized
-        ``exec-<uuid>`` call_id that pairs with nothing. Rebinding it to
-        the outer ``exec`` call restores 5.5 display parity (full-file
-        diff, canonical paths, patch error).
+        When a code-mode script applies a patch or calls an MCP tool, the
+        nested handler emits the same persisted end event as a direct
+        call — ``patch_apply_end`` with all its riches (structured
+        ``changes``, the live-captured ``original_files`` splice),
+        ``mcp_tool_call_end`` with the structured ``CallToolResult`` —
+        but under a synthesized ``exec-<uuid>`` call_id that pairs with
+        nothing. Rebinding it to the outer ``exec`` call restores 5.5
+        display parity (full-file diff / MCP result body, error surfacing).
 
         No exact key exists, so the match is heuristic over the
-        registered patch-wrapping execs (see ``_patch_exec_maps``):
+        registered end-event-emitting execs (see ``_code_exec_targets``):
 
-        1. most recent exec whose statically-extracted envelope declares
-           a path matching the event's ``changes`` (suffix match — the
-           envelope may use relative paths);
-        2. else the most recent patch-wrapping exec (covers the
-           unresolvable-script case; the canonical wrapper applies its
-           patch synchronously, so recency is right in practice).
+        1. most recent exec whose statically-extracted script declares a
+           matching target — a patch path matching the event's
+           ``changes`` (suffix match, the envelope may use relative
+           paths) for ``patch_apply_end``, the exact
+           ``mcp__<server>__<tool>`` name from the event's ``invocation``
+           for ``mcp_tool_call_end``;
+        2. else the most recent exec declaring a call of the same family
+           (covers the unresolvable-script case; the canonical wrappers
+           run their nested calls synchronously, so recency is right in
+           practice).
 
         Falls back to identity when the line isn't such an event, the
         call_id doesn't carry the nested ``exec-`` prefix, or nothing is
@@ -1502,19 +1547,38 @@ class CodexSessionCompute(BaseSessionCompute):
         if parsed_json.get("type") != _TYPE_EVENT_MSG:
             return naive_tool_use_id
         payload = _payload(parsed_json)
-        if payload is None or payload.get("type") != "patch_apply_end":
+        if payload is None:
             return naive_tool_use_id
-        records = self._patch_exec_maps.get(session_id)
+        records = self._code_exec_targets.get(session_id)
         if not records:
             return naive_tool_use_id
-        changes = payload.get("changes")
-        change_paths = (
-            [p for p in changes if isinstance(p, str)] if isinstance(changes, dict) else []
-        )
-        for exec_call_id, declared in reversed(records):
-            if declared and _changes_match_declared(change_paths, declared):
-                return exec_call_id
-        return records[-1][0]
+        event_type = payload.get("type")
+        if event_type == "patch_apply_end":
+            changes = payload.get("changes")
+            change_paths = (
+                [p for p in changes if isinstance(p, str)] if isinstance(changes, dict) else []
+            )
+            fallback: str | None = None
+            for exec_call_id, targets in reversed(records):
+                if not targets.has_patch:
+                    continue
+                if targets.patch_paths and _changes_match_declared(change_paths, targets.patch_paths):
+                    return exec_call_id
+                if fallback is None:
+                    fallback = exec_call_id
+            return fallback if fallback is not None else naive_tool_use_id
+        if event_type == "mcp_tool_call_end":
+            qualified = _mcp_end_qualified_name(payload)
+            fallback = None
+            for exec_call_id, targets in reversed(records):
+                if not targets.mcp_tools:
+                    continue
+                if qualified is not None and qualified in targets.mcp_tools:
+                    return exec_call_id
+                if fallback is None:
+                    fallback = exec_call_id
+            return fallback if fallback is not None else naive_tool_use_id
+        return naive_tool_use_id
 
     def _remap_wait_result_id(
         self,
@@ -1575,10 +1639,11 @@ class CodexSessionCompute(BaseSessionCompute):
           shape (wait arguments → cell_id → the ``exec``
           custom_tool_call_output that announced ``Script running with
           cell ID <id>``).
-        - nested-patch ``patch_apply_end`` (code mode, ``call_id``
-          prefixed ``exec-``): rebound to the owning ``exec``
-          custom_tool_call via :meth:`_lookup_patch_exec_call_id` (path
-          match on the statically-extracted envelope, recency fallback).
+        - nested ``patch_apply_end`` / ``mcp_tool_call_end`` (code mode,
+          ``call_id`` prefixed ``exec-``): rebound to the owning ``exec``
+          custom_tool_call via :meth:`_lookup_orphan_end_exec_call_id`
+          (declared-target match on the statically-extracted script —
+          patch paths / MCP tool name — recency fallback).
 
         Falls back to identity at every step that can't be resolved so
         other tools' result rows are unaffected.
@@ -1593,14 +1658,19 @@ class CodexSessionCompute(BaseSessionCompute):
             return link.tool_use_id
         if parsed_json.get("type") == _TYPE_EVENT_MSG:
             payload = _payload(parsed_json)
-            if (
-                payload is not None
-                and payload.get("type") == "patch_apply_end"
-                and naive_tool_use_id.startswith("exec-")
-            ):
-                return self._lookup_patch_exec_call_id(
-                    session_id, item.line_num, payload.get("changes"), naive_tool_use_id,
-                )
+            if payload is not None and naive_tool_use_id.startswith("exec-"):
+                if payload.get("type") == "patch_apply_end":
+                    return self._lookup_orphan_end_exec_call_id(
+                        session_id, item.line_num, naive_tool_use_id,
+                        event_type="patch_apply_end",
+                        changes=payload.get("changes"),
+                    )
+                if payload.get("type") == "mcp_tool_call_end":
+                    return self._lookup_orphan_end_exec_call_id(
+                        session_id, item.line_num, naive_tool_use_id,
+                        event_type="mcp_tool_call_end",
+                        mcp_qualified=_mcp_end_qualified_name(payload),
+                    )
             # Direct apply_patch / MCP end events keep their own call_id.
             return naive_tool_use_id
         parent_payload = self._lookup_function_call_payload(
@@ -1667,23 +1737,28 @@ class CodexSessionCompute(BaseSessionCompute):
             return payload
         return None
 
-    def _lookup_patch_exec_call_id(
+    def _lookup_orphan_end_exec_call_id(
         self,
         session_id: str,
         max_line_num: int,
-        changes: object,
         fallback: str,
+        *,
+        event_type: str,
+        changes: object = None,
+        mcp_qualified: str | None = None,
     ) -> str:
-        """Live equivalent of :meth:`_remap_orphan_patch_apply_end`.
+        """Live equivalent of :meth:`_remap_orphan_end_event`.
 
         Walks the preceding code-mode ``exec`` custom_tool_calls (newest
         first, textual pre-filter on ``"name":"exec"``), re-extracts each
-        script, and returns the first whose declared patch paths match
-        the event's ``changes``; the newest patch-wrapping exec is kept
-        as the recency fallback. Returns ``fallback`` when nothing
-        qualifies, so the live link is still created (just under the
-        naive id).
+        script, and returns the first whose declared targets match the
+        event — patch paths against ``changes`` for ``patch_apply_end``,
+        the exact ``mcp_qualified`` name for ``mcp_tool_call_end``; the
+        newest exec declaring a call of the same family is kept as the
+        recency fallback. Returns ``fallback`` when nothing qualifies,
+        so the live link is still created (just under the naive id).
         """
+        is_patch = event_type == "patch_apply_end"
         change_paths = (
             [p for p in changes if isinstance(p, str)] if isinstance(changes, dict) else []
         )
@@ -1708,11 +1783,17 @@ class CodexSessionCompute(BaseSessionCompute):
             call_id = payload.get("call_id")
             if not isinstance(call_id, str) or not call_id:
                 continue
-            has_patch, declared = _patch_paths_from_script(payload.get("input"))
-            if not has_patch:
-                continue
-            if declared and _changes_match_declared(change_paths, declared):
-                return call_id
+            targets = _script_targets(payload.get("input"))
+            if is_patch:
+                if not targets.has_patch:
+                    continue
+                if targets.patch_paths and _changes_match_declared(change_paths, targets.patch_paths):
+                    return call_id
+            else:
+                if not targets.mcp_tools:
+                    continue
+                if mcp_qualified is not None and mcp_qualified in targets.mcp_tools:
+                    return call_id
             if recency_fallback is None:
                 recency_fallback = call_id
         return recency_fallback if recency_fallback is not None else fallback
@@ -3312,14 +3393,15 @@ class CodexSessionCompute(BaseSessionCompute):
                     name = _qualified_function_call_name(payload)
                 tool_use_entries = {call_id: name}
                 # Register code-mode execs whose script declares a nested
-                # apply_patch, so the later orphan ``patch_apply_end`` can
-                # be rebound to them (see _remap_orphan_patch_apply_end).
-                # Bounded to the last 50 records per session.
+                # apply_patch or MCP call, so the later orphan
+                # ``patch_apply_end`` / ``mcp_tool_call_end`` can be
+                # rebound to them (see _remap_orphan_end_event). Bounded
+                # to the last 50 records per session.
                 if sub_type == "custom_tool_call" and name == _CODE_MODE_EXEC_TOOL:
-                    has_patch, declared_paths = _patch_paths_from_script(payload.get("input"))
-                    if has_patch:
-                        records = self._patch_exec_map(session_id)
-                        records.append((call_id, declared_paths))
+                    targets = _script_targets(payload.get("input"))
+                    if targets.has_patch or targets.mcp_tools:
+                        records = self._code_exec_target_map(session_id)
+                        records.append((call_id, targets))
                         del records[:-50]
                 # ``spawn_agent`` is the only agent-spawning tool today.
                 # Always background — see :meth:`extract_task_tool_uses`.

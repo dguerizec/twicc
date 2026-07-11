@@ -312,7 +312,7 @@ LOGGING = {
 # rules change to trigger recomputation. ``None`` declares "no compute pipeline
 # yet" — sessions of that provider are reported up-to-date as-is.
 CLAUDE_CODE_COMPUTE_VERSION = 107  # 107: repair agent links wrongly flipped to background by SendMessage-continuation notifications (106 = plan_paths from subagent writes too, 105 = Session.plan_paths backfill, 104 = async-by-default agents + task-notification rerouting repair)
-CODEX_COMPUTE_VERSION = 37  # 37: code-mode (GPT-5.6 exec/wait) — wait chaining, script status errors, doc-edit mining (36: per-model context window, 35: plan_paths from subagent writes too)
+CODEX_COMPUTE_VERSION = 38  # 38: code-mode nested mcp_tool_call_end paired to its exec (37: code-mode exec/wait chaining + nested patch pairing, 36: per-model context window)
 
 # Search index version
 # Bumped when the schema or document layout changes — forces a full

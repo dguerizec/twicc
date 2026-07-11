@@ -6,10 +6,12 @@ Covers, per ``docs/plans/2026-07-10-codex-code-mode-display-design.md`` §9:
   list shared with the frontend mirror (``parseCodeModeScript.js``);
 - the output status parser (``parse_code_mode_output``) for both wire shapes
   (plain string / array of ``input_text`` segments) and all four statuses;
-- compute integration on JSONL lifted from the real 5.6 session
-  ``019f4d27-01dd-7612-8ec4-f9659e71a7ac``: kinds, ``wait`` → ``exec``
-  chaining (batch + live), ``is_terminated`` transitions, script-failure
-  errors, doc-edit events;
+- compute integration on JSONL lifted from the real 5.6 sessions
+  ``019f4d27-01dd-7612-8ec4-f9659e71a7ac`` (exec/wait/patch) and
+  ``019f4fcb-5ddb-71b0-ac0d-660c41ee5fd6`` (nested MCP): kinds,
+  ``wait`` → ``exec`` chaining (batch + live), ``is_terminated``
+  transitions, script-failure errors, orphan ``patch_apply_end`` /
+  ``mcp_tool_call_end`` pairing, doc-edit events;
 - a pre-5.6 regression check (``exec_command`` / ``write_stdin`` chain
   untouched by the remap refactor).
 """
@@ -260,6 +262,22 @@ def _function_output_line(call_id: str, output) -> str:
     )
 
 
+def _mcp_end_line(call_id: str, server: str, tool: str, *, result: dict | None = None) -> str:
+    # Shape lifted from the real 5.6 session
+    # ``019f4fcb-5ddb-71b0-ac0d-660c41ee5fd6`` (nested MCP call): the
+    # event's ``call_id`` is the synthesized ``exec-<uuid>`` and the
+    # ``invocation`` names the exact server/tool pair.
+    return _codex_line("event_msg", {
+        "type": "mcp_tool_call_end",
+        "call_id": call_id,
+        "invocation": {"server": server, "tool": tool, "arguments": {}},
+        "duration": {"secs": 0, "nanos": 26792847},
+        "result": result if result is not None else {
+            "Ok": {"content": [{"type": "text", "text": "ok"}], "isError": False},
+        },
+    })
+
+
 _RUNNING_CELL_2 = "Script running with cell ID 2\nWall time 32.2 seconds\nOutput:\n"
 _COMPLETED_ARRAY = [
     {"type": "input_text", "text": "Script completed\nWall time 0.1 seconds\nOutput:\n"},
@@ -446,6 +464,88 @@ class TestCodeModeCompute:
         )
         assert event_link.error is not None
 
+    def test_nested_mcp_ends_pair_with_exec(self, codex_session):
+        """Both ``mcp_tool_call_end`` events of a two-call script are
+        rebound to the outer exec, and neither disturbs the spinner
+        (their links carry no extra; the exec's own output terminates)."""
+        script = (
+            "const status = await tools.mcp__twicc__status({});\n"
+            "const info = await tools.mcp__twicc__info({});\n"
+            'text(JSON.stringify({status, info}));'
+        )
+        _create_items(codex_session, [
+            _exec_call_line("call_exec_mcp_1", script),
+            _mcp_end_line("exec-56549e4c-4c82-4f8f-b67a-405fd2707e9b", "twicc", "status"),
+            _mcp_end_line("exec-5539c01c-0566-42a3-ba31-a84e0dc3aeb0", "twicc", "info"),
+            _custom_output_line("call_exec_mcp_1", _COMPLETED_ARRAY),
+        ])
+        _run_batch_compute(codex_session)
+
+        links = list(
+            ToolResultLink.objects.filter(
+                session=codex_session, tool_use_id="call_exec_mcp_1",
+            ).order_by("tool_result_line_num")
+        )
+        assert [link.tool_result_line_num for link in links] == [2, 3, 4]
+        assert links[0].error is None and links[0].extra is None
+        assert links[1].error is None and links[1].extra is None
+        assert json.loads(links[2].extra) == {"is_terminated": True}
+
+    def test_nested_mcp_tool_name_match_beats_recency(self, codex_session):
+        """An event whose invocation matches an older script binds to that
+        script, not to the most recent MCP-wrapping exec."""
+        _create_items(codex_session, [
+            _exec_call_line("call_exec_mcp_a", "await tools.mcp__twicc__status({});"),
+            _custom_output_line("call_exec_mcp_a", _RUNNING_CELL_2),
+            _exec_call_line("call_exec_mcp_b", "await tools.mcp__twicc__info({});"),
+            _custom_output_line("call_exec_mcp_b", _COMPLETED_ARRAY),
+            _mcp_end_line("exec-11111111-2222-3333-4444-555555555555", "twicc", "status"),
+        ])
+        _run_batch_compute(codex_session)
+
+        event_link = ToolResultLink.objects.get(
+            session=codex_session, tool_result_line_num=5,
+        )
+        assert event_link.tool_use_id == "call_exec_mcp_a"
+
+    def test_failed_nested_mcp_surfaces_error_on_exec(self, codex_session):
+        _create_items(codex_session, [
+            _exec_call_line("call_exec_mcp_2", "await tools.mcp__twicc__status({});"),
+            _mcp_end_line(
+                "exec-66666666-7777-8888-9999-000000000000", "twicc", "status",
+                result={"Err": "MCP server unreachable"},
+            ),
+            _custom_output_line("call_exec_mcp_2", _COMPLETED_ARRAY),
+        ])
+        _run_batch_compute(codex_session)
+
+        event_link = ToolResultLink.objects.get(
+            session=codex_session, tool_use_id="call_exec_mcp_2", tool_result_line_num=2,
+        )
+        assert event_link.error == "MCP server unreachable"
+
+    def test_direct_mcp_end_pairing_unchanged(self, codex_session):
+        """Regression: a direct MCP function_call's end event keeps
+        binding to its own call (same call_id, no ``exec-`` prefix — the
+        orphan remap never fires)."""
+        _create_items(codex_session, [
+            _codex_line("response_item", {
+                "type": "function_call",
+                "call_id": "call_mcp_direct_1",
+                "name": "status",
+                "namespace": "mcp__twicc",
+                "arguments": "{}",
+            }),
+            _function_output_line("call_mcp_direct_1", "{}"),
+            _mcp_end_line("call_mcp_direct_1", "twicc", "status"),
+        ])
+        _run_batch_compute(codex_session)
+
+        links = ToolResultLink.objects.filter(
+            session=codex_session, tool_use_id="call_mcp_direct_1",
+        )
+        assert links.count() == 2
+
     def test_direct_patch_apply_end_pairing_unchanged(self, codex_session):
         """5.5 regression: a direct apply_patch's event keeps binding to its
         own call (same call_id — the orphan remap never fires)."""
@@ -548,6 +648,25 @@ class TestCodeModeLiveRemap:
             item=event_item,
         )
         assert remapped == "call_exec_7"
+
+    def test_nested_mcp_end_remaps_to_exec_live(self, codex_session):
+        _create_items(codex_session, [
+            _exec_call_line("call_exec_mcp_live", "await tools.mcp__twicc__status({});"),
+        ])
+        event_item = SessionItem.objects.create(
+            session=codex_session, line_num=2,
+            content=_mcp_end_line(
+                "exec-aaaaaaaa-bbbb-cccc-dddd-ffffffffffff", "twicc", "status",
+            ),
+        )
+        compute = get_compute()
+        remapped = compute.remap_tool_result_id_live(
+            orjson.loads(event_item.content),
+            "exec-aaaaaaaa-bbbb-cccc-dddd-ffffffffffff",
+            session_id=codex_session.id,
+            item=event_item,
+        )
+        assert remapped == "call_exec_mcp_live"
 
     def test_write_stdin_live_remap_still_works(self, codex_session):
         """Pre-5.6 regression: the generalized function_call lookup keeps

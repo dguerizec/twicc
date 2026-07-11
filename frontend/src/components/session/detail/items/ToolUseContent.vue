@@ -9,6 +9,7 @@ import { apiFetch } from '../../../../utils/api'
 import { PROCESS_STATE, PROCESS_STATE_COLORS } from '../../../../constants'
 import { stopSubagent } from '../../../../composables/useWebSocket'
 import { getSessionCutoffMs } from '../../../../utils/sessions'
+import { formatToolNameForHeader } from '../../../../utils/toolNames'
 import { getParsedContent, hasContent } from '../../../../utils/parsedContent'
 import { getToolHelpers, getProviderHelpers } from '../../../../providers'
 import { fileRootsFromStore } from '../../../../utils/projectRoots'
@@ -350,8 +351,11 @@ const displayResult = computed(() => {
     // ``event_msg.mcp_tool_call_end`` instead). ``undefined`` means
     // "default behaviour" — single row collapses to the row itself,
     // multiple rows stay as an array.
+    // ``input`` rides along for helpers whose pick depends on what the
+    // call asked for (Codex's code-mode ``exec`` resolving its nested
+    // MCP call from the script source).
     const transformed = toolHelpers.value?.transformDisplayResult(
-        props.name, resultData.value, helperOptions.value,
+        props.name, resultData.value, { ...helperOptions.value, input: props.input },
     )
     if (transformed !== undefined) return transformed
     if (resultData.value.length === 1) return resultData.value[0]
@@ -360,7 +364,7 @@ const displayResult = computed(() => {
 
 // --- Tool input JHV overrides ---
 // Force specific valueType for certain tool input keys (prevents markdown auto-detection).
-const inputOverrides = computed(() => toolHelpers.value?.getInputOverrides(props.name) ?? {})
+const inputOverrides = computed(() => toolHelpers.value?.getInputOverrides(props.name, props.input) ?? {})
 
 // --- Tool result JHV overrides ---
 // Force specific valueType for certain tool result keys (prevents markdown auto-detection).
@@ -536,6 +540,10 @@ const resultRendering = computed(() => {
         // Chained-result tools read this instead of the raw
         // ``displayResult`` row; null for everyone else.
         aggregatedExecOutput: aggregatedExecOutput.value,
+        // Raw ToolResultLink payload list, for helpers that branch on
+        // whether a specific row shape has arrived (e.g. Codex's
+        // code-mode ``exec`` checking for a rebound ``*_end`` event).
+        resultsArray: resultData.value,
     })
 })
 
@@ -791,25 +799,6 @@ const isAgentSpawnPending = computed(() => {
     if (isStaleToolUse.value) return false
     return !!toolHelpers.value?.isToolRunning(props.name, props.input, helperOptions.value)
 })
-
-/**
- * Fallback header label for tools that have neither a static
- * ``headerLabel`` nor a Task ``displayName``. Splits on ``__`` (the
- * separator used both by Claude Code's MCP tools ``mcp__server__tool``
- * and by Codex's fully-qualified names like
- * ``mcp__codex_apps__github___search_repositories``), trims any
- * leading / trailing underscores from each segment (Codex bare MCP
- * names often start with ``_``), drops empty segments, and joins back
- * with spaces. Plain tool names without ``__`` pass through unchanged.
- */
-function formatToolNameForHeader(rawName) {
-    if (typeof rawName !== 'string') return ''
-    return rawName
-        .split('__')
-        .map((s) => s.replace(/^_+|_+$/g, ''))
-        .filter(Boolean)
-        .join(' ')
-}
 
 // Unique ID for the View Agent button (for tooltip targeting)
 const viewAgentButtonId = computed(() => `view-agent-${props.toolId}`)
