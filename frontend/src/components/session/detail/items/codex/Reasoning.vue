@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, nextTick, onMounted } from 'vue'
 import { useDataStore } from '../../../../../stores/data'
+import { isBlankMarkdown } from '../../../../../utils/markdown.js'
 import MarkdownContent from '../../../../ui/MarkdownContent.vue'
 
 const props = defineProps({
@@ -69,6 +70,12 @@ const extracted = computed(() => {
 const text = computed(() => extracted.value.text)
 const streaming = computed(() => extracted.value.streaming)
 
+// Empty reasoning (nothing, whitespace, or only HTML comments — which the
+// renderer hides) has nothing to show; surface a placeholder rather than an
+// empty expandable body. While streaming we keep rendering the (growing)
+// source so the placeholder never flashes before the first tokens land.
+const hasContent = computed(() => !isBlankMarkdown(text.value))
+
 // Lazy rendering + persisted open state, mirrored from
 // ``claude_code/ThinkingContent.vue``. Initialized from the store so the
 // virtual scroller's mount/unmount cycle doesn't reset the user's choice.
@@ -109,7 +116,8 @@ function onHide() {
             <wa-spinner v-if="streaming"></wa-spinner>
         </span>
         <div v-if="isOpen" class="reasoning-body">
-            <MarkdownContent :source="text" />
+            <MarkdownContent v-if="streaming || hasContent" :source="text" />
+            <p v-else class="reasoning-placeholder">No thinking content was provided</p>
         </div>
     </wa-details>
 </template>
@@ -123,5 +131,11 @@ wa-details {
 
 .reasoning-body {
     word-break: break-word;
+}
+
+.reasoning-placeholder {
+    margin: 0;
+    color: var(--wa-color-text-quiet);
+    font-style: italic;
 }
 </style>

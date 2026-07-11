@@ -264,6 +264,23 @@ export function splitMarkdownBlocks(source) {
 }
 
 /**
+ * True when `source` renders to nothing visible: empty, whitespace-only, or
+ * only HTML comments (which the renderer hides) — in any combination.
+ *
+ * Reuses the renderer's own block tokenizer, so the distinction the
+ * comment-hiding rules already draw is preserved: a comment inside a fenced or
+ * indented code block still counts as content (it stays rendered) and yields a
+ * block, while a standalone comment yields none.
+ *
+ * @param {string} source - Raw markdown text
+ * @returns {boolean}
+ */
+export function isBlankMarkdown(source) {
+    if (!source || !source.trim()) return true
+    return splitMarkdownBlocks(source).blocks.length === 0
+}
+
+/**
  * Extract the heading outline of a markdown document, in document order.
  *
  * A single parse pass (same mechanism as splitMarkdownBlocks) — for each

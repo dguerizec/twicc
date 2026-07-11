@@ -1,6 +1,7 @@
 <script setup>
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { useDataStore } from '../../../../../stores/data'
+import { isBlankMarkdown } from '../../../../../utils/markdown.js'
 import MarkdownContent from '../../../../ui/MarkdownContent.vue'
 
 const dataStore = useDataStore()
@@ -25,6 +26,12 @@ const props = defineProps({
 })
 
 const detailsRef = ref(null)
+
+// Empty thinking (nothing, whitespace, or only HTML comments — which the
+// renderer hides) has nothing to show; we surface a placeholder instead of an
+// empty expandable body. While streaming we keep rendering the (growing) source
+// so the placeholder never flashes before the first tokens land.
+const hasContent = computed(() => !isBlankMarkdown(props.thinking))
 
 // Lazy rendering: content is only mounted when wa-details is open.
 // Initialized from the store to restore state across virtual scroller mount/unmount cycles.
@@ -58,7 +65,8 @@ function onHide() {
             <wa-spinner v-if="streaming"></wa-spinner>
         </span>
         <div v-if="isOpen" class="thinking-body">
-            <MarkdownContent :source="thinking" />
+            <MarkdownContent v-if="streaming || hasContent" :source="thinking" />
+            <p v-else class="thinking-placeholder">No thinking content was provided</p>
         </div>
     </wa-details>
 </template>
@@ -72,5 +80,11 @@ wa-details {
 
 .thinking-body {
     word-break: break-word;
+}
+
+.thinking-placeholder {
+    margin: 0;
+    color: var(--wa-color-text-quiet);
+    font-style: italic;
 }
 </style>
