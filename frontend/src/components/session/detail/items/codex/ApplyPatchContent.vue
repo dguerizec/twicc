@@ -90,7 +90,15 @@ const patchEndPayload = computed(() => {
         if (!parsed || parsed.type !== 'event_msg') continue
         const payload = parsed.payload
         if (!payload || payload.type !== 'patch_apply_end') continue
-        if (payload.call_id !== props.toolId) continue
+        // Direct apply_patch: the event carries our own call_id. Nested
+        // (code-mode) patch: the backend rebound the event to our exec's
+        // link chain but the payload keeps Codex's synthesized nested id
+        // (``exec-<uuid>``) — accept it, the lineNums list is already
+        // scoped to our tool_use so this stays unambiguous.
+        if (
+            payload.call_id !== props.toolId
+            && !(typeof payload.call_id === 'string' && payload.call_id.startsWith('exec-'))
+        ) continue
         return payload
     }
     return null
@@ -138,6 +146,36 @@ const backendFileStatsByPath = computed(() => {
  *   - 'delete':           file body that was removed
  *   - 'pending-delete':   pre-result delete (no body to show yet)
  */
+/**
+ * Per-file +/- counts derived from the ``patch_apply_end`` change entry
+ * itself — the fallback when the backend stats aren't available on
+ * ``ToolResultLink.extra`` (nested code-mode patches: that slot carries
+ * the exec spinner's ``is_terminated`` instead). Mirrors the backend's
+ * ``_count_diff_lines`` rules: only ``+`` / ``-`` payload lines of the
+ * unified diff count (headers and ``@@`` hunk markers excluded); adds and
+ * deletes count every content line.
+ */
+function countChangeLines(change) {
+    if (change.type === 'update') {
+        let added = 0
+        let removed = 0
+        for (const line of (typeof change.unified_diff === 'string' ? change.unified_diff : '').split('\n')) {
+            if (!line) continue
+            if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) continue
+            if (line[0] === '+') added += 1
+            else if (line[0] === '-') removed += 1
+        }
+        return { added, removed }
+    }
+    const content = typeof change.content === 'string' ? change.content : ''
+    const lines = content
+        ? (content.match(/\n/g)?.length ?? 0) + (content.endsWith('\n') ? 0 : 1)
+        : 0
+    if (change.type === 'add') return { added: lines, removed: 0 }
+    if (change.type === 'delete') return { added: 0, removed: lines }
+    return { added: 0, removed: 0 }
+}
+
 const fileEntries = computed(() => {
     const baseDir = sessionBaseDir.value
     const decorate = (path) => ({
@@ -164,16 +202,19 @@ const fileEntries = computed(() => {
         for (const [path, change] of Object.entries(payload.changes)) {
             if (!change || typeof change !== 'object') continue
             // Stats from the backend's ``ToolResultLink.extra`` when
-            // it has reached the store; defaulted to zero otherwise
-            // (the real counts arrive on the next tick — Vue reactivity
-            // re-runs this computed at that point).
+            // available (direct apply_patch); otherwise derived from
+            // the change entry itself (nested code-mode patches never
+            // get the stats extra — see ``countChangeLines``).
             const stats = backendStats ? backendStats[path] : null
+            const counts = stats
+                ? { added: stats.lines_added ?? 0, removed: stats.lines_removed ?? 0 }
+                : countChangeLines(change)
             const base = {
                 ...decorate(path),
                 movePath: null,
                 firstModifiedLine: null,
-                linesAdded: stats?.lines_added ?? 0,
-                linesRemoved: stats?.lines_removed ?? 0,
+                linesAdded: counts.added,
+                linesRemoved: counts.removed,
             }
             if (change.type === 'update') {
                 const hunks = parseUnifiedDiff(change.unified_diff || '')

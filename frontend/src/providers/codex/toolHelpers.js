@@ -25,6 +25,7 @@ import { BaseToolHelpers } from '../baseHelpers'
 import { capitalize } from '../utils/format'
 import { formatRelativePath, fileIconFor, resolveAbsolutePath } from '../utils/path'
 import { parseCommand } from './parseCommand'
+import { parseCodeModeOutput, parseCodeModeScript } from './parseCodeModeScript'
 import { parseApplyPatchEnvelope } from './parsePatch'
 import { getTodoDescription } from '../../utils/todoList'
 
@@ -160,6 +161,111 @@ const PERSISTED_END_EVENT_TYPES = new Set([
 // is dynamic (``mcp__<server>__<tool>``).
 const MCP_TOOL_NAME_PREFIX = 'mcp__'
 
+// Codex "code mode" (GPT-5.6+ ``tool_mode: code_mode_only`` models):
+// every action is a ``custom_tool_call`` named ``exec`` whose ``input``
+// is JavaScript calling nested tools (``tools.exec_command({...})``,
+// ``tools.apply_patch("...")``, …) — the rollout never persists the
+// nested calls, only the script. ``parseCodeModeScript`` statically
+// recovers them so a script wrapping a single resolvable call renders
+// like the direct call would (shell heuristics / patch diff); anything
+// else degrades to the generic "Run code" card enriched with the
+// detected call list. The companion ``wait`` function_call (resumes a
+// still-running cell) never reaches these helpers: the backend buckets
+// it as SYSTEM and rebinds its output chunks to the owning ``exec``
+// call, so they surface here through ``aggregateCodeModeOutput`` like
+// write_stdin chunks do for ``exec_command``. Deliberately NOT a
+// member of ``FUNCTION_CALL_EXEC_TOOLS`` — its input is JS, not a
+// shell command, so it must never enter ``extractCommandPayload`` et
+// al. Design: ``docs/plans/2026-07-10-codex-code-mode-display-design.md``.
+const CODE_MODE_EXEC_TOOL_NAME = 'exec'
+
+/**
+ * Tier-1 detection for a code-mode script: return the single resolved
+ * nested call when the script wraps exactly one and we know how to give
+ * it a dedicated rendering (``exec_command`` with a string ``cmd``,
+ * ``apply_patch`` with a string envelope). Returns ``null`` for
+ * everything else — multi-call scripts, unresolved arguments, other
+ * nested tools — which then flow through the tier-2/3 generic paths.
+ *
+ * ``input`` is the tool card's input wrapper: ``{ input: <JS source> }``
+ * as set by ``ToolUse.vue`` for ``custom_tool_call`` (a bare string is
+ * tolerated for symmetry with the apply_patch helpers).
+ */
+function resolveCodeModeCall(input) {
+    const source = typeof input === 'string' ? input : input?.input
+    if (typeof source !== 'string' || !source) return null
+    const { calls } = parseCodeModeScript(source)
+    if (calls.length !== 1 || !calls[0].resolved) return null
+    const call = calls[0]
+    if (call.name === 'exec_command') {
+        const arg = call.arg
+        if (arg && typeof arg === 'object' && !Array.isArray(arg)
+            && typeof arg.cmd === 'string' && arg.cmd) return call
+        return null
+    }
+    if (call.name === 'apply_patch') {
+        if (typeof call.arg === 'string' && call.arg) return call
+        return null
+    }
+    return null
+}
+
+/**
+ * Tier-2 summary text for a code-mode script: the detected nested tool
+ * names in source order, deduplicated with a count (``exec_command ×2,
+ * apply_patch``). Empty string when nothing was detected (tier 3).
+ */
+function summarizeCodeModeCalls(input) {
+    const source = typeof input === 'string' ? input : input?.input
+    if (typeof source !== 'string' || !source) return ''
+    const { calls } = parseCodeModeScript(source)
+    if (calls.length === 0) return ''
+    const counts = new Map()
+    for (const call of calls) {
+        counts.set(call.name, (counts.get(call.name) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+        .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
+        .join(', ')
+}
+
+/**
+ * Walk the result chain of a code-mode ``exec`` call (its own
+ * ``custom_tool_call_output`` plus every ``wait`` chunk the backend
+ * rebound to it) and stitch the bodies together — the code-mode
+ * counterpart of ``aggregateExecCommandOutput``. The status header of
+ * each chunk is stripped by ``parseCodeModeOutput``; ``isTerminated``
+ * flips on the first final status (completed / failed / terminated).
+ * ``exitCode`` is always ``null``: the script wrapper hides the nested
+ * command's exit code (script-level failure surfaces through
+ * ``ToolResultLink.error`` instead).
+ */
+function aggregateCodeModeOutput(toolId, options) {
+    const results = options?.resultsArray
+    if (!Array.isArray(results) || results.length === 0) return null
+    const bodies = []
+    let isTerminated = false
+    for (const payload of results) {
+        if (!payload || typeof payload !== 'object') continue
+        if (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output') continue
+        const parsed = parseCodeModeOutput(payload.output)
+        if (parsed === null) {
+            // Not a code-mode header — keep the raw string visible rather
+            // than losing the chunk (defensive, format drift).
+            if (typeof payload.output === 'string' && payload.output) bodies.push(payload.output)
+            continue
+        }
+        if (parsed.status !== 'running') isTerminated = true
+        if (parsed.body) bodies.push(parsed.body)
+    }
+    if (bodies.length === 0 && !isTerminated) return null
+    return {
+        aggregatedOutput: bodies.join(''),
+        isTerminated,
+        exitCode: null,
+    }
+}
+
 // `spawn_agent` collects two ToolResultLinks per call: the immediate
 // `function_call_output` ack carrying `{agent_id, nickname}` (rendered
 // useless on its own), and a synthetic second link rebound from the
@@ -258,6 +364,11 @@ const INPUT_OVERRIDES = {
         // JS code-block. ``input`` here is the wrapper key set by
         // ``ToolUse.vue`` for ``custom_tool_call`` (``{ input: p.input }``).
         input: { valueType: 'string-code', language: 'javascript' },
+        // Tier-1 exec_command scripts: ``getDisplayInputObject`` swaps the
+        // JS wrapper for the extracted ``{cmd}`` so the card shows the
+        // actual shell command (bash block) — the full JS source stays
+        // reachable through the ``</>`` raw toggle.
+        cmd: { valueType: 'string-code', language: 'bash' },
     },
     web_search_call: {
         // Multiple queries ship as ``queries`` (after the
@@ -923,7 +1034,11 @@ export class CodexToolHelpers extends BaseToolHelpers {
         if (wrapperType === 'custom_tool_call') {
             // apply_patch (Freeform variant) is the only custom_tool_call
             // that pairs with a persisted ``*_end`` event today.
-            // The code_mode ``exec`` tool falls through to 1.
+            // The code_mode ``exec`` tool falls through to 1: like
+            // ``exec_command`` it can chain a variable number of result
+            // rows (one per rebound ``wait`` chunk), so the spinner is
+            // driven by :meth:`isToolRunning` reading
+            // ``extra.is_terminated`` rather than the expected count.
             if (name === 'apply_patch') return 2
             return 1
         }
@@ -942,11 +1057,11 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     getRequiredResultCountForDisplay(name, input, options) {
-        // Shell tools render progressively from a single chunk (the
-        // ``aggregateExecCommandOutput`` helper concatenates whatever
-        // is in the store), so 1 is enough; everything else mirrors
-        // ``getExpectedResultCount``.
-        if (FUNCTION_CALL_EXEC_TOOLS.has(name)) return 1
+        // Shell tools — and code-mode ``exec`` — render progressively
+        // from a single chunk (the aggregation helpers concatenate
+        // whatever is in the store), so 1 is enough; everything else
+        // mirrors ``getExpectedResultCount``.
+        if (FUNCTION_CALL_EXEC_TOOLS.has(name) || name === CODE_MODE_EXEC_TOOL_NAME) return 1
         return this.getExpectedResultCount(name, input, options)
     }
 
@@ -962,11 +1077,12 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // aggregated ``toolState.error`` is ``Max('error')`` across
         // every link, so any non-null marks the tool as terminated.
         if (options?.toolState?.error) return false
-        // Shell tools: status comes from the chain's last chunk via the
-        // ``is_terminated`` flag the backend set on
-        // ``ToolResultLink.extra``. ``Max``-aggregated across links so
-        // any closing chunk flips the whole tool to "done".
-        if (FUNCTION_CALL_EXEC_TOOLS.has(name)) {
+        // Shell tools — and code-mode ``exec``, whose ``wait`` chunks
+        // chain exactly like write_stdin polls: status comes from the
+        // chain's last chunk via the ``is_terminated`` flag the backend
+        // set on ``ToolResultLink.extra``. ``Max``-aggregated across
+        // links so any closing chunk flips the whole tool to "done".
+        if (FUNCTION_CALL_EXEC_TOOLS.has(name) || name === CODE_MODE_EXEC_TOOL_NAME) {
             const extra = options?.toolState?.extra
             if (extra) {
                 // ``extra`` is the JSON string set by
@@ -998,10 +1114,13 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     shouldAggregateExecOutput(name) {
-        return FUNCTION_CALL_EXEC_TOOLS.has(name)
+        return FUNCTION_CALL_EXEC_TOOLS.has(name) || name === CODE_MODE_EXEC_TOOL_NAME
     }
 
     getAggregatedExecOutput(name, toolId, options) {
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            return aggregateCodeModeOutput(toolId, options)
+        }
         return aggregateExecCommandOutput(name, toolId, options)
     }
 
@@ -1024,9 +1143,21 @@ export class CodexToolHelpers extends BaseToolHelpers {
             return input?.type === 'search' ? 'WebSearch' : 'WebFetch'
         }
         // ``exec`` is Codex's ``code_mode`` tool — runs a JavaScript
-        // snippet as a sandboxed code cell. "Run code" reads better
-        // than the bare ``exec`` for users.
-        if (name === 'exec') return 'Run code'
+        // snippet as a sandboxed code cell. When the script wraps a
+        // single resolvable nested call, label it like the direct call
+        // would be (shell heuristics for exec_command, ``Edit`` for
+        // apply_patch); otherwise "Run code" reads better than the
+        // bare ``exec`` for users.
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            const nested = resolveCodeModeCall(input)
+            if (nested?.name === 'exec_command') {
+                // Delegate to the direct exec_command path — the nested
+                // arg has the exact same shape ({cmd, workdir, …}).
+                return this.getHeaderLabel('exec_command', nested.arg, options) ?? 'Shell'
+            }
+            if (nested?.name === 'apply_patch') return 'Edit'
+            return 'Run code'
+        }
         // ``view_image`` loads a local image for the model — show the
         // clean "Image" header instead of the raw ``view_image`` name.
         if (name === VIEW_IMAGE_TOOL_NAME) return 'Image'
@@ -1045,6 +1176,27 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     getSummaryRendering(name, input, baseDir, options) {
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            // Tier 1: delegate to the direct tool's summary path with the
+            // extracted argument (same shapes — {cmd, workdir, …} for
+            // exec_command, { input: <envelope> } for apply_patch).
+            const nested = resolveCodeModeCall(input)
+            if (nested?.name === 'exec_command') {
+                return this.getSummaryRendering('exec_command', nested.arg, baseDir, options)
+            }
+            if (nested?.name === 'apply_patch') {
+                return this.getSummaryRendering('apply_patch', { input: nested.arg }, baseDir, options)
+            }
+            // Tier 2: list the detected nested tools so the collapsed
+            // card says what the script does. Tier 3 (nothing detected)
+            // keeps the bare "Run code" header, no summary.
+            const detected = summarizeCodeModeCalls(input)
+            if (!detected) return null
+            return {
+                component: DescriptionSummary,
+                props: { description: detected, fileIconSrc: null, truncate: true },
+            }
+        }
         if (name === SPAWN_AGENT_TOOL_NAME) {
             // Surface the subagent's nickname (Codex's
             // ``agent_nickname``, persisted as ``Session.slug`` and
@@ -1236,6 +1388,18 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     getInputRendering(name, input, ctx) {
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            // Tier-1 apply_patch: the extracted envelope feeds the same
+            // diff renderer as a direct apply_patch call. Tier-1
+            // exec_command and tiers 2/3 return null — their body goes
+            // through ``getDisplayInputObject`` (extracted ``{cmd}`` as a
+            // bash block, or the raw JS source).
+            const nested = resolveCodeModeCall(input)
+            if (nested?.name === 'apply_patch') {
+                return this.getInputRendering('apply_patch', { input: nested.arg }, ctx)
+            }
+            return null
+        }
         if (name === 'apply_patch') {
             const raw = typeof input === 'string' ? input : input?.input
             if (typeof raw !== 'string' || !raw) return null
@@ -1310,6 +1474,23 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 props: { images, name: imageName },
             }
         }
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            // Tier-1 exec_command: delegate to the direct path so a
+            // ``cat``-classified script gets the same ReadResultContent
+            // treatment (the aggregate in ``options`` was already built
+            // by ``aggregateCodeModeOutput``, same shape).
+            const nested = resolveCodeModeCall(input)
+            if (nested?.name === 'exec_command') {
+                return this.getResultRendering('exec_command', result, nested.arg, options)
+            }
+            const aggregated = options?.aggregatedExecOutput
+            if (!aggregated || typeof aggregated.aggregatedOutput !== 'string') return null
+            if (!aggregated.aggregatedOutput && !aggregated.isTerminated) return null
+            return {
+                component: ExecResultContent,
+                props: { result: { aggregated_output: aggregated.aggregatedOutput } },
+            }
+        }
         if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
         // The shell precomputed the chain aggregate when
         // :meth:`shouldAggregateExecOutput` returned ``true``; reach
@@ -1363,6 +1544,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // tell the user anything actionable — keep the rich result body
         // visible so they can see what the server actually returned.
         if (typeof name === 'string' && name.startsWith(MCP_TOOL_NAME_PREFIX)) return true
+        // Code-mode ``exec``: a ``Script failed`` error label says nothing
+        // about what the script printed before dying — keep the body.
+        if (name === CODE_MODE_EXEC_TOOL_NAME) return true
         return FUNCTION_CALL_EXEC_TOOLS.has(name)
     }
 
@@ -1485,6 +1669,20 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // ``ApplyPatchContent`` renderer takes over the full body, so
         // there's nothing useful left for the JSON fallback.
         if (name === 'apply_patch') return null
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            const nested = resolveCodeModeCall(input)
+            // Tier-1 apply_patch: ApplyPatchContent (via getInputRendering)
+            // renders the whole body — same rule as direct apply_patch.
+            if (nested?.name === 'apply_patch') return null
+            // Tier-1 exec_command: swap the JS wrapper for the extracted
+            // command so the card body shows a bash block (see the
+            // ``cmd`` entry in INPUT_OVERRIDES.exec). The internal knobs
+            // (yield_time_ms, …) and the full JS source stay reachable
+            // through the ``</>`` raw toggle.
+            if (nested?.name === 'exec_command') return { cmd: nested.arg.cmd }
+            // Tiers 2/3 fall through: ``{ input: <JS source> }`` rendered
+            // as a fenced JS block by INPUT_OVERRIDES.exec.input.
+        }
         // ``update_plan`` is fully rendered by ``TodoContent`` (plan +
         // explanation), so the JSON fallback would only duplicate it.
         if (name === 'update_plan') return null
@@ -1575,6 +1773,14 @@ export class CodexToolHelpers extends BaseToolHelpers {
     }
 
     getFilePath(name, input) {
+        // Code-mode script wrapping a single-file apply_patch: surface the
+        // path so the shell shows the same ``View in Files tab`` button as
+        // a direct apply_patch.
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            const nested = resolveCodeModeCall(input)
+            if (nested?.name !== 'apply_patch') return null
+            return this.getFilePath('apply_patch', { input: nested.arg })
+        }
         if (name !== 'apply_patch') return null
         const parsed = parseApplyPatchEnvelope(typeof input === 'string' ? input : input?.input)
         // Single-file: surface the path so the shell shows a
@@ -1586,14 +1792,41 @@ export class CodexToolHelpers extends BaseToolHelpers {
         return parsed[0]?.path ?? null
     }
 
-    shouldAutoOpenLive(name) {
+    shouldAutoOpenLive(name, input) {
         // Same UX as Claude Code's Edit / Write: when the user has
         // ``showDiffs`` enabled, an apply_patch tool_use that arrives
         // live is auto-expanded so the diff is visible without a click.
+        // A code-mode script wrapping a single apply_patch is the same
+        // user-facing operation, so it auto-opens too.
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            return resolveCodeModeCall(input)?.name === 'apply_patch'
+        }
         return name === 'apply_patch'
     }
 
-    computeFileChangeStats(name, _input, toolState, _isSubagent) {
+    computeFileChangeStats(name, input, toolState, _isSubagent) {
+        // Nested code-mode patch: the stats can't travel through
+        // ``ToolResultLink.extra`` (that slot drives the exec spinner's
+        // ``is_terminated`` and the tool_state aggregates a single
+        // value), so derive them client-side from the extracted
+        // envelope — the same counts the v4a parser feeds the card body.
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            const nested = resolveCodeModeCall(input)
+            if (nested?.name !== 'apply_patch') return null
+            const files = parseApplyPatchEnvelope(nested.arg)
+            if (files.length === 0) return null
+            let linesAdded = 0
+            let linesRemoved = 0
+            const perFile = []
+            for (const file of files) {
+                const added = file.linesAdded ?? 0
+                const removed = file.linesRemoved ?? 0
+                linesAdded += added
+                linesRemoved += removed
+                perFile.push({ path: file.path, lines_added: added, lines_removed: removed })
+            }
+            return { lines_added: linesAdded, lines_removed: linesRemoved, files: perFile }
+        }
         if (name !== 'apply_patch') return null
         if (!toolState?.extra) return null
         try {

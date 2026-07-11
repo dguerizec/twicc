@@ -89,6 +89,11 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   For exec_command long-running shells the chain accumulates one row
   per polling write_stdin; for everything else there's a single row
   (plus the matching event_msg.*_end when applicable).
+- Code mode (GPT-5.6+): ``custom_tool_call name=exec`` (JS script) →
+  ``TOOL_USE``; ``function_call name=wait`` → ``SYSTEM`` (via
+  :data:`_NON_TOOL_FUNCTION_NAMES`), its output chunks rebound to the
+  owning ``exec`` through the cell map — see
+  :data:`_CODE_MODE_EXEC_TOOL` and ``code_mode_script.py``.
 - top-level ``compacted`` → ``COMPACT_SUMMARY`` (lands at ``ALWAYS``).
   Codex CLI writes this line on auto-compaction; the payload carries
   a ``replacement_history`` of the messages that were summarized plus
@@ -168,6 +173,7 @@ from twicc.providers.compute_base import (
 )
 
 from .agent.original_files_cache import pop_original_files
+from .code_mode_script import parse_code_mode_output, parse_code_mode_script
 from .pricing import extract_model_info, to_token_usage
 
 logger = logging.getLogger(__name__)
@@ -320,21 +326,43 @@ _DOC_EDIT_SHELL_COMMAND_KEYS = {
     "shell_command": "command",
 }
 
+# Code-mode tool names (GPT-5.6+ "tool_mode: code_mode_only" models).
+# ``exec`` is a ``custom_tool_call`` whose ``input`` is raw JavaScript
+# executed in a V8 isolate by the CLI; every real action (shell command,
+# patch, MCP call) is a *nested* call made from that JS and never
+# persisted to the rollout — the script source is statically mined by
+# :func:`parse_code_mode_script` instead. ``wait`` is the ``function_call``
+# that resumes a still-running script "cell" (the code-mode analog of
+# ``write_stdin`` polling an ``exec_command`` process): its output chunks
+# are rebound to the owning ``exec`` call via the ``cell_id`` announced
+# by the parent's ``Script running with cell ID <id>`` status header.
+# Detection is shape-based only (payload sub-type + these names) — never
+# model-version-based — so pre-5.6 sessions are untouched. The bare name
+# ``exec`` is unambiguous among custom_tool_calls (MCP tools are
+# ``mcp__``-prefixed and the only historical custom_tool_call is
+# ``apply_patch``); no historical function_call is named ``wait``
+# (``wait_agent`` is distinct). Design:
+# ``docs/plans/2026-07-10-codex-code-mode-display-design.md``.
+_CODE_MODE_EXEC_TOOL = "exec"
+_CODE_MODE_WAIT_TOOL = "wait"
+
 # Function-call ``name`` values whose tool_use is bucketed as SYSTEM (no
 # tool card rendered) because the relevant exchange is captured elsewhere.
 # ``write_stdin`` belongs to a previously-spawned ``exec_command`` session;
 # its ``function_call_output`` is rebound to the parent exec_command's
 # ``call_id`` via :meth:`CodexSessionCompute.remap_tool_result_id` so the
-# polled chunks all land on the same ``ToolResultLink`` chain.
+# polled chunks all land on the same ``ToolResultLink`` chain. ``wait``
+# is the code-mode equivalent (rebound to the owning ``exec`` call via
+# the cell map — see :data:`_CODE_MODE_WAIT_TOOL`).
 #
 # NOTE: this list governs UI rendering only (``compute_item_kind`` returns
-# ``SYSTEM`` for these). For ``write_stdin`` the pairing path
+# ``SYSTEM`` for these). For ``write_stdin`` and ``wait`` the pairing path
 # (``extract_tool_use_entries``, ``analyze_content``) STILL records the
-# call_id in ``tool_use_map`` so the remap hook can resolve its
-# function_call_output to the parent exec_command. For
+# call_id in ``tool_use_map`` so the remap hook can resolve their
+# function_call_output to the parent call. For
 # :data:`_IGNORED_FUNCTION_NAMES` (``wait_agent``) the pairing is
 # dropped entirely — see that constant's docstring.
-_NON_TOOL_FUNCTION_NAMES = frozenset({"write_stdin", "wait_agent"})
+_NON_TOOL_FUNCTION_NAMES = frozenset({"write_stdin", "wait_agent", _CODE_MODE_WAIT_TOOL})
 
 # Function-call ``name`` values that ARE real tool calls but carry nothing
 # worth a visible card, so their ``function_call`` is bucketed as SYSTEM
@@ -602,6 +630,95 @@ def _structured_exec_output_error(output: str) -> str | None:
     if not isinstance(exit_code, int) or exit_code == 0:
         return None
     return f"Exit code {exit_code}"
+
+
+def _code_mode_output_error(output: object) -> str | None:
+    """Surface a script-level failure from a code-mode ``exec``/``wait`` output.
+
+    A ``Script failed`` status header flips the link to error state, with
+    the ``Script error:`` segment body as the message when present. Every
+    other status (and any non-code-mode output — :func:`parse_code_mode_output`
+    returns ``None`` for those) yields ``None``. Note: a *nested* command
+    exiting non-zero does NOT fail the script; the script-level status is
+    all the rollout lets us claim.
+    """
+    parsed = parse_code_mode_output(output)
+    if parsed is None or parsed.status != "failed":
+        return None
+    return parsed.error_text or "Script failed"
+
+
+# Declared targets of a v4a patch envelope (``*** Add File: <path>`` /
+# ``*** Update File: <path>`` / ``*** Delete File: <path>``). Used to match
+# an orphan ``patch_apply_end`` back to the code-mode ``exec`` whose script
+# declared a patch on the same files — see
+# :meth:`CodexSessionCompute._remap_orphan_patch_apply_end`.
+_PATCH_ENVELOPE_PATH_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
+
+
+def _patch_paths_from_script(script_input: object) -> tuple[bool, frozenset[str]]:
+    """Inspect a code-mode script for nested ``apply_patch`` calls.
+
+    Returns ``(has_apply_patch, declared_paths)``: whether the script
+    contains at least one ``tools.apply_patch(...)`` call, and the file
+    paths declared by every statically-resolved patch envelope (possibly
+    empty when the envelope isn't resolvable — the caller then falls back
+    to recency-only matching).
+    """
+    script = parse_code_mode_script(script_input)
+    has_patch = False
+    paths: set[str] = set()
+    for call in script.calls:
+        if call.name != "apply_patch":
+            continue
+        has_patch = True
+        if call.resolved and isinstance(call.arg, str):
+            for match in _PATCH_ENVELOPE_PATH_RE.finditer(call.arg):
+                path = match.group(1).strip()
+                if path:
+                    paths.add(path)
+    return has_patch, frozenset(paths)
+
+
+def _changes_match_declared(change_paths: list[str], declared: frozenset[str]) -> bool:
+    """True when a ``patch_apply_end.changes`` path matches a declared one.
+
+    ``changes`` keys are absolute; envelope declarations may be relative
+    (the patch grammar allows both), so a suffix match on a path-segment
+    boundary is used instead of resolving against a cwd.
+    """
+    for declared_path in declared:
+        for change_path in change_paths:
+            if change_path == declared_path or change_path.endswith("/" + declared_path):
+                return True
+    return False
+
+
+def _wait_cell_id_from_payload(payload: dict | None) -> str | None:
+    """Read ``arguments.cell_id`` from a code-mode ``wait`` function_call payload.
+
+    The cell id is the token the parent ``exec`` output announced in its
+    ``Script running with cell ID <id>`` header. Codex serialises it as a
+    JSON string in the wait's arguments; an integer is tolerated and
+    normalised to its string form so it matches the header-side capture.
+    """
+    if payload is None:
+        return None
+    raw_args = payload.get("arguments")
+    if not isinstance(raw_args, str):
+        return None
+    try:
+        args = orjson.loads(raw_args)
+    except orjson.JSONDecodeError:
+        return None
+    if not isinstance(args, dict):
+        return None
+    cell_id = args.get("cell_id")
+    if isinstance(cell_id, str) and cell_id:
+        return cell_id
+    if isinstance(cell_id, int):
+        return str(cell_id)
+    return None
 
 
 def _extract_write_stdin_exec_command_id(parsed_json: dict) -> int | None:
@@ -1128,6 +1245,28 @@ class CodexSessionCompute(BaseSessionCompute):
         # both eagerly (when a "Process exited" status is observed) and
         # lazily (in :meth:`end_session_compute`).
         self._exec_command_maps: dict[str, dict[int, str]] = {}
+        # {session_id: {cell_id: exec_call_id}}. Code-mode analog of
+        # ``_exec_command_maps``: populated by :meth:`analyze_content`
+        # (via :meth:`_maintain_code_cell_map`) when an ``exec``
+        # custom_tool_call_output reports ``Script running with cell ID
+        # <id>``; read by :meth:`remap_tool_result_id` to rebind a
+        # ``wait`` function_call_output to the owning ``exec`` call.
+        # Entries are evicted when the chain reports a final status
+        # (completed / failed / terminated) — on the exec's own output
+        # in :meth:`_maintain_code_cell_map`, on a wait chunk in
+        # :meth:`remap_tool_result_id` (after the pairing read, like
+        # write_stdin) — and lazily in :meth:`end_session_compute`.
+        self._code_cell_maps: dict[str, dict[str, str]] = {}
+        # {session_id: [(exec_call_id, declared_patch_paths), ...]} in
+        # line order. One entry per code-mode ``exec`` whose script
+        # declares at least one nested ``apply_patch`` call. Populated
+        # by :meth:`analyze_content`; read by
+        # :meth:`_remap_orphan_patch_apply_end` to rebind the orphan
+        # ``patch_apply_end`` (whose ``call_id`` is the nested
+        # ``exec-<uuid>``) to the outer ``exec`` call — path match
+        # first, recency as fallback. Bounded (last 50 entries) and
+        # freed in :meth:`end_session_compute`.
+        self._patch_exec_maps: dict[str, list[tuple[str, frozenset[str]]]] = {}
         # {session_id: {agent_id: spawn_agent_call_id}}. Batch-only
         # side-table mirroring the inverse of the spawn ack: when
         # ``analyze_content`` sees a successful ``function_call_output``
@@ -1166,6 +1305,22 @@ class CodexSessionCompute(BaseSessionCompute):
         """
         return self._exec_command_maps.setdefault(session_id, {})
 
+    def _cell_map(self, session_id: str) -> dict[str, str]:
+        """Return the per-session ``{cell_id: exec_call_id}`` map.
+
+        Lazily creates the map on first access for the same reason as
+        :meth:`_proc_map`.
+        """
+        return self._code_cell_maps.setdefault(session_id, {})
+
+    def _patch_exec_map(self, session_id: str) -> list[tuple[str, frozenset[str]]]:
+        """Return the per-session list of patch-wrapping ``exec`` records.
+
+        Lazily creates the list on first access for the same reason as
+        :meth:`_proc_map`.
+        """
+        return self._patch_exec_maps.setdefault(session_id, [])
+
     def _agent_id_map(self, session_id: str) -> dict[str, str]:
         """Return the per-session ``{agent_id: spawn_agent_call_id}`` map.
 
@@ -1182,6 +1337,8 @@ class CodexSessionCompute(BaseSessionCompute):
         # pass. Batch always reprocesses every line of the session, so
         # starting the running total at zero is correct.
         self._exec_command_maps[session_id] = {}
+        self._code_cell_maps[session_id] = {}
+        self._patch_exec_maps[session_id] = []
         self._agent_id_to_spawn_call_id[session_id] = {}
         self._prev_total_tokens[session_id] = 0
 
@@ -1193,6 +1350,8 @@ class CodexSessionCompute(BaseSessionCompute):
         # agent_id map mirrors AgentLink rows already in DB; the
         # token-count map carries one int per active session.
         self._exec_command_maps.pop(session_id, None)
+        self._code_cell_maps.pop(session_id, None)
+        self._patch_exec_maps.pop(session_id, None)
         self._agent_id_to_spawn_call_id.pop(session_id, None)
         self._prev_total_tokens.pop(session_id, None)
 
@@ -1214,6 +1373,21 @@ class CodexSessionCompute(BaseSessionCompute):
             if mapped_call_id == call_id:
                 proc_map.pop(exec_command_id, None)
 
+    def _release_code_cell_for_call(self, session_id: str, call_id: str) -> None:
+        """Drop any code-cell map entry that points at ``call_id``.
+
+        Code-mode counterpart of :meth:`_release_exec_command_for_call`,
+        used when an ``exec`` output reports a final script status. The
+        final chunk doesn't repeat the cell id, so we scan by value —
+        the map stays tiny (concurrent background cells).
+        """
+        cell_map = self._code_cell_maps.get(session_id)
+        if not cell_map:
+            return
+        for cell_id, mapped_call_id in list(cell_map.items()):
+            if mapped_call_id == call_id:
+                cell_map.pop(cell_id, None)
+
     def remap_tool_result_id(
         self,
         parsed_json: dict,
@@ -1222,15 +1396,20 @@ class CodexSessionCompute(BaseSessionCompute):
         session_id: str,
         tool_use_map: dict[str, ToolUseEntry],
     ) -> str:
-        """Rebind a write_stdin function_call_output OR a subagent notification.
+        """Rebind a write_stdin / wait function_call_output OR a subagent notification.
 
-        Two unrelated chains converge here:
+        Three unrelated chains converge here:
 
         - ``write_stdin`` ``function_call_output``: rebound to the
           parent ``exec_command`` via ``self._exec_command_maps``,
           populated by :meth:`analyze_content` when it saw the parent's
           first ``Process running with session ID N`` line. Falls back
           to identity when the chain can't be resolved.
+        - ``wait`` ``function_call_output`` (code mode): rebound to the
+          owning ``exec`` custom_tool_call via ``self._code_cell_maps``,
+          populated by :meth:`analyze_content` when it saw the parent's
+          ``Script running with cell ID <id>`` status header. Same
+          identity fallback.
         - ``<subagent_notification>`` user message: rebound to the
           originating ``spawn_agent`` via
           ``self._agent_id_to_spawn_call_id``, populated by
@@ -1240,11 +1419,12 @@ class CodexSessionCompute(BaseSessionCompute):
           matching spawn ack — defensive only, the SDK never emits one
           without the other).
 
-        Also handles eviction for the write_stdin side: when this poll's
-        output reports a terminating ``Process exited``, the entry is
-        removed from the map AFTER we resolved the parent_call_id, so
-        analyze_content's reading order stays correct (it had already
-        populated / read the map by the time we got here).
+        Also handles eviction for the write_stdin and wait sides: when
+        this poll's output reports a terminating status (``Process
+        exited`` / a final script status), the entry is removed from the
+        map AFTER we resolved the parent_call_id, so analyze_content's
+        reading order stays correct (it had already populated / read the
+        map by the time we got here).
         """
         if _subagent_notification_text(parsed_json) is not None:
             agent_map = self._agent_id_to_spawn_call_id.get(session_id)
@@ -1252,7 +1432,18 @@ class CodexSessionCompute(BaseSessionCompute):
                 return naive_tool_use_id
             return agent_map.get(naive_tool_use_id, naive_tool_use_id)
         parent = tool_use_map.get(naive_tool_use_id)
-        if parent is None or parent.tool_name != "write_stdin":
+        if parent is None:
+            # A ``patch_apply_end`` from a code-mode nested apply_patch
+            # carries the synthesized ``exec-<uuid>`` call_id, matching
+            # no rollout tool_use — rebind it to the owning ``exec``.
+            return self._remap_orphan_patch_apply_end(
+                parsed_json, naive_tool_use_id, session_id=session_id,
+            )
+        if parent.tool_name == _CODE_MODE_WAIT_TOOL:
+            return self._remap_wait_result_id(
+                parsed_json, naive_tool_use_id, session_id=session_id, parent=parent
+            )
+        if parent.tool_name != "write_stdin":
             return naive_tool_use_id
         exec_command_id = _extract_write_stdin_exec_command_id(parent.parsed_json)
         if exec_command_id is None:
@@ -1275,6 +1466,86 @@ class CodexSessionCompute(BaseSessionCompute):
                 proc_map.pop(exec_command_id, None)
         return parent_call_id
 
+    def _remap_orphan_patch_apply_end(
+        self,
+        parsed_json: dict,
+        naive_tool_use_id: str,
+        *,
+        session_id: str,
+    ) -> str:
+        """Rebind a nested-patch ``patch_apply_end`` to its ``exec`` call.
+
+        When a code-mode script applies a patch, the nested handler emits
+        the same ``patch_apply_end`` event as a direct apply_patch — with
+        all its riches (structured ``changes``, the live-captured
+        ``original_files`` splice) — but under a synthesized
+        ``exec-<uuid>`` call_id that pairs with nothing. Rebinding it to
+        the outer ``exec`` call restores 5.5 display parity (full-file
+        diff, canonical paths, patch error).
+
+        No exact key exists, so the match is heuristic over the
+        registered patch-wrapping execs (see ``_patch_exec_maps``):
+
+        1. most recent exec whose statically-extracted envelope declares
+           a path matching the event's ``changes`` (suffix match — the
+           envelope may use relative paths);
+        2. else the most recent patch-wrapping exec (covers the
+           unresolvable-script case; the canonical wrapper applies its
+           patch synchronously, so recency is right in practice).
+
+        Falls back to identity when the line isn't such an event, the
+        call_id doesn't carry the nested ``exec-`` prefix, or nothing is
+        registered.
+        """
+        if not naive_tool_use_id.startswith("exec-"):
+            return naive_tool_use_id
+        if parsed_json.get("type") != _TYPE_EVENT_MSG:
+            return naive_tool_use_id
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != "patch_apply_end":
+            return naive_tool_use_id
+        records = self._patch_exec_maps.get(session_id)
+        if not records:
+            return naive_tool_use_id
+        changes = payload.get("changes")
+        change_paths = (
+            [p for p in changes if isinstance(p, str)] if isinstance(changes, dict) else []
+        )
+        for exec_call_id, declared in reversed(records):
+            if declared and _changes_match_declared(change_paths, declared):
+                return exec_call_id
+        return records[-1][0]
+
+    def _remap_wait_result_id(
+        self,
+        parsed_json: dict,
+        naive_tool_use_id: str,
+        *,
+        session_id: str,
+        parent: ToolUseEntry,
+    ) -> str:
+        """Rebind a code-mode ``wait`` output to the owning ``exec`` call.
+
+        The wait's own arguments carry the ``cell_id``; the cell map
+        (populated when the exec's output announced ``Script running
+        with cell ID <id>``) resolves it to the exec's call_id. Eviction
+        happens here when this chunk reports a final script status —
+        AFTER the pairing read, mirroring the write_stdin flow.
+        """
+        cell_id = _wait_cell_id_from_payload(_payload(parent.parsed_json))
+        if cell_id is None:
+            return naive_tool_use_id
+        cell_map = self._code_cell_maps.get(session_id)
+        if not cell_map:
+            return naive_tool_use_id
+        parent_call_id = cell_map.get(cell_id, naive_tool_use_id)
+        payload = _payload(parsed_json)
+        if payload is not None:
+            parsed = parse_code_mode_output(payload.get("output"))
+            if parsed is not None and parsed.status != "running":
+                cell_map.pop(cell_id, None)
+        return parent_call_id
+
     def remap_tool_result_id_live(
         self,
         parsed_json: dict,
@@ -1285,7 +1556,7 @@ class CodexSessionCompute(BaseSessionCompute):
     ) -> str:
         """Live equivalent of :meth:`remap_tool_result_id` (no in-memory map).
 
-        Two unrelated chains converge here, mirroring the batch hook:
+        Three unrelated chains converge here, mirroring the batch hook:
 
         - ``<subagent_notification>`` user message: rebound to the
           originating ``spawn_agent`` via a single ``AgentLink`` DB
@@ -1300,6 +1571,14 @@ class CodexSessionCompute(BaseSessionCompute):
           arguments → exec_command_id → function_call_output that
           announced it). The cost is incurred only on a write_stdin
           result line, which is rare per session.
+        - ``wait`` ``function_call_output`` (code mode): same two-lookup
+          shape (wait arguments → cell_id → the ``exec``
+          custom_tool_call_output that announced ``Script running with
+          cell ID <id>``).
+        - nested-patch ``patch_apply_end`` (code mode, ``call_id``
+          prefixed ``exec-``): rebound to the owning ``exec``
+          custom_tool_call via :meth:`_lookup_patch_exec_call_id` (path
+          match on the statically-extracted envelope, recency fallback).
 
         Falls back to identity at every step that can't be resolved so
         other tools' result rows are unaffected.
@@ -1312,10 +1591,32 @@ class CodexSessionCompute(BaseSessionCompute):
             if link is None:
                 return naive_tool_use_id
             return link.tool_use_id
-        parent_payload = self._lookup_write_stdin_call_payload(
+        if parsed_json.get("type") == _TYPE_EVENT_MSG:
+            payload = _payload(parsed_json)
+            if (
+                payload is not None
+                and payload.get("type") == "patch_apply_end"
+                and naive_tool_use_id.startswith("exec-")
+            ):
+                return self._lookup_patch_exec_call_id(
+                    session_id, item.line_num, payload.get("changes"), naive_tool_use_id,
+                )
+            # Direct apply_patch / MCP end events keep their own call_id.
+            return naive_tool_use_id
+        parent_payload = self._lookup_function_call_payload(
             session_id, item.line_num, naive_tool_use_id
         )
         if parent_payload is None:
+            return naive_tool_use_id
+        parent_name = parent_payload.get("name")
+        if parent_name == _CODE_MODE_WAIT_TOOL:
+            cell_id = _wait_cell_id_from_payload(parent_payload)
+            if cell_id is None:
+                return naive_tool_use_id
+            return self._lookup_code_cell_call_id(
+                session_id, item.line_num, cell_id, naive_tool_use_id
+            )
+        if parent_name != "write_stdin":
             return naive_tool_use_id
         raw_args = parent_payload.get("arguments")
         if not isinstance(raw_args, str):
@@ -1333,16 +1634,16 @@ class CodexSessionCompute(BaseSessionCompute):
             session_id, item.line_num, exec_command_id, naive_tool_use_id
         )
 
-    def _lookup_write_stdin_call_payload(
+    def _lookup_function_call_payload(
         self, session_id: str, max_line_num: int, naive_tool_use_id: str
     ) -> dict | None:
-        """Find the function_call payload for a write_stdin id, or ``None``.
+        """Find the ``function_call`` payload owning ``naive_tool_use_id``.
 
-        Returns the payload dict only when the candidate is a
-        ``function_call`` named ``write_stdin`` matching the given
-        call_id — anything else (including non-write_stdin tool_uses, or
-        text containing the id) yields ``None`` so callers can fall
-        through to identity remap.
+        Returns the payload dict of the ``function_call`` line matching
+        the given call_id — the caller branches on its ``name``
+        (``write_stdin`` / ``wait``); anything else (non-function_call
+        tool_uses, or text merely containing the id) yields ``None`` so
+        callers can fall through to identity remap.
         """
         candidates = SessionItem.objects.filter(
             session_id=session_id,
@@ -1363,10 +1664,104 @@ class CodexSessionCompute(BaseSessionCompute):
                 continue
             if payload.get("call_id") != naive_tool_use_id:
                 continue
-            if payload.get("name") != "write_stdin":
-                return None
             return payload
         return None
+
+    def _lookup_patch_exec_call_id(
+        self,
+        session_id: str,
+        max_line_num: int,
+        changes: object,
+        fallback: str,
+    ) -> str:
+        """Live equivalent of :meth:`_remap_orphan_patch_apply_end`.
+
+        Walks the preceding code-mode ``exec`` custom_tool_calls (newest
+        first, textual pre-filter on ``"name":"exec"``), re-extracts each
+        script, and returns the first whose declared patch paths match
+        the event's ``changes``; the newest patch-wrapping exec is kept
+        as the recency fallback. Returns ``fallback`` when nothing
+        qualifies, so the live link is still created (just under the
+        naive id).
+        """
+        change_paths = (
+            [p for p in changes if isinstance(p, str)] if isinstance(changes, dict) else []
+        )
+        recency_fallback: str | None = None
+        candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__lt=max_line_num,
+            content__contains='"name":"exec"',
+        ).order_by('-line_num')
+        for candidate in candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            if parsed.get("type") != _TYPE_RESPONSE_ITEM:
+                continue
+            payload = _payload(parsed)
+            if payload is None or payload.get("type") != "custom_tool_call":
+                continue
+            if payload.get("name") != _CODE_MODE_EXEC_TOOL:
+                continue
+            call_id = payload.get("call_id")
+            if not isinstance(call_id, str) or not call_id:
+                continue
+            has_patch, declared = _patch_paths_from_script(payload.get("input"))
+            if not has_patch:
+                continue
+            if declared and _changes_match_declared(change_paths, declared):
+                return call_id
+            if recency_fallback is None:
+                recency_fallback = call_id
+        return recency_fallback if recency_fallback is not None else fallback
+
+    def _lookup_code_cell_call_id(
+        self,
+        session_id: str,
+        max_line_num: int,
+        cell_id: str,
+        fallback: str,
+    ) -> str:
+        """Resolve the ``exec`` call_id that owns code-mode cell ``cell_id``.
+
+        Code-mode counterpart of :meth:`_lookup_exec_command_call_id`:
+        searches for the ``custom_tool_call_output`` line whose status
+        header announced ``Script running with cell ID <cell_id>`` —
+        that line's ``call_id`` IS the owning ``exec``'s call_id. The
+        textual pre-filter can over-match (``cell ID 2`` is a prefix of
+        ``cell ID 23``, and a still-running ``wait`` output repeats the
+        same header on a ``function_call_output``), so each candidate is
+        re-verified by parsing its output and comparing the exact cell
+        id. Returns ``fallback`` when nothing matches, so the live link
+        is still created (just under the naive id).
+        """
+        marker = f"Script running with cell ID {cell_id}"
+        candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__lt=max_line_num,
+            content__contains=marker,
+        ).order_by('line_num')
+        for candidate in candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            if parsed.get("type") != _TYPE_RESPONSE_ITEM:
+                continue
+            payload = _payload(parsed)
+            if payload is None:
+                continue
+            if payload.get("type") != "custom_tool_call_output":
+                continue
+            output_status = parse_code_mode_output(payload.get("output"))
+            if output_status is None or output_status.cell_id != cell_id:
+                continue
+            call_id = payload.get("call_id")
+            if isinstance(call_id, str) and call_id:
+                return call_id
+        return fallback
 
     def _lookup_exec_command_call_id(
         self,
@@ -1453,6 +1848,51 @@ class CodexSessionCompute(BaseSessionCompute):
             elif status.is_terminated:
                 self._release_exec_command_for_call(session_id, call_id)
         return _exit_code_error_from_output(output)
+
+    def _maintain_code_cell_map(
+        self,
+        session_id: str,
+        call_id: str,
+        payload: dict,
+        tool_use_map: dict[str, ToolUseEntry],
+    ) -> str | None:
+        """Code-mode counterpart of :meth:`_maintain_exec_command_map`.
+
+        Called from :meth:`analyze_content` for every Codex tool result.
+        Only acts when the parent tool_use is a code-mode ``exec``
+        (custom_tool_call) or ``wait`` (function_call); updates the cell
+        map for the ``exec`` side only:
+
+        - On an exec output reporting ``Script running with cell ID
+          <id>``, register ``map[<id>] = call_id`` so future ``wait``
+          chunks can be remapped to this exec.
+        - On an exec output reporting a final status, evict any entry
+          that points to this call_id.
+
+        ``wait``'s contribution (eviction on a final chunk) is handled
+        in :meth:`_remap_wait_result_id` instead, AFTER the pairing read
+        — same ordering contract as write_stdin.
+
+        Returns the ``Script failed`` error string (or the ``Script
+        error:`` body when present) so the caller can stuff it into
+        ``ContentAnalysis.tool_result_error``.
+        """
+        parent = tool_use_map.get(call_id)
+        if parent is None or parent.tool_name not in (
+            _CODE_MODE_EXEC_TOOL, _CODE_MODE_WAIT_TOOL,
+        ):
+            return None
+        parsed = parse_code_mode_output(payload.get("output"))
+        if parsed is None:
+            return None
+        if parent.tool_name == _CODE_MODE_EXEC_TOOL:
+            if parsed.status == "running" and parsed.cell_id is not None:
+                self._cell_map(session_id)[parsed.cell_id] = call_id
+            elif parsed.status != "running":
+                self._release_code_cell_for_call(session_id, call_id)
+        if parsed.status == "failed":
+            return parsed.error_text or "Script failed"
+        return None
 
     # ------------------------------------------------------------------
     # Extraction — content classification
@@ -2109,9 +2549,14 @@ class CodexSessionCompute(BaseSessionCompute):
                     _structured_exec_output_error(output)
                     or _freeform_exec_output_error(output)
                     or _exit_code_error_from_output(output)
+                    or _code_mode_output_error(output)
                 )
             else:
-                error_text = None
+                # Code-mode ``exec`` / ``wait`` outputs may be an array
+                # of ``{type: "input_text", text}`` segments — the only
+                # non-string output shape carrying an error signal
+                # (the ``Script failed`` status header).
+                error_text = _code_mode_output_error(output)
         elif wrapper_type == _TYPE_EVENT_MSG:
             call_id = _event_msg_call_id(parsed_json)
             error_text = _event_msg_payload_error(payload)
@@ -2305,17 +2750,24 @@ class CodexSessionCompute(BaseSessionCompute):
         return [p for p in changes if isinstance(p, str) and p.startswith("/")]
 
     def extract_doc_edit_events(self, parsed_json: dict, *, cwd: str | None) -> list[DocEditEvent]:
-        # Two sources of plan-doc writes/deletes:
+        # Three sources of plan-doc writes/deletes:
         # 1. ``event_msg.patch_apply_end`` — the canonical apply_patch result
         #    (absolute paths + per-file add/update/delete type), regardless of
-        #    how the patch was invoked (custom_tool_call or shell-wrapped).
-        #    Only successful applies count: the ``changes`` map is present on
-        #    failed/declined patches too.
+        #    how the patch was invoked (custom_tool_call, shell-wrapped, or
+        #    nested in a code-mode script — the event is persisted in all
+        #    three cases). Only successful applies count: the ``changes`` map
+        #    is present on failed/declined patches too.
         # 2. Shell tool calls, through the shared shell-write heuristic. The
         #    input shape diverges per tool: ``exec_command`` ships its script
         #    under ``cmd``, ``shell``/``container.exec`` a ``command`` argv,
         #    ``shell_command`` a ``command`` string, and ``local_shell_call``
         #    has no ``arguments`` at all (argv in ``payload.action.command``).
+        # 3. Code-mode ``exec`` scripts (custom_tool_call): every statically
+        #    resolved nested ``exec_command`` call feeds its ``cmd`` through
+        #    the same shell-write heuristic. Nested ``apply_patch`` calls are
+        #    deliberately NOT mined here — ``patch_apply_end`` (source 1)
+        #    already covers them, exactly like the direct apply_patch
+        #    custom_tool_call which has no branch here either.
         line_type = parsed_json.get("type")
         payload = _payload(parsed_json)
         if payload is None:
@@ -2340,6 +2792,24 @@ class CodexSessionCompute(BaseSessionCompute):
         if line_type != _TYPE_RESPONSE_ITEM:
             return []
         sub_type = payload.get("type")
+        if (
+            sub_type == "custom_tool_call"
+            and payload.get("name") == _CODE_MODE_EXEC_TOOL
+        ):
+            script = parse_code_mode_script(payload.get("input"))
+            for nested_call in script.calls:
+                if nested_call.name != "exec_command" or not isinstance(nested_call.arg, dict):
+                    continue
+                nested_command = nested_call.arg.get("cmd")
+                if not isinstance(nested_command, str) or not nested_command:
+                    continue
+                nested_workdir = nested_call.arg.get("workdir")
+                base_dir = nested_workdir if isinstance(nested_workdir, str) and nested_workdir else cwd
+                for target, target_action in extract_shell_write_targets(nested_command):
+                    path = target if os.path.isabs(target) else (os.path.join(base_dir, target) if base_dir else None)
+                    if path and is_plan_doc_path(path):
+                        events.append(DocEditEvent(path, target_action))
+            return events
         command = None
         workdir = None
         if sub_type == "function_call":
@@ -2381,7 +2851,7 @@ class CodexSessionCompute(BaseSessionCompute):
     ) -> str | None:
         """Return the JSON ``ToolResultLink.extra`` payload for this result.
 
-        Two shapes contribute today:
+        Three shapes contribute today:
 
         - ``exec_command`` / ``write_stdin`` ``function_call_output``
           rows whose trailer reports ``Process exited`` produce
@@ -2390,6 +2860,10 @@ class CodexSessionCompute(BaseSessionCompute):
           status, the parent's first chunk) return ``None`` so the
           tool_state's ``Max``-aggregated ``extra`` only flips to
           terminated once we've seen the closing chunk.
+        - Code-mode ``exec`` result rows (the exec's own output plus
+          rebound ``wait`` chunks) follow the same chained logic, keyed
+          on the script status header instead of the unified-exec
+          trailer.
         - ``apply_patch`` ``event_msg.patch_apply_end`` rows produce
           ``{"lines_added": N, "lines_removed": M, "files": [...]}``
           so the front can show the per-tool badge.
@@ -2518,6 +2992,30 @@ class CodexSessionCompute(BaseSessionCompute):
                         return None
             # Atomic result row, the closing chunk of a chained sequence,
             # or a user-terminated chained call — flag it so the card stops spinning.
+            return orjson.dumps({"is_terminated": True}).decode()
+
+        # Code-mode ``exec``: chained like exec_command (one row for the
+        # exec's own output plus one per rebound ``wait`` chunk). Only a
+        # final script status (completed / failed / terminated) — or a
+        # user termination, same signal-based check as exec_command —
+        # flips ``is_terminated``; a ``Script running with cell ID <id>``
+        # header keeps the spinner on until a wait chunk closes the cell.
+        if tool_name == _CODE_MODE_EXEC_TOOL:
+            if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+                return None
+            payload = _payload(parsed_json)
+            if payload is None or payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
+                return None
+            call_id = payload.get("call_id")
+            user_terminated = (
+                isinstance(call_id, str)
+                and session_id is not None
+                and _user_terminated_tool_reason(session_id, call_id) is not None
+            )
+            if not user_terminated:
+                parsed = parse_code_mode_output(payload.get("output"))
+                if parsed is None or parsed.status == "running":
+                    return None
             return orjson.dumps({"is_terminated": True}).decode()
 
         if tool_name != "apply_patch":
@@ -2813,6 +3311,16 @@ class CodexSessionCompute(BaseSessionCompute):
                 else:
                     name = _qualified_function_call_name(payload)
                 tool_use_entries = {call_id: name}
+                # Register code-mode execs whose script declares a nested
+                # apply_patch, so the later orphan ``patch_apply_end`` can
+                # be rebound to them (see _remap_orphan_patch_apply_end).
+                # Bounded to the last 50 records per session.
+                if sub_type == "custom_tool_call" and name == _CODE_MODE_EXEC_TOOL:
+                    has_patch, declared_paths = _patch_paths_from_script(payload.get("input"))
+                    if has_patch:
+                        records = self._patch_exec_map(session_id)
+                        records.append((call_id, declared_paths))
+                        del records[:-50]
                 # ``spawn_agent`` is the only agent-spawning tool today.
                 # Always background — see :meth:`extract_task_tool_uses`.
                 if sub_type == "function_call" and name == _SPAWN_AGENT_FUNCTION_NAME:
@@ -2840,9 +3348,18 @@ class CodexSessionCompute(BaseSessionCompute):
                 # ``exec_command_id`` map and (b) surface a
                 # ``"Exit code N"`` error string so the front lights up
                 # the same way it would for any other failed shell.
+                # Code-mode ``exec`` / ``wait`` outputs go through the
+                # same dance with their own map (cell_id → exec call_id)
+                # and error signal (``Script failed`` status header) —
+                # the two maintainers are mutually exclusive by parent
+                # tool name, so chaining on ``None`` is safe.
                 tool_result_error = self._maintain_exec_command_map(
                     session_id, call_id, payload, tool_use_map
                 )
+                if tool_result_error is None:
+                    tool_result_error = self._maintain_code_cell_map(
+                        session_id, call_id, payload, tool_use_map
+                    )
                 # ``spawn_agent`` ack: the JSON ``{"agent_id": ...}`` lets
                 # the batch path link parent ↔ subagent without waiting
                 # for the prompt-matching fallback. The matching parent
