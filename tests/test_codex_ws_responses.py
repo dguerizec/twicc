@@ -1,8 +1,9 @@
 """Unit tests for the Codex WS response builders.
 
-The 5 builders on ``CodexWSHandler`` translate the frontend's
-payload (``{tool_name, decision, ...}`` or
-``{tool_name, permissions, scope}``) into the SDK-compliant dicts
+The 7 builders on ``CodexWSHandler`` translate the frontend's
+payload (``{tool_name, decision, ...}``, ``{tool_name, permissions, scope}``,
+``{tool_name, action, ...}`` for elicitations, or
+``{tool_name, answers}`` for requestUserInput) into the SDK-compliant dicts
 that ``_async_approval_handler`` returns to Codex via the bridge.
 
 Contract: return ``dict`` on valid input, ``None`` on invalid input.
@@ -230,3 +231,78 @@ class TestSafeDefaultFor:
     def test_another_unknown_tool_returns_decline(self, handler):
         result = handler._safe_default_for("totallyMadeUp")
         assert result == {"decision": "decline"}
+
+
+class TestBuildElicitationResponse:
+    @pytest.mark.parametrize("tool_name", ["mcpToolCall", "elicitationForm", "elicitationUrl"])
+    @pytest.mark.parametrize("action", ["accept", "decline", "cancel"])
+    def test_valid_plain_actions(self, handler, tool_name, action):
+        result = handler._build_codex_response(tool_name, {"action": action})
+        assert result == {"action": action, "content": None, "_meta": None}
+
+    @pytest.mark.parametrize("persist", ["session", "always"])
+    def test_mcp_tool_call_accept_with_persist(self, handler, persist):
+        result = handler._build_codex_response(
+            "mcpToolCall", {"action": "accept", "persist": persist},
+        )
+        assert result == {
+            "action": "accept", "content": None, "_meta": {"persist": persist},
+        }
+
+    def test_form_accept_with_content(self, handler):
+        content = {"name": "Alice", "count": 3, "ok": True, "tags": ["a", "b"]}
+        result = handler._build_codex_response(
+            "elicitationForm", {"action": "accept", "content": content},
+        )
+        assert result == {"action": "accept", "content": content, "_meta": None}
+
+    @pytest.mark.parametrize("payload", [
+        {"action": "approve"},                                  # unknown action
+        {"action": None}, {},                                   # missing action
+        {"action": "accept", "persist": "forever"},             # bad persist value
+        {"action": "decline", "persist": "session"},            # persist without accept
+        {"action": "accept", "content": "not-a-dict"},          # non-dict content
+    ])
+    def test_invalid_payloads(self, handler, payload):
+        assert handler._build_codex_response("mcpToolCall", payload) is None
+
+    def test_persist_rejected_outside_mcp_tool_call(self, handler):
+        assert handler._build_codex_response(
+            "elicitationForm", {"action": "accept", "persist": "session"},
+        ) is None
+
+
+class TestBuildRequestUserInputResponse:
+    def test_valid_answers(self, handler):
+        answers = {"q1": {"answers": ["Allow"]}, "q2": {"answers": ["a", "b"]}}
+        result = handler._build_codex_response(
+            "toolRequestUserInput", {"answers": answers},
+        )
+        assert result == {"answers": answers}
+
+    def test_empty_answers_valid(self, handler):
+        assert handler._build_codex_response(
+            "toolRequestUserInput", {"answers": {}},
+        ) == {"answers": {}}
+
+    @pytest.mark.parametrize("answers", [
+        None, "nope", ["list"],                       # not a dict
+        {"q1": "Allow"},                              # entry not a dict
+        {"q1": {"answers": "Allow"}},                 # answers not a list
+        {"q1": {"answers": [1, 2]}},                  # non-string answers
+    ])
+    def test_invalid_answers(self, handler, answers):
+        assert handler._build_codex_response(
+            "toolRequestUserInput", {"answers": answers},
+        ) is None
+
+
+class TestSafeDefaultsNewMethods:
+    @pytest.mark.parametrize("tool_name", ["mcpToolCall", "elicitationForm", "elicitationUrl"])
+    def test_elicitation_default(self, handler, tool_name):
+        assert handler._safe_default_for(tool_name) == {
+            "action": "cancel", "content": None, "_meta": None,
+        }
+
+    def test_request_user_input_default(self, handler):
+        assert handler._safe_default_for("toolRequestUserInput") == {"answers": {}}

@@ -84,10 +84,16 @@ class CodexWSHandler:
                 "type": "codex:pending_request_response",
                 "session_id": "...",
                 "request_id": "...",
-                "tool_name": "commandExecution" | "fileChange" | "permissions",
+                "tool_name": "commandExecution" | "fileChange" | "permissions"
+                             | "mcpToolCall" | "elicitationForm" | "elicitationUrl"
+                             | "toolRequestUserInput",
                 "decision": <string-or-dict-variant>,  # see _build_codex_response
                 "permissions": {...},   // permissions only
                 "scope": "turn" | "session",  // permissions only
+                "action": "accept" | "decline" | "cancel",  // elicitations only
+                "persist": "session" | "always",  // mcpToolCall accept only
+                "content": {...},  // elicitationForm accept only
+                "answers": {...},  // toolRequestUserInput only
             }
 
         Invalid / unroutable messages are logged and dropped; we never raise
@@ -149,6 +155,10 @@ class CodexWSHandler:
         "applyNetworkPolicyAmendment":   ("network_policy_amendment", dict),
     }
     _PERMISSIONS_SCOPES: set[str] = {"turn", "session"}
+    # Elicitation sub-kinds share one wire shape (McpServerElicitationRequestResponse).
+    _ELICITATION_ACTIONS: set[str] = {"accept", "decline", "cancel"}
+    _ELICITATION_PERSIST_VALUES: set[str] = {"session", "always"}
+    _ELICITATION_TOOL_NAMES: set[str] = {"mcpToolCall", "elicitationForm", "elicitationUrl"}
 
     def _build_codex_response(self, tool_name: str, content: dict) -> dict | None:
         """Convert the frontend payload to the SDK-wire response dict.
@@ -161,6 +171,12 @@ class CodexWSHandler:
           dict variants (no amendments for file changes — see spec §1.1.b).
         - permissions: ``scope`` ∈ :attr:`_PERMISSIONS_SCOPES`, ``permissions``
           is a dict (may be empty).
+        - elicitation (mcpToolCall / elicitationForm / elicitationUrl):
+          ``action`` ∈ :attr:`_ELICITATION_ACTIONS`; ``persist``/``content``
+          only allowed with ``accept`` (``persist`` further restricted to
+          ``mcpToolCall`` and :attr:`_ELICITATION_PERSIST_VALUES`).
+        - toolRequestUserInput: ``answers`` is a dict of
+          ``{question_id: {"answers": [str, ...]}}`` (may be empty).
         """
         decision = content.get("decision")
 
@@ -172,6 +188,12 @@ class CodexWSHandler:
 
         if tool_name == "permissions":
             return self._build_permissions_response(content)
+
+        if tool_name in self._ELICITATION_TOOL_NAMES:
+            return self._build_elicitation_response(tool_name, content)
+
+        if tool_name == "toolRequestUserInput":
+            return self._build_request_user_input_response(content)
 
         logger.error(
             "codex:pending_request_response: unknown tool_name=%r in %r",
@@ -251,8 +273,88 @@ class CodexWSHandler:
             response["strictAutoReview"] = strict_auto_review
         return response
 
+    def _build_elicitation_response(self, tool_name: str, content: dict) -> dict | None:
+        """Response for the 3 elicitation sub-kinds (wire: McpServerElicitationRequestResponse).
+
+        ``{"action", "content", "_meta"}`` — ``content`` is the filled form on
+        an accepted ``elicitationForm``; ``_meta.persist`` is the
+        remember-this-choice variant on an accepted ``mcpToolCall``. Both are
+        only meaningful with ``accept`` and are rejected otherwise. ``content``
+        is deliberately NOT gated per tool_name (an accepted ``mcpToolCall``
+        may carry one): Codex's approval parser ignores unexpected content, and
+        the looseness keeps the builder simple.
+        """
+        action = content.get("action")
+        if action not in self._ELICITATION_ACTIONS:
+            logger.error("codex %s: invalid action=%r", tool_name, action)
+            return None
+        persist = content.get("persist")
+        form_content = content.get("content")
+        if action != "accept" and (persist is not None or form_content is not None):
+            logger.error(
+                "codex %s: persist/content only allowed with accept "
+                "(action=%r persist=%r)", tool_name, action, persist,
+            )
+            return None
+        response: dict = {"action": action, "content": None, "_meta": None}
+        if form_content is not None:
+            if not isinstance(form_content, dict):
+                logger.error(
+                    "codex %s: invalid content type=%r (expected dict)",
+                    tool_name, type(form_content).__name__,
+                )
+                return None
+            response["content"] = form_content
+        if persist is not None:
+            if tool_name != "mcpToolCall" or persist not in self._ELICITATION_PERSIST_VALUES:
+                logger.error(
+                    "codex %s: invalid persist=%r", tool_name, persist,
+                )
+                return None
+            response["_meta"] = {"persist": persist}
+        return response
+
+    def _build_request_user_input_response(self, content: dict) -> dict | None:
+        """Response for ``item/tool/requestUserInput`` (wire: ToolRequestUserInputResponse).
+
+        ``{"answers": {question_id: {"answers": [str, …]}}}`` — an empty map is
+        valid (Codex treats a missing answer as a cancel).
+        """
+        answers = content.get("answers")
+        if not isinstance(answers, dict):
+            logger.error(
+                "codex toolRequestUserInput: invalid answers type=%r",
+                type(answers).__name__,
+            )
+            return None
+        normalized: dict = {}
+        for question_id, entry in answers.items():
+            values = entry.get("answers") if isinstance(entry, dict) else None
+            if (
+                not isinstance(question_id, str)
+                or not isinstance(values, list)
+                or not all(isinstance(v, str) for v in values)
+            ):
+                logger.error(
+                    "codex toolRequestUserInput: invalid entry for %r: %r",
+                    question_id, entry,
+                )
+                return None
+            normalized[question_id] = {"answers": values}
+        return {"answers": normalized}
+
     def _safe_default_for(self, tool_name: str) -> dict:
-        """Wire-safe fallback when the frontend response failed validation."""
+        """Wire-safe fallback when the frontend response failed validation.
+
+        Elicitations default to a "cancel" (not decline — Codex's elicitation
+        action set has no "decline for safety" equivalent semantics beyond
+        cancel/decline, and cancel is the least presumptive). requestUserInput
+        defaults to an empty answer map, which Codex treats as a cancel too.
+        """
         if tool_name == "permissions":
             return {"permissions": {}, "scope": "turn"}
+        if tool_name in self._ELICITATION_TOOL_NAMES:
+            return {"action": "cancel", "content": None, "_meta": None}
+        if tool_name == "toolRequestUserInput":
+            return {"answers": {}}
         return {"decision": "decline"}
