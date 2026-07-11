@@ -5,6 +5,10 @@ import { getProviderLabel } from '../../../../../providers'
 import { useDataStore } from '../../../../../stores/data'
 import { fileIconFor } from '../../../../../providers/utils/path'
 import { canStealFocus } from '../../../../../utils/focusGuard'
+import McpToolCallApprovalBody from './McpToolCallApprovalBody.vue'
+import RequestUserInputBody from './RequestUserInputBody.vue'
+import ElicitationFormBody from './ElicitationFormBody.vue'
+import ElicitationUrlBody from './ElicitationUrlBody.vue'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },
@@ -24,15 +28,28 @@ const approveAllowNetworkId = useId()
 const approvePermsTurnId = useId()
 const approvePermsSessionId = useId()
 
+// tool_names rendered by a self-contained sub-component that owns its whole
+// body INCLUDING the action row (buttons differ per kind). Everything else
+// keeps the legacy shared Approve/Deny/Cancel-turn row below.
+const SELF_CONTAINED_BODIES = {
+    mcpToolCall: McpToolCallApprovalBody,
+    toolRequestUserInput: RequestUserInputBody,
+    elicitationForm: ElicitationFormBody,
+    elicitationUrl: ElicitationUrlBody,
+}
+const selfContainedBody = computed(() => SELF_CONTAINED_BODIES[toolName.value] || null)
+
 // Template ref for the Approve main button of the split button (auto-focused
-// when the approval block appears). Codex has no ask_user_question variant,
-// so every pending request gets the focus.
+// when the approval block appears). Only the legacy body (command / file /
+// permissions / unknown fallback) autofocuses via this ref — self-contained
+// bodies own their own focus (see their own ``.auto-focused`` element).
 const approveButtonRef = ref(null)
 
 // Gated by canStealFocus(): we don't yank focus if the user is typing in
 // another field or has an overlay (dialog/popover/dropdown/text-selection
 // comment) open. The matching outline is driven by CSS — see the style block.
 function focusApproveButton() {
+    if (selfContainedBody.value) return
     nextTick(() => {
         if (!canStealFocus()) return
         approveButtonRef.value?.focus()
@@ -200,6 +217,7 @@ function handleCancelTurn() {
 function onSubmitShortcut(e) {
     if (e.key !== 'Enter') return
     if (!(e.metaKey || e.ctrlKey)) return
+    if (selfContainedBody.value) return
     const form = document.querySelector('.pending-request-form')
     if (!form || !form.contains(document.activeElement)) return
     if (props.isResponding) return
@@ -233,265 +251,275 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="codex-pending-body">
-        <!-- commandExecution rich body (also the apply_patch-via-shell fallback) -->
-        <template v-if="showCommandBody">
-            <div class="codex-pending-section">
-                <!-- Fallback header: surface the shell command so the banner
-                     isn't empty. Native commandExecution approvals keep their
-                     original chip-first layout (renderAsCommand is false). -->
-                <div v-if="renderAsCommand" class="codex-pending-summary">
-                    <span class="codex-summary-label">
-                        {{ providerLabel }} wants to run a command
-                    </span>
-                </div>
-                <!-- action chips first, at-a-glance summary -->
-                <div v-if="commandActions.length" class="codex-action-chips">
-                    <wa-badge v-if="groupedActions.read.length" variant="neutral">
-                        Read
-                        <span v-if="groupedActions.read.length > 1" class="codex-chip-count">{{ groupedActions.read.length }}</span>
-                    </wa-badge>
-                    <wa-badge v-if="groupedActions.listFiles.length" variant="neutral">
-                        List files
-                        <span v-if="groupedActions.listFiles.length > 1" class="codex-chip-count">{{ groupedActions.listFiles.length }}</span>
-                    </wa-badge>
-                    <wa-badge v-if="groupedActions.search.length" variant="neutral">
-                        Grep
-                        <span v-if="groupedActions.search.length > 1" class="codex-chip-count">{{ groupedActions.search.length }}</span>
-                    </wa-badge>
-                    <wa-badge v-if="groupedActions.unknown.length" variant="neutral">
-                        Shell
-                        <span v-if="groupedActions.unknown.length > 1" class="codex-chip-count">{{ groupedActions.unknown.length }}</span>
-                    </wa-badge>
-                </div>
-                <!-- reason below chips -->
-                <div v-if="reason" class="codex-pending-reason">
-                    <wa-icon name="comment" variant="classic"></wa-icon>
-                    <span>{{ reason }}</span>
-                </div>
-                <!-- detail sections: Read -->
-                <div v-if="groupedActions.read.length" class="codex-pending-section-block">
-                    <span class="codex-summary-label">Read</span>
-                    <ul class="codex-action-detail-list">
-                        <li v-for="(action, idx) in groupedActions.read" :key="idx">
-                            <img
-                                v-if="fileIconFor(action.path)"
-                                :src="fileIconFor(action.path)"
-                                alt=""
-                                class="codex-file-icon"
-                            >
-                            <code class="codex-file-path">{{ action.path }}</code>
-                        </li>
-                    </ul>
-                </div>
-                <!-- detail sections: List files -->
-                <div v-if="groupedActions.listFiles.length" class="codex-pending-section-block">
-                    <span class="codex-summary-label">List files</span>
-                    <ul class="codex-action-detail-list">
-                        <li v-for="(action, idx) in groupedActions.listFiles" :key="idx">
-                            <img
-                                v-if="fileIconFor(action.path)"
-                                :src="fileIconFor(action.path)"
-                                alt=""
-                                class="codex-file-icon"
-                            >
-                            <code class="codex-file-path">{{ action.path }}</code>
-                        </li>
-                    </ul>
-                </div>
-                <!-- detail sections: Grep -->
-                <div v-if="groupedActions.search.length" class="codex-pending-section-block">
-                    <span class="codex-summary-label">Grep</span>
-                    <ul class="codex-action-detail-list">
-                        <li v-for="(action, idx) in groupedActions.search" :key="idx">
-                            <code class="codex-search-query">{{ action.query || '(no query)' }}</code>
-                            <span v-if="action.path">in</span>
-                            <img
-                                v-if="action.path && fileIconFor(action.path)"
-                                :src="fileIconFor(action.path)"
-                                alt=""
-                                class="codex-file-icon"
-                            >
-                            <code v-if="action.path" class="codex-file-path">{{ action.path }}</code>
-                        </li>
-                    </ul>
-                </div>
-                <!-- command and cwd last -->
-                <div class="codex-pending-summary">
-                    <span class="codex-summary-label">Command</span>
-                    <code class="codex-summary-code">{{ command }}</code>
-                </div>
-                <div v-if="cwd" class="codex-pending-summary">
-                    <span class="codex-summary-label">cwd</span>
-                    <code class="codex-summary-code">{{ cwd }}</code>
-                </div>
-                <div v-if="networkApprovalContext" class="codex-pending-network">
-                    <wa-icon name="globe" variant="classic"></wa-icon>
-                    <span>
-                        Wants network access to
-                        <code>{{ networkApprovalContext.host }}</code>
-                        via {{ networkApprovalContext.protocol || 'unknown' }}
-                    </span>
-                </div>
-            </div>
-        </template>
-
-        <!-- fileChange rich body -->
-        <template v-else-if="toolName === 'fileChange'">
-            <div class="codex-pending-section">
-                <!-- reason first -->
-                <div v-if="reason" class="codex-pending-reason">
-                    <wa-icon name="comment" variant="classic"></wa-icon>
-                    <span>{{ reason }}</span>
-                </div>
-                <div class="codex-pending-summary">
-                    <span class="codex-summary-label">
-                        {{ providerLabel }} wants to modify {{ fileChanges.length }} file{{ fileChanges.length === 1 ? '' : 's' }}
-                    </span>
-                </div>
-                <ul v-if="fileChanges.length" class="codex-file-list">
-                    <li v-for="(change, idx) in fileChanges" :key="idx" class="codex-file-row">
-                        <wa-badge
-                            :variant="change.kind?.type === 'delete' ? 'danger'
-                                : change.kind?.type === 'add' ? 'success' : 'neutral'"
-                        >{{ change.kind?.type || 'update' }}</wa-badge>
-                        <img
-                            v-if="fileIconFor(change.path)"
-                            :src="fileIconFor(change.path)"
-                            alt=""
-                            class="codex-file-icon"
-                        >
-                        <code class="codex-file-path">{{ change.path }}</code>
-                    </li>
-                </ul>
-            </div>
-        </template>
-
-        <!-- permissions rich body -->
-        <template v-else-if="toolName === 'permissions'">
-            <div class="codex-pending-section">
-                <!-- reason first -->
-                <div v-if="reason" class="codex-pending-reason">
-                    <wa-icon name="comment" variant="classic"></wa-icon>
-                    <span>{{ reason }}</span>
-                </div>
-                <div class="codex-pending-summary">
-                    <span class="codex-summary-label">Requests additional permissions</span>
-                </div>
-                <ul class="codex-permission-list">
-                    <li v-for="(value, key) in requestedPermissions" :key="key" class="codex-permission-row">
-                        <code class="codex-permission-key">{{ key }}</code>
-                        <span class="codex-permission-value">{{ JSON.stringify(value) }}</span>
-                    </li>
-                </ul>
-            </div>
-        </template>
-
-        <!-- Unknown tool_name safety net -->
+        <component
+            :is="selfContainedBody"
+            v-if="selfContainedBody"
+            :pending-request="pendingRequest"
+            :is-responding="isResponding"
+            :session-id="sessionId"
+            @submit="emit('submit', $event)"
+        />
         <template v-else>
-            <div class="codex-pending-section"><em>Unknown tool_name: {{ toolName }}</em></div>
-        </template>
+            <!-- commandExecution rich body (also the apply_patch-via-shell fallback) -->
+            <template v-if="showCommandBody">
+                <div class="codex-pending-section">
+                    <!-- Fallback header: surface the shell command so the banner
+                         isn't empty. Native commandExecution approvals keep their
+                         original chip-first layout (renderAsCommand is false). -->
+                    <div v-if="renderAsCommand" class="codex-pending-summary">
+                        <span class="codex-summary-label">
+                            {{ providerLabel }} wants to run a command
+                        </span>
+                    </div>
+                    <!-- action chips first, at-a-glance summary -->
+                    <div v-if="commandActions.length" class="codex-action-chips">
+                        <wa-badge v-if="groupedActions.read.length" variant="neutral">
+                            Read
+                            <span v-if="groupedActions.read.length > 1" class="codex-chip-count">{{ groupedActions.read.length }}</span>
+                        </wa-badge>
+                        <wa-badge v-if="groupedActions.listFiles.length" variant="neutral">
+                            List files
+                            <span v-if="groupedActions.listFiles.length > 1" class="codex-chip-count">{{ groupedActions.listFiles.length }}</span>
+                        </wa-badge>
+                        <wa-badge v-if="groupedActions.search.length" variant="neutral">
+                            Grep
+                            <span v-if="groupedActions.search.length > 1" class="codex-chip-count">{{ groupedActions.search.length }}</span>
+                        </wa-badge>
+                        <wa-badge v-if="groupedActions.unknown.length" variant="neutral">
+                            Shell
+                            <span v-if="groupedActions.unknown.length > 1" class="codex-chip-count">{{ groupedActions.unknown.length }}</span>
+                        </wa-badge>
+                    </div>
+                    <!-- reason below chips -->
+                    <div v-if="reason" class="codex-pending-reason">
+                        <wa-icon name="comment" variant="classic"></wa-icon>
+                        <span>{{ reason }}</span>
+                    </div>
+                    <!-- detail sections: Read -->
+                    <div v-if="groupedActions.read.length" class="codex-pending-section-block">
+                        <span class="codex-summary-label">Read</span>
+                        <ul class="codex-action-detail-list">
+                            <li v-for="(action, idx) in groupedActions.read" :key="idx">
+                                <img
+                                    v-if="fileIconFor(action.path)"
+                                    :src="fileIconFor(action.path)"
+                                    alt=""
+                                    class="codex-file-icon"
+                                >
+                                <code class="codex-file-path">{{ action.path }}</code>
+                            </li>
+                        </ul>
+                    </div>
+                    <!-- detail sections: List files -->
+                    <div v-if="groupedActions.listFiles.length" class="codex-pending-section-block">
+                        <span class="codex-summary-label">List files</span>
+                        <ul class="codex-action-detail-list">
+                            <li v-for="(action, idx) in groupedActions.listFiles" :key="idx">
+                                <img
+                                    v-if="fileIconFor(action.path)"
+                                    :src="fileIconFor(action.path)"
+                                    alt=""
+                                    class="codex-file-icon"
+                                >
+                                <code class="codex-file-path">{{ action.path }}</code>
+                            </li>
+                        </ul>
+                    </div>
+                    <!-- detail sections: Grep -->
+                    <div v-if="groupedActions.search.length" class="codex-pending-section-block">
+                        <span class="codex-summary-label">Grep</span>
+                        <ul class="codex-action-detail-list">
+                            <li v-for="(action, idx) in groupedActions.search" :key="idx">
+                                <code class="codex-search-query">{{ action.query || '(no query)' }}</code>
+                                <span v-if="action.path">in</span>
+                                <img
+                                    v-if="action.path && fileIconFor(action.path)"
+                                    :src="fileIconFor(action.path)"
+                                    alt=""
+                                    class="codex-file-icon"
+                                >
+                                <code v-if="action.path" class="codex-file-path">{{ action.path }}</code>
+                            </li>
+                        </ul>
+                    </div>
+                    <!-- command and cwd last -->
+                    <div class="codex-pending-summary">
+                        <span class="codex-summary-label">Command</span>
+                        <code class="codex-summary-code">{{ command }}</code>
+                    </div>
+                    <div v-if="cwd" class="codex-pending-summary">
+                        <span class="codex-summary-label">cwd</span>
+                        <code class="codex-summary-code">{{ cwd }}</code>
+                    </div>
+                    <div v-if="networkApprovalContext" class="codex-pending-network">
+                        <wa-icon name="globe" variant="classic"></wa-icon>
+                        <span>
+                            Wants network access to
+                            <code>{{ networkApprovalContext.host }}</code>
+                            via {{ networkApprovalContext.protocol || 'unknown' }}
+                        </span>
+                    </div>
+                </div>
+            </template>
 
-        <!-- Shared action row. -->
-        <div class="codex-pending-actions">
-            <wa-button
-                :id="denyButtonId"
-                variant="danger"
-                appearance="outlined"
-                size="small"
-                :disabled="isResponding"
-                @click="handleDeny"
-            >
-                <wa-icon slot="start" name="xmark" variant="classic"></wa-icon>
-                Deny
-            </wa-button>
-            <AppTooltip :for="denyButtonId">Refuse this action. Codex may try another approach.</AppTooltip>
-            <wa-button
-                v-if="supportsCancelTurn"
-                :id="cancelTurnButtonId"
-                variant="neutral"
-                appearance="outlined"
-                size="small"
-                :disabled="isResponding"
-                @click="handleCancelTurn"
-            >
-                <wa-icon slot="start" name="stop" variant="classic"></wa-icon>
-                Cancel turn
-            </wa-button>
-            <AppTooltip v-if="supportsCancelTurn" :for="cancelTurnButtonId">End this turn. Codex returns control to you. Different from Stop (which kills the agent).</AppTooltip>
-            <wa-button-group label="Approve">
+            <!-- fileChange rich body -->
+            <template v-else-if="toolName === 'fileChange'">
+                <div class="codex-pending-section">
+                    <!-- reason first -->
+                    <div v-if="reason" class="codex-pending-reason">
+                        <wa-icon name="comment" variant="classic"></wa-icon>
+                        <span>{{ reason }}</span>
+                    </div>
+                    <div class="codex-pending-summary">
+                        <span class="codex-summary-label">
+                            {{ providerLabel }} wants to modify {{ fileChanges.length }} file{{ fileChanges.length === 1 ? '' : 's' }}
+                        </span>
+                    </div>
+                    <ul v-if="fileChanges.length" class="codex-file-list">
+                        <li v-for="(change, idx) in fileChanges" :key="idx" class="codex-file-row">
+                            <wa-badge
+                                :variant="change.kind?.type === 'delete' ? 'danger'
+                                    : change.kind?.type === 'add' ? 'success' : 'neutral'"
+                            >{{ change.kind?.type || 'update' }}</wa-badge>
+                            <img
+                                v-if="fileIconFor(change.path)"
+                                :src="fileIconFor(change.path)"
+                                alt=""
+                                class="codex-file-icon"
+                            >
+                            <code class="codex-file-path">{{ change.path }}</code>
+                        </li>
+                    </ul>
+                </div>
+            </template>
+
+            <!-- permissions rich body -->
+            <template v-else-if="toolName === 'permissions'">
+                <div class="codex-pending-section">
+                    <!-- reason first -->
+                    <div v-if="reason" class="codex-pending-reason">
+                        <wa-icon name="comment" variant="classic"></wa-icon>
+                        <span>{{ reason }}</span>
+                    </div>
+                    <div class="codex-pending-summary">
+                        <span class="codex-summary-label">Requests additional permissions</span>
+                    </div>
+                    <ul class="codex-permission-list">
+                        <li v-for="(value, key) in requestedPermissions" :key="key" class="codex-permission-row">
+                            <code class="codex-permission-key">{{ key }}</code>
+                            <span class="codex-permission-value">{{ JSON.stringify(value) }}</span>
+                        </li>
+                    </ul>
+                </div>
+            </template>
+
+            <!-- Unknown tool_name safety net -->
+            <template v-else>
+                <div class="codex-pending-section"><em>Unknown tool_name: {{ toolName }}</em></div>
+            </template>
+
+            <!-- Shared action row. -->
+            <div class="codex-pending-actions">
                 <wa-button
-                    :id="approveButtonId"
-                    ref="approveButtonRef"
-                    class="auto-focused"
-                    variant="brand"
+                    :id="denyButtonId"
+                    variant="danger"
+                    appearance="outlined"
                     size="small"
                     :disabled="isResponding"
-                    @click="emitApprove('once')"
+                    @click="handleDeny"
                 >
-                    <wa-icon slot="start" name="check" variant="classic"></wa-icon>
-                    Approve
+                    <wa-icon slot="start" name="xmark" variant="classic"></wa-icon>
+                    Deny
                 </wa-button>
-                <AppTooltip :for="approveButtonId">Approve this action.</AppTooltip>
-                <wa-dropdown placement="top-end">
+                <AppTooltip :for="denyButtonId">Refuse this action. Codex may try another approach.</AppTooltip>
+                <wa-button
+                    v-if="supportsCancelTurn"
+                    :id="cancelTurnButtonId"
+                    variant="neutral"
+                    appearance="outlined"
+                    size="small"
+                    :disabled="isResponding"
+                    @click="handleCancelTurn"
+                >
+                    <wa-icon slot="start" name="stop" variant="classic"></wa-icon>
+                    Cancel turn
+                </wa-button>
+                <AppTooltip v-if="supportsCancelTurn" :for="cancelTurnButtonId">End this turn. Codex returns control to you. Different from Stop (which kills the agent).</AppTooltip>
+                <wa-button-group label="Approve">
                     <wa-button
-                        :id="approveMenuId"
-                        slot="trigger"
+                        :id="approveButtonId"
+                        ref="approveButtonRef"
+                        class="auto-focused"
                         variant="brand"
                         size="small"
                         :disabled="isResponding"
+                        @click="emitApprove('once')"
                     >
-                        <wa-icon name="chevron-up" label="More approve options" variant="classic"></wa-icon>
+                        <wa-icon slot="start" name="check" variant="classic"></wa-icon>
+                        Approve
                     </wa-button>
-                    <AppTooltip :for="approveMenuId">More approve options.</AppTooltip>
-
-                    <!-- command / file menu -->
-                    <template v-if="toolName === 'commandExecution' || toolName === 'fileChange'">
-                        <wa-dropdown-item :id="approveOnceId" @click="emitApprove('once')">
-                            <wa-icon slot="icon" name="check" variant="classic"></wa-icon>
-                            Once
-                        </wa-dropdown-item>
-                        <AppTooltip placement="left" :for="approveOnceId">Approve only this action.</AppTooltip>
-                        <wa-dropdown-item :id="approveForSessionId" @click="emitApprove('forSession')">
-                            <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
-                            For this session
-                        </wa-dropdown-item>
-                        <AppTooltip placement="left" :for="approveForSessionId">Approve and remember this decision for the rest of the session.</AppTooltip>
-                        <wa-dropdown-item
-                            v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment"
-                            :id="approveAddAllowRuleId"
-                            @click="emitApprove('addAllowRule')"
+                    <AppTooltip :for="approveButtonId">Approve this action.</AppTooltip>
+                    <wa-dropdown placement="top-end">
+                        <wa-button
+                            :id="approveMenuId"
+                            slot="trigger"
+                            variant="brand"
+                            size="small"
+                            :disabled="isResponding"
                         >
-                            <wa-icon slot="icon" name="plus" variant="classic"></wa-icon>
-                            Add allow rule
-                        </wa-dropdown-item>
-                        <AppTooltip v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment" placement="left" :for="approveAddAllowRuleId">Approve and add this command to the persistent allow list.</AppTooltip>
-                        <wa-dropdown-item
-                            v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments"
-                            :id="approveAllowNetworkId"
-                            @click="emitApprove('allowNetwork')"
-                        >
-                            <wa-icon slot="icon" name="globe" variant="classic"></wa-icon>
-                            Allow network access
-                        </wa-dropdown-item>
-                        <AppTooltip v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments" placement="left" :for="approveAllowNetworkId">Approve and persist the network policy amendment.</AppTooltip>
-                    </template>
+                            <wa-icon name="chevron-up" label="More approve options" variant="classic"></wa-icon>
+                        </wa-button>
+                        <AppTooltip :for="approveMenuId">More approve options.</AppTooltip>
 
-                    <!-- permissions menu -->
-                    <template v-else-if="toolName === 'permissions'">
-                        <wa-dropdown-item :id="approvePermsTurnId" @click="emitApprove('turn')">
-                            <wa-icon slot="icon" name="clock" variant="classic"></wa-icon>
-                            For this turn
-                        </wa-dropdown-item>
-                        <AppTooltip placement="left" :for="approvePermsTurnId">Grant the requested permissions for the current turn only.</AppTooltip>
-                        <wa-dropdown-item :id="approvePermsSessionId" @click="emitApprove('session')">
-                            <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
-                            For this session
-                        </wa-dropdown-item>
-                        <AppTooltip placement="left" :for="approvePermsSessionId">Grant the requested permissions for the full session.</AppTooltip>
-                    </template>
-                </wa-dropdown>
-            </wa-button-group>
-        </div>
+                        <!-- command / file menu -->
+                        <template v-if="toolName === 'commandExecution' || toolName === 'fileChange'">
+                            <wa-dropdown-item :id="approveOnceId" @click="emitApprove('once')">
+                                <wa-icon slot="icon" name="check" variant="classic"></wa-icon>
+                                Once
+                            </wa-dropdown-item>
+                            <AppTooltip placement="left" :for="approveOnceId">Approve only this action.</AppTooltip>
+                            <wa-dropdown-item :id="approveForSessionId" @click="emitApprove('forSession')">
+                                <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
+                                For this session
+                            </wa-dropdown-item>
+                            <AppTooltip placement="left" :for="approveForSessionId">Approve and remember this decision for the rest of the session.</AppTooltip>
+                            <wa-dropdown-item
+                                v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment"
+                                :id="approveAddAllowRuleId"
+                                @click="emitApprove('addAllowRule')"
+                            >
+                                <wa-icon slot="icon" name="plus" variant="classic"></wa-icon>
+                                Add allow rule
+                            </wa-dropdown-item>
+                            <AppTooltip v-if="toolName === 'commandExecution' && proposedExecpolicyAmendment" placement="left" :for="approveAddAllowRuleId">Approve and add this command to the persistent allow list.</AppTooltip>
+                            <wa-dropdown-item
+                                v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments"
+                                :id="approveAllowNetworkId"
+                                @click="emitApprove('allowNetwork')"
+                            >
+                                <wa-icon slot="icon" name="globe" variant="classic"></wa-icon>
+                                Allow network access
+                            </wa-dropdown-item>
+                            <AppTooltip v-if="toolName === 'commandExecution' && proposedNetworkPolicyAmendments" placement="left" :for="approveAllowNetworkId">Approve and persist the network policy amendment.</AppTooltip>
+                        </template>
+
+                        <!-- permissions menu -->
+                        <template v-else-if="toolName === 'permissions'">
+                            <wa-dropdown-item :id="approvePermsTurnId" @click="emitApprove('turn')">
+                                <wa-icon slot="icon" name="clock" variant="classic"></wa-icon>
+                                For this turn
+                            </wa-dropdown-item>
+                            <AppTooltip placement="left" :for="approvePermsTurnId">Grant the requested permissions for the current turn only.</AppTooltip>
+                            <wa-dropdown-item :id="approvePermsSessionId" @click="emitApprove('session')">
+                                <wa-icon slot="icon" name="rotate" variant="classic"></wa-icon>
+                                For this session
+                            </wa-dropdown-item>
+                            <AppTooltip placement="left" :for="approvePermsSessionId">Grant the requested permissions for the full session.</AppTooltip>
+                        </template>
+                    </wa-dropdown>
+                </wa-button-group>
+            </div>
+        </template>
     </div>
 </template>
 

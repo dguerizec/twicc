@@ -46,6 +46,15 @@ export function sendCheckUsage() {
  *       permissions: {...}, scope: 'turn' | 'session',
  *       strictAutoReview?: boolean }
  *
+ *   mcpToolCall / elicitationForm / elicitationUrl:
+ *     { tool_name, action: 'accept' | 'decline' | 'cancel',
+ *       persist?: 'session' | 'always',      // mcpToolCall accept only
+ *       content?: { ... } }                  // elicitationForm accept only
+ *
+ *   toolRequestUserInput:
+ *     { tool_name: 'toolRequestUserInput',
+ *       answers: { [questionId]: { answers: [string, ...] } } }
+ *
  * The backend ``CodexWSHandler._build_codex_response`` validates this
  * strictly and falls back to a safe default on any malformed payload, so
  * the SDK is never left waiting.
