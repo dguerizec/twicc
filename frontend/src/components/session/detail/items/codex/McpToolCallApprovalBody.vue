@@ -152,7 +152,7 @@ watch(() => props.pendingRequest?.request_id, focusApprove)
                     </wa-dropdown-item>
                     <AppTooltip v-if="canPersistSession" placement="left" :for="approveSessionId">Approve and remember for the rest of the session.</AppTooltip>
                     <wa-dropdown-item v-if="canPersistAlways" :id="approveAlwaysId" @click="approve('always')">
-                        <wa-icon slot="icon" name="repeat" variant="classic"></wa-icon>
+                        <wa-icon slot="icon" name="infinity" variant="classic"></wa-icon>
                         Always
                     </wa-dropdown-item>
                     <AppTooltip v-if="canPersistAlways" placement="left" :for="approveAlwaysId">Approve and never ask again for this tool.</AppTooltip>
