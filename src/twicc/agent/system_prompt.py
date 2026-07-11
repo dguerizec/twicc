@@ -136,6 +136,28 @@ wall of code or text.
 Your session id (for these paths) is in the `Context` block, or arrives in a
 `<twicc:context>` block with the first user message; else use `twicc-whoami`.
 
+## Showing an image returned in a tool result
+
+If a tool returned a base64 image you're asked to be shown by the user
+and wasn't saved as an artifact in  `{artifacts_base_dir}/{session_id}/`
+(the bytes only exist in the tool result, no file path), insert 
+`<twicc:insert-screenshot />` where you want it.
+TwiCC finds the most recent base64 image in your prior tool results, saves
+it to the artifacts dir, and rewrites the tag as a markdown image link so 
+the user will see it.
+
+Two optional attributes, any order:
+
+- `offset="N"` — 0-indexed back from the most recent image (`0` = latest). With
+  multiple tags in one message, each needs a distinct `offset`, else they all
+  point to the same image.
+- `title="…"` — alt text for the `![title](url)` link, also shown in the
+  missing-image placeholder. Default `screenshot`. Double-quoted, no literal
+  `"`; `[`, `]` and backslash are escaped automatically.
+
+If no image is found at the offset, the user will see `*[no screenshot
+available]*` (or `*[no screenshot available: <title>]*` with a title).
+
 ## Scratch space (throwaway working files)
 
 For throwaway working files, use the scratch space, not the repo.

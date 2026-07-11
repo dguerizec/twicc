@@ -151,6 +151,7 @@ from datetime import datetime
 from typing import ClassVar, NamedTuple
 
 import orjson
+from django.db.models import Q
 
 from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import SessionItem
@@ -1273,6 +1274,24 @@ def _user_terminated_tool_reason(session_id: str, call_id: str) -> str | None:
     return manager.get_user_terminated_tool_reason(session_id, call_id)
 
 
+def _data_url_image(value: object) -> tuple[str, str] | None:
+    """Split an ``input_image`` data URL into ``(media_type, base64_data)``.
+
+    Codex tool results carry images as ``image_url`` data URLs
+    (``data:image/png;base64,<data>``), unlike Claude's structured
+    ``{media_type, data}`` source dicts. Returns ``None`` for anything
+    that isn't a base64 ``image/*`` data URL (http(s) references, other
+    media families, percent-encoded non-base64 payloads).
+    """
+    if not isinstance(value, str) or not value.startswith("data:image/"):
+        return None
+    header, sep, data = value.partition(",")
+    if not sep or not data or not header.endswith(";base64"):
+        return None
+    media_type = header[len("data:"):-len(";base64")]
+    return media_type, data
+
+
 class CodexSessionCompute(BaseSessionCompute):
     """Concrete :class:`BaseSessionCompute` for Codex sessions.
 
@@ -2048,15 +2067,11 @@ class CodexSessionCompute(BaseSessionCompute):
         # The other Codex rewrite is the cross-provider screenshot tag
         # substitution: ``<twicc:insert-screenshot />`` markers placed
         # by the agent in an ``event_msg.agent_message`` payload are
-        # replaced inline with a markdown image link, or with the
+        # replaced inline with a markdown image link (images looked up
+        # via :meth:`iter_tool_result_image_refs`), or with the
         # missing-screenshot placeholder when no image is available.
         # The Codex JSONL itself is already in its canonical shape — no
         # legacy XML or normalisation work to do here.
-        #
-        # Until :meth:`iter_tool_result_image_refs` is wired for Codex,
-        # the substitution will always produce placeholders (no images
-        # surfaced from the JSONL). That's the documented fallback — the
-        # raw tag never leaks through to the rendered output.
         if parsed_json.get("type") != _TYPE_EVENT_MSG:
             return None
         payload = _payload(parsed_json)
@@ -2697,6 +2712,59 @@ class CodexSessionCompute(BaseSessionCompute):
             is_error=error_text is not None,
             error_text=error_text,
         )
+
+    def iter_tool_result_image_refs(self, parsed_json):
+        # Codex tool results carry images as ``input_image`` segments in
+        # the ``output`` list of a ``function_call_output`` (direct tools:
+        # pre-5.6 MCP, view_image, ...) or ``custom_tool_call_output``
+        # (5.6 code-mode ``exec`` cells): ``{type: "input_image",
+        # image_url: "data:image/png;base64,<data>"}``. The paired
+        # ``mcp_tool_call_end`` event usually duplicates the same bytes
+        # (raw base64 in ``result.Ok.content``) — intentionally NOT
+        # harvested here: the aggregated output is the canonical
+        # model-visible result, and walking both sources would surface
+        # the same screenshot at two consecutive offsets. User messages
+        # also carry ``input_image`` segments (attachments) but are not
+        # tool results, so ``response_item.message`` is excluded — same
+        # scope as the Claude Code override.
+        # Segments are walked in REVERSE document order so that, in a
+        # multi-image output (e.g. a code-mode cell taking two
+        # screenshots), the chronologically later image is yielded first
+        # — matching the "offset=0 = most recent" contract of the base
+        # hook.
+        if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+            return
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
+            return
+        output = payload.get("output")
+        if not isinstance(output, list):
+            return
+        call_id = payload.get("call_id") or ""
+        for segment in reversed(output):
+            if not isinstance(segment, dict) or segment.get("type") != "input_image":
+                continue
+            detected = _data_url_image(segment.get("image_url"))
+            if detected is None:
+                continue
+            media_type, data = detected
+            yield (call_id, media_type, data)
+
+    def image_candidate_queryset(self, session_id, before_line_num):
+        # ``'"type":"input_image"'`` narrows to lines carrying an image
+        # segment (both codex-rs and our orjson rewrites serialise
+        # compactly); the payload-type marker excludes user messages with
+        # attached images, which would otherwise consume slots in the
+        # walker's ``[:images_needed]`` slice without ever yielding a
+        # hit. Cheap LIKE pre-filters; iter_tool_result_image_refs does
+        # the final shape check.
+        return SessionItem.objects.filter(
+            Q(content__contains='"type":"function_call_output"')
+            | Q(content__contains='"type":"custom_tool_call_output"'),
+            session_id=session_id,
+            line_num__lt=before_line_num,
+            content__contains='"type":"input_image"',
+        ).order_by('-line_num')
 
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict

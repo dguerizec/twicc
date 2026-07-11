@@ -8,10 +8,12 @@ Covers the shared helpers in ``twicc.providers.compute_base``:
 - :data:`INSERT_SCREENSHOT_TAG_RE` — accepts the documented attribute
   shapes (no offset, ``offset="N"``) and tolerates inner whitespace.
 
-Plus the Claude Code provider override
-:meth:`ClaudeCodeSessionCompute.iter_tool_result_image_refs`, which
-yields ``(tool_use_id, media_type, data)`` triples from the native
-``tool_result`` block layout.
+Plus the provider overrides of ``iter_tool_result_image_refs``, which
+yield ``(tool_use_id, media_type, data)`` triples from each provider's
+native layout: Claude Code's ``tool_result`` blocks
+(``source = {type, media_type, data}``) and Codex's
+``function_call_output`` / ``custom_tool_call_output`` segments
+(``input_image`` data URLs).
 
 These tests are pure unit tests — no DB access, no Django models — so
 they run fast and cover the rewrite logic in isolation. End-to-end DB
@@ -27,6 +29,7 @@ from datetime import datetime, timezone
 import pytest
 
 from twicc.providers.claude_code.compute import ClaudeCodeSessionCompute
+from twicc.providers.codex.compute import CodexSessionCompute
 from twicc.providers.compute_base import (
     INSERT_SCREENSHOT_MISSING_PLACEHOLDER,
     INSERT_SCREENSHOT_TAG_RE,
@@ -573,3 +576,153 @@ class TestClaudeCodeIterToolResultImageRefs:
         }
         refs = list(cc.iter_tool_result_image_refs(parsed))
         assert refs == [("", "image/png", _PNG_B64)]
+
+
+def _codex_image_segment(data: str = _PNG_B64, media: str = "image/png") -> dict:
+    """Build an ``input_image`` segment in the Codex data-URL shape."""
+    return {
+        "type": "input_image",
+        "image_url": f"data:{media};base64,{data}",
+        "detail": "auto",
+    }
+
+
+class TestCodexIterToolResultImageRefs:
+    @pytest.fixture
+    def cx(self) -> CodexSessionCompute:
+        return CodexSessionCompute()
+
+    def test_yields_image_from_code_mode_output(self, cx):
+        # 5.6 code-mode exec cell: the aggregated output mixes the status
+        # header, nested-tool text and the screenshot as an input_image
+        # data URL. Real wire shape (custom_tool_call_output.output is a
+        # plain list, not a JSON-encoded string).
+        parsed = {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "call_abc",
+                "output": [
+                    {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                    {"type": "input_text", "text": "Took a screenshot."},
+                    _codex_image_segment(),
+                ],
+            },
+        }
+        assert list(cx.iter_tool_result_image_refs(parsed)) == [
+            ("call_abc", "image/png", _PNG_B64),
+        ]
+
+    def test_yields_image_from_function_call_output(self, cx):
+        # Direct tool result (pre-5.6 MCP screenshot, view_image, ...).
+        parsed = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call_def",
+                "output": [_codex_image_segment(media="image/jpeg", data="QUFB")],
+            },
+        }
+        assert list(cx.iter_tool_result_image_refs(parsed)) == [
+            ("call_def", "image/jpeg", "QUFB"),
+        ]
+
+    def test_yields_multiple_images_in_reverse_document_order(self, cx):
+        # Same contract as Claude: in a multi-image output (a code-mode
+        # cell taking two screenshots), the chronologically later image
+        # lands at offset=0.
+        parsed = {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "call_x",
+                "output": [
+                    _codex_image_segment(data="A"),
+                    {"type": "input_text", "text": "between"},
+                    _codex_image_segment(data="B", media="image/jpeg"),
+                ],
+            },
+        }
+        assert list(cx.iter_tool_result_image_refs(parsed)) == [
+            ("call_x", "image/jpeg", "B"),  # most recent first
+            ("call_x", "image/png", "A"),
+        ]
+
+    @pytest.mark.parametrize(
+        "image_url",
+        [
+            "https://example.com/shot.png",       # remote reference, no bytes
+            "data:image/png,rawpercentencoded",   # not base64
+            "data:application/pdf;base64,QUFB",   # not an image
+            "data:image/png;base64,",             # empty payload
+            42,                                   # not even a string
+        ],
+    )
+    def test_non_base64_image_urls_skipped(self, cx, image_url):
+        parsed = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call_x",
+                "output": [{"type": "input_image", "image_url": image_url}],
+            },
+        }
+        assert list(cx.iter_tool_result_image_refs(parsed)) == []
+
+    @pytest.mark.parametrize(
+        "parsed",
+        [
+            # String output (the common text-only tool result).
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call_x",
+                    "output": "plain text result",
+                },
+            },
+            # mcp_tool_call_end event — carries the same image bytes as
+            # the paired aggregated output (raw base64 in
+            # ``result.Ok.content``) and is deliberately NOT harvested:
+            # walking both sources would duplicate the screenshot at two
+            # consecutive offsets.
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "mcp_tool_call_end",
+                    "call_id": "exec-uuid",
+                    "result": {
+                        "Ok": {
+                            "content": [
+                                {"type": "image", "data": _PNG_B64, "mimeType": "image/png"},
+                            ]
+                        }
+                    },
+                },
+            },
+            # User message with an attached image — an attachment, not a
+            # tool result (same scope as the Claude Code override).
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [_codex_image_segment()],
+                },
+            },
+        ],
+    )
+    def test_yields_nothing_for_non_tool_result_shapes(self, cx, parsed):
+        assert list(cx.iter_tool_result_image_refs(parsed)) == []
+
+    def test_falls_back_to_empty_call_id(self, cx):
+        parsed = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "output": [_codex_image_segment()],
+            },
+        }
+        assert list(cx.iter_tool_result_image_refs(parsed)) == [
+            ("", "image/png", _PNG_B64),
+        ]

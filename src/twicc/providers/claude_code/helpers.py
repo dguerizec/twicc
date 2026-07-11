@@ -148,26 +148,6 @@ This is CRITICAL for conversation integrity: unquoted, the user's text vanishes
 from the visible conversation (no transcript entry, no visual record) and your
 reply looks ungrounded.
 
-## Inserting an image returned in a tool result
-
-If a tool returned a base64 image you can't easily save to
-`{artifacts_base_dir}/{session_id}/` yourself (the bytes only exist in the tool
-result, no file path), insert `<twicc:insert-screenshot />` where you want it.
-TwiCC finds the most recent base64 image in your prior tool results, saves it to
-the artifacts dir, and rewrites the tag as a markdown image link.
-
-Two optional attributes, any order:
-
-- `offset="N"` — 0-indexed back from the most recent image (`0` = latest). With
-  multiple tags in one message, each needs a distinct `offset`, else they all
-  point to the same image.
-- `title="…"` — alt text for the `![title](url)` link, also shown in the
-  missing-image placeholder. Default `screenshot`. Double-quoted, no literal
-  `"`; `[`, `]` and backslash are escaped automatically.
-
-If no image is found at the offset, the tag becomes `*[no screenshot
-available]*` (or `*[no screenshot available: <title>]*` with a title).
-
 ## Workflows
 
 The live progress of a `Workflow` you launch — phases, per-agent status, cost —
