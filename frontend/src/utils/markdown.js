@@ -87,6 +87,77 @@ md.core.ruler.push('slash_command_tag', (state) => {
 md.renderer.rules.slash_command_tag = (tokens, idx) =>
     `<span class="slash-command-tag">${md.utils.escapeHtml(tokens[idx].content)}</span>`
 
+// Hide HTML comments (`<!-- ... -->`) from the rendered output.
+//
+// With `html: false`, markdown-it treats a comment as plain text and renders it
+// escaped (visibly), both as a standalone block and inline within a paragraph.
+// We strip it instead — but only in real text. Comments inside a fenced/indented
+// code block or inline code must stay visible (they're example content), which
+// falls out for free: those constructs are tokenized by their own
+// higher-priority rules, so the comment characters never reach these two.
+//
+// A naive `source.replace(/<!--.*?-->/gs, '')` preprocessing would wrongly wipe
+// comments inside code as well; token-level rules are the surgical fix.
+
+// Block rule: a comment that begins a line (after indentation), possibly spanning
+// several lines (blank lines included). Registered before `paragraph` so fenced
+// (`fence`) and indented (`code`) blocks — which run earlier — keep priority.
+// It pushes a map-less hidden token: `splitMarkdownBlocks` collects only mapped
+// tokens, so the comment forms no block at all (no empty wrapper), and the
+// full-document render draws it as '' via the renderer rule below.
+function htmlCommentBlock(state, startLine, endLine, silent) {
+    const pos = state.bMarks[startLine] + state.tShift[startLine]
+    if (state.src.charCodeAt(pos) !== 0x3C /* < */) return false
+    if (state.src.slice(pos, pos + 4) !== '<!--') return false
+
+    // Find the line holding the closing `-->`, scanning forward from the opener.
+    let closeLine = -1
+    for (let line = startLine; line < endLine; line++) {
+        const lineText = state.src.slice(
+            state.bMarks[line] + state.tShift[line],
+            state.eMarks[line],
+        )
+        // On the opening line, start past `<!--` so `<!-->` isn't misread as closed.
+        const closeIdx = lineText.indexOf('-->', line === startLine ? 4 : 0)
+        if (closeIdx === -1) continue
+        // Real text after `-->` means this isn't a standalone comment block; bail
+        // to the paragraph rule so the inline rule strips only the comment and
+        // keeps the trailing text.
+        if (lineText.slice(closeIdx + 3).trim() !== '') return false
+        closeLine = line
+        break
+    }
+    // Unterminated: leave it as plain text rather than swallowing the rest.
+    if (closeLine === -1) return false
+
+    if (silent) return true
+
+    state.line = closeLine + 1
+    const token = state.push('html_comment', '', 0)
+    token.hidden = true
+    return true
+}
+md.block.ruler.before('paragraph', 'html_comment', htmlCommentBlock)
+
+// Inline rule: a `<!-- ... -->` embedded in text. Surrounding text is preserved
+// (only the comment span is consumed). An unterminated `<!--` is left as text.
+function htmlCommentInline(state, silent) {
+    const start = state.pos
+    if (state.src.charCodeAt(start) !== 0x3C /* < */) return false
+    if (state.src.slice(start, start + 4) !== '<!--') return false
+    const closeIdx = state.src.indexOf('-->', start + 4)
+    if (closeIdx === -1 || closeIdx + 3 > state.posMax) return false
+    if (!silent) {
+        const token = state.push('html_comment', '', 0)
+        token.hidden = true
+    }
+    state.pos = closeIdx + 3
+    return true
+}
+md.inline.ruler.before('html_inline', 'html_comment', htmlCommentInline)
+
+md.renderer.rules.html_comment = () => ''
+
 // Wrapper around codeToHtml that falls back to 'text' (plain) for unknown languages.
 // Shiki throws an error when encountering unsupported languages (like 'env', 'dotenv', etc.)
 // which would crash the entire markdown render. This wrapper catches those errors.
