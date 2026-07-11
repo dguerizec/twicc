@@ -93,9 +93,15 @@ function activateOther(idx) {
     nextTick(() => textInputRefs.value[idx]?.focus())
 }
 
+// Typing in the free-text field makes it the active choice for the question
+// (clearing any selected option card). Activation happens on actual input —
+// never on mere focus: the always-visible "Other" input sits in the Tab
+// order between the option cards and Dismiss/Submit, so a focus-triggered
+// activation would let plain keyboard traversal silently change the answer.
 function onTextInput(idx, event) {
     otherTexts.value[idx] = event.target.value
     otherActive.value[idx] = true
+    selections.value[idx] = null
 }
 
 // Resolved answer for a question: the free text when "Other"/bare-input is
@@ -156,6 +162,7 @@ function dismiss() {
                             selected: isOptionSelected(qIndex, option.label),
                             'auto-focused': qIndex === 0 && optionIndex === 0,
                         }"
+                        :aria-pressed="String(isOptionSelected(qIndex, option.label))"
                         :disabled="isResponding"
                         :ref="el => setPrimaryRef(el, qIndex === 0 && optionIndex === 0)"
                         @click="selectOption(qIndex, option.label)"
@@ -169,6 +176,7 @@ function dismiss() {
                         type="button"
                         class="option-card other-card"
                         :class="{ selected: otherActive[qIndex] }"
+                        :aria-pressed="String(!!otherActive[qIndex])"
                         :disabled="isResponding"
                         @click="activateOther(qIndex)"
                     >
@@ -186,7 +194,6 @@ function dismiss() {
                         :value.prop="otherTexts[qIndex] || ''"
                         :disabled="isResponding"
                         @input="onTextInput(qIndex, $event)"
-                        @focus="activateOther(qIndex)"
                     ></wa-input>
                 </div>
 
