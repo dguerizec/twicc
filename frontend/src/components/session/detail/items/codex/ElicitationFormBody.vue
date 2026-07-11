@@ -258,7 +258,7 @@ function cancel() {
 </script>
 
 <template>
-    <div class="codex-pending-body">
+    <div class="elicitation-form-body">
         <div class="codex-pending-section">
             <div class="codex-pending-summary">
                 <span class="codex-summary-label">MCP form</span>
@@ -405,7 +405,7 @@ function cancel() {
 </template>
 
 <style scoped>
-.codex-pending-body {
+.elicitation-form-body {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-s);

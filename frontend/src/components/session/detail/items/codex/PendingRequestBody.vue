@@ -28,17 +28,6 @@ const approveAllowNetworkId = useId()
 const approvePermsTurnId = useId()
 const approvePermsSessionId = useId()
 
-// tool_names rendered by a self-contained sub-component that owns its whole
-// body INCLUDING the action row (buttons differ per kind). Everything else
-// keeps the legacy shared Approve/Deny/Cancel-turn row below.
-const SELF_CONTAINED_BODIES = {
-    mcpToolCall: McpToolCallApprovalBody,
-    toolRequestUserInput: RequestUserInputBody,
-    elicitationForm: ElicitationFormBody,
-    elicitationUrl: ElicitationUrlBody,
-}
-const selfContainedBody = computed(() => SELF_CONTAINED_BODIES[toolName.value] || null)
-
 // Template ref for the Approve main button of the split button (auto-focused
 // when the approval block appears). Only the legacy body (command / file /
 // permissions / unknown fallback) autofocuses via this ref — self-contained
@@ -61,8 +50,22 @@ onMounted(focusApproveButton)
 // Re-focus the Approve button when a new request takes over the slot (queued approvals).
 watch(() => props.pendingRequest?.request_id, focusApproveButton)
 
-// Codex tool_name: 'commandExecution' | 'fileChange' | 'permissions'.
+// Codex tool_name — legacy kinds ('commandExecution' | 'fileChange' |
+// 'permissions') rendered inline below, and the routing key for the
+// self-contained bodies ('mcpToolCall' | 'toolRequestUserInput' |
+// 'elicitationForm' | 'elicitationUrl').
 const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
+
+// tool_names rendered by a self-contained sub-component that owns its whole
+// body INCLUDING the action row (buttons differ per kind). Everything else
+// keeps the legacy shared Approve/Deny/Cancel-turn row below.
+const SELF_CONTAINED_BODIES = {
+    mcpToolCall: McpToolCallApprovalBody,
+    toolRequestUserInput: RequestUserInputBody,
+    elicitationForm: ElicitationFormBody,
+    elicitationUrl: ElicitationUrlBody,
+}
+const selfContainedBody = computed(() => SELF_CONTAINED_BODIES[toolName.value] || null)
 
 // Wire params (as injected by make_pending_request).
 const toolInput = computed(() => props.pendingRequest.tool_input || {})
