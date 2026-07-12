@@ -15,6 +15,7 @@
 import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { canStealFocus } from '../../../../../utils/focusGuard'
+import { usePendingRequestSubmitShortcut } from '../../../../../composables/usePendingRequestSubmitShortcut'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },
@@ -258,6 +259,13 @@ function cancel() {
     if (props.isResponding) return
     emit('submit', { tool_name: 'elicitationForm', action: 'cancel' })
 }
+
+usePendingRequestSubmitShortcut((e) => {
+    if (!canSubmit.value) return
+    e.preventDefault()
+    e.stopPropagation()
+    submit()
+}, () => props.isResponding)
 </script>
 
 <template>

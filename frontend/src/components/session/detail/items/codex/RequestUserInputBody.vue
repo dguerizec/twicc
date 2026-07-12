@@ -24,6 +24,7 @@
 import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { canStealFocus } from '../../../../../utils/focusGuard'
+import { usePendingRequestSubmitShortcut } from '../../../../../composables/usePendingRequestSubmitShortcut'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },
@@ -207,6 +208,13 @@ function dismiss() {
     // Empty answers map: Codex treats a missing answer as a cancel.
     emit('submit', { tool_name: 'toolRequestUserInput', answers: {} })
 }
+
+usePendingRequestSubmitShortcut((e) => {
+    if (!allAnswered.value) return
+    e.preventDefault()
+    e.stopPropagation()
+    submit()
+}, () => props.isResponding)
 </script>
 
 <template>

@@ -16,6 +16,7 @@ import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { canStealFocus } from '../../../../../utils/focusGuard'
 import { toast } from '../../../../../composables/useToast'
+import { usePendingRequestSubmitShortcut } from '../../../../../composables/usePendingRequestSubmitShortcut'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },
@@ -76,6 +77,12 @@ function focusDone() {
 }
 onMounted(focusDone)
 watch(() => props.pendingRequest?.request_id, focusDone)
+
+usePendingRequestSubmitShortcut((e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    done()
+}, () => props.isResponding)
 </script>
 
 <template>
