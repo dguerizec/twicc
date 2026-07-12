@@ -6,11 +6,11 @@
 // resolved through hooks on the session's provider helpers — see the
 // "Agent settings popover/summary rendering hooks" section in
 // ``BaseProviderHelpers``.
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { presetSummaryParts, bundleSummaryParts } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
-import { getProviderOptions, getProviderHelpers, getProviderIcon } from '../../providers'
+import { getProviderHelpers, getProviderIcon } from '../../providers'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
@@ -47,13 +47,12 @@ const {
     clampedPermissionMode,
     anySettingForced,
     hasDropdownsChanged,
-    presets,
-    hasPresets,
+    presetGroups,
     presetsDialogOpen,
     handlePresetSelect,
+    providerSwitcherOptions,
     restoreSettings,
     resetAllToDefaults,
-    resetStack,
     startupChanges,
     providerHelpers,
     providerStore,
@@ -71,30 +70,26 @@ const nonImageAttachments = computed(() => {
     return dataStore.getAttachments(sid).filter(m => m.type !== 'image')
 })
 
-// Provider switcher (drafts only) — list of registered providers with
-// their icon and active-disabled flag. Options that don't accept the
-// draft's current attachment mix stay clickable: the click handler
-// intercepts the switch, surfaces a callout, and lets the user resolve
-// the conflict before retrying.
-const providerSwitcherOptions = computed(() => {
-    // Only show providers that are usable right now (intent-enabled AND
-    // in running state). The current provider stays in the list even if
-    // it is in a transient state — switching away from it is a valid
-    // user intent that the runtime gate will handle on the new turn.
-    const current = props.session?.provider
-    return getProviderOptions()
-        .filter(opt => opt.value === current || dataStore.isProviderAvailable(opt.value))
-        .map(opt => ({
-            value: opt.value,
-            label: opt.label,
-            icon: getProviderIcon(opt.value),
-            active: opt.value === current,
-        }))
-})
-
+// Provider selector (drafts only). ``providerSwitcherOptions`` (from the
+// composable) lists the providers usable right now — the current one always
+// stays, plus every other intent-enabled + running provider. The popover
+// renders 2 options as a bi-label switch, >2 as a dropdown, ≤1 as nothing.
 const currentProviderIcon = computed(() => getProviderIcon(props.session?.provider))
 
 const currentProviderLabel = computed(() => providerHelpers.value?.constructor.label ?? null)
+
+// Two-provider toggle: the global default provider anchors the "on" (checked)
+// side of the switch, the other provider the "off" side. When the configured
+// default isn't one of the two offered options (edge case), the first option
+// anchors "on" so the toggle keeps a stable meaning.
+const defaultProvider = computed(() => {
+    const configured = settings.getDefaultProvider
+    const opts = providerSwitcherOptions.value
+    return opts.some(o => o.value === configured) ? configured : (opts[0]?.value ?? null)
+})
+const switchOnOption = computed(() => providerSwitcherOptions.value.find(o => o.value === defaultProvider.value) ?? null)
+const switchOffOption = computed(() => providerSwitcherOptions.value.find(o => o.value !== defaultProvider.value) ?? null)
+const isOnDefault = computed(() => props.session?.provider === defaultProvider.value)
 
 // Provider id of the most recent rejected switch attempt — used to
 // surface a transient warning callout asking the user to drop the
@@ -110,16 +105,13 @@ const blockedSwitchTargetLabel = computed(() => {
     return opt?.label ?? null
 })
 
-function handleProviderSelect(event) {
-    const provider = event.detail?.item?.value
-    if (!provider) return
-    if (provider === props.session?.provider) return
-
-    // Intercept the switch when the target provider can't accept the
-    // current non-image attachments: surface the callout and leave the
-    // session on its current provider. The user can either drop the
-    // attachments via the callout's inline action (which retries the
-    // switch automatically) or back out by selecting something else.
+// Switch the draft to another provider. Intercepts the switch when the target
+// can't accept the current non-image attachments: surfaces the callout and
+// leaves the session on its current provider (the user drops the attachments via
+// the callout's inline action, which retries, or backs out). Resets every per-
+// session override so the bundle follows the new provider's defaults.
+function switchToProvider(provider) {
+    if (!provider || provider === props.session?.provider) return
     const optHelpers = getProviderHelpers(provider)
     const support = optHelpers?.getAttachmentSupport() ?? null
     const docsBlocked = nonImageAttachments.value.length > 0 && support?.documents === false
@@ -127,12 +119,26 @@ function handleProviderSelect(event) {
         blockedSwitchTargetProvider.value = provider
         return
     }
-
     blockedSwitchTargetProvider.value = null
     dataStore.setDraftProvider(props.settings.sessionId.value, provider)
-    // Reset every per-session override so the bundle follows the new
-    // provider's defaults.
     resetAllToDefaults()
+}
+
+// >2 providers: dropdown selection.
+function handleProviderSelect(event) {
+    switchToProvider(event.detail?.item?.value)
+}
+
+// 2 providers: the bi-label switch flips to whichever option is not current.
+async function onProviderSwitchToggle(event) {
+    const target = providerSwitcherOptions.value.find(o => o.value !== props.session?.provider)
+    if (target) switchToProvider(target.value)
+    // Re-assert the DOM switch from the source of truth: a blocked or no-op
+    // switch leaves session.provider (and isOnDefault) unchanged, but wa-switch
+    // already flipped its own ``checked`` and Vue won't re-patch an unchanged
+    // bound value — realign it explicitly (web-component two-way quirk).
+    await nextTick()
+    if (event?.target) event.target.checked = isOnDefault.value
 }
 
 async function removeBlockingDocuments() {
@@ -141,13 +147,9 @@ async function removeBlockingDocuments() {
     const target = blockedSwitchTargetProvider.value
     await dataStore.removeNonImageAttachments(sid)
     // Auto-retry the switch the user originally asked for so the click
-    // sequence "select Codex → Remove them" doesn't require a third
-    // click on the dropdown.
+    // sequence "select Codex → Remove them" doesn't require a third click.
     blockedSwitchTargetProvider.value = null
-    if (target && target !== props.session?.provider) {
-        dataStore.setDraftProvider(sid, target)
-        resetAllToDefaults()
-    }
+    if (target) switchToProvider(target)
 }
 
 // Order of the rows below the model row. ``supportsAgentSetting`` filters
@@ -315,11 +317,11 @@ const popoverRef = ref(null)
 function focusFirstElement() {
     const pop = popoverRef.value
     if (!pop) return
-    // wa-button[slot="trigger"] targets the inner wa-dropdown triggers
-    // (provider switcher, Reset/Presets); wa-select covers the model row
-    // and simple-field rows. First DOM match wins, which mirrors the
-    // top-to-bottom order of the popover.
-    const first = pop.querySelector('wa-button[slot="trigger"]:not([disabled]), wa-select:not([disabled])')
+    // wa-switch covers the two-provider toggle; wa-button[slot="trigger"]
+    // targets the inner wa-dropdown triggers (>2 provider switcher,
+    // Reset/Presets); wa-select covers the model row and simple-field rows.
+    // First DOM match wins, which mirrors the top-to-bottom order of the popover.
+    const first = pop.querySelector('wa-switch:not([disabled]), wa-button[slot="trigger"]:not([disabled]), wa-select:not([disabled])')
     first?.focus()
 }
 
@@ -400,10 +402,49 @@ onBeforeUnmount(() => {
 
         <!-- Apply preset / Reset / Manage (non-scrollable) -->
         <div class="settings-panel-presets">
-            <!-- Provider switcher: drafts only. Switching resets every per-
-                 session override so the bundle follows the new provider's
-                 defaults. -->
-            <wa-dropdown v-if="isDraft && providerSwitcherOptions.length > 1" @wa-select="handleProviderSelect">
+            <!-- Provider selector: drafts only. 2 providers → bi-label switch
+                 (the default provider anchors the "on" side); >2 → dropdown.
+                 Switching resets every per-session override so the bundle
+                 follows the new provider's defaults. -->
+            <div
+                v-if="isDraft && providerSwitcherOptions.length === 2"
+                class="provider-toggle"
+            >
+                <span
+                    class="provider-toggle-side"
+                    :class="{ active: !isOnDefault }"
+                    @click="switchToProvider(switchOffOption?.value)"
+                >
+                    <wa-icon
+                        v-if="switchOffOption?.icon"
+                        auto-width
+                        family="brands"
+                        :name="switchOffOption.icon"
+                    ></wa-icon>
+                    {{ switchOffOption?.label }}
+                </span>
+                <wa-switch
+                    class="provider-toggle-switch"
+                    size="small"
+                    :checked="isOnDefault"
+                    :aria-label="`Switch provider (currently ${currentProviderLabel})`"
+                    @change="onProviderSwitchToggle"
+                ></wa-switch>
+                <span
+                    class="provider-toggle-side"
+                    :class="{ active: isOnDefault }"
+                    @click="switchToProvider(switchOnOption?.value)"
+                >
+                    <wa-icon
+                        v-if="switchOnOption?.icon"
+                        auto-width
+                        family="brands"
+                        :name="switchOnOption.icon"
+                    ></wa-icon>
+                    {{ switchOnOption?.label }}
+                </span>
+            </div>
+            <wa-dropdown v-else-if="isDraft && providerSwitcherOptions.length > 2" @wa-select="handleProviderSelect">
                 <wa-button slot="trigger" size="small" appearance="outlined">
                     <wa-icon
                         v-if="currentProviderIcon"
@@ -431,49 +472,55 @@ onBeforeUnmount(() => {
                     {{ opt.label }}
                 </wa-dropdown-item>
             </wa-dropdown>
+            <!-- Reset / Presets: one dropdown grouped by provider. Each group
+                 leads with a "{provider} default" reset entry, then that
+                 provider's presets. A draft shows every switchable provider
+                 (picking one switches the draft first); a real session lists
+                 only its own. See useSessionAgentSettings.presetGroups. -->
             <wa-dropdown @wa-select="handlePresetSelect">
                 <wa-button slot="trigger" size="small" appearance="outlined" :disabled="isStarting">
                     <wa-icon slot="start" name="sliders"></wa-icon>
                     Reset / Presets
                     <wa-icon slot="end" name="caret-down"></wa-icon>
                 </wa-button>
-                <!-- Reset stack: re-apply the project's resolved defaults, an
-                     ancestor project's, or the global defaults — each shown with
-                     the concrete values it would set (like a preset). Collapses
-                     to a single "Reset to defaults" when no project in the chain
-                     sets any. See useSessionAgentSettings.resetStack. -->
-                <template v-if="resetStack.length === 1">
-                    <wa-dropdown-item :value="resetStack[0].key" :disabled="!anySettingForced" class="reset-item">
-                        <wa-icon slot="icon" name="arrow-rotate-left"></wa-icon>
-                        <span>{{ resetStack[0].label }}</span>
-                        <AgentSettingsSummaryView class="option-description" :parts="bundleSummaryParts(resetStack[0].bundle, providerHelpers, currentEffective)" />
+                <template v-for="(group, gi) in presetGroups" :key="group.provider">
+                    <wa-divider v-if="gi > 0"></wa-divider>
+                    <!-- Group header: only when more than one provider is shown -->
+                    <wa-dropdown-item v-if="presetGroups.length > 1" disabled class="group-header">
+                        <wa-icon
+                            v-if="group.icon"
+                            slot="icon"
+                            auto-width
+                            family="brands"
+                            :name="group.icon"
+                        ></wa-icon>
+                        {{ group.label }}
                     </wa-dropdown-item>
-                </template>
-                <template v-else>
-                    <wa-dropdown-item disabled>Reset to…</wa-dropdown-item>
+                    <!-- Reset targets: "{provider} default" always, plus the
+                         ancestor / global levels when a project sets its own
+                         defaults. See useSessionAgentSettings.resetTargetsForProvider. -->
                     <wa-dropdown-item
-                        v-for="target in resetStack"
+                        v-for="(target, ti) in group.resetTargets"
                         :key="target.key"
-                        :value="target.key"
+                        :value="`reset:${group.provider}:${ti}`"
+                        :disabled="group.isCurrent && group.resetTargets.length === 1 && !anySettingForced"
                         class="reset-item"
                     >
                         <wa-icon slot="icon" name="arrow-rotate-left"></wa-icon>
                         <span>{{ target.label }}</span>
-                        <AgentSettingsSummaryView class="option-description" :parts="bundleSummaryParts(target.bundle, providerHelpers, currentEffective)" />
+                        <AgentSettingsSummaryView class="option-description" :parts="bundleSummaryParts(target.bundle, getProviderHelpers(group.provider), group.isCurrent ? currentEffective : null)" />
+                    </wa-dropdown-item>
+                    <wa-dropdown-item
+                        v-for="p in group.presets"
+                        :key="p.index"
+                        :value="`preset:${group.provider}:${p.index}`"
+                        class="preset-item"
+                    >
+                        <span>{{ p.preset.name }}</span>
+                        <AgentSettingsSummaryView class="option-description" :parts="presetSummaryParts(p.preset, getProviderHelpers(group.provider), group.isCurrent ? currentEffective : null)" />
                     </wa-dropdown-item>
                 </template>
                 <wa-divider></wa-divider>
-                <wa-dropdown-item v-if="hasPresets" disabled>Presets</wa-dropdown-item>
-                <wa-dropdown-item
-                    v-for="(preset, i) in presets"
-                    :key="i"
-                    :value="String(i)"
-                    class="preset-item"
-                >
-                    <span>{{ preset.name }}</span>
-                    <AgentSettingsSummaryView class="option-description" :parts="presetSummaryParts(preset, providerHelpers, currentEffective)" />
-                </wa-dropdown-item>
-                <wa-divider v-if="hasPresets"></wa-divider>
                 <wa-dropdown-item value="__manage__">
                     <wa-icon slot="icon" name="pen-to-square"></wa-icon>
                     Manage presets
@@ -636,13 +683,58 @@ onBeforeUnmount(() => {
 .settings-panel-presets {
     display: flex;
     justify-content: center;
-    gap: var(--wa-space-xs);
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--wa-space-xs) var(--wa-space-m);
     flex-shrink: 0;
     padding-bottom: var(--wa-space-s);
     wa-dropdown::part(menu) {
         max-width: 90vw !important;
         width: auto;
     }
+}
+
+/* Two-provider selector: a label on each side of the switch, the active
+   provider highlighted. Mirrors the bi-label toggle pattern used elsewhere
+   (e.g. TerminalPanel's scroll/select toggle). */
+.provider-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    flex-shrink: 0;
+}
+
+.provider-toggle-side {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-3xs);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+    transition: color 0.1s;
+    &.active {
+        color: var(--wa-color-text-normal);
+        font-weight: var(--wa-font-weight-semibold);
+    }
+    &:hover {
+        color: var(--wa-color-text-normal);
+    }
+}
+
+/* Provider group headers are disabled dropdown-items (non-selectable only);
+   undo wa-dropdown-item's disabled dimming (opacity: 0.5) and pin the provider
+   name to the normal text color so it reads clearly. */
+.group-header {
+    opacity: 1 !important;
+}
+.group-header::part(label) {
+    color: var(--wa-color-text-normal);
+    font-weight: var(--wa-font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: var(--wa-font-size-xs);
 }
 
 .settings-panel-actions {

@@ -1,7 +1,7 @@
-import { ref, computed, watch, toValue } from 'vue'
+import { ref, computed, watch, toValue, nextTick } from 'vue'
 import { useDataStore } from '../stores/data'
 import { useAgentSettingsPresetsStore } from '../stores/agentSettingsPresets'
-import { getProviderHelpers, getProviderStore } from '../providers'
+import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderIcon, getProviderLabel } from '../providers'
 import { resolveProjectAgentDefaults, ancestorChain } from '../utils/projectAgentDefaults'
 import { resolveProjectTrust } from '../utils/trust'
 
@@ -101,8 +101,11 @@ export function useSessionAgentSettings(sessionIdSource) {
     // The provider's GLOBAL defaults (synced settings), with no project layer.
     // The bottom of every resolution: resolvedDefaults falls through to it, and
     // the reset stack's "Global defaults" target pins to it.
-    const globalDefaults = computed(() => {
-        const pStore = providerStore.value
+    // Global (synced-settings) defaults for an ARBITRARY provider — reads that
+    // provider's store directly rather than the session's current one, so the
+    // cross-provider preset picker can resolve every provider's defaults.
+    function providerGlobalDefaults(provider) {
+        const pStore = getProviderStore(provider)
         return {
             selected_model: pStore?.defaultModel,
             permission_mode: pStore?.defaultPermissionMode,
@@ -115,7 +118,9 @@ export function useSessionAgentSettings(sessionIdSource) {
             fast_mode: pStore?.defaultFastMode,
             context_max: pStore?.defaultContextMax,
         }
-    })
+    }
+
+    const globalDefaults = computed(() => providerGlobalDefaults(session.value?.provider))
 
     // Collapse the trust-dependent permission layer of a resolved bundle: in an
     // untrusted project the effective permission default is the
@@ -128,9 +133,12 @@ export function useSessionAgentSettings(sessionIdSource) {
         return rest
     }
 
-    const resolvedDefaults = computed(() => {
-        const g = globalDefaults.value
-        const provider = session.value?.provider
+    // Resolve the concrete default bundle (project chain → global) for ANY
+    // provider — generalises ``resolvedDefaults`` so the cross-provider preset
+    // picker can render each provider's "{provider} default" entry and switching
+    // to another provider can re-pin to its defaults.
+    function resolveDefaultsForProvider(provider) {
+        const g = providerGlobalDefaults(provider)
         const projectId = session.value?.project_id
         const chain = (projectId && provider)
             ? resolveProjectAgentDefaults(projectId, provider, store.projects)
@@ -146,7 +154,75 @@ export function useSessionAgentSettings(sessionIdSource) {
             fast_mode: chain.fast_mode ?? g.fast_mode,
             context_max: chain.context_max ?? g.context_max,
         }, sessionIsUntrusted.value)
-    })
+    }
+
+    const resolvedDefaults = computed(() => resolveDefaultsForProvider(session.value?.provider))
+
+    // Resolve a full concrete bundle starting at a chain slice (nearest node
+    // first), filling unset fields from the provider's global defaults. Powers
+    // the reset stack's ancestor targets: "reset to <ancestor>" pins to that
+    // ancestor's resolved defaults, skipping the overrides of nearer projects.
+    function resolveFromChainSlice(slice, provider, global) {
+        const resolved = {}
+        for (const node of slice) {
+            const bundle = node.default_agent_settings?.[provider] || {}
+            for (const field in bundle) {
+                if (bundle[field] != null && !(field in resolved)) resolved[field] = bundle[field]
+            }
+        }
+        return collapseTrustPermission({ ...global, ...resolved }, sessionIsUntrusted.value)
+    }
+
+    // The stack of reset targets for a provider, surfaced under its group in the
+    // Reset/Presets dropdown. The first entry is always the fully resolved
+    // default (project chain → global) — what the user resets to by default —
+    // labelled by the NATURE of the session's own project: "Worktree default"
+    // when it's a git worktree, else "Project default". When a project in the
+    // chain defines its own defaults, the extra levels the old multi-target
+    // reset offered are appended: one entry per ANCESTOR project that sets
+    // defaults (its own resolved bundle, skipping nearer overrides) — the
+    // worktree's main repo reads "Project default", deeper path ancestors keep
+    // their project name — and a final "Global defaults" (the provider's
+    // globals, ignoring the project chain). No project defaults → single entry.
+    function resetTargetsForProvider(provider) {
+        const g = providerGlobalDefaults(provider)
+        const projectId = session.value?.project_id
+        const chain = (provider && projectId) ? ancestorChain(projectId, store.projects) : []
+        const self = chain[0]
+        const selfIsWorktree = !!self?.worktree_of
+        const ancestorSources = []
+        for (let i = 1; i < chain.length; i++) {
+            const node = chain[i]
+            const bundle = node.default_agent_settings?.[provider]
+            if (bundle && Object.keys(bundle).length) {
+                // The worktree's main repo (the session project's direct
+                // ``worktree_of``) reads "Project default"; any deeper path
+                // ancestor keeps its own project name to stay unambiguous.
+                const isMainRepoOfWorktree = selfIsWorktree && self.worktree_of === node.id
+                ancestorSources.push({
+                    key: `node:${node.id}`,
+                    label: isMainRepoOfWorktree ? 'Project default' : (node.name || node.directory || node.id),
+                    bundle: resolveFromChainSlice(chain.slice(i), provider, g),
+                })
+            }
+        }
+        const selfBundle = self?.default_agent_settings?.[provider]
+        const hasProjectDefaults = (selfBundle && Object.keys(selfBundle).length) || ancestorSources.length > 0
+        const targets = [{
+            key: 'default',
+            label: selfIsWorktree ? 'Worktree default' : 'Project default',
+            bundle: resolveDefaultsForProvider(provider),
+        }]
+        if (hasProjectDefaults) {
+            targets.push(...ancestorSources)
+            targets.push({
+                key: 'global',
+                label: 'Global defaults',
+                bundle: collapseTrustPermission({ ...g }, sessionIsUntrusted.value),
+            })
+        }
+        return targets
+    }
 
     // The model that's effectively in use right now: the user's selection if
     // any, otherwise the resolved (project → global) default. Used to feed
@@ -244,38 +320,63 @@ export function useSessionAgentSettings(sessionIdSource) {
     })
 
     // ─── Presets ─────────────────────────────────────────────────────────────
-    // Sourced from the cross-provider presets store, keyed by the session's
-    // provider. The on-disk format is shared, only the file path varies.
-    // The "Manage…" button toggles ``presetsDialogOpen`` to open the
+    // Sourced from the cross-provider presets store, keyed by provider. The
+    // on-disk format is shared, only the file path varies. ``presetGroups``
+    // below assembles the per-provider view the picker renders; the "Manage…"
+    // entry toggles ``presetsDialogOpen`` to open the
     // ``AgentSettingsPresetsDialog`` for the current provider.
     const presetsStore = useAgentSettingsPresetsStore()
-    const presets = computed(() => presetsStore.getPresets(session.value?.provider))
-    const hasPresets = computed(() => presets.value.length > 0)
     const presetsDialogOpen = ref(false)
 
-    function handlePresetSelect(event) {
-        const item = event.detail?.item
-        const value = item?.value
-        if (value === undefined || value === null || value === '') return
-        if (typeof value === 'string' && value.startsWith('__reset__')) {
-            applyResetTarget(resetStack.value.find(t => t.key === value))
-            return
-        }
-        if (value === '__manage__') {
-            presetsDialogOpen.value = true
-            return
-        }
-        const index = Number(value)
-        if (!Number.isInteger(index)) return
-        const preset = presets.value[index]
-        if (!preset) return
+    // ─── Provider selector options (drafts) ──────────────────────────────────
+    // Registered providers usable for the switch / picker: the current one
+    // always stays (switching away is a valid intent even in a transient
+    // state), plus every other provider that is intent-enabled AND running. The
+    // popover renders this as a two-provider toggle, a >2 dropdown, or nothing.
+    const providerSwitcherOptions = computed(() => {
+        const current = session.value?.provider
+        return getProviderOptions()
+            .filter(opt => opt.value === current || store.isProviderAvailable(opt.value))
+            .map(opt => ({
+                value: opt.value,
+                label: opt.label,
+                icon: getProviderIcon(opt.value),
+                active: opt.value === current,
+            }))
+    })
+
+    // ─── Cross-provider preset groups ────────────────────────────────────────
+    // One group per provider the picker offers, each carrying that provider's
+    // reset targets ("{provider} default", plus ancestor/global levels when a
+    // project sets its own defaults — see resetTargetsForProvider) and its
+    // presets. A draft offers every switchable provider (so a preset from
+    // another provider can be applied in one click, switching the draft's
+    // provider first); a real session — which cannot change provider — offers
+    // only its own.
+    const presetGroups = computed(() => {
+        const current = session.value?.provider
+        const providerList = session.value?.draft
+            ? providerSwitcherOptions.value.map(o => o.value)
+            : (current ? [current] : [])
+        return providerList.map(provider => ({
+            provider,
+            label: getProviderLabel(provider),
+            icon: getProviderIcon(provider),
+            isCurrent: provider === current,
+            resetTargets: resetTargetsForProvider(provider),
+            presets: presetsStore.getPresets(provider).map((preset, index) => ({ preset, index })),
+        }))
+    })
+
+    // Apply a preset's forced fields onto the selected refs (of the current
+    // provider). Trust-dependent field selection (trust design §13.3): an
+    // untrusted project applies the preset's untrusted permission layer instead
+    // of the trusted one (falling back to the global untrusted default).
+    function applyPresetToRefs(preset) {
         selectedModel.value = preset.model
         selectedContextMax.value = preset.context_max
         selectedEffort.value = preset.effort
         selectedThinking.value = preset.thinking
-        // Trust-dependent field selection (trust design §13.3): an untrusted
-        // project applies the preset's untrusted permission layer instead of
-        // the trusted one (falling back to the global untrusted default).
         selectedPermissionMode.value = sessionIsUntrusted.value
             ? (preset.permission_mode_if_untrusted
                 ?? globalDefaults.value.permission_mode_if_untrusted
@@ -283,6 +384,67 @@ export function useSessionAgentSettings(sessionIdSource) {
             : preset.permission_mode
         selectedClaudeInChrome.value = preset.claude_in_chrome
         selectedFastMode.value = preset.fast_mode
+    }
+
+    // Apply a concrete resolved bundle (wire keys) onto the selected refs — used
+    // by the reset targets (project / ancestor / global defaults). Permission is
+    // already trust-collapsed in the bundle; the untrusted pseudo-field is gone.
+    function applyBundleToRefs(bundle) {
+        const b = bundle || {}
+        selectedModel.value = b.selected_model ?? null
+        selectedContextMax.value = b.context_max ?? null
+        selectedEffort.value = b.effort ?? null
+        selectedThinking.value = b.thinking_enabled ?? null
+        selectedPermissionMode.value = b.permission_mode ?? null
+        selectedClaudeInChrome.value = b.claude_in_chrome ?? null
+        selectedFastMode.value = b.fast_mode ?? null
+    }
+
+    // Handle a selection in the cross-provider Reset/Presets dropdown. Item
+    // values are encoded as:
+    //   • ``__manage__``                  → open the presets manager
+    //   • ``reset:<provider>:<targetIdx>``→ apply that provider's reset target
+    //   • ``preset:<provider>:<index>``   → apply that provider's preset
+    // A target provider different from the session's switches the draft's
+    // provider first (real sessions can't switch and only ever list their own
+    // provider, so the guard is belt-and-suspenders). The concrete bundle/preset
+    // is captured BEFORE the switch (presetGroups recomputes on switch), and the
+    // ``await nextTick()`` after the switch lets the session→refs watcher settle
+    // the refs to the new provider's defaults BEFORE we overwrite them — without
+    // it, that watcher fires after this handler and clobbers the applied values.
+    async function handlePresetSelect(event) {
+        const value = event.detail?.item?.value
+        if (value === undefined || value === null || value === '') return
+        if (value === '__manage__') {
+            presetsDialogOpen.value = true
+            return
+        }
+        const sep = typeof value === 'string' ? value.indexOf(':') : -1
+        if (sep === -1) return
+        const kind = value.slice(0, sep)
+        if (kind !== 'reset' && kind !== 'preset') return
+        const rest = value.slice(sep + 1)
+        const lastColon = rest.lastIndexOf(':')
+        if (lastColon === -1) return
+        const targetProvider = rest.slice(0, lastColon)
+        const idx = Number(rest.slice(lastColon + 1))
+        if (!targetProvider || !Number.isInteger(idx)) return
+
+        const group = presetGroups.value.find(gr => gr.provider === targetProvider)
+        if (!group) return
+        // Capture the concrete payload before any provider switch.
+        const bundle = kind === 'reset' ? group.resetTargets[idx]?.bundle : null
+        const preset = kind === 'preset' ? group.presets[idx]?.preset : null
+        if (kind === 'reset' ? !bundle : !preset) return
+
+        if (targetProvider !== session.value?.provider) {
+            if (!session.value?.draft) return
+            store.setDraftProvider(sessionId.value, targetProvider)
+            await nextTick()
+        }
+
+        if (kind === 'reset') applyBundleToRefs(bundle)
+        else applyPresetToRefs(preset)
     }
 
     // Re-pin every field to the current resolved default (project chain →
@@ -298,75 +460,6 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedClaudeInChrome.value = d.claude_in_chrome
         selectedFastMode.value = d.fast_mode
         selectedContextMax.value = d.context_max
-    }
-
-    // Resolve a full concrete bundle starting at a chain slice (nearest node
-    // first), filling unset fields from the global defaults. Powers the reset
-    // stack: "reset to <ancestor>" pins the draft to that ancestor's resolved
-    // defaults, skipping the overrides of nearer projects.
-    function resolveFromChainSlice(slice, provider, global) {
-        const resolved = {}
-        for (const node of slice) {
-            const bundle = node.default_agent_settings?.[provider] || {}
-            for (const field in bundle) {
-                if (bundle[field] != null && !(field in resolved)) resolved[field] = bundle[field]
-            }
-        }
-        return collapseTrustPermission({ ...global, ...resolved }, sessionIsUntrusted.value)
-    }
-
-    // The stack of reset targets surfaced under "Reset" in the popover. Every
-    // target re-applies a CONCRETE resolved bundle (the snapshot model has no
-    // "follow"/NULL):
-    //   • "Project defaults" — the project's own resolved defaults (full chain).
-    //   • one entry per ANCESTOR project that defines its own defaults — that
-    //     ancestor's resolved defaults (skips the overrides of nearer projects).
-    //   • "Global defaults"  — the provider's global defaults.
-    // When no project in the chain defines any defaults, collapses to a single
-    // "Reset to defaults" that re-applies the global bundle.
-    const resetStack = computed(() => {
-        const provider = session.value?.provider
-        const projectId = session.value?.project_id
-        const g = globalDefaults.value
-        const chain = (provider && projectId) ? ancestorChain(projectId, store.projects) : []
-        const ancestorSources = []
-        for (let i = 1; i < chain.length; i++) {
-            const node = chain[i]
-            const bundle = node.default_agent_settings?.[provider]
-            if (bundle && Object.keys(bundle).length) {
-                ancestorSources.push({
-                    key: `__reset__node:${node.id}`,
-                    label: node.name || node.directory || node.id,
-                    bundle: resolveFromChainSlice(chain.slice(i), provider, g),
-                })
-            }
-        }
-        const selfBundle = chain[0]?.default_agent_settings?.[provider]
-        const hasProjectDefaults = (selfBundle && Object.keys(selfBundle).length) || ancestorSources.length > 0
-        const globalBundle = collapseTrustPermission({ ...g }, sessionIsUntrusted.value)
-        if (!hasProjectDefaults) {
-            return [{ key: '__reset__global', label: 'Reset to defaults', bundle: globalBundle }]
-        }
-        return [
-            { key: '__reset__project', label: 'Project defaults', bundle: resolveFromChainSlice(chain, provider, g) },
-            ...ancestorSources,
-            { key: '__reset__global', label: 'Global defaults', bundle: globalBundle },
-        ]
-    })
-
-    // Apply a reset target by forcing its concrete bundle onto every field. In
-    // the snapshot model there is no "follow" target — each reset re-pins the
-    // session to a resolved bundle (project / ancestor / global).
-    function applyResetTarget(target) {
-        if (!target) return
-        const b = target.bundle || {}
-        selectedModel.value = b.selected_model ?? null
-        selectedContextMax.value = b.context_max ?? null
-        selectedEffort.value = b.effort ?? null
-        selectedThinking.value = b.thinking_enabled ?? null
-        selectedPermissionMode.value = b.permission_mode ?? null
-        selectedClaudeInChrome.value = b.claude_in_chrome ?? null
-        selectedFastMode.value = b.fast_mode ?? null
     }
 
     function restoreSettings() {
@@ -567,13 +660,12 @@ export function useSessionAgentSettings(sessionIdSource) {
         summaryState,
         startupChanges,
         // presets
-        presets,
-        hasPresets,
         presetsDialogOpen,
+        presetGroups,
         handlePresetSelect,
+        providerSwitcherOptions,
         // handlers
         resetAllToDefaults,
-        resetStack,
         restoreSettings,
         resolveSettingsDefaults,
     }

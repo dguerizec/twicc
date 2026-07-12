@@ -63,8 +63,9 @@ export function presetSummaryParts(preset, helpers, current = null) {
 
 /**
  * Summary parts of a CONCRETE agent-settings bundle keyed by WIRE field names
- * (``selected_model`` / ``thinking_enabled`` / …) — as produced by the
- * reset-stack targets (``useSessionAgentSettings.resetStack``).
+ * (``selected_model`` / ``thinking_enabled`` / …) — as produced by the resolved
+ * default bundles (e.g. the preset picker's "{provider} default" entries via
+ * ``useSessionAgentSettings.presetGroups``) and the project defaults picker.
  */
 export function bundleSummaryParts(bundle, helpers, current = null) {
     return summaryParts(helpers, (spec) => bundle?.[spec.wireField], current)
