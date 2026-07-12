@@ -275,10 +275,17 @@ function collapsePendingRequest() {
 // A new pending request takes the slot (focus it); resolving the last one
 // returns home to the composer and focuses it, ready for the next message —
 // except on touch devices, where stealing focus pops the on-screen keyboard.
+// `flush: 'post'` is required: the form mounts via `v-if` in the *same* flush,
+// so a default 'pre' watcher would run before `pendingFormRef` is set and
+// `focusBlock('pending')` would silently no-op (the form's `requestFocus` is
+// the unconditional focuser that moves the caret onto `.auto-focused`, even
+// out of the composer textarea). Focus only on the active session — a
+// background split-view/KeepAlive instance opens the block but never grabs
+// focus.
 watch(() => pendingRequest.value?.request_id, (id, oldId) => {
-    if (id && id !== oldId) setOpenBlock('pending', { focus: true })
+    if (id && id !== oldId) setOpenBlock('pending', { focus: sessionActive.value })
     else if (!id && oldId && openBlock.value === 'pending') goToComposer(!settingsStore.isTouchDevice)
-})
+}, { flush: 'post' })
 
 // Reset on session switch (this component is reused across sessions). Force a
 // re-apply even when the value is unchanged, so the panels reset too.
