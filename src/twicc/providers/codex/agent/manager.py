@@ -608,6 +608,9 @@ class CodexAgentManager(BaseAgentManager):
             if mcp_enabled():
                 thread_config["mcp_servers"] = {"twicc": _twicc_mcp_server_config(session_id)}
                 _apply_codex_mcp_context_mode(thread_config)
+            # Offer request_user_input (the AskUserQuestion-equivalent) in every
+            # collaboration mode, not just Plan. Applied on both start and resume.
+            _force_request_user_input(thread_config)
             if resume:
                 # Model is sticky to the existing thread server-side — leave it
                 # unset so the resumed thread keeps whatever model it was started
@@ -754,6 +757,23 @@ def _apply_codex_mcp_context_mode(thread_config: dict) -> None:
     features["tool_search_always_defer_mcp_tools"] = True
     # Enabling an under-development feature otherwise prints an unstable-features
     # warning on every thread start.
+    thread_config["suppress_unstable_features_warning"] = True
+
+
+def _force_request_user_input(thread_config: dict) -> None:
+    """Expose Codex's ``request_user_input`` tool in the Default collaboration mode.
+
+    The tool handler is added by default (``tools.experimental_request_user_input``
+    resolves to on when unset), but in the Default (non-Plan) collaboration mode —
+    which is where TwiCC's Codex sessions run — Codex only offers it when the
+    ``default_mode_request_user_input`` feature is enabled. Force it so the
+    AskUserQuestion-equivalent works in every mode, not just Plan.
+
+    The feature is stage ``UnderDevelopment``, so silence the per-start
+    unstable-features warning (same knob ``_apply_codex_mcp_context_mode`` sets).
+    """
+    features = thread_config.setdefault("features", {})
+    features["default_mode_request_user_input"] = True
     thread_config["suppress_unstable_features_warning"] = True
 
 
