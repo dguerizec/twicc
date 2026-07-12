@@ -12,8 +12,12 @@ Wire / preset table (kept in sync with the spec ``§4 Étape 7``):
 | strict      | read-only         | never              | no        | no             |
 | auto        | workspace-write   | on-request         | yes       | workspace only |
 | autonomous  | workspace-write   | never              | no        | workspace only |
-| yolo        | danger-full-access| never              | no        | anywhere       |
+| yolo        | danger-full-access| granular           | elicit    | anywhere       |
 +-------------+-------------------+--------------------+-----------+----------------+
+
+``yolo`` uses a ``granular`` approval policy (not ``never``) so MCP servers can
+still elicit input from the user — see ``_YOLO_APPROVAL`` below for the full
+rationale. Command autonomy is unchanged; only MCP elicitations reach the user.
 
 ``DEFAULT_MODE`` is the value used when ``Session.permission_mode`` is unset
 (``None``) or unknown. Since PR2b it is ``"auto"`` — ``workspace-write`` +
@@ -27,10 +31,43 @@ from __future__ import annotations
 from openai_codex.generated.v2_all import (
     AskForApproval,
     DangerFullAccessSandboxPolicy,
+    Granular,
+    GranularAskForApproval,
     ReadOnlySandboxPolicy,
     SandboxMode,
     SandboxPolicy,
     WorkspaceWriteSandboxPolicy,
+)
+
+# YOLO's approval policy: full autonomy that STILL forwards MCP elicitations to
+# the user. A plain ``never`` makes Codex auto-resolve every elicitation before
+# it reaches the client (decline for schemas with fields, accept-empty for
+# field-less confirms) — so an MCP server that needs input can never ask. A
+# ``granular`` policy with ``mcp_elicitations=true`` is the only variant that
+# both keeps autonomy and lets the elicitation through
+# (``elicitation_is_rejected_by_policy`` returns false for it).
+#
+# Command autonomy is preserved because YOLO's sandbox is ``danger-full-access``
+# (an *unrestricted* filesystem): Codex's ``default_exec_approval_requirement``
+# only raises an exec approval under ``granular`` when the filesystem is
+# ``Restricted``, so with full access commands run without a prompt exactly like
+# ``never`` — the other granular flags never fire and are left False (auto-reject
+# any stray prompt, matching YOLO's no-interruption intent). This is why the
+# trick works ONLY for ``yolo``: ``autonomous`` uses ``workspace-write`` (a
+# Restricted filesystem), where a granular policy would auto-reject
+# out-of-workspace commands instead of sandbox-failing them, so it stays
+# ``never`` (elicitations auto-resolve there — consistent with a non-interactive
+# autonomous mode).
+_YOLO_APPROVAL = AskForApproval(
+    GranularAskForApproval(
+        granular=Granular(
+            mcp_elicitations=True,
+            sandbox_approval=False,
+            rules=False,
+            request_permissions=False,
+            skill_approval=False,
+        )
+    )
 )
 
 # Preset wire value → (SandboxMode enum, AskForApproval enum)
@@ -38,13 +75,14 @@ from openai_codex.generated.v2_all import (
 # AskForApproval is a Pydantic RootModel union; the wire strings live in
 # ``openai_codex.generated.v2_all``. We use AskForApproval(value) for
 # the explicit string variants ("on-request", "never") — that constructor
-# accepts a raw string and round-trips through validation.
+# accepts a raw string and round-trips through validation — and the
+# ``_YOLO_APPROVAL`` granular object for ``yolo`` (see above).
 _PRESET_MAP: dict[str, tuple[SandboxMode, AskForApproval]] = {
     "read_only":  (SandboxMode.read_only,           AskForApproval("on-request")),
     "strict":     (SandboxMode.read_only,           AskForApproval("never")),
     "auto":       (SandboxMode.workspace_write,     AskForApproval("on-request")),
     "autonomous": (SandboxMode.workspace_write,     AskForApproval("never")),
-    "yolo":       (SandboxMode.danger_full_access,  AskForApproval("never")),
+    "yolo":       (SandboxMode.danger_full_access,  _YOLO_APPROVAL),
 }
 
 # ``"auto"`` is the canonical default since PR2b: ``workspace-write`` sandbox

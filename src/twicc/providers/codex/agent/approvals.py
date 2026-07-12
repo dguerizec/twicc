@@ -219,6 +219,31 @@ def auto_approve_response_for(method: str) -> dict:
     return {"decision": "accept"}
 
 
+def is_mcp_tool_call_approval(method: str, params: dict | None) -> bool:
+    """True if this RPC is Codex asking to approve an MCP tool CALL.
+
+    Distinguishes the tool-call approval (``mcpToolCall`` — Codex wants the
+    go-ahead to *run* an MCP tool) from a genuine MCP-server elicitation
+    (``elicitationForm`` / ``elicitationUrl`` — a server asking the *user* for
+    input). Both ride ``mcpServer/elicitation/request``; only the sub-kind
+    (:func:`resolve_tool_name`, from the ``_meta``) tells them apart. Used by
+    the agent to auto-approve tool calls in ``yolo`` — where the Granular
+    approval policy forwards them instead of Codex auto-approving them — while
+    still surfacing real elicitations to the user. Non-approval methods → False.
+    """
+    return is_approval_method(method) and resolve_tool_name(method, params) == "mcpToolCall"
+
+
+def approve_mcp_tool_call_response() -> dict:
+    """Wire response accepting an MCP tool-call approval elicitation.
+
+    Shape mirrors :meth:`CodexWSHandler._build_elicitation_response`'s accept
+    branch: ``{"action": "accept", "content": None, "_meta": None}`` — no
+    ``persist``, so it's a one-shot approval (nothing remembered).
+    """
+    return {"action": "accept", "content": None, "_meta": None}
+
+
 def extract_codex_approval_paths(
     method: str, enriched_params: dict | None,
 ) -> tuple[list[str], bool]:

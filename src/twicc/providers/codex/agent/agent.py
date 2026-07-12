@@ -54,10 +54,12 @@ from ..streaming_registry import get_streamed_item_registry
 from .approvals import (
     ELICITATION_METHOD,
     REQUEST_USER_INPUT_METHOD,
+    approve_mcp_tool_call_response,
     auto_approve_response_for,
     default_response_for,
     extract_codex_approval_paths,
     is_approval_method,
+    is_mcp_tool_call_approval,
     make_pending_request,
 )
 from .hardcoded_commands import HardcodedCommand
@@ -1654,6 +1656,23 @@ class CodexAgent(BaseAgent):
             self.session_id, method, item_id_for_log,
         )
         enriched_params = self._enrich_params_with_item_payload(method, params)
+        # yolo auto-approves MCP tool CALLS client-side. yolo's Granular approval
+        # policy forwards the tool-call approval to us so genuine elicitations
+        # get through (a plain ``never`` auto-approved the call but auto-declined
+        # elicitations — see permission_modes._YOLO_APPROVAL); yolo's contract is
+        # still "no prompt to run a tool". Genuine elicitations
+        # (elicitationForm/Url) are NOT caught here — they reach the user. Gated
+        # on the trust-clamped mode so an untrusted project (yolo clamped away)
+        # never silently auto-approves.
+        if (
+            is_mcp_tool_call_approval(method, enriched_params)
+            and await self._effective_permission_mode() == "yolo"
+        ):
+            logger.info(
+                "Auto-approving Codex MCP tool-call for session %s (yolo — no "
+                "prompt for tool execution)", self.session_id,
+            )
+            return approve_mcp_tool_call_response()
         if await self._should_auto_approve_work_dir(method, enriched_params):
             logger.info(
                 "Auto-approving Codex %s for session %s — targets only system "
@@ -1691,6 +1710,24 @@ class CodexAgent(BaseAgent):
         if payload is None:
             return params
         return {**params, "_item_payload": payload}
+
+    async def _effective_permission_mode(self) -> str | None:
+        """The session's permission mode after the untrusted trust clamp.
+
+        Mirrors :meth:`_run_turn`: an untrusted project re-clamps to the
+        untrusted-allowed set (``yolo`` / ``autonomous`` stripped), so a caller
+        gating on a permissive mode (e.g. auto-approving MCP tool calls in
+        ``yolo``) sees the SAME mode the turn's Codex policy was built from —
+        never the raw, pre-clamp bundle value that would bypass the trust floor.
+        """
+        mode = self.agent_settings.permission_mode
+        if self._untrusted:
+            from twicc.core.services.trust import clamp_permission_mode_for_untrusted
+
+            mode = await sync_to_async(clamp_permission_mode_for_untrusted)(
+                Provider.CODEX, mode,
+            )
+        return mode
 
     async def _should_auto_approve_work_dir(
         self, method: str, enriched_params: dict | None,
