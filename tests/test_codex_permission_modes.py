@@ -13,6 +13,7 @@ import pytest
 from openai_codex.generated.v2_all import (
     AskForApproval,
     DangerFullAccessSandboxPolicy,
+    GranularAskForApproval,
     ReadOnlySandboxPolicy,
     SandboxMode,
     SandboxPolicy,
@@ -28,14 +29,37 @@ from twicc.providers.codex.permission_modes import (
 )
 
 
-# (wire_mode, sandbox_mode, approval_policy_string)
+# (wire_mode, sandbox_mode, approval_policy_expectation)
+# The expectation is the wire string for the plain variants, or "granular" for
+# yolo (a GranularAskForApproval object — see _assert_approval_matches).
 PRESET_TABLE: list[tuple[str, SandboxMode, str]] = [
     ("read_only", SandboxMode.read_only, "on-request"),
     ("strict", SandboxMode.read_only, "never"),
     ("auto", SandboxMode.workspace_write, "on-request"),
     ("autonomous", SandboxMode.workspace_write, "never"),
-    ("yolo", SandboxMode.danger_full_access, "never"),
+    ("yolo", SandboxMode.danger_full_access, "granular"),
 ]
+
+
+def _assert_approval_matches(approval: AskForApproval, expected: str) -> None:
+    """Assert an AskForApproval matches its PRESET_TABLE expectation.
+
+    ``yolo`` uses a granular policy whose only prompt-enabled flag is
+    ``mcp_elicitations`` (elicitations reach the user, everything else stays
+    autonomous — see ``permission_modes._YOLO_APPROVAL``); the other presets
+    are plain string variants.
+    """
+    assert isinstance(approval, AskForApproval)
+    if expected == "granular":
+        assert isinstance(approval.root, GranularAskForApproval)
+        granular = approval.root.granular
+        assert granular.mcp_elicitations is True
+        assert granular.sandbox_approval is False
+        assert granular.rules is False
+        assert granular.request_permissions is False
+        assert granular.skill_approval is False
+    else:
+        assert approval.root.value == expected
 
 
 class TestPresetMap:
@@ -54,8 +78,7 @@ class TestResolveCodexPolicy:
     def test_known_mode_returns_expected_couple(self, mode, sandbox, approval_str):
         result_sandbox, result_approval = resolve_codex_policy(mode)
         assert result_sandbox is sandbox
-        assert isinstance(result_approval, AskForApproval)
-        assert result_approval.root.value == approval_str
+        _assert_approval_matches(result_approval, approval_str)
 
     def test_none_falls_back_to_default(self):
         result = resolve_codex_policy(None)
@@ -108,8 +131,7 @@ class TestResolveCodexTurnOverrides:
             SandboxMode.danger_full_access: DangerFullAccessSandboxPolicy,
         }
         assert isinstance(sandbox_policy.root, type_map[sandbox_mode])
-        assert isinstance(approval, AskForApproval)
-        assert approval.root.value == approval_str
+        _assert_approval_matches(approval, approval_str)
 
     def test_none_falls_back_to_default(self):
         sandbox_policy, approval = resolve_codex_turn_overrides(None)
