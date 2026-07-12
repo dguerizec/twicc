@@ -31,6 +31,7 @@ from ..permission_modes import resolve_codex_policy
 from ..sdk_wrappers import TwiccAsyncCodex
 from .agent import CodexAgent
 from .hardcoded_commands import HardcodedCommand, parse_hardcoded_command
+from .sdk_logger import attach_stderr_logging
 
 logger = logging.getLogger(__name__)
 
@@ -536,6 +537,10 @@ class CodexAgentManager(BaseAgentManager):
         """
         config = await make_codex_config(cwd=cwd)
         codex = TwiccAsyncCodex(config=config)
+        # Debug-only: persist the app-server's stderr (RUST_LOG tracing) per
+        # session. Must be attached before the first RPC lazily spawns the
+        # subprocess and its drain thread.
+        attach_stderr_logging(session_id, codex)
 
         # ``thread_start`` / ``thread_resume`` lazy-init the transport via
         # ``_ensure_initialized`` on first call — no need to start it

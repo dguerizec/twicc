@@ -53,10 +53,19 @@ def _codex_env() -> dict[str, str]:
     Reproduces what the SDK does automatically only when ``codex_bin`` is
     auto-resolved — which never applies to us since we always pass
     ``codex_bin`` explicitly.
+
+    In debug mode (``TWICC_DEBUG``, set by devctl) the overlay also turns on
+    the app-server's tracing output via ``RUST_LOG`` — persisted per session
+    by ``sdk_logger.attach_stderr_logging`` — unless the operator already
+    exported their own ``RUST_LOG``.
     """
     path_dir = str(codex_path_dir())
     existing = os.environ.get("PATH", "")
-    return {"PATH": f"{path_dir}{os.pathsep}{existing}" if existing else path_dir}
+    env = {"PATH": f"{path_dir}{os.pathsep}{existing}" if existing else path_dir}
+    debug = os.environ.get("TWICC_DEBUG", "").strip().lower() in ("1", "true", "yes")
+    if debug and "RUST_LOG" not in os.environ:
+        env["RUST_LOG"] = "codex_core=debug,codex_app_server=debug"
+    return env
 
 
 async def make_codex_config(*, cwd: str | None = None, **extra) -> CodexConfig:

@@ -141,3 +141,65 @@ def log_approval_response(session_id: str, method: str, response: dict) -> None:
         "sent",
         {"method": method, "response": response},
     )
+
+
+def attach_stderr_logging(session_id: str, codex: Any) -> None:
+    """Persist the ``codex app-server`` subprocess stderr to a per-session file.
+
+    The SDK drains stderr into an in-memory ring buffer
+    (``_stderr_lines``, 400 lines) that is lost with the process — useless
+    for post-mortem debugging of the Rust side (tracing output selected via
+    ``RUST_LOG`` goes to stderr). When debug logging is on, replace the
+    SDK's drain-thread starter with a tee variant writing every line to
+    ``<data_dir>/logs/sdk/codex/{session_id}-stderr.log`` while still
+    feeding the ring buffer.
+
+    Must be called BEFORE the first RPC (the subprocess — and its drain
+    thread — starts lazily on ``_ensure_initialized``). No-op in production.
+
+    PRIVATE SDK API — relies on ``codex._client._sync`` exposing ``_proc``,
+    ``_stderr_lines`` and the ``_start_stderr_drain_thread`` slot; see the
+    vendored-SDK update checklist (memory
+    ``reference_codex_sdk_update_procedure``).
+    """
+    if not SDK_LOGGING_ENABLED:
+        return
+    import threading
+
+    sync_client = codex._client._sync
+    log_path = LOGS_DIR / f"{session_id}-stderr.log"
+
+    def _start_tee_drain_thread() -> None:
+        proc = sync_client._proc
+        if proc is None or proc.stderr is None:
+            return
+
+        def _drain() -> None:
+            stderr = proc.stderr
+            if stderr is None:
+                return
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                sink = open(log_path, "ab")
+            except Exception:
+                logger.exception("Failed to open Codex stderr log %s", log_path)
+                sink = None
+            try:
+                for line in stderr:
+                    sync_client._stderr_lines.append(line.rstrip("\n"))
+                    if sink is not None:
+                        try:
+                            sink.write(line.encode() if isinstance(line, str) else line)
+                            sink.flush()
+                        except Exception:
+                            logger.exception("Failed to write Codex stderr log %s", log_path)
+                            sink.close()
+                            sink = None
+            finally:
+                if sink is not None:
+                    sink.close()
+
+        sync_client._stderr_thread = threading.Thread(target=_drain, daemon=True)
+        sync_client._stderr_thread.start()
+
+    sync_client._start_stderr_drain_thread = _start_tee_drain_thread
