@@ -286,7 +286,12 @@ class CodexWSHandler:
         """
         action = content.get("action")
         if not isinstance(action, str) or action not in self._ELICITATION_ACTIONS:
-            logger.error("codex %s: invalid action=%r", tool_name, action)
+            # Dump the whole payload: an absent action with a legacy
+            # ``decision`` key is the signature of a stale frontend page
+            # (pre-elicitation build) answering through the old wire shape.
+            logger.error(
+                "codex %s: invalid action=%r (payload=%r)", tool_name, action, content,
+            )
             return None
         persist = content.get("persist")
         form_content = content.get("content")
