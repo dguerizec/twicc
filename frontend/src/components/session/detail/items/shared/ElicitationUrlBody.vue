@@ -1,15 +1,16 @@
 <script setup>
-// ElicitationUrlBody.vue (codex) — body sub-component for an
+// ElicitationUrlBody.vue (shared) — body sub-component for an
 // ``elicitationUrl`` pending request (request_type ``ask_user_question``,
-// mode ``url``) — Codex asking the user to open an external page (e.g. an
-// OAuth authorization flow) and confirm once done.
+// mode ``url``) — an MCP server asking the user to open an external page
+// (e.g. an OAuth authorization flow) and confirm once done. Used by BOTH
+// providers' PendingRequestBody (Codex and Claude Code).
 //
-// Wire params (tool_input): McpServerElicitationRequestParams —
-// { threadId, turnId, serverName, mode: 'url', _meta, message, url,
-//   elicitationId }
-// (elicitationId is an internal correlation id, never displayed.)
+// Wire params (tool_input): { serverName, mode: 'url', message, url,
+//   elicitationId } — Codex passes its McpServerElicitationRequestParams
+// verbatim, Claude's elicitation bridge maps its snake_case fields onto the
+// same names. (elicitationId is an internal correlation id, never displayed.)
 //
-// Self-contained: like the sibling elicitation bodies, this component owns
+// Self-contained: like the sibling elicitation body, this component owns
 // its entire body including the action row (Cancel / Decline / Done).
 
 import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
@@ -87,12 +88,12 @@ usePendingRequestSubmitShortcut((e) => {
 
 <template>
     <div class="elicitation-url-body">
-        <div class="codex-pending-section">
-            <div class="codex-pending-summary">
-                <span class="codex-summary-label">MCP URL request</span>
+        <div class="elicit-section">
+            <div class="elicit-summary">
+                <span class="elicit-summary-label">MCP URL request</span>
                 <wa-badge variant="neutral">{{ serverName }}</wa-badge>
             </div>
-            <div v-if="message" class="codex-pending-reason">
+            <div v-if="message" class="elicit-reason">
                 <span>{{ message }}</span>
             </div>
 
@@ -100,13 +101,13 @@ usePendingRequestSubmitShortcut((e) => {
                 <code
                     v-if="isValidUrl"
                     :id="copyUrlId"
-                    class="codex-summary-code elicitation-url-code"
+                    class="elicit-summary-code elicitation-url-code"
                     @click="copyUrl"
                 >
                     <wa-icon name="copy" variant="classic"></wa-icon>
                     {{ url }}
                 </code>
-                <code v-else class="codex-summary-code elicitation-url-code elicitation-url-inert">{{ url }}</code>
+                <code v-else class="elicit-summary-code elicitation-url-code elicitation-url-inert">{{ url }}</code>
                 <AppTooltip v-if="isValidUrl" :for="copyUrlId">Click to copy</AppTooltip>
 
                 <wa-button
@@ -126,7 +127,7 @@ usePendingRequestSubmitShortcut((e) => {
             </div>
         </div>
 
-        <div class="codex-pending-actions">
+        <div class="elicit-actions">
             <wa-button
                 :id="cancelButtonId"
                 variant="neutral"
@@ -180,7 +181,7 @@ usePendingRequestSubmitShortcut((e) => {
     overflow-y: auto;
 }
 
-.codex-pending-section {
+.elicit-section {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-xs);
@@ -189,14 +190,14 @@ usePendingRequestSubmitShortcut((e) => {
     padding: var(--wa-space-s);
 }
 
-.codex-pending-summary {
+.elicit-summary {
     display: flex;
     align-items: baseline;
     gap: var(--wa-space-s);
     flex-wrap: wrap;
 }
 
-.codex-summary-label {
+.elicit-summary-label {
     color: var(--wa-color-text-quiet);
     font-size: var(--wa-font-size-xs);
     text-transform: uppercase;
@@ -204,7 +205,7 @@ usePendingRequestSubmitShortcut((e) => {
     font-weight: 600;
 }
 
-.codex-summary-code {
+.elicit-summary-code {
     font-family: var(--wa-font-family-mono);
     font-size: var(--wa-font-size-s);
     background: var(--wa-color-neutral-fill-quiet);
@@ -214,7 +215,7 @@ usePendingRequestSubmitShortcut((e) => {
     white-space: pre-wrap;
 }
 
-.codex-pending-reason {
+.elicit-reason {
     display: flex;
     align-items: center;
     gap: var(--wa-space-xs);
@@ -247,7 +248,7 @@ usePendingRequestSubmitShortcut((e) => {
     color: var(--wa-color-text-quiet);
 }
 
-.codex-pending-actions {
+.elicit-actions {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;

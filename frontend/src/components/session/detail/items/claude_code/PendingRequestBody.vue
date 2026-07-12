@@ -6,6 +6,9 @@
 //   edit mode, deny reason input, and action buttons.
 // - ask_user_question: Shows questions with selectable options and an "Other"
 //   free-text input.
+// Plus the MCP elicitation tool_names (elicitationForm / elicitationUrl),
+// routed to the self-contained shared bodies (same components as Codex) —
+// those own their entire body including the action row.
 //
 // This component does NOT own:
 // - The card outer wrapper (<wa-divider>, container div)
@@ -18,6 +21,8 @@
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount, useId } from 'vue'
 import JsonHumanView from '../../../../json/JsonHumanView.vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
+import ElicitationFormBody from '../shared/ElicitationFormBody.vue'
+import ElicitationUrlBody from '../shared/ElicitationUrlBody.vue'
 import { getLanguageFromPath } from '../../../../../utils/languages'
 import { canStealFocus } from '../../../../../utils/focusGuard'
 
@@ -195,6 +200,18 @@ const otherInputRefs = ref({})
 // Request type for conditional rendering
 const requestType = computed(() => props.pendingRequest.request_type)
 
+// tool_names rendered by a self-contained sub-component that owns its whole
+// body INCLUDING the action row (same pattern as the Codex body). MCP
+// elicitations arrive with these tool_names (request_type ask_user_question);
+// everything else keeps the legacy request_type-driven rendering below.
+const SELF_CONTAINED_BODIES = {
+    elicitationForm: ElicitationFormBody,
+    elicitationUrl: ElicitationUrlBody,
+}
+const selfContainedBody = computed(
+    () => SELF_CONTAINED_BODIES[props.pendingRequest.tool_name] || null,
+)
+
 // Reset state when the pending request changes (e.g., a new one arrives after the previous was resolved)
 watch(() => props.pendingRequest?.request_id, () => {
     // Tool approval state
@@ -222,6 +239,8 @@ watch(() => props.pendingRequest?.request_id, () => {
 // another field or has an overlay (dialog/popover/dropdown/text-selection
 // comment) open. The matching outline is driven by CSS — see the style block.
 function focusPrimaryTarget() {
+    // Self-contained bodies own their own focus (see their `.auto-focused` element).
+    if (selfContainedBody.value) return
     if (!['tool_approval', 'ask_user_question'].includes(requestType.value)) return
     nextTick(() => {
         if (!canStealFocus()) return
@@ -304,6 +323,9 @@ onMounted(focusPrimaryTarget)
 function onSubmitShortcut(e) {
     if (e.key !== 'Enter') return
     if (!(e.metaKey || e.ctrlKey)) return
+    // Self-contained bodies register their own Cmd/Ctrl+Enter handler
+    // (usePendingRequestSubmitShortcut) — never double-fire from here.
+    if (selfContainedBody.value) return
     const form = document.querySelector('.pending-request-form')
     if (!form || !form.contains(document.activeElement)) return
     if (props.isResponding) return
@@ -899,7 +921,18 @@ function handleCancelQuestions() {
 </script>
 
 <template>
-    <template v-if="requestType === 'tool_approval'">
+    <!-- MCP elicitations: self-contained shared bodies (form / URL), which own
+         their entire rendering including the action row. -->
+    <component
+        :is="selfContainedBody"
+        v-if="selfContainedBody"
+        :pending-request="pendingRequest"
+        :is-responding="isResponding"
+        :session-id="sessionId"
+        @submit="emit('submit', $event)"
+    />
+
+    <template v-else-if="requestType === 'tool_approval'">
         <!-- Tool details -->
         <div class="pending-request-details">
             <div class="tool-name-badge">

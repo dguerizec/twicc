@@ -1,16 +1,20 @@
 <script setup>
-// ElicitationFormBody.vue (codex) — body sub-component for an
+// ElicitationFormBody.vue (shared) — body sub-component for an
 // ``elicitationForm`` pending request (request_type ``ask_user_question``,
-// mode ``form``, no approval ``_meta`` tag — untagged elicitations route
-// here instead of McpToolCallApprovalBody).
+// mode ``form``). Used by BOTH providers' PendingRequestBody: Codex (untagged
+// ``mcpServer/elicitation/request`` — the ``_meta``-tagged tool-call variant
+// routes to McpToolCallApprovalBody instead) and Claude Code (the
+// ``subtype: "elicitation"`` control request, normalised backend-side to the
+// same tool_input keys by the elicitation bridge).
 //
-// Wire params (tool_input): McpServerElicitationRequestParams —
-// { threadId, turnId, serverName, mode: 'form', _meta, message,
+// Wire params (tool_input): { serverName, mode: 'form', message,
 //   requestedSchema: { type: 'object', properties: {...}, required: [...] } }
-// (MCP 2025-11-25 ``ElicitRequestFormParams``).
+// (MCP 2025-11-25 ``ElicitRequestFormParams``; Codex passes its
+// McpServerElicitationRequestParams verbatim, Claude's bridge maps its
+// snake_case fields onto the same names).
 //
-// Self-contained: like RequestUserInputBody, this component owns its entire
-// body including the action row (Cancel / Decline / Submit).
+// Self-contained: this component owns its entire body including the action
+// row (Cancel / Decline / Submit).
 
 import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
@@ -270,18 +274,18 @@ usePendingRequestSubmitShortcut((e) => {
 
 <template>
     <div class="elicitation-form-body">
-        <div class="codex-pending-section">
-            <div class="codex-pending-summary">
-                <span class="codex-summary-label">MCP form</span>
+        <div class="elicit-section">
+            <div class="elicit-summary">
+                <span class="elicit-summary-label">MCP form</span>
                 <wa-badge variant="neutral">{{ serverName }}</wa-badge>
             </div>
-            <div v-if="message" class="codex-pending-reason">
+            <div v-if="message" class="elicit-reason">
                 <span>{{ message }}</span>
             </div>
         </div>
 
-        <div v-if="fields.length" class="codex-elicit-fields">
-            <div v-for="(field, fieldIndex) in fields" :key="field.name" class="codex-elicit-field">
+        <div v-if="fields.length" class="elicit-fields">
+            <div v-for="(field, fieldIndex) in fields" :key="field.name" class="elicit-field">
                 <!-- Text / number / select use Web Awesome's own label/hint
                      attributes (associated to the control inside its shadow
                      DOM) and its native required asterisk semantics. -->
@@ -336,21 +340,21 @@ usePendingRequestSubmitShortcut((e) => {
                     :disabled="isResponding"
                     @change="values[field.name] = $event.target.checked"
                 >
-                    {{ field.label }}<span v-if="field.required" class="codex-elicit-required" aria-hidden="true"> *</span>
+                    {{ field.label }}<span v-if="field.required" class="elicit-required" aria-hidden="true"> *</span>
                 </wa-checkbox>
 
                 <!-- Multiselect: checkbox group labelled via aria-labelledby
                      (same pattern as RequestUserInputBody's question groups). -->
                 <div
                     v-else-if="field.kind === 'multiselect'"
-                    class="codex-elicit-multiselect-group"
+                    class="elicit-multiselect-group"
                     role="group"
                     :aria-labelledby="fieldLabelId(fieldIndex)"
                 >
-                    <span :id="fieldLabelId(fieldIndex)" class="codex-elicit-label">
-                        {{ field.label }}<span v-if="field.required" class="codex-elicit-required" aria-hidden="true"> *</span>
+                    <span :id="fieldLabelId(fieldIndex)" class="elicit-label">
+                        {{ field.label }}<span v-if="field.required" class="elicit-required" aria-hidden="true"> *</span>
                     </span>
-                    <div class="codex-elicit-multiselect">
+                    <div class="elicit-multiselect">
                         <wa-checkbox
                             v-for="(opt, idx) in field.options"
                             :key="idx"
@@ -359,19 +363,19 @@ usePendingRequestSubmitShortcut((e) => {
                             @change="toggleMultiselect(field.name, opt.value, $event.target.checked)"
                         >{{ opt.label }}</wa-checkbox>
                     </div>
-                    <p v-if="field.spec.description" class="codex-elicit-help">{{ field.spec.description }}</p>
+                    <p v-if="field.spec.description" class="elicit-help">{{ field.spec.description }}</p>
                 </div>
 
                 <template v-else-if="field.kind === 'unsupported'">
-                    <p class="codex-elicit-unsupported">
+                    <p class="elicit-unsupported">
                         Unsupported field type for "{{ field.name }}".
                     </p>
-                    <p v-if="field.spec.description" class="codex-elicit-help">{{ field.spec.description }}</p>
+                    <p v-if="field.spec.description" class="elicit-help">{{ field.spec.description }}</p>
                 </template>
             </div>
         </div>
 
-        <div class="codex-pending-actions">
+        <div class="elicit-actions">
             <wa-button
                 :id="cancelButtonId"
                 variant="neutral"
@@ -425,7 +429,7 @@ usePendingRequestSubmitShortcut((e) => {
     overflow-y: auto;
 }
 
-.codex-pending-section {
+.elicit-section {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-xs);
@@ -434,14 +438,14 @@ usePendingRequestSubmitShortcut((e) => {
     padding: var(--wa-space-s);
 }
 
-.codex-pending-summary {
+.elicit-summary {
     display: flex;
     align-items: baseline;
     gap: var(--wa-space-s);
     flex-wrap: wrap;
 }
 
-.codex-summary-label {
+.elicit-summary-label {
     color: var(--wa-color-text-quiet);
     font-size: var(--wa-font-size-xs);
     text-transform: uppercase;
@@ -449,7 +453,7 @@ usePendingRequestSubmitShortcut((e) => {
     font-weight: 600;
 }
 
-.codex-pending-reason {
+.elicit-reason {
     display: flex;
     align-items: center;
     gap: var(--wa-space-xs);
@@ -457,54 +461,54 @@ usePendingRequestSubmitShortcut((e) => {
     font-size: var(--wa-font-size-m);
 }
 
-.codex-elicit-fields {
+.elicit-fields {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-m);
 }
 
-.codex-elicit-field {
+.elicit-field {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-2xs);
 }
 
-.codex-elicit-label {
+.elicit-label {
     font-size: var(--wa-font-size-s);
     font-weight: 600;
     color: var(--wa-color-text);
 }
 
-.codex-elicit-required {
+.elicit-required {
     color: var(--wa-color-danger-fill-loud);
 }
 
-.codex-elicit-help {
+.elicit-help {
     margin: 0;
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
 }
 
-.codex-elicit-multiselect-group {
+.elicit-multiselect-group {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-2xs);
 }
 
-.codex-elicit-multiselect {
+.elicit-multiselect {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-2xs);
 }
 
-.codex-elicit-unsupported {
+.elicit-unsupported {
     margin: 0;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
     font-style: italic;
 }
 
-.codex-pending-actions {
+.elicit-actions {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;

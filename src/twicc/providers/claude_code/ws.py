@@ -25,6 +25,10 @@ from claude_agent_sdk.types import (
 )
 
 from twicc.core.enums import Provider
+from twicc.providers.claude_code.agent.elicitation import (
+    ELICITATION_TOOL_NAMES,
+    default_elicitation_response,
+)
 from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
 from twicc.providers.claude_code.auth import (
     check_and_broadcast as check_auth_and_broadcast,
@@ -295,6 +299,19 @@ class ClaudeCodeWSHandler:
                       (answered ones listed, the rest "(No answer provided)").
         - "cancel"  : declined → deny (no interrupt) with a fixed message asking the
                       agent to acknowledge and ask how to proceed.
+
+        Expected content for an MCP elicitation (shared Elicitation*Body
+        components — they carry ``tool_name``, never ``request_type``):
+        {
+            "type": "claude_code:pending_request_response",
+            "session_id": "...",
+            "request_id": "...",
+            "tool_name": "elicitationForm" | "elicitationUrl",
+            "action": "accept" | "decline" | "cancel",
+            "content": {...},  // accept only (filled form values)
+        }
+        The validated ``{action, content?}`` dict is handed verbatim to the
+        elicitation bridge, which writes it back as the CLI control response.
         """
         try:
             ensure_provider_running(Provider.CLAUDE_CODE)
@@ -311,15 +328,41 @@ class ClaudeCodeWSHandler:
         request_type = content.get("request_type")
         request_id = content.get("request_id")
 
-        if not session_id or not request_type or not request_id:
+        if not session_id or not request_id:
             logger.warning(
                 "pending_request_response missing required fields: "
-                "session_id=%s, request_type=%s, request_id=%s",
-                session_id, request_type, request_id,
+                "session_id=%s, request_id=%s",
+                session_id, request_id,
             )
             return
 
         manager = get_claude_code_agent_manager()
+
+        # MCP elicitations first: their payload is keyed by ``tool_name`` (the
+        # shared bodies emit no ``request_type``), and their response is a raw
+        # wire dict, not a PermissionResult.
+        if content.get("tool_name") in ELICITATION_TOOL_NAMES:
+            response = self._build_elicitation_response(content)
+            if response is None:
+                # Validation failed (already logged). Resolve with the safe
+                # default so the elicitation — and the MCP tool call awaiting
+                # it — isn't left hanging.
+                response = default_elicitation_response()
+            resolved = await manager.resolve_pending_request(session_id, request_id, response)
+            if not resolved:
+                logger.warning(
+                    "pending_request_response: failed to resolve elicitation %s for "
+                    "session %s (no matching pending request or already resolved)",
+                    request_id, session_id,
+                )
+            return
+
+        if not request_type:
+            logger.warning(
+                "pending_request_response missing request_type for session %s (request %s)",
+                session_id, request_id,
+            )
+            return
 
         if request_type == "tool_approval":
             decision = content.get("decision")
@@ -411,3 +454,41 @@ class ClaudeCodeWSHandler:
                 "(no matching pending request or already resolved)",
                 request_id, session_id,
             )
+
+    # Actions an elicitation response may carry (MCP ElicitationResult).
+    _ELICITATION_ACTIONS: frozenset[str] = frozenset({"accept", "decline", "cancel"})
+
+    def _build_elicitation_response(self, content: dict) -> dict | None:
+        """Validate an elicitation answer into the CLI wire response.
+
+        Mirrors the Codex builder (``CodexWSHandler._build_elicitation_response``)
+        minus the ``persist`` variant (Claude has no MCP-tool-call elicitation
+        sub-kind). Returns ``None`` on any validation failure — the caller
+        substitutes the safe ``cancel`` default. ``content`` (the filled form
+        values) is only allowed with ``accept`` and is omitted from the
+        response when absent (the CLI schema marks it optional).
+        """
+        tool_name = content.get("tool_name")
+        action = content.get("action")
+        if not isinstance(action, str) or action not in self._ELICITATION_ACTIONS:
+            logger.error(
+                "claude_code %s: invalid action=%r (payload=%r)", tool_name, action, content,
+            )
+            return None
+        form_content = content.get("content")
+        if action != "accept" and form_content is not None:
+            logger.error(
+                "claude_code %s: content only allowed with accept (action=%r)",
+                tool_name, action,
+            )
+            return None
+        response: dict = {"action": action}
+        if form_content is not None:
+            if not isinstance(form_content, dict):
+                logger.error(
+                    "claude_code %s: invalid content type=%r (expected dict)",
+                    tool_name, type(form_content).__name__,
+                )
+                return None
+            response["content"] = form_content
+        return response

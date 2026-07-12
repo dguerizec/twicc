@@ -7,8 +7,8 @@ import { fileIconFor } from '../../../../../providers/utils/path'
 import { canStealFocus } from '../../../../../utils/focusGuard'
 import McpToolCallApprovalBody from './McpToolCallApprovalBody.vue'
 import RequestUserInputBody from './RequestUserInputBody.vue'
-import ElicitationFormBody from './ElicitationFormBody.vue'
-import ElicitationUrlBody from './ElicitationUrlBody.vue'
+import ElicitationFormBody from '../shared/ElicitationFormBody.vue'
+import ElicitationUrlBody from '../shared/ElicitationUrlBody.vue'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },

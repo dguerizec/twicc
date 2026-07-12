@@ -39,6 +39,7 @@ from twicc.core.models import Session
 from twicc.pending_session_attributes import get_pending_session_attributes
 from twicc.providers.helpers import AgentSettings
 
+from .elicitation import attach_elicitation_handler, make_elicitation_pending_request
 from .permissions import (
     extract_claude_tool_paths,
     maybe_update_plan_file,
@@ -731,6 +732,31 @@ class ClaudeCodeAgent(BaseAgent):
 
         return response
 
+    async def _handle_elicitation_request(self, params: dict) -> dict:
+        """Elicitation-bridge handler: create a pending request and wait for the user.
+
+        Called (via :mod:`.elicitation`) when an MCP server elicits input
+        mid-tool-call — the CLI forwards it as a ``subtype: "elicitation"``
+        control request. Unlike ``can_use_tool``, this path is active in EVERY
+        permission mode (including ``bypassPermissions``): an elicitation is a
+        server asking the *user* for data, not a tool asking to run, so no
+        auto-approve gate applies.
+
+        The returned dict is the CLI wire response, already shape-validated by
+        the WS layer (``ClaudeCodeWSHandler._build_elicitation_response``):
+        ``{"action": ..., "content"?: {...}}``. A cancelled future
+        (kill / turn interrupt) propagates ``CancelledError`` to the bridge,
+        which drops the control request without a response — mirroring the
+        SDK's own cancel semantics.
+        """
+        request = make_elicitation_pending_request(params)
+        logger.info(
+            "MCP elicitation for session %s: server=%r mode=%r",
+            self.session_id, request.tool_input.get("serverName"),
+            request.tool_input.get("mode"),
+        )
+        return await self._await_pending_request(request)
+
     async def _build_query_prompt(
         self,
         text: str,
@@ -1067,6 +1093,12 @@ class ClaudeCodeAgent(BaseAgent):
             # always uses streaming mode for the control protocol. We must connect()
             # first, then query() to send messages.
             await self._client.connect()
+
+            # Route MCP elicitations (control requests the Python SDK does not
+            # know) to our pending-request pipeline. Must come after connect()
+            # — the Query object only exists from there — and always before
+            # any turn runs (elicitations only fire mid-turn).
+            attach_elicitation_handler(self._client, self._handle_elicitation_request)
 
             # Build query prompt as async generator (streaming mode)
             query_prompt = await self._build_query_prompt(prompt, images, documents)
