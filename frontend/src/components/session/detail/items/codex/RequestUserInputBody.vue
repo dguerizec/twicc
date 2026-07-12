@@ -13,6 +13,13 @@
 //
 // Self-contained: unlike the sibling approval bodies, this component owns
 // its entire body including the action row (Dismiss / Submit).
+//
+// Rendering and keyboard interaction are a deliberate hard-align with the
+// Claude equivalent (PendingRequestBody.vue's ask_user_question section) —
+// an interim before a shared component, hence the duplicated markup/CSS.
+// Codex is single-select only (the native request_user_input tool never
+// emits multi-select), so the multiSelect concept from that reference is
+// dropped entirely here.
 
 import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
@@ -45,7 +52,7 @@ const questions = computed(() => {
 // position guarantee across requests, but request_id changes reset all of this).
 const selections = ref({}) // idx -> selected option label
 const otherTexts = ref({}) // idx -> free text
-const otherActive = ref({}) // idx -> bool ("Other"/bare-input is the active choice)
+const otherActive = ref({}) // idx -> bool ("Other" is the active choice)
 
 function resetState() {
     selections.value = {}
@@ -62,9 +69,9 @@ function setPrimaryRef(el, isPrimary) {
 }
 
 // Template refs for the "Other" free-text inputs, keyed by question index —
-// used to move focus into the field when its Other card is clicked. Bare
-// free-text questions (no options) don't register here: they have no card
-// to activate them.
+// used to move focus into the field when its toggle link is clicked. Bare
+// free-text questions (no options) don't register here: they have no
+// toggle, the input is the primary control itself (see setPrimaryRef).
 const textInputRefs = ref({})
 function setTextInputRef(idx, el) {
     if (el) textInputRefs.value[idx] = el
@@ -89,49 +96,98 @@ function hasOptions(question) {
     return Array.isArray(question.options) && question.options.length > 0
 }
 
-function selectOption(idx, label) {
+/**
+ * Select an option for a question. Single-select only: replaces the
+ * selection and clears any active "Other" text.
+ */
+function selectOption(questionIndex, label) {
     if (props.isResponding) return
-    selections.value[idx] = label
-    otherActive.value[idx] = false
+    selections.value[questionIndex] = label
+    otherActive.value[questionIndex] = false
+    otherTexts.value[questionIndex] = ''
 }
 
-function activateOther(idx) {
+/**
+ * Handle keyboard navigation and selection on option cards.
+ * Enter/Space select; ArrowLeft/Right wrap-navigate within the question;
+ * Home/End jump to first/last card.
+ */
+function handleOptionKeydown(event, qIndex, option) {
     if (props.isResponding) return
-    otherActive.value[idx] = true
-    selections.value[idx] = null
-    nextTick(() => textInputRefs.value[idx]?.focus())
+
+    const key = event.key
+
+    if (key === 'Enter' || key === ' ') {
+        event.preventDefault()
+        selectOption(qIndex, option.label)
+        return
+    }
+
+    if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'Home' || key === 'End') {
+        const currentCard = event.currentTarget
+        const container = currentCard.parentElement
+        if (!container) return
+        const cards = Array.from(container.querySelectorAll(':scope > .option-card'))
+        const currentIndex = cards.indexOf(currentCard)
+        if (currentIndex === -1) return
+        event.preventDefault()
+        let targetIndex
+        if (key === 'ArrowLeft') {
+            targetIndex = (currentIndex - 1 + cards.length) % cards.length
+        } else if (key === 'ArrowRight') {
+            targetIndex = (currentIndex + 1) % cards.length
+        } else if (key === 'Home') {
+            targetIndex = 0
+        } else {
+            targetIndex = cards.length - 1
+        }
+        cards[targetIndex].focus()
+    }
 }
 
-// Typing in the free-text field makes it the active choice for the question
-// (clearing any selected option card). Activation happens on actual input —
-// never on mere focus: the always-visible "Other" input sits in the Tab
-// order between the option cards and Dismiss/Submit, so a focus-triggered
-// activation would let plain keyboard traversal silently change the answer.
-function onTextInput(idx, event) {
-    otherTexts.value[idx] = event.target.value
-    otherActive.value[idx] = true
-    selections.value[idx] = null
+function isOptionSelected(questionIndex, label) {
+    return selections.value[questionIndex] === label
 }
 
-// Resolved answer for a question: the free text when "Other"/bare-input is
-// active (or the question has no options at all), otherwise the selected
-// option label. null means unanswered.
-function answerFor(idx) {
-    const q = questions.value[idx]
-    if (!q) return null
-    if (otherActive.value[idx] || !hasOptions(q)) {
-        const text = (otherTexts.value[idx] || '').trim()
+/**
+ * Toggle "Other" free-text mode for a question.
+ * If already active, deactivates it and clears the text.
+ * If not active, activates it and clears the selected option card.
+ */
+function toggleOther(questionIndex) {
+    if (otherActive.value[questionIndex]) {
+        otherActive.value[questionIndex] = false
+        otherTexts.value[questionIndex] = ''
+        return
+    }
+    otherActive.value[questionIndex] = true
+    selections.value[questionIndex] = null
+    // Focus the input after Vue renders it
+    nextTick(() => {
+        const input = textInputRefs.value[questionIndex]
+        if (input) input.focus()
+    })
+}
+
+function onOtherInput(questionIndex, event) {
+    otherTexts.value[questionIndex] = event.target.value
+}
+
+// Resolved answer for a question: the free text when "Other" is active (or
+// the question has no options at all — a bare free-text question),
+// otherwise the selected option label. null means unanswered.
+function getQuestionAnswer(questionIndex) {
+    const question = questions.value[questionIndex]
+    if (!question) return null
+    if (otherActive.value[questionIndex] || !hasOptions(question)) {
+        const text = (otherTexts.value[questionIndex] || '').trim()
         return text ? text : null
     }
-    return selections.value[idx] ?? null
-}
-
-function isOptionSelected(idx, label) {
-    return !otherActive.value[idx] && selections.value[idx] === label
+    return selections.value[questionIndex] ?? null
 }
 
 const allAnswered = computed(() =>
-    questions.value.length > 0 && questions.value.every((q, idx) => answerFor(idx) !== null))
+    questions.value.length > 0 && questions.value.every((q, idx) => getQuestionAnswer(idx) !== null))
 
 function submit() {
     if (props.isResponding || !allAnswered.value) return
@@ -141,7 +197,7 @@ function submit() {
         // payload could send a missing/non-string id (→ key "undefined",
         // silently overwriting any prior entry) — skip those defensively.
         if (typeof q.id !== 'string' || !q.id) continue
-        answers[q.id] = { answers: [answerFor(idx)] }
+        answers[q.id] = { answers: [getQuestionAnswer(idx)] }
     }
     emit('submit', { tool_name: 'toolRequestUserInput', answers })
 }
@@ -159,64 +215,70 @@ function dismiss() {
             <div
                 v-for="(question, qIndex) in questions"
                 :key="question.id ?? qIndex"
-                class="codex-pending-section"
+                class="question-block"
                 role="group"
                 :aria-labelledby="questionTextId(qIndex)"
             >
-                <span v-if="question.header" class="codex-summary-label">{{ question.header }}</span>
+                <div v-if="question.header" class="question-header">{{ question.header }}</div>
                 <div :id="questionTextId(qIndex)" class="question-text">{{ question.question }}</div>
+                <div v-if="hasOptions(question)" class="question-select-hint">Select one</div>
 
-                <!-- Option cards, keyboard-accessible via native <button> semantics. -->
+                <!-- Options as selectable cards. -->
                 <div v-if="hasOptions(question)" class="question-options">
-                    <button
+                    <wa-card
                         v-for="(option, optionIndex) in question.options"
                         :key="option.label"
-                        type="button"
+                        appearance="outlined"
                         class="option-card"
                         :class="{
                             selected: isOptionSelected(qIndex, option.label),
+                            disabled: isResponding,
                             'auto-focused': qIndex === 0 && optionIndex === 0,
                         }"
-                        :aria-pressed="String(isOptionSelected(qIndex, option.label))"
-                        :disabled="isResponding"
+                        role="button"
+                        :tabindex="isResponding ? -1 : 0"
+                        :aria-pressed="isOptionSelected(qIndex, option.label) ? 'true' : 'false'"
+                        :aria-disabled="isResponding ? 'true' : null"
                         :ref="el => setPrimaryRef(el, qIndex === 0 && optionIndex === 0)"
-                        @click="selectOption(qIndex, option.label)"
+                        @click="!isResponding && selectOption(qIndex, option.label)"
+                        @keydown="handleOptionKeydown($event, qIndex, option)"
                     >
-                        <span class="option-label">{{ option.label }}</span>
-                        <span v-if="option.description" class="option-description">{{ option.description }}</span>
-                    </button>
-
-                    <button
-                        v-if="question.isOther"
-                        type="button"
-                        class="option-card other-card"
-                        :class="{ selected: otherActive[qIndex] }"
-                        :aria-pressed="String(!!otherActive[qIndex])"
-                        :disabled="isResponding"
-                        @click="activateOther(qIndex)"
-                    >
-                        <span class="option-label">Other…</span>
-                    </button>
+                        <div class="option-card-content">
+                            <span class="option-label">{{ option.label }}</span>
+                            <span v-if="option.description" class="option-description">{{ option.description }}</span>
+                        </div>
+                    </wa-card>
                 </div>
 
-                <!-- Free-text alternative alongside options ("Other"). -->
-                <div v-if="question.isOther && hasOptions(question)" class="text-input-row">
+                <!-- "Other" toggle link + text input (only when the question allows it). -->
+                <div v-if="question.isOther && hasOptions(question)" class="other-section">
+                    <a
+                        href="#"
+                        class="other-toggle-link"
+                        :class="{ disabled: isResponding }"
+                        @click.prevent="!isResponding && toggleOther(qIndex)"
+                    >{{ otherActive[qIndex] ? 'Cancel other' : 'Other...' }}</a>
+                </div>
+                <div v-if="question.isOther && hasOptions(question) && otherActive[qIndex]" class="other-input-row">
                     <wa-input
                         :ref="el => setTextInputRef(qIndex, el)"
                         :type="question.isSecret ? 'password' : 'text'"
                         :aria-label="question.question"
                         placeholder="Type your answer..."
                         size="small"
+                        class="other-input"
                         :value.prop="otherTexts[qIndex] || ''"
                         :disabled="isResponding"
-                        @input="onTextInput(qIndex, $event)"
+                        @input="onOtherInput(qIndex, $event)"
                     ></wa-input>
                 </div>
 
-                <!-- Pure free-text question (no options at all). -->
-                <div v-else-if="!hasOptions(question)" class="text-input-row">
+                <!-- Pure free-text question (no options at all) — the input is the
+                     only control, always visible (there's nothing to toggle). -->
+                <div v-if="!hasOptions(question)" class="other-input-row">
                     <wa-input
                         :ref="el => setPrimaryRef(el, qIndex === 0)"
+                        class="other-input"
                         :class="{ 'auto-focused': qIndex === 0 }"
                         :type="question.isSecret ? 'password' : 'text'"
                         :aria-label="question.question"
@@ -224,7 +286,7 @@ function dismiss() {
                         size="small"
                         :value.prop="otherTexts[qIndex] || ''"
                         :disabled="isResponding"
-                        @input="onTextInput(qIndex, $event)"
+                        @input="onOtherInput(qIndex, $event)"
                     ></wa-input>
                 </div>
             </div>
@@ -268,23 +330,6 @@ function dismiss() {
     min-height: 0;
 }
 
-.codex-pending-section {
-    display: flex;
-    flex-direction: column;
-    gap: var(--wa-space-xs);
-    background: var(--wa-color-neutral-5);
-    border-radius: var(--wa-border-radius-m);
-    padding: var(--wa-space-s);
-}
-
-.codex-summary-label {
-    color: var(--wa-color-text-quiet);
-    font-size: var(--wa-font-size-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 600;
-}
-
 .codex-pending-actions {
     display: flex;
     flex-wrap: wrap;
@@ -301,8 +346,28 @@ function dismiss() {
     min-height: 0;
 }
 
+.question-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-xs);
+    padding: var(--wa-space-s);
+}
+
+.question-header {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+}
+
 .question-text {
     line-height: 1.4;
+}
+
+.question-select-hint {
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-text-quiet);
 }
 
 .question-options {
@@ -312,40 +377,31 @@ function dismiss() {
     margin-top: var(--wa-space-2xs);
 }
 
-/* Plain <button> styled as a card — native focus/keyboard semantics (Tab,
-   Enter, Space) come for free, no custom keydown handling needed.
-   Two-layer variable indirection (like the Claude question form): the
-   `-base` layer carries the state colors (default vs .selected), and the
-   derived layer is what's painted — hover lightens the derived layer FROM
-   the current base, so hovering a selected card keeps its selected colors. */
+/* Two-layer variable indirection: the `-base` layer carries the state
+   colors (default vs .selected), and the derived layer is what's painted —
+   hover lightens the derived layer FROM the current base, so hovering a
+   selected card keeps its selected colors. */
 .option-card {
     flex: 1 1 0;
     min-width: min-content;
     max-width: 20rem;
-    display: flex;
-    flex-direction: column;
-    gap: var(--wa-space-s);
-    text-align: left;
     cursor: pointer;
-    font: inherit;
-    color: inherit;
     transition: border-color 0.15s, background-color 0.15s;
-    padding: var(--wa-space-s);
-    border-radius: var(--wa-border-radius-m);
+    --spacing: var(--wa-space-m);
 
     --border-color-base: var(--wa-color-surface-border);
     --background-color-base: var(--wa-color-surface-raised);
     --border-color: var(--border-color-base);
     --background-color: var(--background-color-base);
 
-    border: 1px solid var(--border-color);
+    border-color: var(--border-color);
     background: var(--background-color);
     box-shadow: var(--wa-shadow-offset-x-s) var(--wa-shadow-offset-y-s) 0 0 var(--border-color);
-}
-
-.option-card:hover:not(:disabled) {
-    --border-color: oklch(from var(--border-color-base) calc(l + 0.025) c h);
-    --background-color: oklch(from var(--background-color-base) calc(l + 0.025) c h);
+    &:hover {
+        /* use new css color syntax to make border-color and background color 10% lighter */
+        --border-color: oklch(from var(--border-color-base)calc(l + 0.025) c h);
+        --background-color: oklch(from var(--background-color-base)calc(l + 0.025) c h);
+    }
 }
 
 .option-card.selected {
@@ -353,7 +409,7 @@ function dismiss() {
     --background-color-base: var(--wa-color-fill-normal);
 }
 
-.option-card:disabled {
+.option-card.disabled {
     opacity: 0.6;
     cursor: not-allowed;
 }
@@ -378,6 +434,12 @@ wa-input.auto-focused:focus-within::part(base) {
     outline-offset: var(--wa-focus-ring-offset);
 }
 
+.option-card-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-s);
+}
+
 .option-label {
     font-weight: 600;
     color: var(--wa-color-text);
@@ -391,11 +453,43 @@ wa-input.auto-focused:focus-within::part(base) {
     line-height: 1.3;
 }
 
-.text-input-row {
+.other-section {
+    margin-top: var(--wa-space-3xs);
+}
+
+.other-toggle-link {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-primary-60);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.other-toggle-link:hover:not(.disabled) {
+    text-decoration: underline;
+}
+
+.other-toggle-link.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.other-input-row {
     margin-top: var(--wa-space-2xs);
 }
 
-.text-input-row wa-input {
+.other-input {
     width: 100%;
+}
+
+/* Auto-grow with content up to 4 lines of text, then scroll. The max-height
+   mirrors the inner textarea's block padding formula (wa-textarea compensates
+   the line-height overshoot: padding-block - (1lh - 1em) / 2 per side).
+   No-op for the wa-input elements above (no `textarea` shadow part) — kept
+   for parity with the Claude reference and in case an Other/free-text field
+   here ever needs to grow to a textarea. */
+.other-input::part(textarea) {
+    max-height: calc(4lh + 2 * (var(--wa-form-control-padding-block) - (1lh - 1em) / 2));
+    overflow-y: auto;
 }
 </style>
