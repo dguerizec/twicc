@@ -1183,13 +1183,16 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // header word across providers.
         if (name === 'update_plan') return 'Todo'
         // ``web_search_call`` splits into two user-facing surfaces
-        // depending on the action variant: WebSearch for ``search``
-        // (one or more queries), WebFetch for ``open_page`` /
-        // ``find_in_page`` (URL retrieval). Mirrors Claude Code's
-        // ``WebSearch`` / ``WebFetch`` headers so the user gets the
-        // same word across providers.
+        // depending on the action variant: a web search for ``search``
+        // (one or more queries) vs a web fetch for ``open_page`` /
+        // ``find_in_page`` (URL retrieval). Sentence case to match the
+        // shared formatter, which now renders Claude Code's ``WebSearch`` /
+        // ``WebFetch`` tools as ``Web search`` / ``Web fetch`` — so the user
+        // gets the same words across providers. Not removable: dropping the
+        // override would surface the raw ``Web search call`` and lose the
+        // search-vs-fetch distinction (which lives in ``input.type``).
         if (name === 'web_search_call') {
-            return input?.type === 'search' ? 'WebSearch' : 'WebFetch'
+            return input?.type === 'search' ? 'Web search' : 'Web fetch'
         }
         // ``exec`` is Codex's ``code_mode`` tool — runs a JavaScript
         // snippet as a sandboxed code cell. When the script wraps a
@@ -1217,12 +1220,15 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // ``view_image`` loads a local image for the model — show the
         // clean "Image" header instead of the raw ``view_image`` name.
         if (name === VIEW_IMAGE_TOOL_NAME) return 'Image'
-        // Codex-only thread Goal tools: the raw snake_case names would
-        // surface verbatim in the header, so give them clean labels.
-        // ``get_goal`` never reaches here — the backend buckets it as
-        // SYSTEM (DEBUG_ONLY).
-        if (name === 'create_goal') return 'Create goal'
-        if (name === 'update_goal') return 'Update goal'
+        // Only SEMANTIC remaps live here (Edit, Todo, WebSearch, Image,
+        // Run code) — where the header word differs from the tool's raw
+        // name. Pure snake_case → clean-label cases (``create_goal``,
+        // ``update_goal``, ``request_user_input``, and any future
+        // first-party tool) are intentionally NOT listed: the shared
+        // ``formatToolNameForHeader`` fallback already sentence-cases them
+        // ("Create goal", "Request user input"), so an entry here would be
+        // dead duplication. ``get_goal`` never reaches the header — the
+        // backend buckets it as SYSTEM (DEBUG_ONLY).
         if (!FUNCTION_CALL_EXEC_TOOLS.has(name)) return null
         const parsed = resolveParsedCommand(name, input)
         if (!parsed) return null
