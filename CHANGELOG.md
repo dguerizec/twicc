@@ -6,10 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **MCP input requests** — MCP servers that need something from you mid-task now show a form right in the conversation.
+- **Codex question widget** — Codex questions now come through the same interactive widget as Claude's (and not only in Plan mode).
+
 ### Changed
 
 - **Claude Agent SDK** — Upgrade from 0.2.111 to 0.2.115 (bundled Claude Code CLI: 2.1.202 → 2.1.206)
 - **Codex runtime** — Update from v0.144.0 to v0.144.1.
+
+### Fixed
+
+- **Codex MCP approvals** — Codex asking permission to run an MCP tool now shows a proper approval form.
 
 ## [1.91.1] - 2026-07-10
 
