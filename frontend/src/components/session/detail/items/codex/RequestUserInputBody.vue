@@ -260,9 +260,27 @@ function dismiss() {
                     >{{ otherActive[qIndex] ? 'Cancel other' : 'Other...' }}</a>
                 </div>
                 <div v-if="question.isOther && hasOptions(question) && otherActive[qIndex]" class="other-input-row">
-                    <wa-input
+                    <!-- Normal case (the native tool never sets isSecret): an
+                         auto-growing wa-textarea, matching Claude verbatim. -->
+                    <wa-textarea
+                        v-if="!question.isSecret"
                         :ref="el => setTextInputRef(qIndex, el)"
-                        :type="question.isSecret ? 'password' : 'text'"
+                        :aria-label="question.question"
+                        placeholder="Type your answer..."
+                        size="small"
+                        rows="1"
+                        resize="auto"
+                        class="other-input"
+                        :value.prop="otherTexts[qIndex] || ''"
+                        :disabled="isResponding"
+                        @input="onOtherInput(qIndex, $event)"
+                    ></wa-textarea>
+                    <!-- Defensive isSecret branch (never fires for the native
+                         tool): a masked input — a textarea can't hide input. -->
+                    <wa-input
+                        v-else
+                        :ref="el => setTextInputRef(qIndex, el)"
+                        type="password"
                         :aria-label="question.question"
                         placeholder="Type your answer..."
                         size="small"
@@ -276,11 +294,26 @@ function dismiss() {
                 <!-- Pure free-text question (no options at all) — the input is the
                      only control, always visible (there's nothing to toggle). -->
                 <div v-if="!hasOptions(question)" class="other-input-row">
-                    <wa-input
+                    <wa-textarea
+                        v-if="!question.isSecret"
                         :ref="el => setPrimaryRef(el, qIndex === 0)"
                         class="other-input"
                         :class="{ 'auto-focused': qIndex === 0 }"
-                        :type="question.isSecret ? 'password' : 'text'"
+                        :aria-label="question.question"
+                        placeholder="Type your answer..."
+                        size="small"
+                        rows="1"
+                        resize="auto"
+                        :value.prop="otherTexts[qIndex] || ''"
+                        :disabled="isResponding"
+                        @input="onOtherInput(qIndex, $event)"
+                    ></wa-textarea>
+                    <wa-input
+                        v-else
+                        :ref="el => setPrimaryRef(el, qIndex === 0)"
+                        class="other-input"
+                        :class="{ 'auto-focused': qIndex === 0 }"
+                        type="password"
                         :aria-label="question.question"
                         placeholder="Type your answer..."
                         size="small"
@@ -429,6 +462,7 @@ function dismiss() {
     outline-offset: 2px;
 }
 
+wa-textarea.auto-focused:focus-within::part(base),
 wa-input.auto-focused:focus-within::part(base) {
     outline: var(--wa-focus-ring);
     outline-offset: var(--wa-focus-ring-offset);
@@ -485,9 +519,9 @@ wa-input.auto-focused:focus-within::part(base) {
 /* Auto-grow with content up to 4 lines of text, then scroll. The max-height
    mirrors the inner textarea's block padding formula (wa-textarea compensates
    the line-height overshoot: padding-block - (1lh - 1em) / 2 per side).
-   No-op for the wa-input elements above (no `textarea` shadow part) — kept
-   for parity with the Claude reference and in case an Other/free-text field
-   here ever needs to grow to a textarea. */
+   resize="auto" sets overflow-y: hidden, which would trap content past the
+   cap — restore scrolling. Live for the normal-case wa-textarea fields; inert
+   on the defensive isSecret wa-input fallback (it has no `textarea` part). */
 .other-input::part(textarea) {
     max-height: calc(4lh + 2 * (var(--wa-form-control-padding-block) - (1lh - 1em) / 2));
     overflow-y: auto;
