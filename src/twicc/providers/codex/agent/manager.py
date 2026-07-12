@@ -539,8 +539,10 @@ class CodexAgentManager(BaseAgentManager):
         codex = TwiccAsyncCodex(config=config)
         # Debug-only: persist the app-server's stderr (RUST_LOG tracing) per
         # session. Must be attached before the first RPC lazily spawns the
-        # subprocess and its drain thread.
-        attach_stderr_logging(session_id, codex)
+        # subprocess and its drain thread — so it only knows the draft id here.
+        # The returned callback re-homes the log onto the canonical thread id
+        # once thread_start mints it (see below); None in production.
+        rebind_stderr_log = attach_stderr_logging(session_id, codex)
 
         # ``thread_start`` / ``thread_resume`` lazy-init the transport via
         # ``_ensure_initialized`` on first call — no need to start it
@@ -667,6 +669,13 @@ class CodexAgentManager(BaseAgentManager):
                 from twicc.mcp.identity import register_draft_alias
 
                 register_draft_alias(session_id, thread.id)
+
+            # Re-home the debug stderr log from the draft id (all we had before
+            # thread_start) onto the canonical id, so it matches the JSONL
+            # request log and everything else keyed by the real session id.
+            # No-op on resume (ids already equal) and in production.
+            if rebind_stderr_log is not None:
+                rebind_stderr_log(thread.id)
 
             # On resume ``thread.id == session_id``; on new sessions Codex
             # picked its own canonical id and ``_start_agent`` will broadcast

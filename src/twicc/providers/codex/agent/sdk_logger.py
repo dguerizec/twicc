@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -143,7 +144,7 @@ def log_approval_response(session_id: str, method: str, response: dict) -> None:
     )
 
 
-def attach_stderr_logging(session_id: str, codex: Any) -> None:
+def attach_stderr_logging(session_id: str, codex: Any) -> Callable[[str], None] | None:
     """Persist the ``codex app-server`` subprocess stderr to a per-session file.
 
     The SDK drains stderr into an in-memory ring buffer
@@ -157,17 +158,31 @@ def attach_stderr_logging(session_id: str, codex: Any) -> None:
     Must be called BEFORE the first RPC (the subprocess — and its drain
     thread — starts lazily on ``_ensure_initialized``). No-op in production.
 
+    Because it runs before ``thread_start``, ``session_id`` here is the
+    frontend *draft* id — Codex hasn't minted the canonical thread id yet.
+    Returns a ``rebind(canonical_id)`` callback (``None`` in production) the
+    caller invokes once ``thread_start`` returns, to re-home the log onto the
+    canonical id so it matches the ``{canonical}.jsonl`` request log and every
+    other artifact keyed by the session's real id. No-op on resume (ids equal).
+
     PRIVATE SDK API — relies on ``codex._client._sync`` exposing ``_proc``,
     ``_stderr_lines`` and the ``_start_stderr_drain_thread`` slot; see the
     vendored-SDK update checklist (memory
     ``reference_codex_sdk_update_procedure``).
     """
     if not SDK_LOGGING_ENABLED:
-        return
+        return None
     import threading
 
     sync_client = codex._client._sync
-    log_path = LOGS_DIR / f"{session_id}-stderr.log"
+    # Lock-guarded so the post-thread_start rebind can re-home the log whether
+    # or not the drain thread has opened the file yet. Only the one-shot open
+    # and the rebind take the lock; the hot per-line write path stays lock-free
+    # (the drain owns its ``sink`` locally, and on Linux the open fd follows the
+    # inode across a rename). ``opened`` flips to True only *after* a successful
+    # open, so a concurrent rebind never renames a not-yet-created file.
+    lock = threading.Lock()
+    state: dict[str, Any] = {"path": LOGS_DIR / f"{session_id}-stderr.log", "opened": False}
 
     def _start_tee_drain_thread() -> None:
         proc = sync_client._proc
@@ -178,12 +193,15 @@ def attach_stderr_logging(session_id: str, codex: Any) -> None:
             stderr = proc.stderr
             if stderr is None:
                 return
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                sink = open(log_path, "ab")
-            except Exception:
-                logger.exception("Failed to open Codex stderr log %s", log_path)
-                sink = None
+            with lock:
+                path = state["path"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    sink = open(path, "ab")
+                except Exception:
+                    logger.exception("Failed to open Codex stderr log %s", path)
+                    sink = None
+                state["opened"] = True
             try:
                 for line in stderr:
                     sync_client._stderr_lines.append(line.rstrip("\n"))
@@ -192,7 +210,7 @@ def attach_stderr_logging(session_id: str, codex: Any) -> None:
                             sink.write(line.encode() if isinstance(line, str) else line)
                             sink.flush()
                         except Exception:
-                            logger.exception("Failed to write Codex stderr log %s", log_path)
+                            logger.exception("Failed to write Codex stderr log %s", path)
                             sink.close()
                             sink = None
             finally:
@@ -203,3 +221,23 @@ def attach_stderr_logging(session_id: str, codex: Any) -> None:
         sync_client._stderr_thread.start()
 
     sync_client._start_stderr_drain_thread = _start_tee_drain_thread
+
+    def _rebind(canonical_id: str) -> None:
+        new_path = LOGS_DIR / f"{canonical_id}-stderr.log"
+        with lock:
+            old_path = state["path"]
+            if new_path == old_path:
+                return
+            state["path"] = new_path
+            if not state["opened"]:
+                return  # drain hasn't opened yet; it will pick up new_path
+            # Already open: the drain's fd follows the inode, so renaming the
+            # file on disk transparently redirects its future writes.
+            try:
+                os.rename(old_path, new_path)
+            except FileNotFoundError:
+                pass  # open() failed earlier (sink is None); nothing to move
+            except OSError:
+                logger.exception("Failed to rename Codex stderr log %s -> %s", old_path, new_path)
+
+    return _rebind
