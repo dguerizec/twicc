@@ -420,7 +420,9 @@ export function useSessionAgentSettings(sessionIdSource) {
         // that follows its defaults still shows its running cell as selected.
         const effModel = selectedModel.value ?? resolvedDefaults.value.selected_model
         const effEffort = selectedEffort.value ?? resolvedDefaults.value.effort
-        return matrixProviders.value.map(provider => {
+        const providers = matrixProviders.value
+        const nProviders = providers.length
+        return providers.map(provider => {
             const helpers = getProviderHelpers(provider)
             const registry = helpers?.getModelRegistry() ?? []
             const supported = new Set((helpers?.getFieldChoices('effort') ?? []).map(c => c.value))
@@ -454,6 +456,22 @@ export function useSessionAgentSettings(sessionIdSource) {
                     : short
                 return { model, name, version, isLatest: entry.latest === true, cells }
             })
+            // Top-score border: mark the block's best-scoring enabled cell(s).
+            // A single provider (or the default provider when several are shown)
+            // gets a solid border; each other provider gets a dashed one — so the
+            // user spots the best score for their provider and for each other.
+            let maxScore = null
+            for (const row of rows) for (const cell of row.cells) {
+                if (cell.enabled && cell.score != null && (maxScore === null || cell.score > maxScore)) {
+                    maxScore = cell.score
+                }
+            }
+            if (maxScore !== null) {
+                const borderStyle = (nProviders < 2 || provider === def?.provider) ? 'solid' : 'dashed'
+                for (const row of rows) for (const cell of row.cells) {
+                    if (cell.enabled && cell.score === maxScore) cell.borderStyle = borderStyle
+                }
+            }
             return { provider, label: getProviderLabel(provider), icon: getProviderIcon(provider), isCurrent, rows }
         })
     })

@@ -124,15 +124,18 @@ function onCellClick(provider, model, cell) {
                         :key="cell.effort"
                         type="button"
                         class="matrix-cell"
-                        :class="{ selected: cell.selected, unavailable: !cell.enabled }"
-                        :style="{ gridColumn: cell.col, gridRow: r.row }"
+                        :class="{ selected: cell.selected, unavailable: !cell.enabled, 'top-solid': cell.borderStyle === 'solid', 'top-dashed': cell.borderStyle === 'dashed', 'score-high': cell.enabled && cell.score != null && cell.score > 80 }"
+                        :style="{ gridColumn: cell.col, gridRow: r.row, '--score-alpha': cell.enabled && cell.score != null ? cell.score / 100 : 0 }"
                         :disabled="!cell.enabled"
                         :aria-label="`${block.label} · ${r.name} ${r.version} · ${cell.effort}${cell.enabled ? ` · score ${cell.score ?? 'unknown'}` : ''}`"
                         :aria-pressed="cell.selected"
                         @click="onCellClick(block.provider, r.model, cell)"
                     >
                         <span v-if="cell.isDefault" class="matrix-default-dot"></span>
-                        <span v-if="cell.enabled" class="matrix-cell-score">{{ cell.score ?? '?' }}</span>
+                        <span v-if="cell.enabled" class="matrix-cell-score" :class="{ 'no-score': cell.score == null }">{{ cell.score ?? '?' }}</span>
+                        <span v-if="cell.selected" class="matrix-cell-check">
+                            <wa-icon name="check"></wa-icon>
+                        </span>
                     </button>
                 </template>
             </template>
@@ -147,7 +150,10 @@ function onCellClick(provider, model, cell) {
             >
                 {{ showOldModels ? 'Hide older models' : 'Show older models' }}
             </button>
-            <span class="matrix-legend"><span class="matrix-default-dot"></span> default</span>
+            <span class="matrix-legend">
+                <span class="matrix-legend-item"><span class="matrix-default-dot"></span> default</span>
+                <span class="matrix-legend-item"><wa-icon class="matrix-legend-check" name="check"></wa-icon> selected</span>
+            </span>
         </div>
     </div>
 </template>
@@ -226,17 +232,31 @@ function onCellClick(provider, model, cell) {
 }
 
 .matrix-cell {
+    /* Shared foreground for the score, the selected check and the default dot.
+       Flipped to the surface color above score 80 in light mode only (see
+       .score-high) so it stays readable on the strong fill. */
+    --cell-fg: var(--wa-color-text-normal);
     position: relative;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     justify-content: center;
     min-height: 1.9rem;
     border: 1px solid var(--wa-color-neutral-border-normal, var(--wa-color-surface-border));
     border-radius: var(--wa-border-radius-s);
-    background: var(--wa-color-neutral-fill-quiet, transparent);
+    /* Score-driven fill: brand at alpha = score/100 (0 -> transparent, 100 ->
+       full brand). --score-alpha is set inline per cell. */
+    background-color: color-mix(in srgb, var(--wa-color-brand-60) calc(var(--score-alpha, 0) * 100%), transparent);
     cursor: pointer;
     padding: 0;
-    transition: background 0.1s, border-color 0.1s;
+    transition: background-color 0.1s, border-color 0.1s;
+}
+
+/* Above score 80, in light mode only, flip the shared foreground to the surface
+   color so the number stays readable on the strong fill. In dark mode
+   text-normal already reads on the fill, so we leave it (no inversion). */
+:root:not(.wa-dark) .matrix-cell.score-high {
+    --cell-fg: var(--wa-color-surface-default);
 }
 
 /* Benchmark score (integer 0..100, or "?" when there's no benchmark data). */
@@ -244,7 +264,12 @@ function onCellClick(provider, model, cell) {
     font-size: var(--wa-font-size-xs);
     font-variant-numeric: tabular-nums;
     line-height: 1;
-    color: var(--wa-color-text-normal);
+    color: var(--cell-fg);
+}
+
+/* "?" placeholder for cells without benchmark data — kept quiet. */
+.matrix-cell-score.no-score {
+    color: var(--wa-color-text-quiet);
 }
 
 .matrix-cell.selected .matrix-cell-score {
@@ -252,14 +277,40 @@ function onCellClick(provider, model, cell) {
 }
 
 .matrix-cell:hover:not(:disabled) {
-    background: var(--wa-color-brand-fill-quiet);
     border-color: var(--wa-color-brand-border-normal, var(--wa-color-brand-60));
 }
 
-.matrix-cell.selected {
-    background: var(--wa-color-brand-fill-normal, var(--wa-color-brand-fill-quiet));
-    border-color: var(--wa-color-brand-60);
-    box-shadow: inset 0 0 0 1px var(--wa-color-brand-60);
+/* Best score of a provider block: solid border for the user's default provider
+   (or a lone provider), dashed for each other provider. Drawn as an overlay
+   ring (::after, out of flow) so the thick border never shifts the grid — every
+   cell keeps its 1px base border — and `outline` stays free for keyboard focus.
+   inset: -2px bleeds the ring 1px into the 3px grid gap instead of shrinking the
+   fill; the ring paints over the base border underneath. */
+.matrix-cell.top-solid::after,
+.matrix-cell.top-dashed::after {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    pointer-events: none;
+    border: 3px solid var(--wa-color-text-normal);
+}
+
+.matrix-cell.top-dashed::after {
+    border-style: dashed;
+}
+
+/* Selection marker — green check in the bottom-right corner (score-sized).
+   The selection no longer draws a border: that's reserved for later use. */
+.matrix-cell-check {
+    position: absolute;
+    right: 3px;
+    bottom: 2px;
+    display: inline-flex;
+    font-size: var(--wa-font-size-s);
+    line-height: 1;
+    color: var(--cell-fg);
+    transform: translateX(3px);
 }
 
 .matrix-cell.unavailable {
@@ -282,7 +333,9 @@ function onCellClick(provider, model, cell) {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--wa-color-brand-60);
+    /* In a cell: matches the score (inverts above 80). In the legend (no
+       --cell-fg ancestor): falls back to the normal text color. */
+    background: var(--cell-fg, var(--wa-color-text-normal));
 }
 
 .matrix-footer {
@@ -308,7 +361,7 @@ function onCellClick(provider, model, cell) {
 .matrix-legend {
     display: inline-flex;
     align-items: center;
-    gap: var(--wa-space-2xs);
+    gap: var(--wa-space-s);
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
     margin-left: auto;
@@ -316,5 +369,16 @@ function onCellClick(provider, model, cell) {
     .matrix-default-dot {
         position: static;
     }
+}
+
+.matrix-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+}
+
+.matrix-legend-check {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-normal);
 }
 </style>
