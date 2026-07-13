@@ -16,6 +16,7 @@ import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
 import HelpSettings from '../settings/HelpSettings.vue'
 import HelpIconButton from '../help/HelpIconButton.vue'
+import { showHelp } from '../help/showHelp'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
 import LayoutManagerDialog from '../session/layout/LayoutManagerDialog.vue'
@@ -1428,6 +1429,12 @@ function onChangelogClose() {
                 <section v-if="activeSection === 'sharing'" class="settings-section">
                     <h3 class="settings-section-title">Sharing</h3>
                     <div class="setting-group">
+                        <wa-button size="small" appearance="plain" class="sharing-help-link" @click="showHelp('sharing', { showDontShowAgain: false })">
+                            <wa-icon name="circle-question" slot="start"></wa-icon>
+                            View help
+                        </wa-button>
+                    </div>
+                    <div class="setting-group">
                         <label class="setting-group-label">Share host <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
                         <div class="setting-input-apply-row">
                             <wa-input
@@ -1455,7 +1462,7 @@ function onChangelogClose() {
                         </span>
                     </div>
                     <div class="setting-group">
-                        <wa-button size="small" variant="neutral" @click="showShareManager = true">
+                        <wa-button size="small" variant="neutral" appearance="accent" @click="showShareManager = true">
                             <wa-icon name="share-nodes" slot="start"></wa-icon>
                             Shared links
                         </wa-button>
@@ -2536,6 +2543,12 @@ wa-popover > wa-divider {
         justify-content: flex-start;
         margin-bottom: var(--wa-space-s);
     }
+}
+
+/* The "View help" link in the Sharing section hugs its content, pinned to
+   the left edge of the section. */
+.settings-sections .sharing-help-link {
+    align-self: flex-start;
 }
 
 .settings-sections .setting-group-label {

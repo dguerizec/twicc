@@ -7,6 +7,7 @@ import { shareAbsoluteUrl } from '../../utils/shareUrl'
 import { apiFetch } from '../../utils/api'
 import { toast } from '../../composables/useToast'
 import AppTooltip from '../ui/AppTooltip.vue'
+import HelpIconButton from '../help/HelpIconButton.vue'
 
 // Async: ArtifactBookmarkDialog.vue statically imports ShareDialog.vue, so this
 // back-reference must be lazy to avoid a circular-import HMR break (project rule).
@@ -217,6 +218,7 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
             <wa-callout variant="warning">
                 Anyone with the link can read this {{ isSession ? 'transcript' : 'artifact' }} as-is,
                 including file paths, commands and output. There is no redaction.
+                <HelpIconButton help-key="sharing" label="Learn about sharing" />
             </wa-callout>
 
             <label>Label (private)

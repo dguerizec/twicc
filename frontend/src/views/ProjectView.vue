@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useSharesStore } from '../stores/shares'
+import { useHelpStore } from '../stores/help'
 import { useWorkspacesStore } from '../stores/workspaces'
 import { COLOR_SCHEME } from '../constants'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
@@ -61,6 +62,7 @@ const router = useRouter()
 const store = useDataStore()
 const settingsStore = useSettingsStore()
 const sharesStore = useSharesStore()
+const helpStore = useHelpStore()
 const { registerCommands, unregisterCommands } = useCommandRegistry()
 
 // Persistent-frame host. hostMounted must be true BEFORE any child mounts
@@ -456,6 +458,15 @@ function openShareDialog(e) {
     }
     if (hasShares) shareTargetOpen.value = true
     else shareDialogOpen.value = true
+    // First time someone reaches sharing, surface the help page on top of the
+    // dialog that just opened (with the dismiss switch). Every share button
+    // funnels through here, so this is the single trigger. maybeAutoShow no-ops
+    // once seen or if another help is already open.
+    helpStore.maybeAutoShow('sharing', {
+        platform: settingsStore._isTouchDevice ? 'mobile' : 'desktop',
+        os: settingsStore.os,
+        enabledProviders: settingsStore.enabledProviders,
+    })
 }
 
 // Pending drop data: set when files/text are dropped on a session list item.
