@@ -12,6 +12,7 @@
 
 ## Commit Conventions
 
+- Format the subject line as a Conventional Commit — `type(scope): summary` (scope optional), with `type` one of `feat`, `fix`, `docs`, `refactor`, `test`, `chore` (etc.) and a lowercase summary.
 - When creating commits, include a descriptive commit body that explains the change, not only a subject line.
 - Add a `Co-Authored-By: Claude MODEL <noreply@anthropic.com>` trailer for the model that performed the work. `MODEL` is the exact name of the Claude model you are currently running as, taken from your own environment at commit time — e.g. `Opus 4.8 (1M context)`, `Fable 5`, `Sonnet 4.6`. Do not hardcode a model name; use whichever one is actually running.
 
