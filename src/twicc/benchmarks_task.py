@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from channels.layers import get_channel_layer
+
 from twicc.benchmarks import extract_benchmarks, fetch_deepswe_leaderboard
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,43 @@ async def _persist_via_db_writer(benchmarks: list[dict]) -> dict[str, int]:
     ))
 
 
+def _serialize_all_benchmarks() -> list[dict]:
+    """Read + serialize every :class:`ModelBenchmark` row (blocking ORM).
+
+    Runs on a worker thread (no event loop): reads the whole table and maps it
+    through :func:`serialize_benchmark_row` so the broadcast ships the same wire
+    shape as the ``/api/bootstrap/`` ``benchmarks`` key.
+    """
+    from twicc.core.models import ModelBenchmark
+    from twicc.core.serializers import serialize_benchmark_row
+
+    return [serialize_benchmark_row(b) for b in ModelBenchmark.objects.all()]
+
+
+async def broadcast_benchmarks_updated() -> None:
+    """Push the full benchmark dataset to every connected client.
+
+    Sends the COMPLETE table (not just the rows that changed): the frontend
+    store replaces its set wholesale and recomputes each score over the whole
+    dataset, so a partial payload would corrupt the min/max normalisation.
+    Mirrors :func:`twicc.usage_task.broadcast_usage_updated` — one
+    ``benchmarks_updated`` message fanned out through the shared ``updates``
+    group. Read + serialize hop onto a worker thread (blocking ORM).
+    """
+    benchmarks = await asyncio.to_thread(_serialize_all_benchmarks)
+    channel_layer = get_channel_layer()
+    await channel_layer.group_send(
+        "updates",
+        {
+            "type": "broadcast",
+            "data": {
+                "type": "benchmarks_updated",
+                "benchmarks": benchmarks,
+            },
+        },
+    )
+
+
 async def _run_sync_cycle() -> None:
     """Run one fetch + extract + DB-writer-routed persist, logging the outcome.
 
@@ -79,6 +118,16 @@ async def _run_sync_cycle() -> None:
         return
 
     logger.info("Model benchmark sync completed: %s", _format_stats(stats))
+
+    # Notify connected clients when the upsert wrote at least one row (created
+    # or updated). An empty fetch (nothing mapped to a supported model) writes
+    # nothing and skips the broadcast. Kept resilient: a channel-layer hiccup
+    # must not break the periodic loop.
+    if stats.get("created", 0) + stats.get("updated", 0) > 0:
+        try:
+            await broadcast_benchmarks_updated()
+        except Exception as e:  # noqa: BLE001 — keep loop alive across transient errors
+            logger.error("Model benchmark broadcast failed: %s", e, exc_info=True)
 
 
 async def start_benchmark_sync_task(stop_event: asyncio.Event) -> None:

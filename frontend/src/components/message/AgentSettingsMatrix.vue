@@ -11,7 +11,9 @@ import { computed, ref } from 'vue'
 
 const props = defineProps({
     // [{ provider, label, icon, isCurrent, rows: [{ model, label, isLatest,
-    //    cells: [{ effort, enabled, selected, isDefault }] }] }]
+    //    cells: [{ effort, enabled, selected, isDefault, score }] }] }]
+    // score is the benchmark score (integer 0..100) or null when there's no
+    // benchmark data for that (model, effort).
     blocks: { type: Array, default: () => [] },
     // [{ effort, label }] — shared columns across every block
     effortColumns: { type: Array, default: () => [] },
@@ -125,11 +127,12 @@ function onCellClick(provider, model, cell) {
                         :class="{ selected: cell.selected, unavailable: !cell.enabled }"
                         :style="{ gridColumn: cell.col, gridRow: r.row }"
                         :disabled="!cell.enabled"
-                        :aria-label="`${block.label} · ${r.name} ${r.version} · ${cell.effort}`"
+                        :aria-label="`${block.label} · ${r.name} ${r.version} · ${cell.effort}${cell.enabled ? ` · score ${cell.score ?? 'unknown'}` : ''}`"
                         :aria-pressed="cell.selected"
                         @click="onCellClick(block.provider, r.model, cell)"
                     >
                         <span v-if="cell.isDefault" class="matrix-default-dot"></span>
+                        <span v-if="cell.enabled" class="matrix-cell-score">{{ cell.score ?? '?' }}</span>
                     </button>
                 </template>
             </template>
@@ -224,6 +227,9 @@ function onCellClick(provider, model, cell) {
 
 .matrix-cell {
     position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-height: 1.9rem;
     border: 1px solid var(--wa-color-neutral-border-normal, var(--wa-color-surface-border));
     border-radius: var(--wa-border-radius-s);
@@ -231,6 +237,18 @@ function onCellClick(provider, model, cell) {
     cursor: pointer;
     padding: 0;
     transition: background 0.1s, border-color 0.1s;
+}
+
+/* Benchmark score (integer 0..100, or "?" when there's no benchmark data). */
+.matrix-cell-score {
+    font-size: var(--wa-font-size-xs);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    color: var(--wa-color-text-normal);
+}
+
+.matrix-cell.selected .matrix-cell-score {
+    font-weight: var(--wa-font-weight-semibold);
 }
 
 .matrix-cell:hover:not(:disabled) {

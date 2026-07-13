@@ -2,6 +2,7 @@ import { ref, computed, watch, toValue, nextTick } from 'vue'
 import { useDataStore } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useAgentSettingsPresetsStore } from '../stores/agentSettingsPresets'
+import { useBenchmarksStore } from '../stores/benchmarks'
 import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderIcon, getProviderLabel } from '../providers'
 import { resolveProjectAgentDefaults, ancestorChain } from '../utils/projectAgentDefaults'
 import { resolveProjectTrust } from '../utils/trust'
@@ -30,6 +31,7 @@ const SESSION_SETTING_FIELDS = ['permission_mode', 'selected_model', 'effort', '
 export function useSessionAgentSettings(sessionIdSource) {
     const store = useDataStore()
     const settingsStore = useSettingsStore()
+    const benchmarksStore = useBenchmarksStore()
 
     const sessionId = computed(() => toValue(sessionIdSource))
     const session = computed(() => store.getSession(sessionId.value))
@@ -436,6 +438,9 @@ export function useSessionAgentSettings(sessionIdSource) {
                         enabled,
                         selected: isCurrent && model === effModel && effort === effEffort,
                         isDefault: !!def && provider === def.provider && model === def.model && effort === def.effort,
+                        // Benchmark score joins on the internal SDK id (full_name),
+                        // not the picker alias (selected_model). null -> "?".
+                        score: benchmarksStore.getScore(provider, entry.full_name, effort),
                     }
                 })
                 // Split name + version into two grid spans. The short label
