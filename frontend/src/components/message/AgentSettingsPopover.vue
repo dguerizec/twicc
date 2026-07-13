@@ -6,7 +6,7 @@
 // resolved through hooks on the session's provider helpers — see the
 // "Agent settings popover/summary rendering hooks" section in
 // ``BaseProviderHelpers``.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { presetSummaryParts, bundleSummaryParts } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
@@ -15,6 +15,7 @@ import { useDataStore } from '../../stores/data'
 import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
 import AgentSettingsSummaryView from './AgentSettingsSummaryView.vue'
 import AgentSettingsMatrix from './AgentSettingsMatrix.vue'
+import AppTooltip from '../ui/AppTooltip.vue'
 
 const props = defineProps({
     for: { type: String, required: true },
@@ -60,6 +61,8 @@ const {
 } = props.settings
 
 const dataStore = useDataStore()
+// Unique prefix for notice-icon ids (multiple popovers may coexist in the DOM).
+const uid = useId()
 
 // Non-image attachments currently held by the draft. Computed off the
 // store's reactive Map so the labelled wa-callout below reacts to add /
@@ -133,10 +136,19 @@ async function removeBlockingDocuments() {
     if (target) switchToProvider(target)
 }
 
-// Setting rows below the matrix. ``supportsAgentSetting`` filters each entry
-// per-provider so a field nobody declares is silently skipped. ``selected_model``
-// and ``effort`` are intentionally absent — the matrix owns both.
-const SIMPLE_FIELDS = ['context_max', 'thinking_enabled', 'permission_mode', 'claude_in_chrome', 'fast_mode']
+// Fields shown below the matrix, in order, each with the widget it renders as.
+// ``selected_model`` / ``effort`` are owned by the matrix and absent here.
+//   • select — Default/Force-to wa-select (permission).
+//   • switch — boolean wa-switch (thinking, Chrome MCP, fast mode).
+//   • toggle — two-value bi-label wa-switch (context: big value on, small off);
+//              hidden when the field offers a single choice.
+const FIELD_WIDGETS = [
+    { field: 'context_max', kind: 'toggle' },
+    { field: 'thinking_enabled', kind: 'switch' },
+    { field: 'fast_mode', kind: 'switch' },
+    { field: 'claude_in_chrome', kind: 'switch' },
+    { field: 'permission_mode', kind: 'select' },
+]
 
 const defaults = computed(() => summaryState.value.defaults)
 
@@ -214,43 +226,78 @@ const idleSettingsWarning = computed(() => {
     })
 })
 
-// Setting rows below the model row — one v-for over all simple fields the
-// provider declares. The model row is rendered separately because it
-// consumes ``getModelSelectGroups`` instead of a flat choices list.
-const simpleFieldRows = computed(() => {
+// Ordered rows below the matrix (see FIELD_WIDGETS). Each carries a ``kind`` the
+// template renders: a select, a boolean switch, or a two-value toggle (context).
+// Switches/toggles are shown only when the feature is actually toggleable
+// (``fieldHasChoice``): context with no 1M / fixed window, thinking that can't be
+// disabled, and fast mode on unsupported models are dropped entirely. A ``notice``
+// (icon + tooltip) surfaces what the compact switch can't spell out.
+const settingRows = computed(() => {
     const helpers = providerHelpers.value
     if (!helpers) return []
-    return SIMPLE_FIELDS
-        .filter(field => helpers.supportsAgentSetting(field))
-        .map(field => {
-            const ctx = fieldContext(field)
+    const rows = []
+    for (const { field, kind } of FIELD_WIDGETS) {
+        if (!helpers.supportsAgentSetting(field)) continue
+        const ctx = fieldContext(field)
+        const label = helpers.getFieldLabel(field)
+        if (kind === 'toggle') {
+            if (!helpers.fieldHasChoice(field, ctx)) continue
+            // Two selectable values ordered small→big. Rendered as a single
+            // switch labelled after the big value ("1M context"): ON selects the
+            // big value, OFF the small one. When the runtime forced the big value
+            // (context auto-promote), reflect it as ON regardless of the stored
+            // value — the field is disabled and carries a warning notice.
+            const choices = [...helpers.getFieldChoices(field)].sort((a, b) => Number(a.value) - Number(b.value))
+            const small = choices[0]
+            const big = choices[choices.length - 1]
+            rows.push({
+                field, kind,
+                toggleLabel: `${big.label} ${label.toLowerCase()}`,
+                bigValue: big.value,
+                smallValue: small.value,
+                checked: currentEffective.value[field] === big.value || !!ctx.isContextMaxForced,
+                disabled: helpers.isFieldDisabled(field, ctx),
+                notice: helpers.getFieldNotice(field, ctx),
+            })
+        } else if (kind === 'switch') {
+            // Only toggleable switches reach here (fieldHasChoice); the disabled
+            // state left is the transient startup lock.
+            if (!helpers.fieldHasChoice(field, ctx)) continue
+            rows.push({
+                field, kind, label,
+                checked: currentEffective.value[field] === true,
+                disabled: helpers.isFieldDisabled(field, ctx),
+                notice: helpers.getFieldNotice(field, ctx),
+            })
+        } else {
             const selectedValue = SELECTED_REFS[field]?.value ?? null
-            const defaultValue = defaults.value[field]
-            return {
-                field,
-                label: helpers.getFieldLabel(field),
+            rows.push({
+                field, kind, label,
                 value: helpers.getDisplayedSelectValue(field, selectedValue, ctx),
-                defaultLabel: helpers.getDefaultValueLabel(field, defaultValue),
+                defaultLabel: helpers.getDefaultValueLabel(field, defaults.value[field]),
                 fieldDisabled: helpers.isFieldDisabled(field, ctx),
                 helpText: helpers.getFieldHelpText(field, ctx),
-                selectedValue,
                 choices: helpers.getFieldChoices(field).map(opt => {
                     const disabled = helpers.isChoiceDisabled(field, opt.value, ctx)
-                    const disabledReason = disabled
-                        ? helpers.getChoiceDisabledReason(field, opt.value, ctx)
-                        : null
+                    const disabledReason = disabled ? helpers.getChoiceDisabledReason(field, opt.value, ctx) : null
                     return {
                         value: String(opt.value),
-                        rawValue: opt.value,
                         label: opt.label,
                         description: disabledReason ?? opt.description ?? null,
                         labelWithSuffix: disabled ? `${opt.label} (not available)` : opt.label,
                         disabled,
                     }
                 }),
-            }
-        })
+            })
+        }
+    }
+    return rows
 })
+
+// Split for layout: the switch/toggle rows share one wrapping flex row; the
+// selects (permission) render below them, each on its own row.
+const switchRows = computed(() => settingRows.value.filter(r => r.kind !== 'select'))
+const selectRows = computed(() => settingRows.value.filter(r => r.kind === 'select'))
 
 function onSelectChange(field, event) {
     const ref_ = SELECTED_REFS[field]
@@ -267,6 +314,17 @@ function onSelectChange(field, event) {
     const choices = providerHelpers.value?.getFieldChoices(field) ?? []
     const match = choices.find(opt => String(opt.value) === raw)
     ref_.value = match ? match.value : raw
+}
+
+function onSwitchChange(field, event) {
+    const ref_ = SELECTED_REFS[field]
+    if (ref_) ref_.value = event.target.checked
+}
+
+// Context toggle switch: ON writes the big value, OFF the small one.
+function onContextToggle(row, event) {
+    const ref_ = SELECTED_REFS[row.field]
+    if (ref_) ref_.value = event.target.checked ? row.bigValue : row.smallValue
 }
 
 function resetField(field) {
@@ -460,9 +518,40 @@ onBeforeUnmount(() => {
                 @select="onMatrixSelect"
             />
 
-            <!-- Other rows -->
+            <!-- Switches (context toggle, thinking, Chrome MCP, fast mode) share
+                 one wrapping flex row; the permission select renders below. -->
+            <div v-if="switchRows.length" class="settings-switches">
+                <!-- Boolean switch (thinking, Chrome MCP, fast) or the context
+                     toggle (ON = 1M). An optional notice icon + tooltip
+                     (hover / click) sits beside the switch. -->
+                <div v-for="row in switchRows" :key="row.field" class="setting-switch">
+                    <wa-switch
+                        size="small"
+                        :checked="row.checked"
+                        :disabled="row.disabled"
+                        @change="row.kind === 'toggle' ? onContextToggle(row, $event) : onSwitchChange(row.field, $event)"
+                    >{{ row.kind === 'toggle' ? row.toggleLabel : row.label }}</wa-switch>
+                    <template v-if="row.notice">
+                        <wa-icon
+                            :id="`${uid}-notice-${row.field}`"
+                            class="setting-notice-icon"
+                            :class="`notice-${row.notice.variant}`"
+                            :name="row.notice.icon"
+                            tabindex="0"
+                            role="button"
+                        ></wa-icon>
+                        <AppTooltip
+                            :for="`${uid}-notice-${row.field}`"
+                            force
+                            trigger="hover focus click"
+                        >{{ row.notice.text }}</AppTooltip>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Select rows (permission) — each on its own row, at the end -->
             <div
-                v-for="row in simpleFieldRows"
+                v-for="row in selectRows"
                 :key="row.field"
                 class="setting-row"
             >
@@ -513,7 +602,7 @@ onBeforeUnmount(() => {
 .settings-panel {
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-m);
+    gap: var(--wa-space-l);
     overflow-y: auto;
     flex: 1;
     min-height: 0;
@@ -627,6 +716,37 @@ onBeforeUnmount(() => {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-2xs);
+}
+
+/* A switch (label inline in the wa-switch) + its optional notice icon, laid
+   out on one line. */
+.setting-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-3xs);
+    font-size: var(--wa-font-size-s);
+}
+
+.setting-notice-icon {
+    cursor: help;
+    font-size: var(--wa-font-size-m);
+}
+
+.setting-notice-icon.notice-warning {
+    color: var(--wa-color-warning-60);
+}
+
+.setting-notice-icon.notice-brand {
+    color: var(--wa-color-brand-60);
+}
+
+/* All switches (context, thinking, Chrome MCP, fast mode) flow together in one
+   wrapping row. */
+.settings-switches {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: var(--wa-space-m);
+    row-gap: var(--wa-space-xs);
 }
 
 .setting-label {

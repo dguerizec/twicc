@@ -232,19 +232,15 @@ export function useSessionAgentSettings(sessionIdSource) {
     // help text, etc.).
     const effectiveModel = computed(() => selectedModel.value ?? resolvedDefaults.value.selected_model)
 
-    // Whether the provider's auto-promote rule would kick in for the user's
-    // current selection in the popover. The rule itself is provider-specific
-    // (Claude Code: 200K + model supports 1M + usage > 85% of 200K → 1M);
-    // we delegate to the provider helper, evaluated against the SELECTED
-    // value (or the global default if none selected) — NOT against the
-    // persisted ``session.context_max``, which can diverge from the user's
-    // current pick and would otherwise trigger false positives on drafts.
+    // Whether context is LOCKED to the larger window: the session can no longer
+    // fit in the base size (Claude Code: model supports 1M + usage > 85% of
+    // 200K). Value-INDEPENDENT on purpose — the switch must stay disabled + on
+    // even when the session is already stored at 1M, so the user can't toggle it
+    // back down (which the old value-sensitive auto-promote check allowed,
+    // desyncing the switch). Delegated to the provider helper.
     const isContextMaxForced = computed(() => {
         if (!session.value || !providerHelpers.value) return false
-        const baseValue = selectedContextMax.value ?? resolvedDefaults.value.context_max
-        return providerHelpers.value.isContextMaxAutoPromoted(
-            session.value, baseValue, effectiveModel.value,
-        )
+        return providerHelpers.value.isContextMaxLocked(session.value, effectiveModel.value)
     })
 
     // Trust clamp surfacing (trust design §13.4, same machinery as
@@ -400,20 +396,28 @@ export function useSessionAgentSettings(sessionIdSource) {
         return [...seen.entries()].map(([effort, label]) => ({ effort, label }))
     })
 
-    // The single "default" cell — the default provider's resolved default model
-    // and effort. Marked with a dot in the grid; stays put as the user picks
-    // other cells.
+    // The single "default" cell — the resolved default model + effort of the
+    // relevant provider. A draft marks the GLOBAL default provider (what a new
+    // session would use); an existing session's provider is fixed, so it marks
+    // that provider's default. Stays put as the user picks other cells.
     const matrixDefaultCell = computed(() => {
-        const defaultP = settingsStore.getDefaultProvider
-        if (!defaultP) return null
-        const d = resolveDefaultsForProvider(defaultP)
-        return { provider: defaultP, model: d.selected_model, effort: d.effort }
+        const provider = session.value?.draft
+            ? settingsStore.getDefaultProvider
+            : session.value?.provider
+        if (!provider) return null
+        const d = resolveDefaultsForProvider(provider)
+        return { provider, model: d.selected_model, effort: d.effort }
     })
 
     const matrixBlocks = computed(() => {
         const current = session.value?.provider
         const columns = matrixEffortColumns.value
         const def = matrixDefaultCell.value
+        // Highlight the EFFECTIVE model/effort of the current provider (the
+        // user's selection, else the resolved default) so an existing session
+        // that follows its defaults still shows its running cell as selected.
+        const effModel = selectedModel.value ?? resolvedDefaults.value.selected_model
+        const effEffort = selectedEffort.value ?? resolvedDefaults.value.effort
         return matrixProviders.value.map(provider => {
             const helpers = getProviderHelpers(provider)
             const registry = helpers?.getModelRegistry() ?? []
@@ -430,7 +434,7 @@ export function useSessionAgentSettings(sessionIdSource) {
                     return {
                         effort,
                         enabled,
-                        selected: isCurrent && model === selectedModel.value && effort === selectedEffort.value,
+                        selected: isCurrent && model === effModel && effort === effEffort,
                         isDefault: !!def && provider === def.provider && model === def.model && effort === def.effort,
                     }
                 })

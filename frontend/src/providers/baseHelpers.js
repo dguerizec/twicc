@@ -636,6 +636,14 @@ export class BaseProviderHelpers {
         return false
     }
 
+    // Whether context is LOCKED to the larger window because the session can no
+    // longer fit in the base one — independent of the currently selected value.
+    // The popover keeps the context switch disabled + on (with a warning) in
+    // this state, so it can't be toggled down. Default: never locked.
+    isContextMaxLocked(/* session */ _session, /* model */ _model) {
+        return false
+    }
+
     // ─── Agent settings popover/summary rendering hooks ──────────────────
     //
     // The popover (per-session selects) and the summary strip share a single
@@ -727,6 +735,20 @@ export class BaseProviderHelpers {
     }
 
     /**
+     * Whether ``field`` offers a real choice (more than one selectable option),
+     * so a select worth showing. Default counts the choices not disabled by
+     * ``isChoiceDisabled`` (e.g. Codex's context, where every option but the
+     * model's window is disabled → one choice). Providers override where
+     * availability is gated at the field level rather than per option. Lets the
+     * popover hide a select that could only ever show its single value.
+     */
+    fieldHasChoice(field, context) {
+        return this.getFieldChoices(field).filter(
+            c => !this.isChoiceDisabled(field, c.value, context),
+        ).length > 1
+    }
+
+    /**
      * Help text rendered under a wa-select (between select and reset link).
      * Returns a string or null. Default: only the trust-clamp explanation on
      * ``permission_mode`` (see ``getDisplayedSelectValue``). Providers
@@ -739,6 +761,16 @@ export class BaseProviderHelpers {
                 ?? String(context.clampedPermissionMode)
             return `Clamped to ${label} — untrusted project.`
         }
+        return null
+    }
+
+    /**
+     * Optional notice shown as an icon + tooltip beside a switch/toggle — a
+     * warning or info the compact switch has no room to spell out inline.
+     * Returns ``{ icon, variant, text }`` (``variant`` is 'warning' or 'brand',
+     * driving the icon colour) or null. Providers override per field.
+     */
+    getFieldNotice(field, context) {
         return null
     }
 

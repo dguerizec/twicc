@@ -162,7 +162,7 @@ const AGENT_SETTINGS_CHOICES = {
             value: true,
             label: 'Enabled',
             display_label: 'Fast mode',
-            description: 'Faster generation, billed on extra usage credits. Tokens cost 6x more (only 2x since 4.8).',
+            description: 'Faster generation, billed on extra usage credits. Costs 2x the tokens (6x before 4.8).',
         },
         { value: false, label: 'Disabled', display_label: 'No fast mode' },
     ],
@@ -507,6 +507,14 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         )
     }
 
+    isContextMaxLocked(session, model) {
+        // Locked whenever the session would auto-promote from 200K — i.e. usage
+        // exceeds 85% of 200K on a 1M-capable model. Value-independent, so it
+        // stays locked even when the session is already stored at 1M (which is
+        // why it can't just reuse the value-sensitive ``isContextMaxForced``).
+        return this.isContextMaxAutoPromoted(session, CONTEXT_MAX.DEFAULT, model)
+    }
+
     /**
      * Resolve a session's effective ``context_max``: the persisted value (or
      * the provider default when null), bumped to 1M by the auto-promote rule
@@ -544,6 +552,12 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         if (field === 'thinking_enabled' && choiceValue === false) {
             return !this.modelSupportsThinkingDisabled(context?.effectiveModel)
         }
+        // Gate the "on" value so ``fieldHasChoice`` (hence the switch's
+        // visibility) is false on models without fast mode — the switch is
+        // hidden rather than shown disabled.
+        if (field === 'fast_mode' && choiceValue === true) {
+            return !this.modelSupportsFast(context?.effectiveModel)
+        }
         return false
     }
 
@@ -559,6 +573,13 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             return false
         }
         return super.isFieldDisabled(field, context)
+    }
+
+    fieldHasChoice(field, context) {
+        // 1M context is gated on the model (see isFieldDisabled), not per
+        // option, so the base per-option count would wrongly see two choices.
+        if (field === 'context_max') return this.modelSupports1m(context?.effectiveModel)
+        return super.fieldHasChoice(field, context)
     }
 
     getFieldHelpText(field, context) {
@@ -588,6 +609,31 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
                 ?? 'Hybrid CLI: applied on the next message by restarting the CLI.'
         }
         return super.getFieldHelpText(field, context)
+    }
+
+    getFieldNotice(field, context) {
+        // Context auto-promoted to 1M (usage > 85% of 200K): the switch is shown
+        // on + disabled with a warning icon explaining the forced state.
+        if (field === 'context_max' && context?.isContextMaxForced) {
+            return {
+                icon: 'triangle-exclamation',
+                variant: 'warning',
+                text: 'Forced to 1M: context usage exceeds 85% of 200K.',
+            }
+        }
+        // Fast mode (only shown on supported models): a brand info icon (circle
+        // exclamation) when off, escalating to a warning icon while it's ON and
+        // actively costing more. Same extra-cost tooltip either way.
+        if (field === 'fast_mode') {
+            const on = (context?.selectedValue ?? context?.defaultValue) === true
+            const enabled = AGENT_SETTINGS_CHOICES.fast_mode.find(c => c.value === true)
+            return {
+                icon: on ? 'triangle-exclamation' : 'circle-exclamation',
+                variant: on ? 'warning' : 'brand',
+                text: enabled?.description ?? '',
+            }
+        }
+        return super.getFieldNotice(field, context)
     }
 
     getDisplayedSelectValue(field, selectedValue, context) {
