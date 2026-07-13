@@ -13,12 +13,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **Codex 5.6 rendering** — Tools and Thinking blocks for GPT-5.6 sessions are now correctly rendered.
 - **Claude Agent SDK** — Upgrade from 0.2.111 to 0.2.116 (bundled Claude Code CLI: 2.1.202 → 2.1.207)
 - **Codex runtime** — Update from v0.144.0 to v0.144.1.
 
 ### Fixed
 
 - **Codex MCP approvals** — Codex asking permission to run an MCP tool now shows a proper approval form.
+- **Form focus** — approval and question forms are focused automatically again when they appear.
+- **Codex quotas** — Codex 7 days usage stays correct when OpenAI temporarily disables 5-hour quota (5-hour quota still shown as "Not started yet")
+- **Quota tooltips** — no longer close before you can reach the buttons inside them.
 
 ## [1.91.1] - 2026-07-10
 
