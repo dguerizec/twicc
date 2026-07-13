@@ -130,7 +130,7 @@ class CodexModelExtra(NamedTuple):
     single-agent reasoning) and ``ultra`` (subagent parallelisation). They are
     NOT uniform across the family, and not Sol-only as the launch coverage
     claimed — the CLI is the source of truth and reports the per-model set in
-    ``model/list`` under ``supportedReasoningEfforts``. As of Codex 0.144.1:
+    ``model/list`` under ``supportedReasoningEfforts``. As of Codex 0.144.2:
     Sol and Terra expose both, Luna exposes ``max`` only, and every pre-5.6
     model exposes neither. Mirrors ``claude_code.constants.ClaudeCodeModelExtra``.
 
