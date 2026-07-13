@@ -2,12 +2,20 @@
 Usage quota fetching and storage for Codex.
 
 Calls ChatGPT's ``/backend-api/wham/usage`` endpoint — the same one the
-Codex CLI polls itself for ``/status``. The response carries 5-hour and
-weekly quota windows under ``rate_limit.primary_window`` and
-``rate_limit.secondary_window``; we map them onto the existing
-:class:`UsageSnapshot` columns so the cross-provider sidebar / graph
-dialog can consume Codex snapshots through exactly the same shape as
-Anthropic's ``five_hour`` / ``seven_day``.
+Codex CLI polls itself for ``/status``. The response carries quota windows
+under ``rate_limit.primary_window`` and ``rate_limit.secondary_window``,
+which we map onto the existing :class:`UsageSnapshot` columns so the
+cross-provider sidebar / graph dialog can consume Codex snapshots through
+exactly the same shape as Anthropic's ``five_hour`` / ``seven_day``.
+
+The payload *slot* is not a reliable indicator of a window's real span:
+Codex normally puts the 5-hour quota in ``primary_window`` and the weekly
+one in ``secondary_window``, but OpenAI can temporarily disable the 5-hour
+limit and publish the weekly quota alone in ``primary_window`` (with
+``secondary_window`` null). We therefore route each window by its declared
+``limit_window_seconds`` (18000 = 5h, 604800 = 7d) rather than its position,
+falling back to the slot only when the duration is missing (see
+:func:`_extract_windows`).
 
 Credentials access lives in :mod:`.credentials`.
 """
@@ -124,10 +132,11 @@ def _extract_window_fields(window: dict | None, prefix: str) -> dict:
     (ISO datetime). The only real conversion is the timestamp: epoch
     seconds → timezone-aware UTC ``datetime``.
 
-    ``prefix`` is the destination column prefix (``"five_hour"`` for the
-    primary 5-hour window, ``"seven_day"`` for the secondary weekly
-    window). Returns ``{f"{prefix}_utilization": float|None,
-    f"{prefix}_resets_at": datetime|None}``.
+    ``prefix`` is the destination column prefix (``"five_hour"`` /
+    ``"seven_day"``), chosen by :func:`_classify_window_prefix` from the
+    window's real span rather than its payload slot. Returns
+    ``{f"{prefix}_utilization": float|None, f"{prefix}_resets_at":
+    datetime|None}``.
     """
     if window is None:
         return {
@@ -153,6 +162,54 @@ def _extract_window_fields(window: dict | None, prefix: str) -> dict:
         f"{prefix}_utilization": utilization,
         f"{prefix}_resets_at": resets_at,
     }
+
+
+# A quota window whose declared span reaches a full day is the weekly (7-day)
+# limit; anything shorter is the rolling 5-hour limit. Real Codex values are
+# 18000s (5h) and 604800s (7d), so the 1-day split sits comfortably between
+# them and stays correct even if OpenAI tweaks the exact durations.
+_WEEKLY_WINDOW_MIN_SECONDS = 24 * 60 * 60
+
+
+def _classify_window_prefix(window: dict, fallback_prefix: str) -> str:
+    """Pick the ``UsageSnapshot`` column prefix for a Codex rate-limit window.
+
+    Prefer the window's own declared span (``limit_window_seconds``) over its
+    payload slot: OpenAI can publish the weekly quota alone in
+    ``primary_window``, so mapping by position would file a 7-day window under
+    the 5-hour columns. Returns ``"seven_day"`` for a window spanning a day or
+    more, ``"five_hour"`` otherwise. When the duration is missing or
+    non-positive (e.g. a degenerate empty window), fall back to
+    ``fallback_prefix`` — the slot the window came from — to preserve the
+    historical position-based behaviour.
+    """
+    seconds = window.get("limit_window_seconds")
+    if isinstance(seconds, (int, float)) and seconds > 0:
+        return "seven_day" if seconds >= _WEEKLY_WINDOW_MIN_SECONDS else "five_hour"
+    return fallback_prefix
+
+
+def _extract_windows(rate_limit: dict) -> dict:
+    """Route the Codex ``rate_limit`` windows onto the five_hour / seven_day columns.
+
+    Both cross-provider windows start empty (utilization/resets_at null); each
+    window actually present in the payload is then classified by its real span
+    (:func:`_classify_window_prefix`) and written into the matching prefix. In
+    the normal two-window case this reproduces the old primary→five_hour /
+    secondary→seven_day mapping; when only the weekly window is published it
+    correctly lands under ``seven_day`` and leaves ``five_hour`` null.
+    """
+    fields = {
+        **_extract_window_fields(None, "five_hour"),
+        **_extract_window_fields(None, "seven_day"),
+    }
+    for slot, fallback_prefix in (("primary_window", "five_hour"), ("secondary_window", "seven_day")):
+        window = rate_limit.get(slot)
+        if window is None:
+            continue
+        prefix = _classify_window_prefix(window, fallback_prefix)
+        fields.update(_extract_window_fields(window, prefix))
+    return fields
 
 
 def _extract_credits_fields(credits: dict | None) -> dict:
@@ -193,8 +250,9 @@ def _build_usage_snapshot_fields(raw: dict) -> dict:
     Pure — no DB access. The raw payload is preserved verbatim in
     ``raw_response`` so we can surface anything Codex-specific (``plan_type``,
     ``email``, ``unlimited``, …) from the wire snapshot later without a
-    backfill. Quota windows are mapped onto the cross-provider columns so the
-    front-end consumes the same shape as Claude Code's snapshots.
+    backfill. Quota windows are routed onto the cross-provider columns by their
+    real span (:func:`_extract_windows`) so the front-end consumes the same
+    shape as Claude Code's snapshots.
 
     The ``credits`` block is mapped onto the shared ``extra_usage_*`` columns
     via :func:`_extract_credits_fields`. Because Codex publishes only a
@@ -215,8 +273,7 @@ def _build_usage_snapshot_fields(raw: dict) -> dict:
         "fetched_at": datetime.now(timezone.utc),
         "raw_response": raw,
     }
-    fields.update(_extract_window_fields(rate_limit.get("primary_window"), "five_hour"))
-    fields.update(_extract_window_fields(rate_limit.get("secondary_window"), "seven_day"))
+    fields.update(_extract_windows(rate_limit))
     fields.update(_extract_credits_fields(raw.get("credits")))
 
     return fields
