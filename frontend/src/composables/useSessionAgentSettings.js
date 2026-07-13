@@ -775,6 +775,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         // matrix (provider × model × effort)
         matrixBlocks,
         matrixEffortColumns,
+        matrixDefaultCell,
         // handlers
         resetAllToDefaults,
         restoreSettings,

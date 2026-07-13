@@ -6,12 +6,13 @@
 // resolved through hooks on the session's provider helpers — see the
 // "Agent settings popover/summary rendering hooks" section in
 // ``BaseProviderHelpers``.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 import { presetSummaryParts, bundleSummaryParts } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 import { getProviderHelpers } from '../../providers'
 import { useDataStore } from '../../stores/data'
+import { useBenchmarkWeightsStore } from '../../stores/benchmarkWeights'
 import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
 import AgentSettingsSummaryView from './AgentSettingsSummaryView.vue'
 import AgentSettingsMatrix from './AgentSettingsMatrix.vue'
@@ -55,6 +56,7 @@ const {
     providerSwitcherOptions,
     matrixBlocks,
     matrixEffortColumns,
+    matrixDefaultCell,
     restoreSettings,
     resetAllToDefaults,
     startupChanges,
@@ -62,6 +64,7 @@ const {
 } = props.settings
 
 const dataStore = useDataStore()
+const weightsStore = useBenchmarkWeightsStore()
 // Unique prefix for notice-icon ids (multiple popovers may coexist in the DOM).
 const uid = useId()
 
@@ -125,6 +128,48 @@ async function onMatrixSelect({ provider, model, effort }) {
     selectedModel.value = model
     selectedEffort.value = effort
 }
+
+// ─── Auto-select the best-scoring cell ───────────────────────────────────
+// With "Auto-select best" on, pick the highest-scoring cell whenever the
+// weights change (or the switches toggle) — exactly as if the user clicked
+// that square. "Default provider only" restricts the search to the user's
+// default provider when several providers are shown.
+function findBestCell() {
+    const blocks = matrixBlocks.value
+    if (!blocks?.length) return null
+    let candidates = blocks
+    if (weightsStore.defaultProviderOnly && blocks.length > 1) {
+        const defProvider = matrixDefaultCell.value?.provider
+        candidates = blocks.filter(b => b.provider === defProvider)
+    }
+    let best = null
+    for (const block of candidates) {
+        for (const row of block.rows) {
+            for (const cell of row.cells) {
+                if (cell.enabled && cell.score != null && (best === null || cell.score > best.score)) {
+                    best = { provider: block.provider, model: row.model, effort: cell.effort, score: cell.score }
+                }
+            }
+        }
+    }
+    return best
+}
+
+watch(
+    [
+        () => weightsStore.autoSelectBest,
+        () => weightsStore.defaultProviderOnly,
+        () => weightsStore.display.capability,
+        () => weightsStore.display.economy,
+        () => weightsStore.display.spd,
+    ],
+    () => {
+        if (!weightsStore.autoSelectBest) return
+        const best = findBestCell()
+        if (best) onMatrixSelect({ provider: best.provider, model: best.model, effort: best.effort })
+    },
+    { flush: 'post' },
+)
 
 async function removeBlockingDocuments() {
     const sid = props.settings.sessionId.value
@@ -520,7 +565,7 @@ onBeforeUnmount(() => {
             />
 
             <!-- Adjustable weights driving the matrix's benchmark scores. -->
-            <AgentSettingsBenchmarkWeights />
+            <AgentSettingsBenchmarkWeights :provider-count="matrixBlocks.length" />
 
             <!-- Switches (context toggle, thinking, Chrome MCP, fast mode) share
                  one wrapping flex row; the permission select renders below. -->
@@ -610,6 +655,12 @@ onBeforeUnmount(() => {
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+}
+
+/* Tighten only the matrix (+ legend) → weighting-block gap; the panel's uniform
+   space-l is too airy right there. Pulls the weights up to a space-s gap. */
+.settings-panel :deep(.weights) {
+    margin-top: calc(var(--wa-space-3xs) - var(--wa-space-l));
 }
 
 .settings-info-callout,

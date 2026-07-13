@@ -49,6 +49,12 @@ export const useBenchmarkWeightsStore = defineStore('benchmarkWeights', {
         priority: 'proportional',
         // Displayed integer % (always sums to 100); written by applyLatent().
         display: { capability: DEFAULT_PRESET.capability, economy: DEFAULT_PRESET.economy, spd: DEFAULT_PRESET.spd },
+        // When on, the matrix auto-picks the best-scoring cell whenever the
+        // weights change (as if the user clicked that square). defaultProviderOnly
+        // restricts "best" to the user's default provider — only meaningful, and
+        // only surfaced, when several providers are shown.
+        autoSelectBest: false,
+        defaultProviderOnly: false,
     }),
 
     getters: {
