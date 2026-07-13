@@ -15,6 +15,7 @@ import { useDataStore } from '../../stores/data'
 import AgentSettingsPresetsDialog from '../app/AgentSettingsPresetsDialog.vue'
 import AgentSettingsSummaryView from './AgentSettingsSummaryView.vue'
 import AgentSettingsMatrix from './AgentSettingsMatrix.vue'
+import AgentSettingsBenchmarkWeights from './AgentSettingsBenchmarkWeights.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 
 const props = defineProps({
@@ -517,6 +518,9 @@ onBeforeUnmount(() => {
                 :effort-columns="matrixEffortColumns"
                 @select="onMatrixSelect"
             />
+
+            <!-- Adjustable weights driving the matrix's benchmark scores. -->
+            <AgentSettingsBenchmarkWeights />
 
             <!-- Switches (context toggle, thinking, Chrome MCP, fast mode) share
                  one wrapping flex row; the permission select renders below. -->

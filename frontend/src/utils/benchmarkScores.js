@@ -10,14 +10,13 @@
  * log or a fractional power of those), carry no score: the matrix renders
  * them as "?".
  *
- * The weights below are fixed constants for now (a future task may make them
- * configurable).
+ * The three weights are adjustable at runtime (see stores/benchmarkWeights.js);
+ * DEFAULT_WEIGHTS is the "Balanced" fallback. ALPHA and GAMMA stay fixed.
  */
 
-// Metric weights (sum to 1.0)
-export const W_CAPABILITY = 0.40 // capability
-export const W_COST = 0.50 // cost
-export const W_SPEED = 0.10 // speed
+// Default score weights (fractions summing to 1) — the "Balanced" profile.
+// Adjustable at runtime; used as the fallback when no weights are supplied.
+export const DEFAULT_WEIGHTS = { capability: 0.40, economy: 0.50, speed: 0.10 }
 
 export const ALPHA = 1.4 // coverage irregularity exponent (capability metric)
 export const GAMMA = 2.5 // contrast (final stretch)
@@ -31,6 +30,18 @@ export function scoreKey(provider, model, effort) {
 // Clamp a note into [EPS, 1] so its natural log stays finite and negative.
 function clampNote(x) {
     return Math.max(EPS, Math.min(1, x))
+}
+
+// Normalize the three weights to fractions summing to 1 (the geometric mean
+// needs weights summing to 1). Defensive: the caller's displayed weights
+// already sum to 100, but a zero/negative total falls back to the defaults.
+function normalizeWeights(w) {
+    const capability = Math.max(0, w?.capability ?? 0)
+    const economy = Math.max(0, w?.economy ?? 0)
+    const speed = Math.max(0, w?.speed ?? 0)
+    const total = capability + economy + speed
+    if (total <= 0) return DEFAULT_WEIGHTS
+    return { capability: capability / total, economy: economy / total, speed: speed / total }
 }
 
 // (value - min) / (max - min); equal bounds -> 1 (divide-by-zero guard).
@@ -69,15 +80,20 @@ function isScorable(r) {
  * Compute the integer score for every scorable benchmark row.
  *
  * @param {Array<object>} rows - the COMPLETE set of benchmark rows.
+ * @param {{capability:number,economy:number,speed:number}} [weights] - metric
+ *   weights (any non-negative magnitudes; normalised to sum 1). Defaults to
+ *   DEFAULT_WEIGHTS.
  * @returns {Map<string, number>} scoreKey(provider, model, effort) -> score 0..100.
  *   Only scorable rows are present; a missing key means "no benchmark data".
  */
-export function computeBenchmarkScores(rows) {
+export function computeBenchmarkScores(rows, weights = DEFAULT_WEIGHTS) {
     const scores = new Map()
     if (!Array.isArray(rows) || rows.length === 0) return scores
 
     const scorable = rows.filter(isScorable)
     if (scorable.length === 0) return scores
+
+    const { capability: wCapability, economy: wEconomy, speed: wSpeed } = normalizeWeights(weights)
 
     // Steps 0-1: capability metric and reference min/max over the COMPLETE set.
     const capabilities = scorable.map(r => capabilityMetric(r.pass_at_1, r.pass_at_4))
@@ -94,12 +110,12 @@ export function computeBenchmarkScores(rows) {
     // Steps 2-3: three notes in [0,1] then their weighted geometric mean.
     const raws = scorable.map((r, i) => {
         const noteResult = clampNote(normUp(capabilities[i], capabilityMin, capabilityMax))
-        const noteCost = clampNote(normDown(logCosts[i], logCostMin, logCostMax)) // cheaper -> higher
+        const noteEconomy = clampNote(normDown(logCosts[i], logCostMin, logCostMax)) // cheaper cost -> higher economy
         const noteSpeed = clampNote(normDown(logDurs[i], logDurMin, logDurMax)) // faster -> higher
         return 100 * Math.exp(
-            W_CAPABILITY * Math.log(noteResult)
-            + W_COST * Math.log(noteCost)
-            + W_SPEED * Math.log(noteSpeed),
+            wCapability * Math.log(noteResult)
+            + wEconomy * Math.log(noteEconomy)
+            + wSpeed * Math.log(noteSpeed),
         )
     })
 
