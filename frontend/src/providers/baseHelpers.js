@@ -574,6 +574,16 @@ export class BaseProviderHelpers {
     }
 
     /**
+     * Short model label for compact grid rows (the agent-settings matrix): the
+     * bare tier name without provider noise. Defaults to ``getModelLabel``;
+     * providers whose full label repeats the family (Codex "GPT sol") override
+     * to strip it ("Sol").
+     */
+    getModelShortLabel(selectedModel) {
+        return this.getModelLabel(selectedModel)
+    }
+
+    /**
      * Version-qualified model label — always includes the version, even for a
      * latest bare alias whose ``getModelLabel`` omits it (e.g. "opus" → "Opus
      * 4.8"). Used where the user needs the exact resolved model, notably the

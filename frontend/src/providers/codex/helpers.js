@@ -309,6 +309,21 @@ export class CodexHelpers extends BaseProviderHelpers {
         return selectedModel.toUpperCase()
     }
 
+    /**
+     * Short grid-row label: drop the "gpt-" prefix so "gpt-sol" → "Sol",
+     * "gpt-mini" → "Mini"; the bare "gpt" family stays "GPT". Numeric-suffixed
+     * legacy aliases ("gpt-5.4") keep the full "GPT 5.4" label to stay clear.
+     */
+    getModelShortLabel(selectedModel) {
+        if (!selectedModel) return ''
+        if (selectedModel === 'gpt') return 'GPT'
+        const suffix = selectedModel.startsWith('gpt-') ? selectedModel.slice(4) : selectedModel
+        if (/^[a-z]+$/i.test(suffix)) {
+            return suffix.charAt(0).toUpperCase() + suffix.slice(1)
+        }
+        return this.getModelLabel(selectedModel)
+    }
+
     getModelRegistry() {
         return useCodexStore().modelRegistry
     }

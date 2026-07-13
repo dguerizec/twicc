@@ -1,5 +1,6 @@
 import { ref, computed, watch, toValue, nextTick } from 'vue'
 import { useDataStore } from '../stores/data'
+import { useSettingsStore } from '../stores/settings'
 import { useAgentSettingsPresetsStore } from '../stores/agentSettingsPresets'
 import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderIcon, getProviderLabel } from '../providers'
 import { resolveProjectAgentDefaults, ancestorChain } from '../utils/projectAgentDefaults'
@@ -28,6 +29,7 @@ const SESSION_SETTING_FIELDS = ['permission_mode', 'selected_model', 'effort', '
  */
 export function useSessionAgentSettings(sessionIdSource) {
     const store = useDataStore()
+    const settingsStore = useSettingsStore()
 
     const sessionId = computed(() => toValue(sessionIdSource))
     const session = computed(() => store.getSession(sessionId.value))
@@ -368,6 +370,85 @@ export function useSessionAgentSettings(sessionIdSource) {
         }))
     })
 
+    // ─── Provider × model × effort matrix ────────────────────────────────────
+    // Data for the AgentSettingsMatrix widget: one block per provider (default
+    // provider first, then the rest — a draft offers every switchable provider,
+    // a real session only its own), a shared set of effort columns (the union of
+    // the shown providers' efforts in ladder order), and per-cell state (enabled
+    // / selected / default). Clicking a cell picks provider + model + effort at
+    // once (the popover's onMatrixSelect wires it, switching provider first when
+    // the cell is in another provider's block on a draft).
+    const matrixProviders = computed(() => {
+        const current = session.value?.provider
+        const defaultP = settingsStore.getDefaultProvider
+        const list = session.value?.draft
+            ? providerSwitcherOptions.value.map(o => o.value)
+            : (current ? [current] : [])
+        return list.includes(defaultP) ? [defaultP, ...list.filter(p => p !== defaultP)] : list
+    })
+
+    // Union of the shown providers' effort choices, default provider first so
+    // the ladder reads low→high→…→max(→ultra). Each column carries its label.
+    const matrixEffortColumns = computed(() => {
+        const seen = new Map()
+        for (const provider of matrixProviders.value) {
+            const helpers = getProviderHelpers(provider)
+            for (const choice of helpers?.getFieldChoices('effort') ?? []) {
+                if (!seen.has(choice.value)) seen.set(choice.value, choice.label ?? String(choice.value))
+            }
+        }
+        return [...seen.entries()].map(([effort, label]) => ({ effort, label }))
+    })
+
+    // The single "default" cell — the default provider's resolved default model
+    // and effort. Marked with a dot in the grid; stays put as the user picks
+    // other cells.
+    const matrixDefaultCell = computed(() => {
+        const defaultP = settingsStore.getDefaultProvider
+        if (!defaultP) return null
+        const d = resolveDefaultsForProvider(defaultP)
+        return { provider: defaultP, model: d.selected_model, effort: d.effort }
+    })
+
+    const matrixBlocks = computed(() => {
+        const current = session.value?.provider
+        const columns = matrixEffortColumns.value
+        const def = matrixDefaultCell.value
+        return matrixProviders.value.map(provider => {
+            const helpers = getProviderHelpers(provider)
+            const registry = helpers?.getModelRegistry() ?? []
+            const supported = new Set((helpers?.getFieldChoices('effort') ?? []).map(c => c.value))
+            const isCurrent = provider === current
+            const rows = registry.map(entry => {
+                const model = entry.selected_model
+                const modelEnabled = entry.enabled !== false
+                const cells = columns.map(col => {
+                    const effort = col.effort
+                    const enabled = modelEnabled
+                        && supported.has(effort)
+                        && !helpers.isChoiceDisabled('effort', effort, { effectiveModel: model })
+                    return {
+                        effort,
+                        enabled,
+                        selected: isCurrent && model === selectedModel.value && effort === selectedEffort.value,
+                        isDefault: !!def && provider === def.provider && model === def.model && effort === def.effort,
+                    }
+                })
+                // Split name + version into two grid spans. The short label
+                // carries the version for non-latest aliases (e.g. "Opus 4.7");
+                // strip it so the name span holds just the tier and the version
+                // renders on its own, uniformly for latest and older models.
+                const short = helpers.getModelShortLabel(model)
+                const version = entry.version
+                const name = version && short.endsWith(version)
+                    ? short.slice(0, -version.length).trim()
+                    : short
+                return { model, name, version, isLatest: entry.latest === true, cells }
+            })
+            return { provider, label: getProviderLabel(provider), icon: getProviderIcon(provider), isCurrent, rows }
+        })
+    })
+
     // Apply a preset's forced fields onto the selected refs (of the current
     // provider). Trust-dependent field selection (trust design §13.3): an
     // untrusted project applies the preset's untrusted permission layer instead
@@ -664,6 +745,9 @@ export function useSessionAgentSettings(sessionIdSource) {
         presetGroups,
         handlePresetSelect,
         providerSwitcherOptions,
+        // matrix (provider × model × effort)
+        matrixBlocks,
+        matrixEffortColumns,
         // handlers
         resetAllToDefaults,
         restoreSettings,
