@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **Claude Agent SDK** — Upgrade from 0.2.116 to 0.2.118 (bundled Claude Code CLI: 2.1.207 → 2.1.209)
 - **Codex runtime** — Update from v0.144.2 to v0.144.4.
 
 ## [1.91.3] - 2026-07-13
