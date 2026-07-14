@@ -42,7 +42,7 @@ import {
 // tint as the settings summary strip and the switch rows.
 const flagCommandIcon = (field) => {
     const info = AGENT_SETTING_ICONS[field]
-    return { icon: info.icon, iconFamily: info.family ?? null, iconColor: info.color }
+    return { icon: info.icon ?? null, iconSrc: info.src ?? null, iconFamily: info.family ?? null, iconColor: info.color }
 }
 
 // The boolean-flag fields whose nested On/Off choices render the flag icon

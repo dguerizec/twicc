@@ -44,7 +44,8 @@ function onChange(row, event) {
             ><wa-icon
                 v-if="AGENT_SETTING_ICONS[row.field]"
                 class="setting-label-icon"
-                :name="AGENT_SETTING_ICONS[row.field].icon"
+                :name="AGENT_SETTING_ICONS[row.field].icon || undefined"
+                :src="AGENT_SETTING_ICONS[row.field].src || undefined"
                 :family="AGENT_SETTING_ICONS[row.field].family || undefined"
                 :style="{ color: AGENT_SETTING_ICONS[row.field].color }"
             ></wa-icon>{{ row.kind === 'toggle' ? row.toggleLabel : row.label }}</wa-switch>

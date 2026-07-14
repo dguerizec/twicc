@@ -878,9 +878,9 @@ export class BaseProviderHelpers {
             })
         }
 
-        // The boolean flags render as a grouped icon cluster (brain, bolt,
-        // chrome), coloured when on and dimmed + struck when off. The glyph and
-        // tint per field live in AGENT_SETTING_ICONS; parts carry only ``field``.
+        // The boolean flags render as a grouped icon cluster (brain-bulb,
+        // bolt, chrome), coloured when on and dimmed + struck when off. The glyph
+        // and tint per field live in AGENT_SETTING_ICONS; parts carry only ``field``.
 
         // Thinking.
         if (this.supportsAgentSetting('thinking_enabled')) {

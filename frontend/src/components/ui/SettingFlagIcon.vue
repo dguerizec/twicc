@@ -21,7 +21,8 @@ const info = computed(() => AGENT_SETTING_ICONS[props.field] ?? null)
     <span v-if="info" class="flag-icon-wrap" :class="{ struck: !on }">
         <wa-icon
             auto-width
-            :name="info.icon"
+            :name="info.icon || undefined"
+            :src="info.src || undefined"
             :family="info.family || undefined"
             :label="label || undefined"
             class="flag-icon"

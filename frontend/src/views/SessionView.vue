@@ -30,6 +30,7 @@ import LayoutSaveDialog from '../components/session/layout/LayoutSaveDialog.vue'
 import LayoutManagerDialog from '../components/session/layout/LayoutManagerDialog.vue'
 import { useLayoutsStore, SINGLE_PANE_ID, SINGLE_PANE_NAME } from '../stores/layouts'
 import { ancestorChain } from '../utils/projectAgentDefaults'
+import { AGENT_SETTING_ICONS } from '../utils/agentSettingIcons'
 import { resolveProjectLayoutId } from '../utils/layoutDefaults'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import TabBar from '../components/ui/TabBar.vue'
@@ -1822,12 +1823,13 @@ function buildSessionSettingsCommands() {
         }
     }
 
-    function buildSimpleCommand(field, { id, label, icon, when }) {
+    function buildSimpleCommand(field, { id, label, icon, iconSrc, when }) {
         if (!helpers.supportsAgentSetting(field)) return []
         return [{
             id,
             label,
             icon,
+            iconSrc,
             category: 'session',
             when: when ?? isAvailable,
             items: () => {
@@ -1885,7 +1887,7 @@ function buildSessionSettingsCommands() {
         ...buildSimpleCommand('thinking_enabled', {
             id: 'session.thinking',
             label: 'Change Session Thinking…',
-            icon: 'brain',
+            iconSrc: AGENT_SETTING_ICONS.thinking_enabled.src,
         }),
         ...buildSimpleCommand('permission_mode', {
             id: 'session.permission',

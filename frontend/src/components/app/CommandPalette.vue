@@ -376,7 +376,8 @@ defineExpose({ open, close })
                 >
                     <wa-icon name="chevron-left" class="breadcrumb-back-icon" />
                     <wa-icon
-                        :name="parentCommand.icon"
+                        :name="parentCommand.icon || undefined"
+                        :src="parentCommand.iconSrc || undefined"
                         :family="parentCommand.iconFamily || undefined"
                         :style="parentCommand.iconColor ? { color: parentCommand.iconColor } : null"
                     />
@@ -412,7 +413,8 @@ defineExpose({ open, close })
                             @pointerenter="activeId = cmd.id"
                         >
                             <wa-icon
-                                :name="cmd.icon"
+                                :name="cmd.icon || undefined"
+                                :src="cmd.iconSrc || undefined"
                                 :family="cmd.iconFamily || undefined"
                                 :style="cmd.iconColor ? { color: cmd.iconColor } : null"
                                 class="command-icon"
@@ -461,7 +463,8 @@ defineExpose({ open, close })
                         @pointerenter="activeId = result.cmd.id"
                     >
                         <wa-icon
-                            :name="result.cmd.icon"
+                            :name="result.cmd.icon || undefined"
+                            :src="result.cmd.iconSrc || undefined"
                             :family="result.cmd.iconFamily || undefined"
                             :style="result.cmd.iconColor ? { color: result.cmd.iconColor } : null"
                             class="command-icon"

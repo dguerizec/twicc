@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="3 -2 58 57.25" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Bulb outline: brain lobes with a valley at the top center, narrowing into the neck.
+       Stroke ratio (~4.5/57) aligned with the permission icons (~1.7/19). -->
+  <path d="
+    M 26.5 41.5
+    L 26.5 38.5
+    Q 21 35.5 19.5 28
+    A 6   6   0 0 1 20.5 17
+    A 4.4 4.4 0 0 1 26.5 12
+    A 3.8 3.8 0 0 1 32 15.5
+    A 3.8 3.8 0 0 1 37.5 12
+    A 4.4 4.4 0 0 1 43.5 17
+    A 6   6   0 0 1 44.5 28
+    Q 43 35.5 37.5 38.5
+    L 37.5 41.5" />
+
+  <!-- Longitudinal fissure: straight, anchored in the top valley -->
+  <path d="M 32 15.5 V 36.5" />
+
+  <!-- Screw base -->
+  <path d="M 26 47 H 38" />
+  <path d="M 29 53 H 35" />
+
+  <!-- Radiating rays -->
+  <path stroke-width="5" d="M 32 0.5 V 5.5" />
+  <path stroke-width="5" d="M 12.5 5 L 16 8.5" />
+  <path stroke-width="5" d="M 51.5 5 L 48 8.5" />
+  <path stroke-width="5" d="M 5.5 24 H 10.5" />
+  <path stroke-width="5" d="M 58.5 24 H 53.5" />
+  <path stroke-width="5" d="M 12.5 43 L 16 39.5" />
+  <path stroke-width="5" d="M 51.5 43 L 48 39.5" />
+</svg>
