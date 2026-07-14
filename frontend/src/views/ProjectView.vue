@@ -1,13 +1,14 @@
 <script setup>
 import { computed, ref, watch, onMounted, onUnmounted, onBeforeUnmount, provide, nextTick } from 'vue'
-import { useElementHover } from '@vueuse/core'
+import { useElementHover, useMediaQuery } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useSharesStore } from '../stores/shares'
 import { useHelpStore } from '../stores/help'
 import { useWorkspacesStore } from '../stores/workspaces'
-import { COLOR_SCHEME } from '../constants'
+import { COLOR_SCHEME, SESSION_TIME_FORMAT } from '../constants'
+import { formatDate } from '../utils/date'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
 import { useToast } from '../composables/useToast'
@@ -45,7 +46,7 @@ import ShareDialog from '../components/share/ShareDialog.vue'
 import ShareTargetDialog from '../components/share/ShareTargetDialog.vue'
 import { getSessionGrantsForBookmark } from '../artifact-broker/host'
 import BulkArchiveConfirmDialog from '../components/sidebar/BulkArchiveConfirmDialog.vue'
-import { getUsageRingColor, formatRecentDelta } from '../utils/usage'
+import { getUsageRingColor, formatRecentDelta, formatBurnChip } from '../utils/usage'
 import { buildProjectTree, flattenProjectTree } from '../utils/projectTree'
 import { projectPathTitle } from '../utils/projectName'
 import { sessionRouteLocation } from '../utils/sessionRoute'
@@ -250,6 +251,23 @@ const quotaSevenDayCost = computed(() => quotaComputed.value?.sevenDayCost ?? nu
 
 const quotaFiveHourRingColor = computed(() => getUsageRingColor(quotaFiveHour.value))
 const quotaSevenDayRingColor = computed(() => getUsageRingColor(quotaSevenDay.value))
+
+// Burn-rate chip shown at the end of each paced quota bar (5h / 7d).
+const quotaFiveHourChip = computed(() => formatBurnChip(quotaFiveHour.value))
+const quotaSevenDayChip = computed(() => formatBurnChip(quotaSevenDay.value))
+
+// Inline style for a burn chip: severity-tinted fill + severity text.
+function burnChipStyle(color) {
+    return { color, background: `color-mix(in srgb, ${color} 20%, transparent)` }
+}
+
+// Bar width helpers (clamped percentages) for the dual usage/time lanes.
+function usageLaneWidth(quota) {
+    return `${Math.min(quota?.utilization ?? 0, 100)}%`
+}
+function timeLaneWidth(quota) {
+    return `${Math.max(0, Math.min(quota?.timePct ?? 0, 100))}%`
+}
 const quotaExtraUsageRingColor = computed(() => {
     const extra = quotaExtraUsage.value
     if (!extra) return 'var(--wa-color-neutral)'
@@ -268,14 +286,6 @@ const quotaExtraUsageRingValue = computed(() => {
     const extra = quotaExtraUsage.value
     if (!extra || extra.utilization == null) return 0
     return Math.min(extra.utilization, 100)
-})
-
-const quotaExtraUsageRingLabel = computed(() => {
-    const extra = quotaExtraUsage.value
-    if (!extra) return ''
-    if (extra.utilization != null) return `${Math.round(extra.utilization)}%`
-    if (extra.remainingCredits != null) return String(Math.round(extra.remainingCredits))
-    return ''
 })
 
 function resetsAtToDate(resetsAt) {
@@ -343,6 +353,27 @@ const quotaLastUpdateFormatted = computed(() => {
         minute: '2-digit',
     })
 })
+
+// "Last updated" date for the header's relative time ("2 min ago").
+const quotaFetchedDate = computed(() => {
+    const fetchedAt = quotaComputed.value?.fetchedAt
+    return fetchedAt ? new Date(fetchedAt) : null
+})
+
+// Honor the global "session time format" setting for the inline usage times
+// (last-update + resets), same as the session list: relative short/narrow, or
+// an absolute clock/date under the "time" setting.
+const usageUseRelativeTime = computed(() =>
+    settingsStore.getSessionTimeFormat === SESSION_TIME_FORMAT.RELATIVE_SHORT ||
+    settingsStore.getSessionTimeFormat === SESSION_TIME_FORMAT.RELATIVE_NARROW
+)
+const usageRelativeFormat = computed(() =>
+    settingsStore.getSessionTimeFormat === SESSION_TIME_FORMAT.RELATIVE_SHORT ? 'short' : 'narrow'
+)
+// Absolute rendering of a JS Date under the "time" setting (formatDate takes seconds).
+function formatUsageDateAbsolute(date) {
+    return date ? formatDate(date.getTime() / 1000, { smart: true }) : ''
+}
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1274,6 +1305,20 @@ const DEFAULT_SIDEBAR_WIDTH = 300
 const SIDEBAR_COLLAPSE_THRESHOLD = 120
 // Mobile breakpoint (must match CSS media query)
 const MOBILE_BREAKPOINT = 640
+
+// Reactive narrow-viewport flag (mobile drawer sidebar). Used to re-place the
+// usage quota tooltips: on desktop they sit to the right of their row; on mobile
+// the sidebar is a ~300px drawer, so a right-placed tooltip would overflow the
+// viewport and get clipped — there we right-align it above the row instead so it
+// stays fully visible.
+const isNarrowViewport = useMediaQuery(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
+const usageTooltipPlacement = computed(() => (isNarrowViewport.value ? 'top-end' : 'right'))
+
+// Tooltip trigger: desktop keeps hover/focus; on mobile use click only, so a tap
+// toggles the tooltip (re-tapping the same row hides it, freeing the view to reach
+// another row). Mixing hover with click on touch would race (synthetic mouseover
+// re-shows what the click just hid), hence click-only on narrow viewports.
+const usageTooltipTrigger = computed(() => (isNarrowViewport.value ? 'click' : 'hover focus'))
 
 // Load sidebar state from localStorage
 function loadSidebarState() {
@@ -2256,32 +2301,64 @@ function updateSidebarClosedClass(closed) {
 
             <div class="sidebar-footer">
                 <div v-if="quotaHasUsage && quotaComputed" ref="usageBlockRef" class="sidebar-footer-usage">
-                    <ProviderIcon
-                        v-if="currentUsageProviderIcon"
-                        id="usage-provider-icon"
-                        class="usage-provider-icon"
-                        :class="{ 'usage-provider-icon-clickable': hasMultipleUsageProviders }"
-                        :provider="currentUsageProvider"
-                        @click="hasMultipleUsageProviders && cycleUsageProvider()"
-                    />
-                    <AppTooltip v-if="currentUsageProviderIcon" for="usage-provider-icon" hoist force>
-                        <div class="usage-provider-tooltip">
-                            <span class="usage-provider-tooltip-name">{{ currentUsageProviderLabel }} usage</span>
-                            <span v-if="hasMultipleUsageProviders" class="usage-provider-tooltip-hint">Click to switch to the next provider</span>
+                    <div class="usage-header">
+                        <div
+                            id="usage-provider-group"
+                            class="usage-provider-group"
+                            :class="{ 'usage-provider-group-clickable': hasMultipleUsageProviders }"
+                            @click="hasMultipleUsageProviders && cycleUsageProvider()"
+                        >
+                            <ProviderIcon
+                                v-if="currentUsageProviderIcon"
+                                class="usage-provider-icon"
+                                :provider="currentUsageProvider"
+                            />
+                            <span class="usage-provider-name">{{ currentUsageProviderLabel }}</span>
+                            <wa-icon v-if="hasMultipleUsageProviders" class="usage-switch" name="repeat"></wa-icon>
                         </div>
-                    </AppTooltip>
+                        <AppTooltip for="usage-provider-group" hoist force>
+                            <div class="usage-provider-tooltip">
+                                <span class="usage-provider-tooltip-name">{{ currentUsageProviderLabel }} usage</span>
+                                <span v-if="hasMultipleUsageProviders" class="usage-provider-tooltip-hint">Click to switch to the next provider</span>
+                            </div>
+                        </AppTooltip>
+                        <div class="usage-header-when">
+                            <wa-icon v-if="quotaIsStale" id="quota-stale-warning" name="triangle-exclamation" class="quota-stale-icon"></wa-icon>
+                            <span v-if="quotaFetchedDate" class="usage-when-time">
+                                <wa-relative-time v-if="usageUseRelativeTime" :date.prop="quotaFetchedDate" :format="usageRelativeFormat" numeric="always" sync></wa-relative-time>
+                                <template v-else>{{ formatUsageDateAbsolute(quotaFetchedDate) }}</template>
+                            </span>
+                        </div>
+                        <AppTooltip v-if="quotaIsStale" for="quota-stale-warning" hoist force :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
+                            <div class="quota-tooltip">
+                                <div class="quota-stale-header"><wa-icon name="triangle-exclamation" class="quota-stale-header-icon"></wa-icon><span>Data may be outdated</span></div>
+                                <div class="quota-tooltip-row"><span class="quota-tooltip-label">Last update</span><span>{{ quotaLastUpdateFormatted }}</span></div>
+                                <div class="quota-tooltip-buttons wa-light">
+                                    <wa-button v-if="canRefreshUsage" size="small" variant="brand" :appearance="quotaButtonAppearance" :loading="usageRefreshing" :disabled="usageRefreshing" class="quota-stale-button" @click="refreshUsage()"><wa-icon slot="start" name="arrow-rotate-right"></wa-icon>Refresh now</wa-button>
+                                    <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
+                                </div>
+                            </div>
+                        </AppTooltip>
+                    </div>
                     <div id="quota-five-hour" class="usage-quota" v-if="quotaFiveHour">
-                        <wa-progress-ring
-                            class="usage-ring"
-                            :value="Math.min(quotaFiveHour.utilization ?? 0, 100)"
-                            :style="{ '--indicator-color': quotaFiveHourRingColor }"
-                        ><span class="wa-font-weight-bold">{{ Math.round(quotaFiveHour.utilization ?? 0) }}%</span></wa-progress-ring>
+                        <div class="usage-bar">
+                            <div class="usage-lane">
+                                <div class="usage-lane-fill" :style="{ width: usageLaneWidth(quotaFiveHour), background: quotaFiveHourRingColor }"></div>
+                            </div>
+                            <div class="usage-lane">
+                                <div class="usage-lane-fill usage-lane-time" :style="{ width: timeLaneWidth(quotaFiveHour) }"></div>
+                            </div>
+                        </div>
+                        <span v-if="quotaFiveHourChip" class="usage-burn-chip" :style="burnChipStyle(quotaFiveHourRingColor)">{{ quotaFiveHourChip.text }}</span>
                         <div class="usage-quota-info">
                             <span class="usage-quota-label">5h</span>
-                            <wa-relative-time v-if="quotaFiveHour.resetsAt" class="usage-quota-reset" :date.prop="resetsAtToDate(quotaFiveHour.resetsAt)" format="narrow" numeric="always" sync></wa-relative-time>
+                            <span v-if="quotaFiveHour.resetsAt" class="usage-quota-reset">
+                                <wa-relative-time v-if="usageUseRelativeTime" :date.prop="resetsAtToDate(quotaFiveHour.resetsAt)" :format="usageRelativeFormat" numeric="always" sync></wa-relative-time>
+                                <template v-else>{{ formatUsageDateAbsolute(resetsAtToDate(quotaFiveHour.resetsAt)) }}</template>
+                            </span>
                         </div>
                     </div>
-                    <AppTooltip v-if="quotaFiveHour" for="quota-five-hour" hoist force>
+                    <AppTooltip v-if="quotaFiveHour" for="quota-five-hour" hoist force :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
                         <div class="quota-tooltip">
                             <div class="quota-tooltip-title">{{ currentUsageProviderLabel }} usage — 5h</div>
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Usage</span><span>{{ (quotaFiveHour.utilization ?? 0).toFixed(1) }}%</span></div>
@@ -2308,17 +2385,24 @@ function updateSidebarClosedClass(closed) {
                         </div>
                     </AppTooltip>
                     <div id="quota-seven-day" class="usage-quota" v-if="quotaSevenDay">
-                        <wa-progress-ring
-                            class="usage-ring"
-                            :value="Math.min(quotaSevenDay.utilization ?? 0, 100)"
-                            :style="{ '--indicator-color': quotaSevenDayRingColor }"
-                        ><span class="wa-font-weight-bold">{{ Math.round(quotaSevenDay.utilization ?? 0) }}%</span></wa-progress-ring>
+                        <div class="usage-bar">
+                            <div class="usage-lane">
+                                <div class="usage-lane-fill" :style="{ width: usageLaneWidth(quotaSevenDay), background: quotaSevenDayRingColor }"></div>
+                            </div>
+                            <div class="usage-lane">
+                                <div class="usage-lane-fill usage-lane-time" :style="{ width: timeLaneWidth(quotaSevenDay) }"></div>
+                            </div>
+                        </div>
+                        <span v-if="quotaSevenDayChip" class="usage-burn-chip" :style="burnChipStyle(quotaSevenDayRingColor)">{{ quotaSevenDayChip.text }}</span>
                         <div class="usage-quota-info">
                             <span class="usage-quota-label">7d</span>
-                            <wa-relative-time v-if="quotaSevenDay.resetsAt" class="usage-quota-reset" :date.prop="resetsAtToDate(quotaSevenDay.resetsAt)" format="narrow" numeric="always" sync></wa-relative-time>
+                            <span v-if="quotaSevenDay.resetsAt" class="usage-quota-reset">
+                                <wa-relative-time v-if="usageUseRelativeTime" :date.prop="resetsAtToDate(quotaSevenDay.resetsAt)" :format="usageRelativeFormat" numeric="always" sync></wa-relative-time>
+                                <template v-else>{{ formatUsageDateAbsolute(resetsAtToDate(quotaSevenDay.resetsAt)) }}</template>
+                            </span>
                         </div>
                     </div>
-                    <AppTooltip v-if="quotaSevenDay" for="quota-seven-day" hoist force>
+                    <AppTooltip v-if="quotaSevenDay" for="quota-seven-day" hoist force :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
                         <div class="quota-tooltip">
                             <div class="quota-tooltip-title">{{ currentUsageProviderLabel }} usage — 7d</div>
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Usage</span><span>{{ (quotaSevenDay.utilization ?? 0).toFixed(1) }}%</span></div>
@@ -2345,17 +2429,24 @@ function updateSidebarClosedClass(closed) {
                         </div>
                     </AppTooltip>
                     <div id="quota-extra-usage" class="usage-quota" v-if="quotaExtraUsage">
-                        <wa-progress-ring
-                            class="usage-ring"
-                            :value="quotaExtraUsageRingValue"
-                            :style="{ '--indicator-color': quotaExtraUsageRingColor }"
-                        ><span class="wa-font-weight-bold">{{ quotaExtraUsageRingLabel }}</span></wa-progress-ring>
+                        <div class="usage-bar usage-bar-extra">
+                            <div v-if="quotaExtraUsage.utilization != null" class="usage-lane usage-lane-solo">
+                                <div class="usage-lane-fill" :style="{ width: quotaExtraUsageRingValue + '%', background: quotaExtraUsageRingColor }"></div>
+                            </div>
+                            <span v-else-if="quotaExtraUsage.remainingCredits != null" class="usage-balance">
+                                <span class="usage-balance-dot" :style="{ background: quotaExtraUsageRingColor }"></span>{{ Math.round(quotaExtraUsage.remainingCredits).toLocaleString() }} credits
+                            </span>
+                        </div>
+                        <span v-if="quotaExtraUsage.utilization != null" class="usage-burn-chip usage-burn-chip-neutral">{{ Math.round(quotaExtraUsage.utilization) }}%</span>
                         <div class="usage-quota-info">
-                            <span class="usage-quota-label">Extra usage</span>
-                            <wa-relative-time v-if="quotaExtraUsage.utilization != null" class="usage-quota-reset" :date.prop="extraUsageResetDate()" format="narrow" numeric="always" sync></wa-relative-time>
+                            <span class="usage-quota-label">Extra</span>
+                            <span v-if="quotaExtraUsage.utilization != null" class="usage-quota-reset">
+                                <wa-relative-time v-if="usageUseRelativeTime" :date.prop="extraUsageResetDate()" :format="usageRelativeFormat" numeric="always" sync></wa-relative-time>
+                                <template v-else>{{ formatUsageDateAbsolute(extraUsageResetDate()) }}</template>
+                            </span>
                         </div>
                     </div>
-                    <AppTooltip v-if="quotaExtraUsage" for="quota-extra-usage" hoist force>
+                    <AppTooltip v-if="quotaExtraUsage" for="quota-extra-usage" hoist force :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
                         <div class="quota-tooltip">
                             <template v-if="quotaExtraUsage.utilization != null">
                                 <div class="quota-tooltip-row"><span class="quota-tooltip-label">Used</span><span>{{ quotaExtraUsage.usedCredits ?? 0 }} credits</span></div>
@@ -2367,17 +2458,6 @@ function updateSidebarClosedClass(closed) {
                             <div v-if="quotaExtraUsage.utilization != null" class="quota-tooltip-row"><span class="quota-tooltip-label">Reset</span><span>{{ formatResetTime(extraUsageResetDate()) }}</span></div>
                             <div class="quota-tooltip-buttons wa-light">
                                <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
-                            </div>
-                        </div>
-                    </AppTooltip>
-                    <wa-icon v-if="quotaIsStale" id="quota-stale-warning" name="triangle-exclamation" class="quota-stale-icon"></wa-icon>
-                    <AppTooltip v-if="quotaIsStale" for="quota-stale-warning" hoist force>
-                        <div class="quota-tooltip">
-                            <div class="quota-stale-header"><wa-icon name="triangle-exclamation" class="quota-stale-header-icon"></wa-icon><span>Data may be outdated</span></div>
-                            <div class="quota-tooltip-row"><span class="quota-tooltip-label">Last update</span><span>{{ quotaLastUpdateFormatted }}</span></div>
-                            <div class="quota-tooltip-buttons wa-light">
-                                <wa-button v-if="canRefreshUsage" size="small" variant="brand" :appearance="quotaButtonAppearance" :loading="usageRefreshing" :disabled="usageRefreshing" class="quota-stale-button" @click="refreshUsage()"><wa-icon slot="start" name="arrow-rotate-right"></wa-icon>Refresh now</wa-button>
-                                <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
                             </div>
                         </div>
                     </AppTooltip>
@@ -2971,12 +3051,63 @@ wa-dropdown-item:hover .row-menu-trigger,
 
 .sidebar-footer-usage {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    padding: var(--wa-space-2xs) var(--wa-space-s) var(--wa-space-xs);
+}
+
+.usage-header {
+    display: flex;
     align-items: center;
-    justify-content: space-evenly;
-    column-gap: var(--wa-space-s);
-    row-gap: var(--wa-space-xs);
-    padding: var(--wa-space-xs) var(--wa-space-s);
+    gap: var(--wa-space-2xs);
+    padding: var(--wa-space-2xs) 0;
+}
+
+/* Provider icon + name + switch icon: one clickable group that cycles providers. */
+.usage-provider-group {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    min-width: 0;
+    padding: var(--wa-space-3xs) var(--wa-space-2xs);
+    margin: calc(-1 * var(--wa-space-3xs)) calc(-1 * var(--wa-space-2xs));
+    border-radius: var(--wa-border-radius-m);
+    transition: background 0.12s;
+}
+.usage-provider-group-clickable {
+    cursor: pointer;
+}
+.usage-provider-group-clickable:hover {
+    background: var(--wa-color-neutral-fill-quiet);
+}
+
+.usage-provider-name {
+    font-size: var(--wa-font-size-xs);
+    font-weight: var(--wa-font-weight-semibold);
+    color: var(--wa-color-neutral-content);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.usage-switch {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-neutral-muted);
+    transition: color 0.12s;
+}
+.usage-provider-group-clickable:hover .usage-switch {
+    color: var(--wa-color-neutral-content);
+}
+
+.usage-header-when {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-3xs);
+}
+
+.usage-when-time {
+    font-size: var(--wa-font-size-2xs);
+    color: var(--wa-color-neutral-muted);
 }
 
 .sidebar-footer-provider-auth {
@@ -3032,7 +3163,11 @@ wa-dropdown-item:hover .row-menu-trigger,
     align-items: center;
     gap: var(--wa-space-xs);
     max-width: 100%;
-   position: relative;
+    padding: var(--wa-space-2xs) 0;
+    position: relative;
+}
+.usage-quota + .usage-quota {
+    border-top: 1px solid var(--wa-color-neutral-border-quiet);
 }
 
 /* Hover-safe bridge for the interactive quota tooltips.
@@ -3051,36 +3186,29 @@ wa-dropdown-item:hover .row-menu-trigger,
  * the ring — before it reaches the buttons. Reported by users on Chromium; not
  * reproducible on a plain 100%/integer-DPR setup.
  *
- * Extending the anchor's own hit-area upward keeps `anchor:matches(':hover')`
- * true across the gap (the condition wa-tooltip re-checks on mouseout),
- * independent of that coordinate math. The strip is transparent, sits above the
- * ring (never over it), and stays below the top-layer tooltip, so it never
- * blocks the buttons. */
+ * On desktop the quota tooltips are placed to the right of their row, so the gap
+ * to bridge is on the right edge. Extending the anchor's own hit-area rightward
+ * keeps `anchor:matches(':hover')` true across the gap (the condition wa-tooltip
+ * re-checks on mouseout), independent of that coordinate math. The strip is
+ * transparent, sits beside the row (never over it), and stays below the top-layer
+ * tooltip, so it never blocks the buttons. (On mobile the tooltip is re-placed
+ * above the row and shown on tap, not hover, so this bridge is a no-op there.) */
 .usage-quota::after,
 .quota-stale-icon::after {
     content: '';
     position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 100%;
-    /* Slightly taller than the tooltip's 8px distance so it overlaps the
+    top: 0;
+    bottom: 0;
+    left: 100%;
+    /* Slightly wider than the tooltip's 8px distance so it overlaps the
        tooltip body with no bare pixel in between. */
-    height: 12px;
-}
-
-.usage-ring {
-    --size: 2rem;
-    --track-width: 3px;
-    font-size: var(--wa-font-size-2xs);
+    width: 12px;
 }
 
 .usage-provider-icon {
     font-size: var(--wa-font-size-l);
     color: var(--wa-color-neutral-content);
-}
-
-.usage-provider-icon-clickable {
-    cursor: pointer;
+    flex: 0 0 auto;
 }
 
 .usage-provider-tooltip {
@@ -3099,18 +3227,98 @@ wa-dropdown-item:hover .row-menu-trigger,
     color: var(--wa-color-neutral-muted);
 }
 
+/* ── C′ quota bar: dual usage/time lanes + burn chip + stacked meta ── */
+.usage-bar {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.usage-lane {
+    position: relative;
+    height: 6px;
+    border-radius: var(--wa-border-radius-pill);
+    background: var(--wa-color-neutral-fill-quiet);
+    overflow: hidden;
+}
+/* Dark: lift the empty track off the dark footer so the remaining (unfilled)
+   portion of each bar stays readable instead of blending into the background. */
+html.wa-dark .usage-lane {
+    background: var(--wa-color-neutral-border-normal);
+}
+
+.usage-lane-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: var(--wa-border-radius-pill);
+}
+
+/* Time-elapsed reference lane — a neutral fill, distinct from the severity-colored
+   usage fill. A softer mid grey in light (the loud fill reads too heavy there);
+   the near-text light grey in dark (kept, reads well against the dark track). */
+.usage-lane-time {
+    background: var(--wa-color-neutral-border-loud);
+}
+html.wa-dark .usage-lane-time {
+    background: var(--wa-color-neutral-fill-loud);
+}
+
+/* Extra usage has no pace: a single solo lane (Claude %) or a balance readout (Codex). */
+.usage-bar-extra {
+    justify-content: center;
+    min-height: 15px;
+}
+.usage-lane-solo {
+    height: 8px;
+}
+
+.usage-balance {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--wa-color-neutral-content);
+    white-space: nowrap;
+}
+.usage-balance-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--wa-border-radius-circle);
+    flex: 0 0 auto;
+}
+
+.usage-burn-chip {
+    flex: 0 0 auto;
+    font-size: var(--wa-font-size-2xs);
+    font-weight: var(--wa-font-weight-bold);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.4;
+    padding: 0 var(--wa-space-2xs);
+    border-radius: var(--wa-border-radius-pill);
+    white-space: nowrap;
+}
+.usage-burn-chip-neutral {
+    color: var(--wa-color-neutral-content);
+    background: var(--wa-color-neutral-fill-quiet);
+}
+
 .usage-quota-info {
     display: flex;
     flex-direction: column;
+    align-items: flex-end;
     line-height: 1.2;
+    flex: 0 0 auto;
 }
 
-/* Remove text in narrow sidebar */
-@container sidebar (width <= 13rem) {
-    .sidebar-footer-usage {
-        column-gap: var(--wa-space-3xs);
-    }
-    .usage-quota-info {
+/* Hide the labels only in a genuinely narrow sidebar. The stacked one-row-per-quota
+   layout leaves more horizontal room than the old side-by-side rings, so this kicks
+   in much later (150px) than the original ≤13rem breakpoint. */
+@container sidebar (width <= 150px) {
+    .usage-quota-info,
+    .usage-provider-name {
         display: none;
     }
 }

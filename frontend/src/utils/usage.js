@@ -47,6 +47,30 @@ export function getUsageRingColor(quota) {
 }
 
 /**
+ * Format the compact burn-rate chip shown at the end of a quota bar.
+ *
+ * The chip is always a burn multiplier — never a percentage:
+ *   - exhausted (utilization >= 100%) → "100%+"
+ *   - a computed burn rate > 0.05     → "×0.7" / "×2.3" (one decimal below ×10)
+ *
+ * Returns null (no chip at all) when there is nothing meaningful to show: no
+ * utilization, or a burn rate that rounds to ×0.0 (<= 0.05, i.e. under 5%) or
+ * isn't computable yet.
+ *
+ * @param {object|null} quota - A computed quota object from computeUsageData()
+ * @returns {{text: string}|null}
+ */
+export function formatBurnChip(quota) {
+    if (!quota || quota.utilization == null) return null
+    if (quota.utilization >= 100) return { text: '100%+' }
+    if (quota.burnRate != null && quota.burnRate > 0.05) {
+        const b = quota.burnRate
+        return { text: '×' + b.toFixed(b < 10 ? 1 : 0) }
+    }
+    return null
+}
+
+/**
  * Window durations in milliseconds.
  */
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
