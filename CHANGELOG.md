@@ -6,10 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Public sharing** — Share sessions and artifacts through read-only public links, with optional passwords and expiry.
+  - ![Create a public share](frontend/public/whats-new/1.92/sharing-create.webp)
+- **Model & effort picker** — Choose agent settings from a model × effort matrix, with benchmark-based recommendations tuned to the task's difficulty.
+  - ![New agent settings picker](frontend/public/whats-new/1.92/new-agent-settings-picker.webp)
+- **Artifact bookmark names** — New bookmarks now get a suggested name from the artifact's title or filename.
+
 ### Changed
 
+- **Current agent settings** — The summary below the message input is now more compact and visual, with an icon for each setting.
+  - ![New agent settings summary](frontend/public/whats-new/1.92/new-agent-settings-summary.webp)
+- **Usage quotas** — The sidebar now shows usage, elapsed time and burn rate as stacked bars, including where a projected cutoff would occur.
+  - ![New usage widget](frontend/public/whats-new/1.92/new-usage-widget.webp)
+- **Native links** — Session tabs and artifact bookmarks are now regular links and can be used as such.
+- **Codex `ultra` effort** — Temporarily unavailable; existing selections fall back to the closest supported effort.
 - **Claude Agent SDK** — Upgrade from 0.2.116 to 0.2.118 (bundled Claude Code CLI: 2.1.207 → 2.1.209)
 - **Codex runtime** — Update from v0.144.2 to v0.144.4.
+
+### Fixed
+
+- **Codex GPT-5.6 tools** — Task plans and output from long-running commands work correctly again.
 
 ## [1.91.3] - 2026-07-13
 
