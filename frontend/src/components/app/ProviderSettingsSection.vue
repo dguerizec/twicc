@@ -29,6 +29,7 @@ import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
 import AgentSettingsMatrix from '../message/AgentSettingsMatrix.vue'
 import AgentSettingsBenchmarkWeights from '../message/AgentSettingsBenchmarkWeights.vue'
 import AgentSettingsSwitches from '../message/AgentSettingsSwitches.vue'
+import HelpTextLink from '../help/HelpTextLink.vue'
 import HybridModeExplainer from '../message/HybridModeExplainer.vue'
 
 const props = defineProps({
@@ -209,7 +210,10 @@ function onOrchestrationToggle(event) {
              Own wrapper class (not .setting-group) so the section's
              `label ~ :not(label)` indent rule doesn't shift the wide grid. -->
         <div class="agent-defaults-group">
-            <label class="setting-group-label">Default model &amp; effort</label>
+            <div class="matrix-heading">
+                <label class="setting-group-label">Model &amp; effort</label>
+                <HelpTextLink help-key="model-effort-score" label="What are those numbers?" />
+            </div>
             <wa-callout
                 v-if="modelFallbackNotice"
                 variant="warning"
@@ -319,6 +323,17 @@ function onOrchestrationToggle(event) {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-m);
+}
+
+/* Heading above the matrix ("Model & effort" + help link). Pull the next block
+   (fallback callout / matrix) up to a tight gap under the label. */
+.matrix-heading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    column-gap: var(--wa-space-s);
+    row-gap: var(--wa-space-3xs);
+    margin-bottom: calc(var(--wa-space-2xs) - var(--wa-space-m));
 }
 
 /* Pull the weighting block up toward the matrix (the uniform space-m gap is a

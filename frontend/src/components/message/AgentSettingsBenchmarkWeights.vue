@@ -3,17 +3,16 @@
 // modes, sharing the same benchmarkWeights store (so switching never resets):
 //  - collapsed (default): a single "Task difficulty" slider that proxies the
 //    Capability weight — no % readout (a difficulty in percent is meaningless);
-//  - expanded ("More controls"): the full block — preset profiles, the three
-//    Capability / Economy / Speed sliders (%, lock, always sum 100), and the
-//    "When Capability moves, favor:" selector.
-// A shared "Auto-select best" switch line (both modes, at the end) toggles the
-// store flags; the parent popover runs the actual matrix pick.
+//  - expanded ("More controls"): the three Capability / Economy / Speed sliders
+//    (%, lock, always sum 100) and the "When Capability moves, favor:" selector.
+// The "Auto-select best" switch line and the preset-profile links (expanded
+// only) sit at the end; the parent popover runs the actual matrix pick. Score
+// help lives in the "Model & effort" heading above the matrix, not here.
 // All logic (latent normalization, exclusive lock, priority split, presets)
 // lives in the store; this component is the presentation layer.
 import { ref, useId } from 'vue'
 import { useBenchmarkWeightsStore, WEIGHT_PRESETS } from '../../stores/benchmarkWeights'
 import AppTooltip from '../ui/AppTooltip.vue'
-import HelpIconButton from '../help/HelpIconButton.vue'
 
 defineProps({
     // Providers shown in the matrix; the "Default provider only" switch only
@@ -82,30 +81,13 @@ function isActivePreset(p) {
                     @input="onSlide('capability', $event)"
                 ></wa-slider>
                 <button type="button" class="weights-toggle" @click="showAll = true">More controls</button>
-                <HelpIconButton help-key="model-effort-score" label="How scores are computed" />
             </div>
         </template>
 
-        <!-- Expanded ("More controls"): the full weighting block. -->
+        <!-- Expanded ("More controls"): "Fewer controls" (top-right), then the
+             three weight sliders, the preset links, and the favor row. -->
         <template v-else>
-            <div class="weights-head">
-                <span class="weights-title">
-                    Scoring priorities
-                    <HelpIconButton help-key="model-effort-score" label="How scores are computed" />
-                </span>
-                <div class="weights-presets">
-                    <template v-for="p in presets" :key="p.id">
-                        <wa-button
-                            :id="`${uid}-preset-${p.id}`"
-                            size="small"
-                            :appearance="isActivePreset(p) ? 'filled' : 'outlined'"
-                            :variant="isActivePreset(p) ? 'brand' : 'neutral'"
-                            @click="store.applyPreset(p.capability, p.economy, p.spd)"
-                        >{{ p.label }}</wa-button>
-                        <AppTooltip v-if="p.tooltip" :for="`${uid}-preset-${p.id}`">{{ p.tooltip }}</AppTooltip>
-                    </template>
-                </div>
-            </div>
+            <button type="button" class="weights-toggle" @click="showAll = false">Fewer controls</button>
 
             <div class="weights-rows">
                 <div
@@ -138,6 +120,23 @@ function isActivePreset(p) {
                         <wa-icon :name="store.locks[row.key] ? 'lock' : 'lock-open'"></wa-icon>
                     </button>
                 </div>
+            </div>
+
+            <!-- Preset profiles as links, prefixed by a "Presets" label. The
+                 active profile is styled distinctly. -->
+            <div class="weights-presets">
+                <span class="weights-presets-label">Presets</span>
+                <template v-for="p in presets" :key="p.id">
+                    <button
+                        :id="`${uid}-preset-${p.id}`"
+                        type="button"
+                        class="weights-preset-link"
+                        :class="{ active: isActivePreset(p) }"
+                        :aria-pressed="isActivePreset(p)"
+                        @click="store.applyPreset(p.capability, p.economy, p.spd)"
+                    >{{ p.label }}</button>
+                    <AppTooltip v-if="p.tooltip" :for="`${uid}-preset-${p.id}`">{{ p.tooltip }}</AppTooltip>
+                </template>
             </div>
 
             <div class="weights-favor">
@@ -175,8 +174,6 @@ function isActivePreset(p) {
             >Default provider only</wa-switch>
         </div>
 
-        <button v-if="showAll" type="button" class="weights-toggle" @click="showAll = false">Fewer controls</button>
-
         <!-- Closes the weighting block in both modes. -->
         <wa-divider class="weights-divider"></wa-divider>
     </div>
@@ -186,7 +183,7 @@ function isActivePreset(p) {
 .weights {
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-s);
+    gap: var(--wa-space-xs);
 }
 
 /* Collapsed mode: the single Task difficulty row. */
@@ -202,7 +199,7 @@ function isActivePreset(p) {
 
 /* More / Fewer controls link. */
 .weights-toggle {
-    align-self: flex-start;
+    align-self: flex-end;
     white-space: nowrap;
     background: none;
     border: none;
@@ -216,14 +213,21 @@ function isActivePreset(p) {
     }
 }
 
+/* The "Fewer controls" toggle (expanded mode — a direct child of .weights, not
+   the collapsed one nested in .weights-simple) sits at the top: reset the WA
+   native-button forced height so it stays a compact link. */
+.weights > .weights-toggle {
+    height: auto;
+}
+
 /* On the collapsed row the link sits inline, after the slider. */
 .weights-simple .weights-toggle {
     align-self: center;
 }
 
-/* Closes the expanded block; the flex gap handles the spacing. */
+/* Closes the weighting block; a little breathing room above it. */
 .weights-divider {
-    margin: 0;
+    margin: var(--wa-space-s) 0 0;
 }
 
 /* Auto-select switch line — same wrap + gaps as the popover's switch row. */
@@ -234,27 +238,47 @@ function isActivePreset(p) {
     row-gap: var(--wa-space-xs);
 }
 
-/* Collapsed mode: tighten the Task difficulty → auto-select gap. */
+/* Collapsed mode: tighten the Task difficulty → auto-select gap (keep it at 2xs
+   now that the base .weights gap is xs). */
 .weights-simple + .weights-autoselect {
-    margin-top: calc(var(--wa-space-2xs) - var(--wa-space-s));
+    margin-top: calc(var(--wa-space-2xs) - var(--wa-space-xs));
 }
 
-.weights-head {
-    display: flex;
-    flex-direction: column;
-    gap: var(--wa-space-2xs);
-}
-
-.weights-title {
-    font-size: var(--wa-font-size-s);
-    font-weight: var(--wa-font-weight-semibold);
-    color: var(--wa-color-text-normal);
-}
-
+/* Preset-profile links, on one wrapping line prefixed by a "Presets" label. */
 .weights-presets {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--wa-space-2xs);
+    align-items: center;
+    column-gap: var(--wa-space-s);
+    row-gap: var(--wa-space-2xs);
+}
+
+.weights-presets-label {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-normal);
+    white-space: nowrap;
+}
+
+/* Each profile as a text link (compact — reset the WA-less native button). The
+   active profile reads bolder + underlined to stand apart from the rest. */
+.weights-preset-link {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    white-space: nowrap;
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-brand-60);
+    text-decoration: none;
+}
+
+.weights-preset-link:hover {
+    text-decoration: underline;
+}
+
+.weights-preset-link.active {
+    font-weight: var(--wa-font-weight-semibold);
+    text-decoration: underline;
 }
 
 .weights-rows {
@@ -317,8 +341,9 @@ function isActivePreset(p) {
 .weights-favor {
     display: flex;
     align-items: center;
-    gap: var(--wa-space-xs);
     flex-wrap: wrap;
+    column-gap: var(--wa-space-m);
+    row-gap: var(--wa-space-s);
 }
 
 .weights-favor-label {
@@ -328,6 +353,6 @@ function isActivePreset(p) {
 }
 
 .weights-favor-select {
-    min-width: 9rem;
+    width: 9rem;
 }
 </style>

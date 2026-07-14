@@ -18,6 +18,7 @@ import AgentSettingsSummaryView from './AgentSettingsSummaryView.vue'
 import AgentSettingsMatrix from './AgentSettingsMatrix.vue'
 import AgentSettingsBenchmarkWeights from './AgentSettingsBenchmarkWeights.vue'
 import AgentSettingsSwitches from './AgentSettingsSwitches.vue'
+import HelpTextLink from '../help/HelpTextLink.vue'
 import { buildSwitchRows } from '../../utils/agentSwitchRows'
 
 const props = defineProps({
@@ -516,6 +517,12 @@ onBeforeUnmount(() => {
 
         <!-- Settings dropdowns (scrollable) -->
         <div class="settings-panel">
+            <!-- Heading above the matrix + a link to the score help page. -->
+            <div class="matrix-heading">
+                <span class="setting-label">Model &amp; effort</span>
+                <HelpTextLink help-key="model-effort-score" label="What are those numbers?" />
+            </div>
+
             <!-- Provider × model × effort matrix — owns those three fields. -->
             <AgentSettingsMatrix
                 :blocks="matrixBlocks"
@@ -587,6 +594,17 @@ onBeforeUnmount(() => {
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+}
+
+/* Heading above the matrix ("Model & effort" + help link). Pull the matrix up
+   to a tight gap under it — the panel's uniform space-l is too airy there. */
+.matrix-heading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    column-gap: var(--wa-space-s);
+    row-gap: var(--wa-space-3xs);
+    margin-bottom: calc(var(--wa-space-2xs) - var(--wa-space-l));
 }
 
 /* Tighten only the matrix (+ legend) → weighting-block gap; the panel's uniform
