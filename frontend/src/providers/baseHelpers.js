@@ -865,9 +865,17 @@ export class BaseProviderHelpers {
             parts.push({ text: modelText, forced: modelForced })
         }
 
-        // Permission mode — text.
+        // Permission mode — label prefixed by the coloured mode glyph (same
+        // icon/tint as the permission selects, from getChoiceIcon).
         if (this.supportsAgentSetting('permission_mode')) {
-            parts.push({ text: this.getChoiceLabel('permission_mode', eff('permission_mode')) ?? '', forced: forced('permission_mode') })
+            const permissionMode = eff('permission_mode')
+            const iconInfo = this.getChoiceIcon('permission_mode', permissionMode)
+            parts.push({
+                text: this.getChoiceLabel('permission_mode', permissionMode) ?? '',
+                permissionIcon: iconInfo?.icon ?? null,
+                permissionColor: iconInfo?.color ?? null,
+                forced: forced('permission_mode'),
+            })
         }
 
         // The boolean flags render as a grouped icon cluster (brain, bolt,

@@ -11,7 +11,9 @@
 // Chrome MCP render as a coloured icon (glyph + tint from AGENT_SETTING_ICONS),
 // dimmed + struck when off, with the label as a tooltip. The model text part
 // additionally carries the effort as a 5-bar level icon (``{ effortSrc,
-// effortLabel }``) glued right after the label.
+// effortLabel }``) glued right after the label; the permission text part
+// carries the coloured mode glyph (``{ permissionIcon, permissionColor }``)
+// glued right before it.
 //
 // ``markForced`` controls the dashed underline on parts that differ from the
 // provider defaults: useful when a user is composing a session (see at a
@@ -23,6 +25,7 @@ import { getProviderIcon } from '../../providers'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ProviderIcon from '../ui/ProviderIcon.vue'
 import SettingFlagIcon from '../ui/SettingFlagIcon.vue'
+import PermissionModeIcon from '../ui/PermissionModeIcon.vue'
 
 const props = defineProps({
     provider: { type: String, default: null },
@@ -68,8 +71,17 @@ function showSeparator(i) {
             </template>
 
             <!-- Text part (model, permission, …). The model part also carries
-                 the 5-bar effort-level icon glued right after its label. -->
+                 the 5-bar effort-level icon glued right after its label; the
+                 permission part carries the coloured mode glyph before it. -->
             <template v-else>
+                <PermissionModeIcon
+                    v-if="part.permissionIcon"
+                    :icon="part.permissionIcon"
+                    :color="part.permissionColor"
+                    :label="part.text"
+                    class="summary-permission-icon"
+                    :class="{ 'setting-forced': markForced && part.forced }"
+                />
                 <span :class="{ 'setting-forced': markForced && part.forced }">{{ part.text }}</span>
                 <template v-if="part.effortSrc">
                     <span
@@ -113,6 +125,12 @@ function showSeparator(i) {
 
 .provider-icon {
     margin-right: 0.25rem;
+}
+
+/* Coloured mode glyph glued right before the permission label. */
+.summary-permission-icon {
+    margin-right: 0.25em;
+    vertical-align: -0.15em;
 }
 
 /* Effort-level bars glued right after the model label (replaces "× effort"). */
