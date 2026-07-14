@@ -10,7 +10,7 @@ import { useReconciliation } from './useReconciliation'
 import { toast } from './useToast'
 import { computeUsageData } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
-import { getProviderHelpers, getProviderLabel, getProviderIcon, getProviderWsHandler, getProviderStore } from '../providers'
+import { getProviderHelpers, getProviderLabel, getProviderIcon, getProviderIconColor, getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification, isPageActive } from '../utils/notificationSounds'
 import { installPresenceHeartbeat, isLocallyPresent } from '../utils/presence'
 import { truncateTitle } from '../utils/truncate'
@@ -1325,8 +1325,9 @@ export function useWebSocket() {
                 const settings = useSettingsStore()
                 const label = getProviderLabel(provider)
                 const iconName = getProviderIcon(provider)
+                const iconColor = getProviderIconColor(provider)
                 const iconHtml = iconName
-                    ? `<wa-icon family="brands" name="${iconName}" style="margin-inline-end: 0.4em;"></wa-icon>`
+                    ? `<wa-icon family="brands" name="${iconName}" style="margin-inline-end: 0.4em;${iconColor ? ` color: ${iconColor};` : ''}"></wa-icon>`
                     : ''
                 const detail = formatExtraUsageStartedDetail(msg.extra_usage)
                 const sentence = `${label} is currently drawing from your extra usage credit, billed on top of your plan.`

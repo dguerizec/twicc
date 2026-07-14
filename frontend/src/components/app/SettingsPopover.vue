@@ -9,6 +9,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useTipsStore } from '../../stores/tips'
 import { useHelpStore } from '../../stores/help'
 import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegisteredProviders, getProviderIcon } from '../../providers'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
 import { validateWorktreeTemplate } from '../../utils/worktreePath'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, SPONSOR_URL } from '../../constants'
@@ -1143,13 +1144,11 @@ function onChangelogClose() {
                         :class="{ active: activeSection === section.id }"
                         @click="selectSection(section.id)"
                     >
-                        <wa-icon
+                        <ProviderIcon
                             v-if="section.icon"
-                            auto-width
-                            family="brands"
-                            :name="section.icon"
+                            :provider="section.provider"
                             class="settings-nav-provider-icon"
-                        ></wa-icon>
+                        />
                         {{ section.navLabel || section.label }}
                         <wa-icon v-if="section.synced" name="cloud" class="synced-icon"></wa-icon>
                     </button>
@@ -1363,13 +1362,11 @@ function onChangelogClose() {
                                         :disabled="isSwitchDisabled(p)"
                                         @change="(e) => onToggleProvider(p, e)"
                                     >
-                                        <wa-icon
+                                        <ProviderIcon
                                             v-if="providerIconFor(p)"
-                                            auto-width
-                                            family="brands"
-                                            :name="providerIconFor(p)"
+                                            :provider="p"
                                             class="provider-switch-icon"
-                                        ></wa-icon>
+                                        />
                                         {{ providerLabelFor(p) }}
                                     </wa-switch>
                                     <template v-if="transitionLabelFor(p)">
@@ -1388,26 +1385,22 @@ function onChangelogClose() {
                             @change="onDefaultProviderChange"
                             size="small"
                         >
-                            <wa-icon
+                            <ProviderIcon
                                 v-if="providerIconFor(defaultProvider)"
                                 slot="start"
-                                auto-width
-                                family="brands"
-                                :name="providerIconFor(defaultProvider)"
-                            ></wa-icon>
+                                :provider="defaultProvider"
+                            />
                             <wa-option
                                 v-for="option in enabledProviderOptions"
                                 :key="option.value"
                                 :value="option.value"
                                 :label="option.label"
                             >
-                                <wa-icon
+                                <ProviderIcon
                                     v-if="providerIconFor(option.value)"
-                                    auto-width
-                                    family="brands"
-                                    :name="providerIconFor(option.value)"
+                                    :provider="option.value"
                                     class="provider-option-icon"
-                                ></wa-icon>
+                                />
                                 {{ option.label }}
                             </wa-option>
                         </wa-select>
@@ -1760,12 +1753,10 @@ function onChangelogClose() {
                         <wa-divider v-if="idx === 0"></wa-divider>
                         <div class="provider-usage-block">
                             <h4 class="provider-usage-title">
-                                <wa-icon
+                                <ProviderIcon
                                     v-if="providerIconFor(provider)"
-                                    auto-width
-                                    family="brands"
-                                    :name="providerIconFor(provider)"
-                                ></wa-icon>
+                                    :provider="provider"
+                                />
                                 {{ getProviderLabel(provider) }}
                             </h4>
                         <div v-if="supportsWakeup(provider)" class="setting-group">
@@ -1953,7 +1944,7 @@ function onChangelogClose() {
                 :class="`settings-footer-status--${currentStatusDisplay.modifier}`"
                 :id="statusFooterId"
             >
-                <wa-icon v-if="currentStatusIcon" family="brands" :name="currentStatusIcon" class="settings-footer-status-icon"></wa-icon>
+                <ProviderIcon v-if="currentStatusIcon" :provider="currentStatusProvider?.provider" class="settings-footer-status-icon" />
                 <span class="status-dot"></span>
                 {{ currentStatusDisplay.label }}
             </a>

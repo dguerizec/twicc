@@ -19,7 +19,8 @@
 import { ref, computed, watch } from 'vue'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
-import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderLabel, getProviderIcon } from '../../providers'
+import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderLabel } from '../../providers'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 import { useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
 import { ancestorChain } from '../../utils/projectAgentDefaults'
 import { formatBundleSummary } from '../../utils/presetFormat'
@@ -274,13 +275,11 @@ defineExpose({ getChangedFields, reset: initLocal })
             size="small"
             class="ad-provider-select"
         >
-            <wa-icon
-                v-if="localProvider && getProviderIcon(localProvider)"
+            <ProviderIcon
+                v-if="localProvider"
                 slot="start"
-                auto-width
-                family="brands"
-                :name="getProviderIcon(localProvider)"
-            ></wa-icon>
+                :provider="localProvider"
+            />
             <wa-option value="" label="Inherit">Inherit</wa-option>
             <wa-option
                 v-for="p in providers"
@@ -288,13 +287,7 @@ defineExpose({ getChangedFields, reset: initLocal })
                 :value="p.value"
                 :label="isEnabled(p.value) ? getProviderLabel(p.value) : getProviderLabel(p.value) + ' (disabled)'"
             >
-                <wa-icon
-                    v-if="getProviderIcon(p.value)"
-                    auto-width
-                    family="brands"
-                    :name="getProviderIcon(p.value)"
-                    class="provider-option-icon"
-                ></wa-icon>
+                <ProviderIcon :provider="p.value" class="provider-option-icon" />
                 {{ getProviderLabel(p.value) }}<template v-if="!isEnabled(p.value)"> (disabled)</template>
             </wa-option>
         </wa-select>
@@ -323,13 +316,7 @@ defineExpose({ getChangedFields, reset: initLocal })
                 slot="nav"
                 :panel="p.value"
             >
-                <wa-icon
-                    v-if="getProviderIcon(p.value)"
-                    family="brands"
-                    :name="getProviderIcon(p.value)"
-                    auto-width
-                    class="ad-tab-icon"
-                ></wa-icon>
+                <ProviderIcon :provider="p.value" class="ad-tab-icon" />
                 {{ getProviderLabel(p.value) }}<span v-if="!isEnabled(p.value)" class="ad-disabled-badge">disabled</span>
             </wa-tab>
 

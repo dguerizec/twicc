@@ -19,8 +19,9 @@
 // in an orchestration tree — those pass ``markForced=false`` to render every
 // effective value plainly.
 import { computed, useId } from 'vue'
-import { getProviderIcon, getProviderIconColor } from '../../providers'
+import { getProviderIcon } from '../../providers'
 import AppTooltip from '../ui/AppTooltip.vue'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 
 const props = defineProps({
     provider: { type: String, default: null },
@@ -31,7 +32,6 @@ const props = defineProps({
 })
 
 const providerIcon = computed(() => getProviderIcon(props.provider))
-const providerColor = computed(() => getProviderIconColor(props.provider))
 
 const uid = useId()
 const iconId = (i) => `${uid}-icon-${i}`
@@ -57,14 +57,7 @@ function showSeparator(i) {
 
 <template>
     <span class="agent-settings-summary">
-        <wa-icon
-            v-if="providerIcon"
-            auto-width
-            family="brands"
-            :name="providerIcon"
-            class="provider-icon"
-            :style="providerColor ? { color: providerColor } : null"
-        ></wa-icon>
+        <ProviderIcon v-if="providerIcon" :provider="provider" class="provider-icon" />
         <template v-for="(part, i) in parts" :key="i">
             <span v-if="showSeparator(i)"> · </span>
 

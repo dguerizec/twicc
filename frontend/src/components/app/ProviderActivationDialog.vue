@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
-import { getRegisteredProviders, getProviderLabel, getProviderIcon, getProviderOptions } from '../../providers'
+import { getRegisteredProviders, getProviderLabel, getProviderOptions } from '../../providers'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 
 const settings = useSettingsStore()
 
@@ -110,13 +111,7 @@ function handleHide(event) {
                 :checked="choices[p] === true"
                 @change="(e) => choices[p] = e.target.checked"
             >
-                <wa-icon
-                    v-if="getProviderIcon(p)"
-                    auto-width
-                    family="brands"
-                    :name="getProviderIcon(p)"
-                    class="provider-icon"
-                ></wa-icon>
+                <ProviderIcon :provider="p" class="provider-icon" />
                 {{ providerLabel(p) }}
             </wa-switch>
         </div>
@@ -128,26 +123,18 @@ function handleHide(event) {
                 :disabled="enabledProviderOptions.length === 0"
                 @change="(e) => defaultChoice = e.target.value"
             >
-                <wa-icon
-                    v-if="defaultChoice && getProviderIcon(defaultChoice)"
+                <ProviderIcon
+                    v-if="defaultChoice"
                     slot="start"
-                    auto-width
-                    family="brands"
-                    :name="getProviderIcon(defaultChoice)"
-                ></wa-icon>
+                    :provider="defaultChoice"
+                />
                 <wa-option
                     v-for="option in enabledProviderOptions"
                     :key="option.value"
                     :value="option.value"
                     :label="option.label"
                 >
-                    <wa-icon
-                        v-if="getProviderIcon(option.value)"
-                        auto-width
-                        family="brands"
-                        :name="getProviderIcon(option.value)"
-                        class="provider-option-icon"
-                    ></wa-icon>
+                    <ProviderIcon :provider="option.value" class="provider-option-icon" />
                     {{ option.label }}
                 </wa-option>
             </wa-select>

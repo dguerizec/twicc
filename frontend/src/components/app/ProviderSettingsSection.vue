@@ -21,6 +21,7 @@
  */
 import { computed, ref } from 'vue'
 import { getProviderHelpers, getProviderIcon } from '../../providers'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 import { useSettingsStore } from '../../stores/settings'
 import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
 import AgentSettingsDefaultsPicker from '../message/AgentSettingsDefaultsPicker.vue'
@@ -150,12 +151,7 @@ function onOrchestrationToggle(event) {
 <template>
     <section class="settings-section">
         <h3 class="settings-section-title">
-            <wa-icon
-                v-if="providerIcon"
-                auto-width
-                family="brands"
-                :name="providerIcon"
-            ></wa-icon>
+            <ProviderIcon v-if="providerIcon" :provider="provider" />
             {{ helpers.constructor.label }} settings
             <wa-icon name="cloud" class="synced-icon"></wa-icon>
         </h3>

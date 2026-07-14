@@ -5,6 +5,7 @@ import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
 import { PROCESS_STATE, PROCESS_STATE_COLORS, PROCESS_STATE_NAMES, DISPLAY_MODE } from '../../../constants'
 import { getProviderHelpers, getProviderLabel, getProviderIcon } from '../../../providers'
+import ProviderIcon from '../../ui/ProviderIcon.vue'
 import { getAgentDisplayLabel } from '../../../utils/agentLabel'
 import { stopSubagent, interruptSession } from '../../../composables/useWebSocket'
 import { stopSessionProcess, hardKillSessionProcess } from '../../../composables/useStopSessionProcess'
@@ -548,13 +549,11 @@ defineExpose({
 
             <!-- Clickable zone: title + project + context ring + chevron toggle compact mode -->
             <div class="compact-toggle-zone" @click="isCompactExpanded = !isCompactExpanded">
-                <wa-icon
+                <ProviderIcon
                     v-if="providerIcon"
-                    auto-width
-                    family="brands"
-                    :name="providerIcon"
+                    :provider="session?.provider"
                     class="compact-provider-icon"
-                ></wa-icon>
+                />
 
                 <!-- Worktree marker: only when the session's project is a git worktree.
                      Sits right before the title; its tooltip restates that the session
@@ -689,7 +688,7 @@ defineExpose({
 
                 <template v-if="formattedModel">
                     <span :id="`session-header-${sessionId}-model`" class="meta-item">
-                        <wa-icon v-if="providerIcon" auto-width family="brands" :name="providerIcon"></wa-icon>
+                        <ProviderIcon v-if="providerIcon" :provider="session?.provider" />
                         <wa-icon v-else auto-width name="robot" variant="classic"></wa-icon>
                         <span>{{ formattedModel }}</span>
                     </span>

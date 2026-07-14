@@ -16,6 +16,7 @@ import { ensureProjectTrust } from '../composables/useTrustGate'
 import { useTerminalCommandStore } from '../stores/terminalCommand'
 import { useSessionSelectionStore } from '../stores/sessionSelection'
 import { getRegisteredProviders, getProviderHelpers, getProviderStore, getProviderLabel, getProviderIcon } from '../providers'
+import ProviderIcon from '../components/ui/ProviderIcon.vue'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { splitProjectsByPriority } from '../utils/projectSort'
 import SessionList from '../components/session/list/SessionList.vue'
@@ -2255,15 +2256,14 @@ function updateSidebarClosedClass(closed) {
 
             <div class="sidebar-footer">
                 <div v-if="quotaHasUsage && quotaComputed" ref="usageBlockRef" class="sidebar-footer-usage">
-                    <wa-icon
+                    <ProviderIcon
                         v-if="currentUsageProviderIcon"
                         id="usage-provider-icon"
                         class="usage-provider-icon"
                         :class="{ 'usage-provider-icon-clickable': hasMultipleUsageProviders }"
-                        family="brands"
-                        :name="currentUsageProviderIcon"
+                        :provider="currentUsageProvider"
                         @click="hasMultipleUsageProviders && cycleUsageProvider()"
-                    ></wa-icon>
+                    />
                     <AppTooltip v-if="currentUsageProviderIcon" for="usage-provider-icon" hoist force>
                         <div class="usage-provider-tooltip">
                             <span class="usage-provider-tooltip-name">{{ currentUsageProviderLabel }} usage</span>

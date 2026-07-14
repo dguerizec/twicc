@@ -28,6 +28,7 @@ import ProcessDuration from '../../ui/ProcessDuration.vue'
 import CostDisplay from '../../ui/CostDisplay.vue'
 import AppTooltip from '../../ui/AppTooltip.vue'
 import { getProviderLabel, getProviderIcon } from '../../../providers'
+import ProviderIcon from '../../ui/ProviderIcon.vue'
 
 const props = defineProps({
     session: {
@@ -451,7 +452,7 @@ function handleMenuSelect(event) {
                 <wa-icon v-if="session.pinned" name="thumbtack" class="pinned-icon"></wa-icon>
                 <wa-tag v-if="session.archived" size="small" variant="neutral" class="archived-tag">Arch.</wa-tag>
                 <wa-tag v-else-if="session.draft && !processState" size="small" variant="warning" class="draft-tag">Draft</wa-tag>
-                <wa-icon v-if="providerIcon" auto-width family="brands" :name="providerIcon" class="provider-icon"></wa-icon>
+                <ProviderIcon v-if="providerIcon" :provider="session.provider" :colored="false" class="provider-icon" />
                 <wa-icon
                     v-if="showWorktreeIcon"
                     :id="`session-worktree-${session.id}`"

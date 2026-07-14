@@ -19,6 +19,7 @@ import AgentSettingsMatrix from './AgentSettingsMatrix.vue'
 import AgentSettingsBenchmarkWeights from './AgentSettingsBenchmarkWeights.vue'
 import AgentSettingsSwitches from './AgentSettingsSwitches.vue'
 import HelpTextLink from '../help/HelpTextLink.vue'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 import { buildSwitchRows } from '../../utils/agentSwitchRows'
 
 const props = defineProps({
@@ -443,13 +444,11 @@ onBeforeUnmount(() => {
                     <wa-divider v-if="gi > 0"></wa-divider>
                     <!-- Group header: only when more than one provider is shown -->
                     <wa-dropdown-item v-if="presetGroups.length > 1" disabled class="group-header">
-                        <wa-icon
+                        <ProviderIcon
                             v-if="group.icon"
                             slot="icon"
-                            auto-width
-                            family="brands"
-                            :name="group.icon"
-                        ></wa-icon>
+                            :provider="group.provider"
+                        />
                         {{ group.label }}
                     </wa-dropdown-item>
                     <!-- Reset targets: "{provider} default" always, plus the

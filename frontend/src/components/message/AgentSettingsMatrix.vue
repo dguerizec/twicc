@@ -10,6 +10,7 @@
 import { computed, ref, useId, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
 import HoverInfoPanel from '../ui/HoverInfoPanel.vue'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 import { formatBenchmarkDetails } from '../../utils/benchmarkScores'
 
 const props = defineProps({
@@ -340,12 +341,11 @@ onBeforeUnmount(() => {
                     :style="{ gridColumn: 1, gridRow: `${block.labelRow} / span ${block.labelSpan}` }"
                 >
                     <span class="matrix-vlabel-text">{{ block.label }}</span>
-                    <wa-icon
+                    <ProviderIcon
                         v-if="block.icon"
                         class="matrix-vlabel-icon"
-                        family="brands"
-                        :name="block.icon"
-                    ></wa-icon>
+                        :provider="block.provider"
+                    />
                 </div>
 
                 <template v-for="r in block.rows" :key="r.model">

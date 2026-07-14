@@ -10,6 +10,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { getProviderHelpers, getProviderLabel, getProviderIcon } from '../../providers'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 import { sendWsMessage, notifyUserDraftUpdated } from '../../composables/useWebSocket'
 import { useSessionAgentSettings } from '../../composables/useSessionAgentSettings'
 import { ensureProjectTrust } from '../../composables/useTrustGate'
@@ -2013,12 +2014,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     size="small"
                     class="settings-button"
                 >
-                    <wa-icon
-                        v-if="providerIcon"
-                        auto-width
-                        family="brands"
-                        :name="providerIcon"
-                    ></wa-icon>
+                    <ProviderIcon v-if="providerIcon" :provider="session?.provider" />
                     <wa-icon v-else name="gear"></wa-icon>
                     <AgentSettingsSummary :session="session" :settings="settings" />
                     <!-- Affordance hinting the button opens the settings popover

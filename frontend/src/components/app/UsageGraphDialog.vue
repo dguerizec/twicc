@@ -7,6 +7,7 @@
 import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
 import { getProviderOptions, getProviderHelpers } from '../../providers'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 import TabBar from '../ui/TabBar.vue'
 
 const props = defineProps({
@@ -881,11 +882,15 @@ function onTabShow(event) {
                     :value.prop="selectedProvider"
                     @change="onProviderChange"
                 >
+                    <ProviderIcon slot="start" :provider="selectedProvider" />
                     <wa-option
                         v-for="option in providerOptions"
                         :key="option.value"
                         :value="option.value"
-                    >{{ option.label }}</wa-option>
+                    >
+                        <ProviderIcon :provider="option.value" class="provider-option-icon" />
+                        {{ option.label }}
+                    </wa-option>
                 </wa-select>
                 <div class="usage-graph-range-control">
                     <span class="usage-graph-range-label">{{ currentRange.label }}</span>
@@ -1179,6 +1184,10 @@ function onTabShow(event) {
 
 .usage-graph-provider-select {
     width: 9rem;
+}
+
+.provider-option-icon {
+    margin-inline-end: 0.4em;
 }
 
 /* Range slider control in header */

@@ -6,6 +6,7 @@ import GlobalMediaPreview from '../components/media/GlobalMediaPreview.vue'
 import { useDataStore } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { getProviderIcon } from '../providers'
+import ProviderIcon from '../components/ui/ProviderIcon.vue'
 import { makeShareApi, setShareApi } from './shims/shareApi'
 import { connectShareLive } from './shims/shareLive'
 import { loadViewerPrefs } from './viewerPrefs'
@@ -140,7 +141,7 @@ onUnmounted(() => window.removeEventListener('popstate', onPopState))
     <div class="share-shell">
         <header class="share-header">
             <div class="share-title">
-                <wa-icon v-if="providerIcon" auto-width family="brands" :name="providerIcon"></wa-icon>
+                <ProviderIcon v-if="providerIcon" :provider="meta.provider" />
                 <strong>{{ meta.title || 'Shared session' }}</strong>
             </div>
             <wa-button id="share-menu-trigger" size="small" appearance="plain" class="share-menu-button">

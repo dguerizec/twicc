@@ -11,7 +11,8 @@ import { useStartupPolling } from '../../composables/useStartupPolling'
 import ActivityDashboard from './ActivityDashboard.vue'
 import ContributionGraph from './ContributionGraph.vue'
 import ContributionSparklines from './ContributionSparklines.vue'
-import { getProviderOptions, getProviderIcon } from '../../providers'
+import { getProviderOptions } from '../../providers'
+import ProviderIcon from '../ui/ProviderIcon.vue'
 
 const settingsStore = useSettingsStore()
 const showCosts = computed(() => settingsStore.areCostsShown)
@@ -43,10 +44,6 @@ const activityTotals = ref(null)
 const providerOptions = getProviderOptions()
 const showProviderSelect = providerOptions.length > 1
 const selectedProvider = ref('all')
-
-function providerIconFor(provider) {
-    return getProviderIcon(provider)
-}
 
 function onProviderChange(e) {
     selectedProvider.value = e.target.value
@@ -199,13 +196,11 @@ useStartupPolling(fetchDailyActivity)
             :value.prop="selectedProvider"
             @change="onProviderChange"
         >
-            <wa-icon
-                v-if="selectedProvider !== 'all' && providerIconFor(selectedProvider)"
+            <ProviderIcon
+                v-if="selectedProvider !== 'all'"
                 slot="start"
-                auto-width
-                family="brands"
-                :name="providerIconFor(selectedProvider)"
-            ></wa-icon>
+                :provider="selectedProvider"
+            />
             <wa-option value="all" label="All providers">All providers</wa-option>
             <wa-option
                 v-for="option in providerOptions"
@@ -213,13 +208,7 @@ useStartupPolling(fetchDailyActivity)
                 :value="option.value"
                 :label="option.label"
             >
-                <wa-icon
-                    v-if="providerIconFor(option.value)"
-                    auto-width
-                    family="brands"
-                    :name="providerIconFor(option.value)"
-                    class="provider-option-icon"
-                ></wa-icon>
+                <ProviderIcon :provider="option.value" class="provider-option-icon" />
                 {{ option.label }}
             </wa-option>
         </wa-select>
