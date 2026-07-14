@@ -864,23 +864,24 @@ export class BaseProviderHelpers {
         }
 
         // The boolean flags render as a grouped icon cluster (brain, bolt,
-        // chrome), coloured when on and dimmed + struck when off.
+        // chrome), coloured when on and dimmed + struck when off. The glyph and
+        // tint per field live in AGENT_SETTING_ICONS; parts carry only ``field``.
 
-        // Thinking — brain icon, pink when on.
+        // Thinking.
         if (this.supportsAgentSetting('thinking_enabled')) {
             const on = eff('thinking_enabled') === true
-            parts.push({ icon: 'brain', on, color: 'pink', forced: forced('thinking_enabled'), label: on ? 'Thinking' : 'No thinking' })
+            parts.push({ field: 'thinking_enabled', on, forced: forced('thinking_enabled'), label: on ? 'Thinking' : 'No thinking' })
         }
 
-        // Fast mode — bolt icon, yellow, only when on.
+        // Fast mode — only when on.
         if (this.supportsAgentSetting('fast_mode') && eff('fast_mode')) {
-            parts.push({ icon: 'bolt', on: true, color: 'yellow', forced: forced('fast_mode'), label: 'Fast mode' })
+            parts.push({ field: 'fast_mode', on: true, forced: forced('fast_mode'), label: 'Fast mode' })
         }
 
-        // Chrome MCP — chrome brand icon, Chrome blue, kept last.
+        // Chrome MCP — kept last.
         if (this.supportsAgentSetting('claude_in_chrome')) {
             const on = eff('claude_in_chrome') === true
-            parts.push({ icon: 'chrome', iconFamily: 'brands', on, color: 'chrome', forced: forced('claude_in_chrome'), label: on ? 'Chrome MCP' : 'No Chrome MCP' })
+            parts.push({ field: 'claude_in_chrome', on, forced: forced('claude_in_chrome'), label: on ? 'Chrome MCP' : 'No Chrome MCP' })
         }
 
         return parts

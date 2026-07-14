@@ -7,6 +7,7 @@
 // exact same widget. An optional notice icon + tooltip sits beside each switch.
 import { useId } from 'vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+import { AGENT_SETTING_ICONS } from '../../utils/agentSettingIcons'
 
 const props = defineProps({
     // [{ field, kind: 'toggle'|'switch', label?, toggleLabel?, bigValue?,
@@ -40,7 +41,13 @@ function onChange(row, event) {
                 :checked="row.checked"
                 :disabled="row.disabled"
                 @change="onChange(row, $event)"
-            >{{ row.kind === 'toggle' ? row.toggleLabel : row.label }}</wa-switch>
+            ><wa-icon
+                v-if="AGENT_SETTING_ICONS[row.field]"
+                class="setting-label-icon"
+                :name="AGENT_SETTING_ICONS[row.field].icon"
+                :family="AGENT_SETTING_ICONS[row.field].family || undefined"
+                :style="{ color: AGENT_SETTING_ICONS[row.field].color }"
+            ></wa-icon>{{ row.kind === 'toggle' ? row.toggleLabel : row.label }}</wa-switch>
             <template v-if="row.notice">
                 <wa-icon
                     :id="`${uid}-notice-${row.field}`"
@@ -75,6 +82,11 @@ function onChange(row, event) {
     align-items: center;
     gap: var(--wa-space-3xs);
     font-size: var(--wa-font-size-s);
+}
+
+/* Setting glyph shown inside the switch label, right before the text. */
+.setting-label-icon {
+    margin-inline-end: 0.3em;
 }
 
 .setting-notice-icon {

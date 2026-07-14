@@ -7,11 +7,11 @@
 // via ``providerHelpers.getSummaryParts(state)`` and pass them in.
 //
 // A part is either a text part (``{ text, forced }``) or an icon part
-// (``{ icon, iconFamily?, on, color?, forced, label }``) — boolean flags like
-// thinking / fast / Chrome MCP render as a coloured icon, dimmed + struck when
-// off, with the label as a tooltip. The model text part additionally carries
-// the effort as a 5-bar level icon (``{ effortSrc, effortLabel }``) glued
-// right after the label.
+// (``{ field, on, forced, label }``) — boolean flags like thinking / fast /
+// Chrome MCP render as a coloured icon (glyph + tint from AGENT_SETTING_ICONS),
+// dimmed + struck when off, with the label as a tooltip. The model text part
+// additionally carries the effort as a 5-bar level icon (``{ effortSrc,
+// effortLabel }``) glued right after the label.
 //
 // ``markForced`` controls the dashed underline on parts that differ from the
 // provider defaults: useful when a user is composing a session (see at a
@@ -20,6 +20,7 @@
 // effective value plainly.
 import { computed, useId } from 'vue'
 import { getProviderIcon } from '../../providers'
+import { AGENT_SETTING_ICONS } from '../../utils/agentSettingIcons'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ProviderIcon from '../ui/ProviderIcon.vue'
 
@@ -36,22 +37,22 @@ const providerIcon = computed(() => getProviderIcon(props.provider))
 const uid = useId()
 const iconId = (i) => `${uid}-icon-${i}`
 
-// Semantic colour name (set by getSummaryParts) → WA token, applied only when
-// the flag is on. Off icons stay dimmed/struck in the neutral text colour.
-const ICON_COLORS = {
-    pink: 'var(--wa-color-pink-70)',
-    yellow: 'var(--wa-color-yellow-60)',
-    chrome: 'var(--wa-color-blue-60)',
+// Icon parts carry a ``field``; the glyph/family/tint come from the shared map.
+// The tint applies only when the flag is on — off icons stay dimmed/struck in
+// the neutral text colour.
+function iconInfo(part) {
+    return part.field ? AGENT_SETTING_ICONS[part.field] : null
 }
 function iconColor(part) {
-    return part.on && part.color ? ICON_COLORS[part.color] : null
+    const info = iconInfo(part)
+    return part.on && info ? info.color : null
 }
 
 // Suppress the "·" separator between two adjacent icon parts so the boolean
 // flags read as one grouped cluster; text boundaries keep their dot.
 function showSeparator(i) {
     if (!i) return false
-    return !(props.parts[i].icon && props.parts[i - 1]?.icon)
+    return !(props.parts[i].field && props.parts[i - 1]?.field)
 }
 </script>
 
@@ -63,20 +64,20 @@ function showSeparator(i) {
 
             <!-- Boolean flag rendered as a coloured icon (thinking / fast /
                  chrome), dimmed + struck when off. -->
-            <template v-if="part.icon">
+            <template v-if="part.field">
                 <span
                     :id="iconId(i)"
                     class="part-icon-wrap"
                     :class="{
                         'setting-forced': markForced && part.forced,
                         struck: !part.on,
-                        'icon-grouped': i > 0 && parts[i - 1]?.icon,
+                        'icon-grouped': i > 0 && parts[i - 1]?.field,
                     }"
                 >
                     <wa-icon
                         auto-width
-                        :name="part.icon"
-                        :family="part.iconFamily || undefined"
+                        :name="iconInfo(part)?.icon"
+                        :family="iconInfo(part)?.family || undefined"
                         :label="part.label"
                         class="part-icon"
                         :class="{ dimmed: !part.on }"
