@@ -19,6 +19,12 @@ defineProps({
     // Providers shown in the matrix; the "Default provider only" switch only
     // surfaces when there is more than one.
     providerCount: { type: Number, default: 1 },
+    // Whether to render the "Auto-select best" line. The per-session popover
+    // wants it (default); the per-provider defaults editor hides it — the
+    // benchmarkWeights store is global and the always-mounted popover watches it,
+    // so a Settings-side auto-select would silently mutate the live session.
+    // The sliders stay in both surfaces (they only re-rank scores).
+    showAutoSelect: { type: Boolean, default: true },
 })
 
 const store = useBenchmarkWeightsStore()
@@ -153,8 +159,9 @@ function isActivePreset(p) {
 
         </template>
 
-        <!-- Auto-select controls: shown in both modes, always at the end. -->
-        <div class="weights-autoselect">
+        <!-- Auto-select controls: shown in both modes, always at the end.
+             Hidden where showAutoSelect is false (per-provider defaults editor). -->
+        <div v-if="showAutoSelect" class="weights-autoselect">
             <wa-switch
                 size="small"
                 :checked="store.autoSelectBest"

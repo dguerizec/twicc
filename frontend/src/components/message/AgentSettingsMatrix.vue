@@ -27,6 +27,13 @@ const hasOldModels = computed(() =>
     props.blocks.some(b => b.rows.some(r => !r.isLatest)),
 )
 
+// Whether any cell is flagged as the default (dot). The per-session popover
+// always has one; the per-provider defaults editor passes no default cell (the
+// selected cell IS the default there), so the "default" legend entry is hidden.
+const hasDefaultCell = computed(() =>
+    props.blocks.some(b => b.rows.some(r => r.cells.some(c => c.isDefault))),
+)
+
 // Assign every element an explicit grid row/column so blocks share one grid
 // (aligned effort columns) while each provider label spans its own rows. Column
 // 1 = vertical provider label, column 2 = model label, columns 3.. = efforts;
@@ -151,7 +158,7 @@ function onCellClick(provider, model, cell) {
                 {{ showOldModels ? 'Hide older models' : 'Show older models' }}
             </button>
             <span class="matrix-legend">
-                <span class="matrix-legend-item"><span class="matrix-default-dot"></span> default</span>
+                <span v-if="hasDefaultCell" class="matrix-legend-item"><span class="matrix-default-dot"></span> default</span>
                 <span class="matrix-legend-item"><wa-icon class="matrix-legend-check" name="check"></wa-icon> selected</span>
             </span>
         </div>

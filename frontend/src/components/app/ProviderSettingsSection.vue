@@ -1,21 +1,34 @@
 <script setup>
 /**
- * ProviderSettingsSection — generic shell rendered inside the Settings
- * popover for the per-provider section (one section per registered
- * provider). Mirrors the agent-settings popover pattern: every wa-select
- * is driven by hooks on the provider's helpers (``getFieldChoices``,
- * ``getModelSelectGroups``, ``isChoiceDisabled``, ``getDefaultValue``,
- * ``setDefaultValue``), so each provider only needs to override what
- * differs from the neutral defaults defined on ``BaseProviderHelpers``.
+ * ProviderSettingsSection — the per-provider section of the Settings popover
+ * (one per registered provider), editing that provider's persisted agent-
+ * settings defaults.
  *
- * Unlike the session popover, the values surfaced here are the persisted
- * ``defaults`` (never null): this section only edits global defaults, no
- * "follow default" sentinel is needed.
+ * Adopts the per-session agent-settings design: a provider × model × effort
+ * matrix (owns the default model + effort) with its benchmark-score weighting
+ * controls, a compact row of switches (context toggle, thinking, Chrome MCP,
+ * fast mode), and permission as plain wa-selects. The matrix, weights, switches
+ * and their builders are SHARED with ``AgentSettingsPopover`` — see
+ * ``utils/agentMatrix.js`` / ``utils/agentSwitchRows.js`` and the three
+ * ``AgentSettings*`` components under ``components/message/``.
+ *
+ * Unlike the session popover, the values here are the persisted ``defaults``
+ * (never the null "follow default" sentinel): every write goes straight to the
+ * provider store via ``getDefaultValue`` / ``setDefaultValue``, no Apply step.
+ * Only the fields a provider supports (per ``supportsAgentSetting`` /
+ * ``fieldHasChoice``) render — so Codex shows just the matrix + permission
+ * selects (its context is model-fixed, and it has no thinking/Chrome/fast).
  */
 import { computed, ref } from 'vue'
 import { getProviderHelpers, getProviderIcon } from '../../providers'
 import { useSettingsStore } from '../../stores/settings'
+import { useBenchmarksStore } from '../../stores/benchmarks'
+import { buildEffortColumns, buildMatrixBlocks } from '../../utils/agentMatrix'
+import { buildSwitchRows } from '../../utils/agentSwitchRows'
 import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
+import AgentSettingsMatrix from '../message/AgentSettingsMatrix.vue'
+import AgentSettingsBenchmarkWeights from '../message/AgentSettingsBenchmarkWeights.vue'
+import AgentSettingsSwitches from '../message/AgentSettingsSwitches.vue'
 import HybridModeExplainer from '../message/HybridModeExplainer.vue'
 
 const props = defineProps({
@@ -27,90 +40,106 @@ const props = defineProps({
 
 const helpers = computed(() => getProviderHelpers(props.provider))
 const providerIcon = computed(() => getProviderIcon(props.provider))
+const benchmarksStore = useBenchmarksStore()
 
-// Field order matches the session popover / presets / project defaults for
-// consistency. Fields a provider doesn't support (per
-// ``supportsAgentSetting``) are skipped.
-const FIELD_ORDER = [
-    'selected_model',
-    'context_max',
-    'effort',
-    'thinking_enabled',
-    'permission_mode',
-    'permission_mode_if_untrusted',
-    'claude_in_chrome',
-    'fast_mode',
-]
+// Permission selects rendered below the switches. Concrete defaults (no
+// sentinel); ``permission_mode_if_untrusted`` is the default-shaping pseudo-
+// field used when a project resolves untrusted (trust design §13.1).
+const PERMISSION_FIELDS = ['permission_mode', 'permission_mode_if_untrusted']
 
-// Section-specific labels — distinct from the generic ``getFieldLabel`` so
-// the existing UI strings stay stable ("Default permission mode" rather
-// than "Default Permission", etc.).
-const FIELD_DEFAULT_LABELS = {
+// Section-specific labels — kept distinct from the generic ``getFieldLabel`` so
+// the existing UI strings stay stable ("Default permission mode", …).
+const PERMISSION_LABELS = {
     permission_mode: 'Default permission mode',
     permission_mode_if_untrusted: 'Default permission mode (untrusted projects)',
-    selected_model: 'Default model',
-    context_max: 'Default context size',
-    effort: 'Default effort',
-    thinking_enabled: 'Default thinking',
-    claude_in_chrome: 'Default Chrome MCP',
-    fast_mode: 'Default fast mode',
 }
 
-const supportedFields = computed(() => FIELD_ORDER.filter(field => helpers.value.supportsAgentSetting(field)))
+// The persisted default (model, effort) reconciled through the provider's
+// consistency rules: a retired/disabled stored model resolves to its available
+// substitute and the effort demotes to what that model supports — so the matrix
+// always highlights a valid, enabled cell (mirrors the effective state the
+// popover shows after its consistency watcher).
+const effectiveDefault = computed(() => helpers.value.enforceAgentSettingsConsistency({
+    selectedModel: helpers.value.getDefaultValue('selected_model'),
+    effort: helpers.value.getDefaultValue('effort'),
+}))
+const effectiveModel = computed(() => effectiveDefault.value.selectedModel)
 
-// Reactive context fed to ``isChoiceDisabled`` / ``isFieldDisabled``. Hors
-// d'une session le seul gating utile vient du modèle par défaut lui-même
-// (Claude désactive ``effort=X_HIGH`` / ``MAX`` et ``context_max=EXTENDED``
-// quand le modèle ne les supporte pas).
-const fieldContext = computed(() => ({
-    isStarting: false,
-    effectiveModel: helpers.value.resolveToAvailableModel(helpers.value.getDefaultValue('selected_model')),
+// Render context fed to the switch/permission hooks. Out of a session, the only
+// gating comes from the default model's capabilities (effort/context/fast).
+function fieldContext(field) {
+    return {
+        field,
+        effectiveModel: effectiveModel.value,
+        selectedValue: helpers.value.getDefaultValue(field),
+        defaultValue: helpers.value.getDefaultValue(field),
+    }
+}
+
+// ─── Matrix (default model × effort) ──────────────────────────────────────
+const effortColumns = computed(() => buildEffortColumns([props.provider]))
+const matrixBlocks = computed(() => buildMatrixBlocks({
+    providers: [props.provider],
+    effortColumns: effortColumns.value,
+    currentProvider: props.provider,
+    selectedModel: effectiveModel.value,
+    selectedEffort: effectiveDefault.value.effort,
+    // No separate default dot: the selected cell IS the default here.
+    defaultCell: null,
+    benchmarksStore,
 }))
 
-function valueOf(field) {
-    return helpers.value.getDefaultValue(field)
-}
-
-function onSelectChange(field, event) {
-    const raw = event.target.value
-    helpers.value.setDefaultValue(field, parseValue(field, raw))
-}
-
-// wa-select returns the raw string value of the chosen option. Choice
-// catalogues mix booleans (thinking_enabled, claude_in_chrome, fast_mode)
-// and integers (context_max) with strings — coerce here to keep the store
-// validators happy.
-function parseValue(field, raw) {
-    if (field === 'thinking_enabled' || field === 'claude_in_chrome' || field === 'fast_mode') {
-        return raw === 'true'
-    }
-    if (field === 'context_max') {
-        const n = Number(raw)
-        return Number.isFinite(n) ? n : raw
-    }
-    return raw
+function onMatrixSelect({ model, effort }) {
+    // Set the model first: the provider setter re-runs consistency (cascading
+    // context/effort/fast/permission/thinking against the new model), then the
+    // explicit effort write applies the clicked (guaranteed-enabled) cell.
+    helpers.value.setDefaultValue('selected_model', model)
+    helpers.value.setDefaultValue('effort', effort)
 }
 
 const modelFallbackNotice = computed(() =>
-    helpers.value?.getModelFallbackNotice(valueOf('selected_model')) ?? null,
+    helpers.value?.getModelFallbackNotice(helpers.value.getDefaultValue('selected_model')) ?? null,
 )
 
-function selectValueOf(field) {
-    let v = valueOf(field)
-    // A stored default model may have become unavailable (disabled/retired);
-    // show its effective substitute so the select isn't left blank (a wa-select
-    // can't display a disabled option as selected). Mirrors the session popover.
-    if (field === 'selected_model') v = helpers.value.resolveToAvailableModel(v)
-    return v === null || v === undefined ? '' : String(v)
+// ─── Switches (context toggle, thinking, Chrome MCP, fast mode) ────────────
+const switchRows = computed(() => buildSwitchRows(helpers.value, {
+    fieldContext,
+    valueFor: (field) => helpers.value.getDefaultValue(field),
+}))
+
+function onSwitchChange({ field, value }) {
+    helpers.value.setDefaultValue(field, value)
 }
 
-function isChoiceDisabledFor(field, choiceValue) {
-    return helpers.value.isChoiceDisabled(field, choiceValue, fieldContext.value)
-}
+// ─── Permission selects (concrete defaults, string-valued) ─────────────────
+const permissionRows = computed(() => {
+    const h = helpers.value
+    return PERMISSION_FIELDS.filter(field => h.supportsAgentSetting(field)).map(field => {
+        const ctx = fieldContext(field)
+        const value = h.getDefaultValue(field)
+        return {
+            field,
+            label: PERMISSION_LABELS[field],
+            value: value === null || value === undefined ? '' : String(value),
+            helpText: h.getFieldHelpText(field, ctx),
+            choices: h.getFieldChoices(field).map(opt => {
+                const disabled = h.isChoiceDisabled(field, opt.value, ctx)
+                const disabledReason = disabled ? h.getChoiceDisabledReason(field, opt.value, ctx) : null
+                return {
+                    value: String(opt.value),
+                    labelWithSuffix: disabled ? `${opt.label} (not available)` : opt.label,
+                    description: disabledReason ?? opt.description ?? null,
+                    disabled,
+                }
+            }),
+        }
+    })
+})
 
-function modelGroups() {
-    const registry = helpers.value.getModelRegistry?.() ?? []
-    return helpers.value.getModelSelectGroups(registry)
+// Permission modes are string-valued, so the raw wa-select value is written
+// straight through (no boolean/int coercion needed — those fields are switches).
+function onPermissionChange(field, event) {
+    helpers.value.setDefaultValue(field, event.target.value)
 }
 
 const presetsDialogOpen = ref(false)
@@ -176,63 +205,56 @@ function onOrchestrationToggle(event) {
         </div>
         <wa-divider v-if="provider === 'claude_code' && settingsStore.isClaudeHybridEnabled"></wa-divider>
 
-        <div
-            v-for="field in supportedFields"
-            :key="field"
-            class="setting-group"
-        >
-            <label class="setting-group-label">{{ FIELD_DEFAULT_LABELS[field] ?? field }}</label>
-
-            <!-- Model field: groups (latest / older) separated by a divider. -->
+        <!-- Default model × effort matrix (+ score weighting) and the switch row.
+             Own wrapper class (not .setting-group) so the section's
+             `label ~ :not(label)` indent rule doesn't shift the wide grid. -->
+        <div class="agent-defaults-group">
+            <label class="setting-group-label">Default model &amp; effort</label>
             <wa-callout
-                v-if="field === 'selected_model' && modelFallbackNotice"
+                v-if="modelFallbackNotice"
                 variant="warning"
                 class="model-fallback-callout"
             >
                 {{ modelFallbackNotice }}
             </wa-callout>
-            <wa-select
-                v-if="field === 'selected_model'"
-                :value.prop="selectValueOf(field)"
-                size="small"
-                @change="onSelectChange(field, $event)"
-            >
-                <template v-for="(group, idx) in modelGroups()" :key="idx">
-                    <wa-divider v-if="idx > 0 && group.entries?.length"></wa-divider>
-                    <wa-option
-                        v-for="entry in group.entries"
-                        :key="entry.value"
-                        :value="entry.value"
-                        :label="entry.labelWithSuffix"
-                        :disabled="entry.disabled"
-                    >
-                        <span>{{ entry.labelWithSuffix }}</span>
-                        <span v-if="entry.description" class="option-description">{{ entry.description }}</span>
-                    </wa-option>
-                </template>
-            </wa-select>
+            <AgentSettingsMatrix
+                :blocks="matrixBlocks"
+                :effort-columns="effortColumns"
+                @select="onMatrixSelect"
+            />
+            <AgentSettingsBenchmarkWeights :provider-count="1" :show-auto-select="false" />
+            <AgentSettingsSwitches :rows="switchRows" @change="onSwitchChange" />
+        </div>
 
-            <!-- Other fields: flat choice list, disabled state via helpers. -->
+        <!-- No divider here: the weights block ends with its own trailing divider
+             (and the switches, when present, follow it) — mirroring the popover,
+             where permission follows the switches with no extra rule. This also
+             avoids a double divider on Codex, whose switch row is empty. -->
+
+        <!-- Permission defaults — plain selects (concrete defaults, no sentinel). -->
+        <div
+            v-for="row in permissionRows"
+            :key="row.field"
+            class="setting-group"
+        >
+            <label class="setting-group-label">{{ row.label }}</label>
             <wa-select
-                v-else
-                :value.prop="selectValueOf(field)"
+                :value.prop="row.value"
                 size="small"
-                @change="onSelectChange(field, $event)"
+                @change="onPermissionChange(row.field, $event)"
             >
                 <wa-option
-                    v-for="option in helpers.getFieldChoices(field)"
-                    :key="String(option.value)"
-                    :value="String(option.value)"
-                    :label="option.label"
-                    :disabled="isChoiceDisabledFor(field, option.value)"
+                    v-for="opt in row.choices"
+                    :key="opt.value"
+                    :value="opt.value"
+                    :label="opt.labelWithSuffix"
+                    :disabled="opt.disabled"
                 >
-                    <span>{{ option.label }}{{ isChoiceDisabledFor(field, option.value) ? ' (not available)' : '' }}</span>
-                    <span v-if="option.description" class="option-description">{{ option.description }}</span>
+                    <span>{{ opt.labelWithSuffix }}</span>
+                    <span v-if="opt.description" class="option-description">{{ opt.description }}</span>
                 </wa-option>
             </wa-select>
-            <span v-if="helpers.getFieldHelpText(field, fieldContext)" class="setting-group-hint">
-                {{ helpers.getFieldHelpText(field, fieldContext) }}
-            </span>
+            <span v-if="row.helpText" class="setting-group-hint">{{ row.helpText }}</span>
         </div>
 
         <wa-divider></wa-divider>
@@ -287,6 +309,21 @@ function onOrchestrationToggle(event) {
 .model-fallback-callout {
     display: block;
     font-size: var(--wa-font-size-s);
-    margin-bottom: var(--wa-space-xs);
+}
+
+/* Matrix + weights + switches stack. A dedicated class (not .setting-group) so
+   the section's `.setting-group > label ~ :not(label)` indent rule never shifts
+   the wide matrix grid; the label still gets its styling from the class-keyed
+   `.settings-sections .setting-group-label` rule. */
+.agent-defaults-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-m);
+}
+
+/* Pull the weighting block up toward the matrix (the uniform space-m gap is a
+   touch airy right there), matching the popover's tightened matrix→weights gap. */
+.agent-defaults-group :deep(.weights) {
+    margin-top: calc(var(--wa-space-2xs) - var(--wa-space-m));
 }
 </style>

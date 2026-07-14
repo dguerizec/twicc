@@ -6,6 +6,7 @@ import { useBenchmarksStore } from '../stores/benchmarks'
 import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderIcon, getProviderLabel } from '../providers'
 import { resolveProjectAgentDefaults, ancestorChain } from '../utils/projectAgentDefaults'
 import { resolveProjectTrust } from '../utils/trust'
+import { buildEffortColumns, buildMatrixBlocks } from '../utils/agentMatrix'
 
 // Sentinel value used by the popover selects to encode the "follow global
 // default" choice. When set, the corresponding selected ref is null.
@@ -387,16 +388,7 @@ export function useSessionAgentSettings(sessionIdSource) {
 
     // Union of the shown providers' effort choices, default provider first so
     // the ladder reads low→high→…→max(→ultra). Each column carries its label.
-    const matrixEffortColumns = computed(() => {
-        const seen = new Map()
-        for (const provider of matrixProviders.value) {
-            const helpers = getProviderHelpers(provider)
-            for (const choice of helpers?.getFieldChoices('effort') ?? []) {
-                if (!seen.has(choice.value)) seen.set(choice.value, choice.label ?? String(choice.value))
-            }
-        }
-        return [...seen.entries()].map(([effort, label]) => ({ effort, label }))
-    })
+    const matrixEffortColumns = computed(() => buildEffortColumns(matrixProviders.value))
 
     // The single "default" cell — the resolved default model + effort of the
     // relevant provider. A draft marks the GLOBAL default provider (what a new
@@ -411,70 +403,19 @@ export function useSessionAgentSettings(sessionIdSource) {
         return { provider, model: d.selected_model, effort: d.effort }
     })
 
-    const matrixBlocks = computed(() => {
-        const current = session.value?.provider
-        const columns = matrixEffortColumns.value
-        const def = matrixDefaultCell.value
-        // Highlight the EFFECTIVE model/effort of the current provider (the
-        // user's selection, else the resolved default) so an existing session
-        // that follows its defaults still shows its running cell as selected.
-        const effModel = selectedModel.value ?? resolvedDefaults.value.selected_model
-        const effEffort = selectedEffort.value ?? resolvedDefaults.value.effort
-        const providers = matrixProviders.value
-        const nProviders = providers.length
-        return providers.map(provider => {
-            const helpers = getProviderHelpers(provider)
-            const registry = helpers?.getModelRegistry() ?? []
-            const supported = new Set((helpers?.getFieldChoices('effort') ?? []).map(c => c.value))
-            const isCurrent = provider === current
-            const rows = registry.map(entry => {
-                const model = entry.selected_model
-                const modelEnabled = entry.enabled !== false
-                const cells = columns.map(col => {
-                    const effort = col.effort
-                    const enabled = modelEnabled
-                        && supported.has(effort)
-                        && !helpers.isChoiceDisabled('effort', effort, { effectiveModel: model })
-                    return {
-                        effort,
-                        enabled,
-                        selected: isCurrent && model === effModel && effort === effEffort,
-                        isDefault: !!def && provider === def.provider && model === def.model && effort === def.effort,
-                        // Benchmark score joins on the internal SDK id (full_name),
-                        // not the picker alias (selected_model). null -> "?".
-                        score: benchmarksStore.getScore(provider, entry.full_name, effort),
-                    }
-                })
-                // Split name + version into two grid spans. The short label
-                // carries the version for non-latest aliases (e.g. "Opus 4.7");
-                // strip it so the name span holds just the tier and the version
-                // renders on its own, uniformly for latest and older models.
-                const short = helpers.getModelShortLabel(model)
-                const version = entry.version
-                const name = version && short.endsWith(version)
-                    ? short.slice(0, -version.length).trim()
-                    : short
-                return { model, name, version, isLatest: entry.latest === true, cells }
-            })
-            // Top-score border: mark the block's best-scoring enabled cell(s).
-            // A single provider (or the default provider when several are shown)
-            // gets a solid border; each other provider gets a dashed one — so the
-            // user spots the best score for their provider and for each other.
-            let maxScore = null
-            for (const row of rows) for (const cell of row.cells) {
-                if (cell.enabled && cell.score != null && (maxScore === null || cell.score > maxScore)) {
-                    maxScore = cell.score
-                }
-            }
-            if (maxScore !== null) {
-                const borderStyle = (nProviders < 2 || provider === def?.provider) ? 'solid' : 'dashed'
-                for (const row of rows) for (const cell of row.cells) {
-                    if (cell.enabled && cell.score === maxScore) cell.borderStyle = borderStyle
-                }
-            }
-            return { provider, label: getProviderLabel(provider), icon: getProviderIcon(provider), isCurrent, rows }
-        })
-    })
+    // Highlight the EFFECTIVE model/effort of the current provider (the user's
+    // selection, else the resolved default) so an existing session that follows
+    // its defaults still shows its running cell as selected. Assembled by the
+    // shared ``buildMatrixBlocks`` (utils/agentMatrix.js).
+    const matrixBlocks = computed(() => buildMatrixBlocks({
+        providers: matrixProviders.value,
+        effortColumns: matrixEffortColumns.value,
+        currentProvider: session.value?.provider,
+        selectedModel: selectedModel.value ?? resolvedDefaults.value.selected_model,
+        selectedEffort: selectedEffort.value ?? resolvedDefaults.value.effort,
+        defaultCell: matrixDefaultCell.value,
+        benchmarksStore,
+    }))
 
     // Apply a preset's forced fields onto the selected refs (of the current
     // provider). Trust-dependent field selection (trust design §13.3): an
