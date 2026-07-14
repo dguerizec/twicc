@@ -117,7 +117,12 @@ const AGENT_SETTINGS_CHOICES = {
         { value: EFFORT.HIGH,   label: 'High',   display_label: 'High effort' },
         { value: EFFORT.X_HIGH, label: 'xHigh',  display_label: 'xHigh effort' },
         { value: EFFORT.MAX,    label: 'Max',    display_label: 'Max effort' },
-        { value: EFFORT.ULTRA,  label: 'Ultra',  display_label: 'Ultra effort' },
+        // ``ultra`` is temporarily disabled product-wide (see the backend switch
+        // ``ULTRA_EFFORT_TEMPORARILY_DISABLED`` in codex/constants.py). Kept out
+        // of the selectable efforts so it drops from the picker and the
+        // model×effort matrix; the ``EFFORT.ULTRA`` value and its demotion logic
+        // below stay in place. Re-enable by restoring this row.
+        // { value: EFFORT.ULTRA,  label: 'Ultra',  display_label: 'Ultra effort' },
     ],
     // Not a user choice: the window is fixed by the model (272K pre-5.6,
     // 372K for the GPT-5.6 tiers) — the non-matching option is disabled and

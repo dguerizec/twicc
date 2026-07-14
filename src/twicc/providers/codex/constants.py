@@ -150,6 +150,19 @@ class CodexModelExtra(NamedTuple):
     context_window: int
 
 
+# Temporary product-wide kill switch for the ``ultra`` reasoning effort
+# (2026-07-14). Sol and Terra natively expose ``ultra`` (see ``CodexModelExtra``
+# and the CLI ``model/list``) and their entries below keep
+# ``supports_effort_ultra=True`` as the real, documented capability. While this
+# is ``True``, the post-processing step just after ``MODEL_VERSIONS`` forces the
+# flag off across the whole registry, so no model offers ``ultra`` and any
+# stored ``ultra`` effort demotes to ``max``/``xhigh`` via
+# ``enforce_agent_settings_consistency``. Re-enable ``ultra`` by setting this
+# back to ``False`` (also un-comment the ``Ultra`` effort row in the frontend
+# ``codex/helpers.js`` and restore the skill docs).
+ULTRA_EFFORT_TEMPORARILY_DISABLED = True
+
+
 # Codex CLI models the bundled binary accepts, cross-checked against the CLI's
 # own ``model/list`` response. ``selected_model_value`` returns the bare alias
 # for ``latest=True`` entries (``"gpt"``, ``"gpt-sol"``, ``"gpt-mini"``) and the
@@ -235,5 +248,16 @@ MODEL_VERSIONS: list[ModelVersion] = [
         ),
     ),
 ]
+
+# See ``ULTRA_EFFORT_TEMPORARILY_DISABLED`` above: while the switch is on, strip
+# ``ultra`` support from every entry so it is unreachable product-wide, keeping
+# the literal per-model capability flags intact for a one-line revert.
+if ULTRA_EFFORT_TEMPORARILY_DISABLED:
+    MODEL_VERSIONS = [
+        mv._replace(provider_extra=mv.provider_extra._replace(supports_effort_ultra=False))
+        if mv.provider_extra is not None
+        else mv
+        for mv in MODEL_VERSIONS
+    ]
 
 assert_unique_weights(MODEL_VERSIONS)
