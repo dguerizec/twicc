@@ -215,31 +215,48 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     // (swap its column in). Then record it as its region's remembered tab so the region keeps it when
     // focus moves away. Mirrors the overlay's route-derived visibility; together they uphold "the
     // active tab is always shown somewhere".
-    watch(routeActiveTabId, (id) => {
+    // Watch the relevant resolved layout state as well as the route. On a direct URL / bookmark the
+    // route id is already present when this composable mounts, often before the session's persisted
+    // layout is hydrated. Watching only routeActiveTabId therefore missed a dock that became known as
+    // collapsed a moment later. Primitive sources for the routed dock's swap/group state also rerun
+    // after tab-presence, measurement and responsive changes, but avoid every unrelated resize.
+    watch([
+        routeActiveTabId,
+        () => intention.value.assignment[routeActiveTabId.value] || null,
+        () => {
+            const dock = intention.value.assignment[routeActiveTabId.value]
+            return !!dock && intention.value.collapsed.includes(dock)
+        },
+        () => intention.value.maximized,
+        () => gutterEdgeForTabAction(routeActiveTabId.value, 'swap'),
+        () => {
+            const id = routeActiveTabId.value
+            const region = render.value.regions.find(
+                (r) => r.slots.some((s) => s.tabs.some((t) => t.id === id))
+            )
+            return region ? groupKeyOf(region.slots) : null
+        },
+    ], ([id, dock, collapsed, maximized, swapEdge, groupKey]) => {
         if (!id) return
         // Demaximize when focusing a tab outside the maximized region — covers any programmatic focus
         // into a tab the maximized region hides (View Agent from a workflow in a maximized dock,
         // opening a file in Files from a maximized Git, …). Must run BEFORE the dock guard below,
         // which early-returns for any center tab (no assignment). No assignment ⇒ the center.
         // Minimized docks / overlays reveal themselves below / via the route — only maximize is left.
-        const maximized = intention.value.maximized
-        if (maximized?.length && !maximized.includes(intention.value.assignment[id] || 'center')) {
+        if (maximized?.length && !maximized.includes(dock || 'center')) {
             restoreMaximized()
         }
-        const dock = intention.value.assignment[id]
         if (!dock || !DOCKS.includes(dock)) return
         // While this dock IS the maximized region, freeze its underlying rail state: don't un-minimize
         // or swap its column in just because the route points into it. This is what lets a dock that was
         // maximized straight from the rail drop back to the rail on restore (minimized → minimized,
         // swap → re-swap). rememberActive still runs below so the region keeps its active tab.
-        if (!(intention.value.maximized || []).includes(dock)) {
-            if (intention.value.collapsed.includes(dock)) restore(dock)
-            const swapEdge = gutterEdgeForTabAction(id, 'swap')
+        if (!(maximized || []).includes(dock)) {
+            if (collapsed) restore(dock)
             if (swapEdge) swapSide(swapEdge)
         }
-        const region = render.value.regions.find((r) => r.slots.some((s) => s.tabs.some((t) => t.id === id)))
-        if (region) rememberActive(groupKeyOf(region.slots), id)
-    })
+        if (groupKey) rememberActive(groupKey, id)
+    }, { immediate: true })
 
     // Auto-restore if the maximized region lost every tab (e.g. an optional tab emptied while
     // maximized) — not supposed to happen, but never leave the user stuck on an empty maximized panel.

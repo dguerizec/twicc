@@ -14,6 +14,7 @@ import { useFramePoolStore } from '../../../stores/framePool'
 
 const props = defineProps({
     layout: { type: Object, required: true },       // the useSessionLayout() return
+    tabHref: { type: Function, required: true },
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
@@ -189,6 +190,7 @@ onBeforeUnmount(endDrag)
             :region="maximizedDockRegion"
             :active-tab-id="layout.regionActiveTabId(maximizedDockRegion)"
             :focused-tab-id="focusedTabId"
+            :tab-href="tabHref"
             :maximized="true"
             :register-target="registerTarget"
             :unregister-target="unregisterTarget"
@@ -208,6 +210,7 @@ onBeforeUnmount(endDrag)
                 :region="r"
                 :active-tab-id="layout.regionActiveTabId(r)"
                 :focused-tab-id="focusedTabId"
+                :tab-href="tabHref"
                 :register-target="registerTarget"
                 :unregister-target="unregisterTarget"
                 @select="(id) => emit('select-tab', id)"
@@ -224,6 +227,7 @@ onBeforeUnmount(endDrag)
                 :gutter="g"
                 :open-overlay-edge="openOverlayEdge"
                 :resolve-active-tab="(item) => layout.dockActiveTabId(item.dockId, item.tabs)"
+                :tab-href="tabHref"
                 @action="onGutterAction"
             />
 
@@ -242,6 +246,7 @@ onBeforeUnmount(endDrag)
                 v-if="overlay"
                 :overlay="overlay"
                 :active-tab-id="overlayActive"
+                :tab-href="tabHref"
                 :dock-of="layout.dockOf"
                 :register-target="registerTarget"
                 :unregister-target="unregisterTarget"

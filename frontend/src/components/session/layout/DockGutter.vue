@@ -3,6 +3,7 @@
 // One icon PER TAB, anchored start/end mirroring the dock origin. A click dispatches the
 // item's action (swap | restore | overlay) up to the layout.
 import { computed, onUnmounted } from 'vue'
+import SessionTabLink from './SessionTabLink.vue'
 
 const props = defineProps({
     // resolver gutter: { edge, x, y, w, h, items: [{ dockId, tabs, action, anchor }] }
@@ -11,6 +12,7 @@ const props = defineProps({
     // (item) -> the active tab id of a single rail dock — used by empty-area clicks so they act on the
     // dock's active (remembered) tab, exactly like clicking its active chip. See dockActiveTabId.
     resolveActiveTab: { type: Function, default: null },
+    tabHref: { type: Function, required: true },
 })
 const emit = defineEmits(['action'])
 
@@ -144,34 +146,36 @@ onUnmounted(cancelPending)
 <template>
     <div class="dock-gutter" :class="gutter.edge" :style="style" :title="emptyAreaTitle" @click="onEmptyAreaClick">
         <div class="g-group start">
-            <button
+            <SessionTabLink
                 v-for="entry in startIcons"
                 :key="entry.item.dockId + ':' + entry.tab.id"
-                type="button"
+                :href="tabHref(entry.tab.id)"
+                tabbable
                 class="g-chip"
                 :class="{ open: isOpen(entry) }"
                 :title="chipTitle(entry)"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"
-                @click="onClick(entry)"
+                @plain-click="onClick(entry)"
             >
                 <wa-icon :name="entry.tab.icon"></wa-icon>
                 <span class="g-label">{{ entry.tab.label }}</span>
-            </button>
+            </SessionTabLink>
         </div>
         <div class="g-group end">
-            <button
+            <SessionTabLink
                 v-for="entry in endIcons"
                 :key="entry.item.dockId + ':' + entry.tab.id"
-                type="button"
+                :href="tabHref(entry.tab.id)"
+                tabbable
                 class="g-chip"
                 :class="{ open: isOpen(entry) }"
                 :title="chipTitle(entry)"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"
-                @click="onClick(entry)"
+                @plain-click="onClick(entry)"
             >
                 <wa-icon :name="entry.tab.icon"></wa-icon>
                 <span class="g-label">{{ entry.tab.label }}</span>
-            </button>
+            </SessionTabLink>
         </div>
     </div>
 </template>

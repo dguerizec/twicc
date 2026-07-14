@@ -4,11 +4,13 @@
 // is a Teleport target registered under 'overlay' (only the overlay-active panel targets it).
 import { computed, ref, watchEffect } from 'vue'
 import TabPlacementMenu from './TabPlacementMenu.vue'
+import SessionTabLink from './SessionTabLink.vue'
 import TabBar from '../../ui/TabBar.vue'
 
 const props = defineProps({
     overlay: { type: Object, required: true }, // { edge, rect:{x,y,w,h}, tabs }
     activeTabId: { type: String, default: null },
+    tabHref: { type: Function, required: true },
     dockOf: { type: Function, required: true }, // tabId -> its current dockId | 'center'
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
@@ -40,8 +42,10 @@ function onShow(event) { emit('select', event.detail.name) }
         <div class="layout-overlay" :class="overlay.edge" :style="style" @click.stop>
             <TabBar class="overlay-tabnav" :active="activeTabId" @wa-tab-show.stop="onShow">
                 <wa-tab v-for="t in overlay.tabs" :key="t.id" slot="nav" :panel="t.id" class="overlay-tab">
-                    <wa-icon v-if="t.icon" :name="t.icon" class="overlay-tab-icon"></wa-icon>
-                    <span>{{ t.label }}</span>
+                    <SessionTabLink :href="tabHref(t.id)">
+                        <wa-icon v-if="t.icon" :name="t.icon" class="overlay-tab-icon"></wa-icon>
+                        <span>{{ t.label }}</span>
+                    </SessionTabLink>
                     <TabPlacementMenu
                         :tab-id="t.id"
                         :current="dockOf(t.id)"

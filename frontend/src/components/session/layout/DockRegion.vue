@@ -5,6 +5,7 @@
 // holds one dockId (split) or two (merged) — its body is registered under each.
 import { computed, ref, watchEffect } from 'vue'
 import TabPlacementMenu from './TabPlacementMenu.vue'
+import SessionTabLink from './SessionTabLink.vue'
 import TabBar from '../../ui/TabBar.vue'
 
 const props = defineProps({
@@ -13,6 +14,7 @@ const props = defineProps({
     // The global route owner (the tab the URL points at). When it lives in this region the region's
     // tab bar stays full opacity; otherwise the bar is dimmed, marking it as a non-active region.
     focusedTabId: { type: String, default: null },
+    tabHref: { type: Function, required: true },
     // When true this region is the maximized one (fills the whole layout area): its tab bar shows a
     // restore button instead of minimize/maximize, and the per-tab placement arrows are hidden (the
     // only exit is restore).
@@ -107,8 +109,10 @@ function onEmptyBarDblClick(event) {
             <wa-tab v-for="t in tabs" :key="t.id" slot="nav" :panel="t.id" class="dock-tab"
                 @click="onTabClick(t.id)"
                 @dblclick.stop="maximized ? emit('restore') : emit('maximize', dockIds, t.id)">
-                <wa-icon v-if="t.icon" :name="t.icon" class="dock-tab-icon"></wa-icon>
-                <span class="dock-tab-label">{{ t.label }}</span>
+                <SessionTabLink :href="tabHref(t.id)">
+                    <wa-icon v-if="t.icon" :name="t.icon" class="dock-tab-icon"></wa-icon>
+                    <span class="dock-tab-label">{{ t.label }}</span>
+                </SessionTabLink>
                 <TabPlacementMenu
                     v-if="!maximized"
                     :tab-id="t.id"

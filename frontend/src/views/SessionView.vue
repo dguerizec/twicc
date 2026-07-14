@@ -23,6 +23,7 @@ import TaskPane from '../components/tasks/TaskPane.vue'
 import WorkflowsPane from '../components/workflows/WorkflowsPane.vue'
 import BrowserPane from '../components/browser/BrowserPane.vue'
 import SessionLayout from '../components/session/layout/SessionLayout.vue'
+import SessionTabLink from '../components/session/layout/SessionTabLink.vue'
 import TabPlacementMenu from '../components/session/layout/TabPlacementMenu.vue'
 import LayoutMenu from '../components/session/layout/LayoutMenu.vue'
 import { DOCK_LABELS, DOCK_ICONS, PLACEMENT_OPTIONS } from '../components/session/layout/dockMeta'
@@ -563,8 +564,8 @@ watch(absentActiveToolTab, (tab) => {
     })
 }, { immediate: true })
 
-function navigateInTab(tab, params = {}, method = 'push') {
-    router[method]({
+function toolTabRouteLocation(tab, params = {}) {
+    return {
         name: buildTabRouteName({
             isAllProjectsMode: isAllProjectsMode.value,
             isSessionRoute: true,
@@ -576,7 +577,11 @@ function navigateInTab(tab, params = {}, method = 'push') {
             ...params,
         }),
         query: route.query,
-    })
+    }
+}
+
+function navigateInTab(tab, params = {}, method = 'push') {
+    router[method](toolTabRouteLocation(tab, params))
 }
 
 // While docking is active several tool panels are visible at once, but only the focused tab
@@ -634,7 +639,7 @@ const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration', 
 
 // Keep the last granular URL visited for each tool tab so switching away and back
 // restores the previous state instead of resetting the panel to its base route.
-const rememberedToolTabRoutes = {
+const rememberedToolTabRoutes = reactive({
     files: null,
     artifacts: null,
     git: null,
@@ -647,7 +652,7 @@ const rememberedToolTabRoutes = {
     tasks: null,
     workflows: null,
     browser: null,
-}
+})
 
 function getCurrentToolTabRouteParams(tabId) {
     if (tabId === 'files') {
@@ -692,6 +697,51 @@ function rememberToolTabRoute(tabId, params = getCurrentToolTabRouteParams(tabId
     rememberedToolTabRoutes[tabId] = params ?? {}
 }
 
+// One canonical route location per visible session tab. Both SPA navigation
+// and native hrefs use this function so links retain granular tool state
+// (selected file, commit, terminal, plan document, etc.).
+function sessionTabRouteLocation(panel) {
+    if (panel === 'main') {
+        return {
+            name: buildSessionBaseRouteName(isAllProjectsMode.value),
+            params: {
+                projectId: filterProjectId.value,
+                sessionId: sessionId.value,
+            },
+            query: route.query,
+        }
+    }
+
+    if (panel.startsWith('agent-')) {
+        return {
+            name: buildSubagentRouteName(isAllProjectsMode.value),
+            params: {
+                projectId: filterProjectId.value,
+                sessionId: sessionId.value,
+                subagentId: panel.slice('agent-'.length),
+            },
+            query: route.query,
+        }
+    }
+
+    if (TOOL_TAB_IDS.includes(panel)) {
+        return toolTabRouteLocation(panel, rememberedToolTabRoutes[panel] ?? {})
+    }
+
+    return null
+}
+
+function sessionTabHref(panel) {
+    // Clicking the route-owning tab is a no-op today, so its native link must
+    // be the exact current URL. This also preserves route details that are not
+    // part of tab memory, such as a focused workflow run.
+    if (panel === activeTabId.value && route.params.sessionId === sessionId.value) {
+        return route.fullPath
+    }
+    const location = sessionTabRouteLocation(panel)
+    return location ? router.resolve(location).href : route.fullPath
+}
+
 watch(
     [
         isActive,
@@ -723,32 +773,8 @@ watch(
 function switchToTab(panel) {
     // Ignore if already on this tab (avoid infinite loop)
     if (panel === activeTabId.value) return
-
-    if (panel === 'main') {
-        // Navigate to session without subagent
-        router.push({
-            name: buildSessionBaseRouteName(isAllProjectsMode.value),
-            params: {
-                projectId: filterProjectId.value,
-                sessionId: sessionId.value
-            },
-            query: route.query,
-        })
-    } else if (panel.startsWith('agent-')) {
-        // Navigate to subagent
-        const agentId = panel.replace('agent-', '')
-        router.push({
-            name: buildSubagentRouteName(isAllProjectsMode.value),
-            params: {
-                projectId: filterProjectId.value,
-                sessionId: sessionId.value,
-                subagentId: agentId
-            },
-            query: route.query,
-        })
-    } else if (TOOL_TAB_IDS.includes(panel)) {
-        navigateInTab(panel, rememberedToolTabRoutes[panel] ?? {})
-    }
+    const location = sessionTabRouteLocation(panel)
+    if (location) router.push(location)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2044,6 +2070,7 @@ onBeforeUnmount(() => {
             v-if="session"
             ref="sessionLayoutRef"
             :layout="layout"
+            :tab-href="sessionTabHref"
             :register-target="registerLayoutTarget"
             :unregister-target="unregisterLayoutTarget"
             @select-tab="onLayoutSelectTab"
@@ -2073,15 +2100,17 @@ onBeforeUnmount(() => {
                 @drop="chatTabDragHover.onDrop"
                 :class="{ 'drag-hover-pending': chatTabDragHover.isPending.value }"
             >
-                <wa-icon :name="TAB_ICONS.main"></wa-icon>
-                Chat
-                <CodeCommentsIndicator :count="chatCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                <wa-icon
-                    v-if="store.getPendingRequests(sessionId).length > 0"
-                    :id="`session-tab-chat-${sessionId}-pending-request`"
-                    name="hand"
-                    class="pending-request-indicator"
-                ></wa-icon>
+                <SessionTabLink :href="sessionTabHref('main')">
+                    <wa-icon :name="TAB_ICONS.main"></wa-icon>
+                    Chat
+                    <CodeCommentsIndicator :count="chatCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
+                    <wa-icon
+                        v-if="store.getPendingRequests(sessionId).length > 0"
+                        :id="`session-tab-chat-${sessionId}-pending-request`"
+                        name="hand"
+                        class="pending-request-indicator"
+                    ></wa-icon>
+                </SessionTabLink>
                 <AppTooltip v-if="store.getPendingRequests(sessionId).length > 0" :for="`session-tab-chat-${sessionId}-pending-request`">Waiting for your response</AppTooltip>
             </wa-tab>
 
@@ -2089,14 +2118,16 @@ onBeforeUnmount(() => {
             <template v-for="tab in openSubagentTabs" :key="tab.id">
                 <wa-tab slot="nav" :panel="tab.id" @click="onCenterTabClick(tab.id)">
                     <span class="subagent-tab-content">
-                        <wa-icon name="robot"></wa-icon>
-                        <span>Agent "{{ getAgentTabLabel(tab.agentId) }}"</span>
-                        <ProcessIndicator
-                            v-if="store.getProcessState(tab.agentId)"
-                            :state="store.getProcessState(tab.agentId).state"
-                            size="small"
-                        />
-                        <CodeCommentsIndicator :count="agentCommentsCount(tab.agentId)" :show-tooltip="false" class="tab-comments-indicator" />
+                        <SessionTabLink :href="sessionTabHref(tab.id)">
+                            <wa-icon name="robot"></wa-icon>
+                            <span>Agent "{{ getAgentTabLabel(tab.agentId) }}"</span>
+                            <ProcessIndicator
+                                v-if="store.getProcessState(tab.agentId)"
+                                :state="store.getProcessState(tab.agentId).state"
+                                size="small"
+                            />
+                            <CodeCommentsIndicator :count="agentCommentsCount(tab.agentId)" :show-tooltip="false" class="tab-comments-indicator" />
+                        </SessionTabLink>
                         <span class="tab-close-icon" @click.stop="closeTab(tab.id)">
                             <wa-icon name="xmark" label="Close tab"></wa-icon>
                         </span>
@@ -2106,50 +2137,68 @@ onBeforeUnmount(() => {
 
             <!-- Tool tabs — shown in the center strip unless docked; arrow places them -->
             <wa-tab v-if="showInCenter('files')" slot="nav" panel="files" @click="onCenterTabClick('files')">
-                <wa-icon :name="TAB_ICONS.files"></wa-icon>
-                Files
-                <CodeCommentsIndicator :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
+                <SessionTabLink :href="sessionTabHref('files')">
+                    <wa-icon :name="TAB_ICONS.files"></wa-icon>
+                    Files
+                    <CodeCommentsIndicator :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
+                </SessionTabLink>
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
             </wa-tab>
             <wa-tab v-if="isToolTabPresent('git') && showInCenter('git')" slot="nav" panel="git" @click="onCenterTabClick('git')">
-                <wa-icon :name="TAB_ICONS.git"></wa-icon>
-                Git
-                <CodeCommentsIndicator :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
+                <SessionTabLink :href="sessionTabHref('git')">
+                    <wa-icon :name="TAB_ICONS.git"></wa-icon>
+                    Git
+                    <CodeCommentsIndicator :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
+                </SessionTabLink>
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
             </wa-tab>
             <wa-tab v-if="showInCenter('terminal')" slot="nav" panel="terminal" @click="onCenterTabClick('terminal')">
-                <wa-icon :name="TAB_ICONS.terminal"></wa-icon>
-                Terminal
+                <SessionTabLink :href="sessionTabHref('terminal')">
+                    <wa-icon :name="TAB_ICONS.terminal"></wa-icon>
+                    Terminal
+                </SessionTabLink>
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
             </wa-tab>
             <wa-tab v-if="isToolTabPresent('tasks') && showInCenter('tasks')" slot="nav" panel="tasks" @click="onCenterTabClick('tasks')">
-                <wa-icon :name="TAB_ICONS.tasks"></wa-icon>
-                Tasks
+                <SessionTabLink :href="sessionTabHref('tasks')">
+                    <wa-icon :name="TAB_ICONS.tasks"></wa-icon>
+                    Tasks
+                </SessionTabLink>
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="tasks" current="center" @place="(dest) => layout.place('tasks', dest)" />
             </wa-tab>
             <wa-tab v-if="isToolTabPresent('plan') && showInCenter('plan')" slot="nav" panel="plan" @click="onCenterTabClick('plan')">
-                <wa-icon :name="TAB_ICONS.plan"></wa-icon>
-                Plan
+                <SessionTabLink :href="sessionTabHref('plan')">
+                    <wa-icon :name="TAB_ICONS.plan"></wa-icon>
+                    Plan
+                </SessionTabLink>
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="plan" current="center" @place="(dest) => layout.place('plan', dest)" />
             </wa-tab>
             <wa-tab v-if="isToolTabPresent('artifacts') && showInCenter('artifacts')" slot="nav" panel="artifacts" @click="onCenterTabClick('artifacts')">
-                <wa-icon :name="TAB_ICONS.artifacts"></wa-icon>
-                Artifacts
+                <SessionTabLink :href="sessionTabHref('artifacts')">
+                    <wa-icon :name="TAB_ICONS.artifacts"></wa-icon>
+                    Artifacts
+                </SessionTabLink>
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
             </wa-tab>
             <wa-tab v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" slot="nav" panel="orchestration" @click="onCenterTabClick('orchestration')">
-                <wa-icon :name="TAB_ICONS.orchestration"></wa-icon>
-                Orchestration
+                <SessionTabLink :href="sessionTabHref('orchestration')">
+                    <wa-icon :name="TAB_ICONS.orchestration"></wa-icon>
+                    Orchestration
+                </SessionTabLink>
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
             </wa-tab>
             <wa-tab v-if="isToolTabPresent('workflows') && showInCenter('workflows')" slot="nav" panel="workflows" @click="onCenterTabClick('workflows')">
-                <wa-icon :name="TAB_ICONS.workflows"></wa-icon>
-                Workflows
+                <SessionTabLink :href="sessionTabHref('workflows')">
+                    <wa-icon :name="TAB_ICONS.workflows"></wa-icon>
+                    Workflows
+                </SessionTabLink>
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="workflows" current="center" @place="(dest) => layout.place('workflows', dest)" />
             </wa-tab>
             <wa-tab v-if="showInCenter('browser')" slot="nav" panel="browser" @click="onCenterTabClick('browser')">
-                <wa-icon :name="TAB_ICONS.browser"></wa-icon>
-                Browser
+                <SessionTabLink :href="sessionTabHref('browser')">
+                    <wa-icon :name="TAB_ICONS.browser"></wa-icon>
+                    Browser
+                </SessionTabLink>
                 <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="browser" current="center" @place="(dest) => layout.place('browser', dest)" />
             </wa-tab>
 
