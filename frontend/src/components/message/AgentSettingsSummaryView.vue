@@ -98,13 +98,18 @@ function showSeparator(i) {
             <template v-else>
                 <span :class="{ 'setting-forced': markForced && part.forced }">{{ part.text }}</span>
                 <template v-if="part.effortSrc">
-                    <wa-icon
+                    <span
                         :id="iconId(i)"
-                        auto-width
-                        :src="part.effortSrc"
-                        :label="part.effortLabel"
-                        class="effort-icon"
-                    ></wa-icon>
+                        class="effort-icon-wrap"
+                        :class="{ 'setting-forced': markForced && part.forced }"
+                    >
+                        <wa-icon
+                            auto-width
+                            :src="part.effortSrc"
+                            :label="part.effortLabel"
+                            class="effort-icon"
+                        ></wa-icon>
+                    </span>
                     <AppTooltip :for="iconId(i)">{{ part.effortLabel }}</AppTooltip>
                 </template>
             </template>
@@ -113,9 +118,23 @@ function showSeparator(i) {
 </template>
 
 <style scoped>
+/* A part that differs from the provider default gets a dashed underline —
+   drawn as a border-bottom pseudo (not text-decoration) so it renders
+   identically for text labels AND for (atomic inline) wa-icons, which
+   text-decoration doesn't paint under. Uniform dash/gap across the whole
+   summary. */
 .setting-forced {
-    text-decoration: underline dashed;
-    text-underline-offset: 3px;
+    position: relative;
+}
+
+.setting-forced::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -2px;
+    border-bottom: 1px dashed currentColor;
+    pointer-events: none;
 }
 
 .provider-icon {
@@ -123,15 +142,18 @@ function showSeparator(i) {
 }
 
 /* Effort-level bars glued right after the model label (replaces "× effort"). */
-.effort-icon {
+.effort-icon-wrap {
+    position: relative;
     margin-left: 0.3em;
+}
+
+.effort-icon {
     font-size: 1.1em;
     vertical-align: -0.15em;
 }
 
 .part-icon-wrap {
     position: relative;
-    text-underline-offset: 3px;
 }
 
 /* Adjacent icons have no "·" between them — give them a small gap instead. */
