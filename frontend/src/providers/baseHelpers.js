@@ -1,8 +1,4 @@
-/**
- * Effort values (low→max, ascending rank) that have a matching 5-bar level
- * icon under ``public/icons/effort/``. Both providers share these strings.
- */
-const SUMMARY_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+import { effortIconSrc } from '../utils/effortIcon'
 
 /**
  * Base class for per-provider frontend helpers.
@@ -909,7 +905,7 @@ export class BaseProviderHelpers {
      * the rest currentColor. Returns null for an unknown effort value.
      */
     getEffortIconSrc(effort) {
-        return SUMMARY_EFFORT_LEVELS.includes(effort) ? `/icons/effort/${effort}.svg` : null
+        return effortIconSrc(effort)
     }
 
     /**

@@ -11,6 +11,7 @@ import { computed, ref, useId, watch, nextTick, onMounted, onBeforeUnmount } fro
 import { useSettingsStore } from '../../stores/settings'
 import HoverInfoPanel from '../ui/HoverInfoPanel.vue'
 import ProviderIcon from '../ui/ProviderIcon.vue'
+import { effortIconSrc } from '../../utils/effortIcon'
 import { formatBenchmarkDetails } from '../../utils/benchmarkScores'
 
 const props = defineProps({
@@ -325,7 +326,15 @@ onBeforeUnmount(() => {
                 :key="e.effort"
                 class="matrix-col-header"
                 :style="{ gridColumn: e.col, gridRow: 1 }"
-            >{{ e.label }}</div>
+            >
+                <wa-icon
+                    v-if="effortIconSrc(e.effort)"
+                    auto-width
+                    :src="effortIconSrc(e.effort)"
+                    class="matrix-col-header-icon"
+                ></wa-icon>
+                <span>{{ e.label }}</span>
+            </div>
 
             <template v-for="block in layout.blocks" :key="block.provider">
                 <div
@@ -436,12 +445,21 @@ onBeforeUnmount(() => {
 }
 
 .matrix-col-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
     font-size: var(--wa-font-size-xs);
     font-weight: var(--wa-font-weight-semibold);
-    color: var(--wa-color-text-quiet);
+    color: var(--wa-color-text-normal);
     text-align: center;
     padding-bottom: var(--wa-space-3xs);
     align-self: end;
+}
+
+/* The 5-bar level icon above the effort name (colours baked into the SVG). */
+.matrix-col-header-icon {
+    font-size: 1.4em;
 }
 
 .matrix-divider {
