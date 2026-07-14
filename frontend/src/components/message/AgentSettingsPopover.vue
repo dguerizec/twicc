@@ -770,8 +770,12 @@ onBeforeUnmount(() => {
     }
 }
 
-.option-description {
+/* Plain text descriptions need block; the agent-settings summary carries this
+   class too but brings its own flex display, so don't force block on it. */
+.option-description:not(.agent-settings-summary) {
     display: block;
+}
+.option-description {
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
 }

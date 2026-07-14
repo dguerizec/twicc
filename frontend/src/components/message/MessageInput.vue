@@ -2236,6 +2236,7 @@ body.sidebar-closed .message-input-toolbar {
     align-items: center;
     gap: var(--wa-space-s);
     min-width: 0;
+    flex-shrink: 0;
     /* React to the composer's own width, not the viewport. */
     @container message-input (width < 40rem) {
         gap: var(--wa-space-xs);
@@ -2246,9 +2247,7 @@ body.sidebar-closed .message-input-toolbar {
     wa-icon {
         display: none;
     }
-    /* The opens-upward affordance overrides every icon display rule above and
-       in the narrow-width container queries, so it shows in all modes — even
-       the icon-only one where the summary is hidden. */
+    /* Opens-upward affordance, kept visible in every summary reduction level. */
     .settings-chevron {
         display: inline-flex;
         flex-shrink: 0;
@@ -2257,8 +2256,17 @@ body.sidebar-closed .message-input-toolbar {
     }
     min-width: 0;
     flex-shrink: 1;
+    &::part(base) {
+        padding-inline: 0;
+    }
+    /* Bound the summary to the button's allotted width so its own graduated
+       flex-shrink can kick in: min-width:0 lets the label shrink below its
+       content, overflow:hidden clips whatever still doesn't fit. Without this
+       the label keeps the summary at its full content width and it never
+       shrinks (see AgentSettingsSummaryView for the per-part shrink priorities). */
     &::part(label) {
-        white-space: wrap;
+        min-width: 0;
+        overflow: hidden;
         font-weight: normal;
         font-size: var(--wa-font-size-s);
     }
@@ -2310,10 +2318,10 @@ body.sidebar-closed .message-input-toolbar {
     display: flex;
     gap: var(--wa-space-s);
     flex-shrink: 1;
+    flex-grow: 1;
     min-width: 0;
     align-items: center;
     justify-content: flex-end;
-    max-width: calc(100% - 6rem);
 
     .cancel-button, .reset-button, .send-button {
         flex-shrink: 0;
@@ -2346,19 +2354,6 @@ body.sidebar-closed .message-input-toolbar {
 }
 
 /* On narrow widths, show only icons for action buttons */
-@container message-input (width < 45rem) {
-    .message-input-actions {
-        .settings-button {
-            &::part(label) {
-                line-height: 1.1;
-            }
-
-            &::part(base) {
-                padding-inline: var(--wa-space-2xs);
-            }
-        }
-    }
-}
 @container message-input (width < 25rem) {
     .message-input-actions {
         gap: var(--wa-space-2xs);
@@ -2374,21 +2369,6 @@ body.sidebar-closed .message-input-toolbar {
 
             & > span {
                 display: none;
-            }
-        }
-    }
-}
-@container message-input (width < 35rem) {
-    .message-input-actions {
-        .settings-button {
-            wa-icon {
-                display: block;
-            }
-            & > span {
-                display: none;
-            }
-            &::part(base) {
-                padding-inline: var(--wa-space-s);
             }
         }
     }

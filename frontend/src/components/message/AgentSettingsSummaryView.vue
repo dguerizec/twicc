@@ -11,9 +11,14 @@
 // Chrome MCP render as a coloured icon (glyph + tint from AGENT_SETTING_ICONS),
 // dimmed + struck when off, with the label as a tooltip. The model text part
 // additionally carries the effort as a 5-bar level icon (``{ effortSrc,
-// effortLabel }``) glued right after the label; the permission text part
-// carries the coloured mode glyph (``{ permissionIcon, permissionColor }``)
-// glued right before it.
+// effortLabel }``) after the label; the permission text part carries the
+// coloured mode glyph (``{ permissionIcon, permissionColor }``) before it.
+//
+// The summary is a flex row that stays on one line and shrinks to fit its
+// container: the parts carry priority classes (``agent-summary-model``,
+// ``agent-summary-dot``, ``agent-summary-permission``) so the CSS drops the
+// least useful bits first (permission label, then separators, then the model
+// clips toward its first letter) via graduated ``flex-shrink`` — no JS.
 //
 // ``markForced`` controls the dashed underline on parts that differ from the
 // provider defaults: useful when a user is composing a session (see at a
@@ -52,7 +57,7 @@ function showSeparator(i) {
     <span class="agent-settings-summary">
         <ProviderIcon v-if="providerIcon" :provider="provider" class="provider-icon" />
         <template v-for="(part, i) in parts" :key="i">
-            <span v-if="showSeparator(i)"> · </span>
+            <span v-if="showSeparator(i)" class="agent-summary-dot"> · </span>
 
             <!-- Boolean flag rendered as a coloured icon (thinking / fast /
                  chrome), dimmed + struck when off. -->
@@ -60,10 +65,7 @@ function showSeparator(i) {
                 <span
                     :id="iconId(i)"
                     class="part-icon-wrap"
-                    :class="{
-                        'setting-forced': markForced && part.forced,
-                        'icon-grouped': i > 0 && parts[i - 1]?.field,
-                    }"
+                    :class="{ 'setting-forced': markForced && part.forced }"
                 >
                     <SettingFlagIcon :field="part.field" :on="part.on" :label="part.label" />
                 </span>
@@ -71,8 +73,8 @@ function showSeparator(i) {
             </template>
 
             <!-- Text part (model, permission, …). The model part also carries
-                 the 5-bar effort-level icon glued right after its label; the
-                 permission part carries the coloured mode glyph before it. -->
+                 the 5-bar effort-level icon after its label; the permission
+                 part carries the coloured mode glyph before it. -->
             <template v-else>
                 <PermissionModeIcon
                     v-if="part.permissionIcon"
@@ -82,7 +84,13 @@ function showSeparator(i) {
                     class="summary-permission-icon"
                     :class="{ 'setting-forced': markForced && part.forced }"
                 />
-                <span :class="{ 'setting-forced': markForced && part.forced }">{{ part.text }}</span>
+                <span
+                    :class="{
+                        'setting-forced': markForced && part.forced,
+                        'agent-summary-model': i === 0,
+                        'agent-summary-permission': part.permissionIcon,
+                    }"
+                >{{ part.text }}</span>
                 <template v-if="part.effortSrc">
                     <span
                         :id="iconId(i)"
@@ -104,6 +112,35 @@ function showSeparator(i) {
 </template>
 
 <style scoped>
+.agent-settings-summary {
+    display: flex;
+    align-items: center;
+    column-gap: var(--wa-space-2xs);
+    overflow: hidden;
+    line-height: 1.1;
+
+    & > * {
+        flex-shrink: 0;
+        overflow: hidden;
+        white-space: normal;
+    }
+
+    & > .agent-summary-model {
+        flex-shrink: 1;
+        min-width: .75rem;
+    }
+
+    & > .agent-summary-dot {
+        flex-shrink: 100;
+        min-width: 0;
+    }
+
+    & > .agent-summary-permission {
+        flex-shrink: 1000;
+        min-width: 0;
+    }
+}
+
 /* A part that differs from the provider default gets a dashed underline —
    drawn as a border-bottom pseudo (not text-decoration) so it renders
    identically for text labels AND for (atomic inline) wa-icons, which
@@ -123,20 +160,15 @@ function showSeparator(i) {
     pointer-events: none;
 }
 
-.provider-icon {
-    margin-right: 0.25rem;
-}
-
-/* Coloured mode glyph glued right before the permission label. */
+/* Coloured mode glyph before the permission label; the flex column-gap now
+   provides the spacing to its neighbours. */
 .summary-permission-icon {
-    margin-right: 0.25em;
     vertical-align: -0.15em;
 }
 
-/* Effort-level bars glued right after the model label (replaces "× effort"). */
+/* Effort-level bars after the model label (replaces "× effort"). */
 .effort-icon-wrap {
     position: relative;
-    margin-left: 0.3em;
 }
 
 .effort-icon {
@@ -146,10 +178,5 @@ function showSeparator(i) {
 
 .part-icon-wrap {
     position: relative;
-}
-
-/* Adjacent icons have no "·" between them — give them a small gap instead. */
-.part-icon-wrap.icon-grouped {
-    margin-left: 0.3em;
 }
 </style>
