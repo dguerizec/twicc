@@ -91,6 +91,15 @@ export function getProviderIcon(provider) {
 }
 
 /**
+ * Brand tint (any CSS colour string) for the given provider's icon, declared
+ * alongside the icon via the helpers' static ``iconColor`` field. Returns
+ * ``null`` when the provider is unknown or declares no colour (inherit).
+ */
+export function getProviderIconColor(provider) {
+    return PROVIDER_HELPERS[provider]?.constructor.iconColor ?? null
+}
+
+/**
  * ``[{ value, label }]`` pairs for every registered provider, intended to feed
  * a ``<wa-select>`` (e.g. the global default-provider setting). The label
  * comes from the helpers' static ``label`` field, falling back to the wire

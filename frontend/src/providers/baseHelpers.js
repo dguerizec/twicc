@@ -17,6 +17,8 @@ export class BaseProviderHelpers {
     static provider = null
     static label = null
     static icon = null
+    // Brand tint for the provider icon (any CSS colour). null → inherit.
+    static iconColor = null
 
     /**
      * Whether the current frontend state allows sending a message to a
@@ -864,10 +866,10 @@ export class BaseProviderHelpers {
         // The boolean flags render as a grouped icon cluster (brain, bolt,
         // chrome), coloured when on and dimmed + struck when off.
 
-        // Thinking — brain icon, brand colour when on.
+        // Thinking — brain icon, pink when on.
         if (this.supportsAgentSetting('thinking_enabled')) {
             const on = eff('thinking_enabled') === true
-            parts.push({ icon: 'brain', on, color: 'brand', forced: forced('thinking_enabled'), label: on ? 'Thinking' : 'No thinking' })
+            parts.push({ icon: 'brain', on, color: 'pink', forced: forced('thinking_enabled'), label: on ? 'Thinking' : 'No thinking' })
         }
 
         // Fast mode — bolt icon, yellow, only when on.

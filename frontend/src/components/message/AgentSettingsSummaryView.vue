@@ -19,7 +19,7 @@
 // in an orchestration tree — those pass ``markForced=false`` to render every
 // effective value plainly.
 import { computed, useId } from 'vue'
-import { getProviderIcon } from '../../providers'
+import { getProviderIcon, getProviderIconColor } from '../../providers'
 import AppTooltip from '../ui/AppTooltip.vue'
 
 const props = defineProps({
@@ -31,6 +31,7 @@ const props = defineProps({
 })
 
 const providerIcon = computed(() => getProviderIcon(props.provider))
+const providerColor = computed(() => getProviderIconColor(props.provider))
 
 const uid = useId()
 const iconId = (i) => `${uid}-icon-${i}`
@@ -38,9 +39,9 @@ const iconId = (i) => `${uid}-icon-${i}`
 // Semantic colour name (set by getSummaryParts) → WA token, applied only when
 // the flag is on. Off icons stay dimmed/struck in the neutral text colour.
 const ICON_COLORS = {
-    brand: 'var(--wa-color-brand-60)',
+    pink: 'var(--wa-color-pink-70)',
     yellow: 'var(--wa-color-yellow-60)',
-    chrome: '#4285f4', // Chrome brand blue
+    chrome: 'var(--wa-color-blue-60)',
 }
 function iconColor(part) {
     return part.on && part.color ? ICON_COLORS[part.color] : null
@@ -62,6 +63,7 @@ function showSeparator(i) {
             family="brands"
             :name="providerIcon"
             class="provider-icon"
+            :style="providerColor ? { color: providerColor } : null"
         ></wa-icon>
         <template v-for="(part, i) in parts" :key="i">
             <span v-if="showSeparator(i)"> · </span>

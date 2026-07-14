@@ -176,6 +176,7 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
     static provider = PROVIDER.CLAUDE_CODE
     static label = 'Claude'
     static icon = 'claude'
+    static iconColor = 'var(--wa-color-orange-70)'
 
     canSendMessage() {
         return useClaudeCodeStore().authenticated !== false

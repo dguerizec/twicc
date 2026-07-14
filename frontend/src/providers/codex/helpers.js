@@ -137,6 +137,7 @@ export class CodexHelpers extends BaseProviderHelpers {
     static provider = PROVIDER.CODEX
     static label = 'Codex'
     static icon = 'openai'
+    static iconColor = 'var(--wa-color-green-70)'
 
     canSendMessage() {
         return true
