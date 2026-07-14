@@ -43,8 +43,12 @@ export function buildEffortColumns(providers) {
  *        the current provider's block).
  * @param {*} opts.selectedEffort  Effort of the cell to mark ``selected``.
  * @param {{provider:string,model:*,effort:*}|null} opts.defaultCell  The cell to
- *        mark ``isDefault`` (dot), or ``null`` for none (defaults editor: the
- *        selected cell IS the default, so no separate dot).
+ *        mark ``isDefault`` (filled dot) — the default provider's default, or
+ *        ``null`` for none (defaults editor: the selected cell IS the default).
+ * @param {{provider:string,model:*,effort:*}[]} [opts.providerDefaults]  Each
+ *        shown provider's own default cell; a match that is NOT the main default
+ *        is flagged ``isProviderDefault`` (hollow dot), so every provider's
+ *        default stays referenced when several blocks are shown. Default: none.
  * @param {{getScore:(p:string,fullName:string,effort:any)=>number|null}} opts.benchmarksStore
  * @returns {Array} blocks for ``AgentSettingsMatrix``.
  */
@@ -55,6 +59,7 @@ export function buildMatrixBlocks({
     selectedModel,
     selectedEffort,
     defaultCell,
+    providerDefaults = [],
     benchmarksStore,
 }) {
     const columns = effortColumns
@@ -65,6 +70,8 @@ export function buildMatrixBlocks({
         const registry = helpers?.getModelRegistry() ?? []
         const supported = new Set((helpers?.getFieldChoices('effort') ?? []).map(c => c.value))
         const isCurrent = provider === currentProvider
+        // This provider's own default (hollow dot when it isn't the main one).
+        const blockDefault = providerDefaults.find(pd => pd.provider === provider) ?? null
         const rows = registry.map(entry => {
             const model = entry.selected_model
             const modelEnabled = entry.enabled !== false
@@ -73,11 +80,16 @@ export function buildMatrixBlocks({
                 const enabled = modelEnabled
                     && supported.has(effort)
                     && !helpers.isChoiceDisabled('effort', effort, { effectiveModel: model })
+                const isDefault = !!def && provider === def.provider && model === def.model && effort === def.effort
                 return {
                     effort,
                     enabled,
                     selected: isCurrent && model === selectedModel && effort === selectedEffort,
-                    isDefault: !!def && provider === def.provider && model === def.model && effort === def.effort,
+                    isDefault,
+                    // Another provider's default (hollow dot): matches this block's
+                    // default but isn't the main (filled) one.
+                    isProviderDefault: !isDefault && !!blockDefault
+                        && model === blockDefault.model && effort === blockDefault.effort,
                     // Benchmark score joins on the internal SDK id (full_name),
                     // not the picker alias (selected_model). null -> "?".
                     score: benchmarksStore.getScore(provider, entry.full_name, effort),

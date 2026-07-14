@@ -53,6 +53,14 @@ function onFavorChange(event) {
     store.setPriority(event.target.value)
 }
 
+// Collapse back to the single Task difficulty slider. That slider proxies the
+// Capability weight, so a lock left on Capability would freeze the only control
+// shown — release it on the way out.
+function collapseControls() {
+    if (store.locks.capability) store.toggleLock('capability')
+    showAll.value = false
+}
+
 // A preset is "active" when no lock is set and the displays match it exactly.
 function isActivePreset(p) {
     return !store.anyLock
@@ -87,7 +95,7 @@ function isActivePreset(p) {
         <!-- Expanded ("More controls"): "Fewer controls" (top-right), then the
              three weight sliders, the preset links, and the favor row. -->
         <template v-else>
-            <button type="button" class="weights-toggle" @click="showAll = false">Fewer controls</button>
+            <button type="button" class="weights-toggle" @click="collapseControls">Fewer controls</button>
 
             <div class="weights-rows">
                 <div

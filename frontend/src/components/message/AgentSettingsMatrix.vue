@@ -14,7 +14,8 @@ import { formatBenchmarkDetails } from '../../utils/benchmarkScores'
 
 const props = defineProps({
     // [{ provider, label, icon, isCurrent, rows: [{ model, label, isLatest,
-    //    cells: [{ effort, enabled, selected, isDefault, score, benchmark }] }] }]
+    //    cells: [{ effort, enabled, selected, isDefault, isProviderDefault,
+    //             score, benchmark }] }] }]
     // score is the benchmark score (integer 0..100) or null when there's no
     // benchmark data for that (model, effort); benchmark is the raw benchmark row
     // (or null) feeding the per-cell details tooltip.
@@ -370,6 +371,7 @@ onBeforeUnmount(() => {
                         @click="onCellClick(block.provider, r.model, cell)"
                     >
                         <span v-if="cell.isDefault" class="matrix-default-dot"></span>
+                        <span v-else-if="cell.isProviderDefault" class="matrix-default-dot hollow"></span>
                         <span v-if="cell.enabled" class="matrix-cell-score" :class="{ 'no-score': cell.score == null }">{{ cell.score ?? '?' }}</span>
                         <span v-if="cell.selected" class="matrix-cell-check">
                             <wa-icon name="check"></wa-icon>
@@ -598,6 +600,14 @@ onBeforeUnmount(() => {
     /* In a cell: matches the score (inverts above 80). In the legend (no
        --cell-fg ancestor): falls back to the normal text color. */
     background: var(--cell-fg, var(--wa-color-text-normal));
+}
+
+/* Another provider's default: a hollow ring of the same 6px size (border-box so
+   the border eats into the size instead of growing it). */
+.matrix-default-dot.hollow {
+    box-sizing: border-box;
+    background: transparent;
+    border: 1px solid var(--cell-fg, var(--wa-color-text-normal));
 }
 
 .matrix-footer {

@@ -2518,10 +2518,15 @@ wa-popover > wa-divider {
     gap: var(--wa-space-m);
 }
 
-/* Horizontal dividers between groups within a section: drop their top margin
-   (the section's flex `gap` already provides the spacing above). */
+/* Horizontal dividers between groups within a section. */
 .settings-sections .settings-section wa-divider {
-    margin-top: 0;
+    margin-block: var(--wa-space-s);
+}
+
+/* The switch row closing the matrix + weights stack (provider sections): a
+   little extra room before the following group. */
+.settings-sections .settings-switches {
+    margin-bottom: var(--wa-space-s);
 }
 
 .settings-sections .settings-section-title {

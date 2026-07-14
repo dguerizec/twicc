@@ -519,7 +519,7 @@ onBeforeUnmount(() => {
         <div class="settings-panel">
             <!-- Heading above the matrix + a link to the score help page. -->
             <div class="matrix-heading">
-                <span class="setting-label">Model &amp; effort</span>
+                <span class="setting-label">Model &amp; effort picker</span>
                 <HelpTextLink help-key="model-effort-score" label="What are those numbers?" />
             </div>
 
@@ -590,7 +590,7 @@ onBeforeUnmount(() => {
 .settings-panel {
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-l);
+    gap: var(--wa-space-m);
     overflow-y: auto;
     flex: 1;
     min-height: 0;
@@ -604,13 +604,13 @@ onBeforeUnmount(() => {
     flex-wrap: wrap;
     column-gap: var(--wa-space-s);
     row-gap: var(--wa-space-3xs);
-    margin-bottom: calc(var(--wa-space-2xs) - var(--wa-space-l));
+    margin-bottom: calc(var(--wa-space-2xs) - var(--wa-space-m));
 }
 
 /* Tighten only the matrix (+ legend) → weighting-block gap; the panel's uniform
-   space-l is too airy right there. Pulls the weights up to a space-s gap. */
+   space-m is too airy right there. */
 .settings-panel :deep(.weights) {
-    margin-top: calc(var(--wa-space-3xs) - var(--wa-space-l));
+    margin-top: calc(var(--wa-space-3xs) - var(--wa-space-m));
 }
 
 .settings-info-callout,

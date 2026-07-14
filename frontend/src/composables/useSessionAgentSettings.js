@@ -403,6 +403,16 @@ export function useSessionAgentSettings(sessionIdSource) {
         return { provider, model: d.selected_model, effort: d.effort }
     })
 
+    // Every shown provider's OWN default (model + effort). The main default (the
+    // default provider's) renders as a filled dot; the others as hollow dots, so
+    // each provider's default stays referenced when a draft shows several blocks.
+    const matrixProviderDefaults = computed(() =>
+        matrixProviders.value.map(provider => {
+            const d = resolveDefaultsForProvider(provider)
+            return { provider, model: d.selected_model, effort: d.effort }
+        }),
+    )
+
     // Highlight the EFFECTIVE model/effort of the current provider (the user's
     // selection, else the resolved default) so an existing session that follows
     // its defaults still shows its running cell as selected. Assembled by the
@@ -414,6 +424,7 @@ export function useSessionAgentSettings(sessionIdSource) {
         selectedModel: selectedModel.value ?? resolvedDefaults.value.selected_model,
         selectedEffort: selectedEffort.value ?? resolvedDefaults.value.effort,
         defaultCell: matrixDefaultCell.value,
+        providerDefaults: matrixProviderDefaults.value,
         benchmarksStore,
     }))
 

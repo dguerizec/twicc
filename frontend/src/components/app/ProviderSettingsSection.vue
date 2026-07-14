@@ -211,7 +211,7 @@ function onOrchestrationToggle(event) {
              `label ~ :not(label)` indent rule doesn't shift the wide grid. -->
         <div class="agent-defaults-group">
             <div class="matrix-heading">
-                <label class="setting-group-label">Model &amp; effort</label>
+                <label class="setting-group-label">Model &amp; effort picker</label>
                 <HelpTextLink help-key="model-effort-score" label="What are those numbers?" />
             </div>
             <wa-callout
