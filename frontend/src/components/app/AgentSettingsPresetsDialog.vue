@@ -21,9 +21,10 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { getProviderHelpers } from '../../providers'
 import { RESERVED_PRESET_NAMES, useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
-import { formatPresetSummary } from '../../utils/presetFormat'
+import { presetSummaryParts } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 import AgentSettingsDefaultsPicker from '../message/AgentSettingsDefaultsPicker.vue'
+import AgentSettingsSummaryView from '../message/AgentSettingsSummaryView.vue'
 import PermissionModeIcon from '../ui/PermissionModeIcon.vue'
 import HelpTextLink from '../help/HelpTextLink.vue'
 
@@ -36,6 +37,13 @@ const emit = defineEmits(['update:open'])
 const providerHelpers = computed(() => getProviderHelpers(props.provider))
 const presetsStore = useAgentSettingsPresetsStore()
 const providerLabel = computed(() => providerHelpers.value?.constructor?.label ?? 'Agent')
+
+// Icon summary parts for a preset, falling back to a plain "all default" text
+// part when the preset forces nothing (no field surfaces an icon).
+function presetSummary(preset) {
+    const parts = presetSummaryParts(preset, providerHelpers.value)
+    return parts.length ? parts : [{ text: 'all default' }]
+}
 
 // Preset records use historical key names (``model``, ``thinking``) while
 // the helpers' rendering hooks are keyed on wire names
@@ -283,7 +291,10 @@ function handleSave() {
                     </div>
                     <div class="preset-display">
                         <span class="preset-name">{{ preset.name }}</span>
-                        <span class="preset-summary">{{ formatPresetSummary(preset, providerHelpers) }}</span>
+                        <AgentSettingsSummaryView
+                            class="preset-summary"
+                            :parts="presetSummary(preset)"
+                        />
                     </div>
                     <div class="preset-actions">
                         <button class="action-btn" title="Edit" @click="openEditForm(index)">

@@ -23,7 +23,8 @@ import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderLa
 import ProviderIcon from '../ui/ProviderIcon.vue'
 import { useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
 import { ancestorChain } from '../../utils/projectAgentDefaults'
-import { formatBundleSummary } from '../../utils/presetFormat'
+import { bundleSummaryParts } from '../../utils/presetFormat'
+import AgentSettingsSummaryView from '../message/AgentSettingsSummaryView.vue'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 import { effortIconSrc } from '../../utils/effortIcon'
 import { AGENT_SETTING_ICONS } from '../../utils/agentSettingIcons'
@@ -196,7 +197,7 @@ function loadSources(provider) {
     // "Reset all to inherit": clear every field for this provider. Only shown
     // when at least one field is currently set, since otherwise it's a no-op.
     if (Object.keys(localSettings.value[provider] || {}).length) {
-        sources.push({ key: 'inherit-all', label: 'Reset all to inherit', summary: 'every field inherits' })
+        sources.push({ key: 'inherit-all', label: 'Reset all to inherit', summaryParts: [{ text: 'every field inherits' }] })
     }
     // Ancestor projects that define their own defaults for this provider.
     for (const node of ancestorChain(props.project.id, store.projects)) {
@@ -215,10 +216,15 @@ function loadSources(provider) {
         sources.push({ key: `preset:${index}`, label: `Preset: ${preset.name}` })
     })
     // Attach a value summary (only the fields each source would set, filtered to
-    // the provider's supported ones) so the user sees what loading it brings in.
-    // Entries that already carry a summary (the synthetic "inherit" one) keep it.
+    // the provider's supported ones) so the user sees what loading it brings in,
+    // rendered as the shared agent-settings icon summary. Entries that already
+    // carry summary parts (the synthetic "inherit" one) keep them.
     return h
-        ? sources.map(s => s.summary !== undefined ? s : { ...s, summary: formatBundleSummary(sourceBundle(provider, s.key), h) })
+        ? sources.map(s => {
+            if (s.summaryParts !== undefined) return s
+            const parts = bundleSummaryParts(sourceBundle(provider, s.key), h)
+            return { ...s, summaryParts: parts.length ? parts : [{ text: 'all default' }] }
+        })
         : sources
 }
 function presetToBundle(preset) {
@@ -358,7 +364,11 @@ defineExpose({ getChangedFields, reset: initLocal })
                 >
                     <wa-option v-for="src in loadSources(p.value)" :key="src.key" :value="src.key" :label="src.label">
                         <span>{{ src.label }}</span>
-                        <span v-if="src.summary" class="ad-option-description">{{ src.summary }}</span>
+                        <AgentSettingsSummaryView
+                            v-if="src.summaryParts?.length"
+                            class="ad-option-summary"
+                            :parts="src.summaryParts"
+                        />
                     </wa-option>
                 </wa-select>
 
@@ -537,6 +547,13 @@ defineExpose({ getChangedFields, reset: initLocal })
 
 .ad-option-description {
     display: block;
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+}
+
+/* The shared agent-settings icon summary keeps its own flex layout — only tint
+   and shrink it to the quiet option-description size. */
+.ad-option-summary {
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
 }
