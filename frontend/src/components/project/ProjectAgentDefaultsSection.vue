@@ -28,6 +28,7 @@ import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 import { effortIconSrc } from '../../utils/effortIcon'
 import { AGENT_SETTING_ICONS } from '../../utils/agentSettingIcons'
 import SettingFlagIcon from '../ui/SettingFlagIcon.vue'
+import PermissionModeIcon from '../ui/PermissionModeIcon.vue'
 import TabBar from '../ui/TabBar.vue'
 
 const props = defineProps({
@@ -146,6 +147,15 @@ function flagSelectShown(provider, field) {
     return isFlagField(field) && toSentinel(fieldValue(provider, field)) !== DEFAULT_SENTINEL
 }
 const flagValueOn = (provider, field) => fieldValue(provider, field) === true
+// Permission-mode fields carry a per-mode glyph.
+const isPermissionField = (field) => field === 'permission_mode' || field === 'permission_mode_if_untrusted'
+// Permission icon for the closed select — only when a concrete mode is forced
+// (not "Inherit"). Mirrors effortSelectIcon.
+function permissionSelectIcon(provider, field) {
+    if (!isPermissionField(field)) return null
+    if (toSentinel(fieldValue(provider, field)) === DEFAULT_SENTINEL) return null
+    return helpersFor(provider)?.getChoiceIcon(field, fieldValue(provider, field)) ?? null
+}
 function fromSentinel(provider, field, raw) {
     if (raw === DEFAULT_SENTINEL) return null
     if (field === 'selected_model') return raw
@@ -401,6 +411,12 @@ defineExpose({ getChangedFields, reset: initLocal })
                                 :field="field"
                                 :on="flagValueOn(p.value, field)"
                             />
+                            <PermissionModeIcon
+                                v-if="permissionSelectIcon(p.value, field)"
+                                slot="start"
+                                :icon="permissionSelectIcon(p.value, field).icon"
+                                :color="permissionSelectIcon(p.value, field).color"
+                            />
                             <wa-option :value="DEFAULT_SENTINEL">Inherit</wa-option>
                             <small class="ad-group-label">Force to:</small>
                             <wa-option
@@ -419,6 +435,12 @@ defineExpose({ getChangedFields, reset: initLocal })
                                     v-if="isFlagField(field)"
                                     :field="field"
                                     :on="opt.value === true"
+                                    class="ad-flag-option-icon"
+                                />
+                                <PermissionModeIcon
+                                    v-if="isPermissionField(field) && opt.icon"
+                                    :icon="opt.icon"
+                                    :color="opt.color"
                                     class="ad-flag-option-icon"
                                 />
                                 <span>{{ opt.label }}</span>

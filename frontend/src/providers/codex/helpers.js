@@ -84,31 +84,48 @@ const OPENAI_STATUS_DISPLAY = {
 // ``selected_model`` is intentionally absent: the model list is served via
 // the model registry (see ``getModelRegistry``).
 const AGENT_SETTINGS_CHOICES = {
+    // ``icon``/``color`` drive the per-mode glyph shown in the permission
+    // selects (see utils/permissionModeIcon.js + PermissionModeIcon.vue). Modes
+    // mirror the same six cross-provider tiers as Claude (claude_code/helpers.js):
+    // strict↔dontAsk (shield-halved/blue), read_only↔default (eye/green),
+    // auto↔acceptEdits (pen-to-square/yellow), autonomous↔auto (shield-check/
+    // orange), yolo↔bypass (triangle-exclamation/red). Order = severity ramp,
+    // most restrictive → most permissive (blue → green → yellow → orange → red).
     permission_mode: [
-        {
-            value: PERMISSION_MODE.READ_ONLY,
-            label: 'Read-only',
-            description: 'Read-only. Any write requires confirmation.',
-        },
         {
             value: PERMISSION_MODE.STRICT,
             label: 'Strict',
             description: 'Read-only. Writes are refused silently (no prompt).',
+            icon: 'shield-halved',
+            color: 'var(--wa-color-blue-60)',
+        },
+        {
+            value: PERMISSION_MODE.READ_ONLY,
+            label: 'Read-only',
+            description: 'Read-only. Any write requires confirmation.',
+            icon: 'eye',
+            color: 'var(--wa-color-green-60)',
         },
         {
             value: PERMISSION_MODE.AUTO,
             label: 'Auto',
             description: 'Writes freely in the project; asks to step outside.',
+            icon: 'pen-to-square',
+            color: 'var(--wa-color-yellow-60)',
         },
         {
             value: PERMISSION_MODE.AUTONOMOUS,
             label: 'Autonomous',
             description: 'Like Auto but uninterrupted (sandbox protects).',
+            icon: 'shield-check',
+            color: 'var(--wa-color-orange-60)',
         },
         {
             value: PERMISSION_MODE.YOLO,
             label: 'YOLO',
             description: 'No restrictions.',
+            icon: 'triangle-exclamation',
+            color: 'var(--wa-color-red-60)',
         },
     ],
     effort: [

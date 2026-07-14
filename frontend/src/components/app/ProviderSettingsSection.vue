@@ -22,6 +22,7 @@
 import { computed, ref } from 'vue'
 import { getProviderHelpers, getProviderIcon } from '../../providers'
 import ProviderIcon from '../ui/ProviderIcon.vue'
+import PermissionModeIcon from '../ui/PermissionModeIcon.vue'
 import { useSettingsStore } from '../../stores/settings'
 import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
 import AgentSettingsDefaultsPicker from '../message/AgentSettingsDefaultsPicker.vue'
@@ -91,6 +92,8 @@ const permissionRows = computed(() => {
             label: PERMISSION_LABELS[field],
             value: value === null || value === undefined ? '' : String(value),
             helpText: h.getFieldHelpText(field, ctx),
+            // Concrete default → glyph for the closed select.
+            iconInfo: h.getChoiceIcon(field, value),
             choices: h.getFieldChoices(field).map(opt => {
                 const disabled = h.isChoiceDisabled(field, opt.value, ctx)
                 const disabledReason = disabled ? h.getChoiceDisabledReason(field, opt.value, ctx) : null
@@ -99,6 +102,8 @@ const permissionRows = computed(() => {
                     labelWithSuffix: disabled ? `${opt.label} (not available)` : opt.label,
                     description: disabledReason ?? opt.description ?? null,
                     disabled,
+                    icon: opt.icon ?? null,
+                    color: opt.color ?? null,
                 }
             }),
         }
@@ -202,6 +207,12 @@ function onOrchestrationToggle(event) {
                 size="small"
                 @change="onPermissionChange(row.field, $event)"
             >
+                <PermissionModeIcon
+                    v-if="row.iconInfo"
+                    slot="start"
+                    :icon="row.iconInfo.icon"
+                    :color="row.iconInfo.color"
+                />
                 <wa-option
                     v-for="opt in row.choices"
                     :key="opt.value"
@@ -209,6 +220,12 @@ function onOrchestrationToggle(event) {
                     :label="opt.labelWithSuffix"
                     :disabled="opt.disabled"
                 >
+                    <PermissionModeIcon
+                        v-if="opt.icon"
+                        :icon="opt.icon"
+                        :color="opt.color"
+                        class="permission-option-icon"
+                    />
                     <span>{{ opt.labelWithSuffix }}</span>
                     <span v-if="opt.description" class="option-description">{{ opt.description }}</span>
                 </wa-option>
@@ -255,6 +272,11 @@ function onOrchestrationToggle(event) {
 </template>
 
 <style scoped>
+.permission-option-icon {
+    margin-right: 0.5em;
+    vertical-align: -0.15em;
+}
+
 .option-description {
     display: block;
     font-size: var(--wa-font-size-s);

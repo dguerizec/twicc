@@ -110,36 +110,54 @@ const ANTHROPIC_STATUS_DISPLAY = {
 // the model registry (see ``getModelRegistry``) which carries additional
 // metadata (latest, retirement_date, capability flags).
 const AGENT_SETTINGS_CHOICES = {
+    // ``icon``/``color`` drive the per-mode glyph shown in the permission
+    // selects (see utils/permissionModeIcon.js + PermissionModeIcon.vue). Modes
+    // are grouped into six cross-provider tiers, each with one glyph + hue;
+    // Codex mirrors the same tiers (codex/helpers.js). Order = severity ramp,
+    // most restrictive → most permissive (plan/purple, then blue → green →
+    // yellow → orange → red); this drives the select option order everywhere.
     permission_mode: [
-        {
-            value: PERMISSION_MODE.DEFAULT,
-            label: 'Default',
-            description: 'Prompts for permission on first use of each tool',
-        },
-        {
-            value: PERMISSION_MODE.AUTO,
-            label: 'Auto',
-            description: 'Auto-approves tools, with safety checks blocking risky actions',
-        },
-        {
-            value: PERMISSION_MODE.ACCEPT_EDITS,
-            label: 'Accept Edits',
-            description: 'Auto-accepts file edit permissions',
-        },
         {
             value: PERMISSION_MODE.PLAN,
             label: 'Plan',
             description: 'Read-only: Claude can analyze but not modify files',
+            icon: 'clipboard-list',
+            color: 'var(--wa-color-purple-60)',
         },
         {
             value: PERMISSION_MODE.DONT_ASK,
             label: "Don't Ask",
             description: 'Auto-denies tools unless pre-approved via permission rules',
+            icon: 'shield-halved',
+            color: 'var(--wa-color-blue-60)',
+        },
+        {
+            value: PERMISSION_MODE.DEFAULT,
+            label: 'Default',
+            description: 'Prompts for permission on first use of each tool',
+            icon: 'eye',
+            color: 'var(--wa-color-green-60)',
+        },
+        {
+            value: PERMISSION_MODE.ACCEPT_EDITS,
+            label: 'Accept Edits',
+            description: 'Auto-accepts file edit permissions',
+            icon: 'pen-to-square',
+            color: 'var(--wa-color-yellow-60)',
+        },
+        {
+            value: PERMISSION_MODE.AUTO,
+            label: 'Auto',
+            description: 'Auto-approves tools, with safety checks blocking risky actions',
+            icon: 'shield-check',
+            color: 'var(--wa-color-orange-60)',
         },
         {
             value: PERMISSION_MODE.BYPASS,
             label: 'Bypass permissions',
             description: 'Skips all permission prompts',
+            icon: 'triangle-exclamation',
+            color: 'var(--wa-color-red-60)',
         },
     ],
     effort: [

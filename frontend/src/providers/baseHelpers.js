@@ -548,6 +548,17 @@ export class BaseProviderHelpers {
     }
 
     /**
+     * Return ``{ icon, color }`` for the choice of ``field`` matching
+     * ``value``, or ``null`` when the choice has no icon (or nothing matches).
+     * Drives the per-mode glyph in the permission selects; generic so any
+     * future icon-bearing choice field works the same way.
+     */
+    getChoiceIcon(field, value) {
+        const choice = this.getFieldChoices(field).find(c => c.value === value)
+        return choice?.icon ? { icon: choice.icon, color: choice.color ?? null } : null
+    }
+
+    /**
      * Whether this provider supports the agent setting ``field``. Derived
      * from ``getAgentSettingsCategories``: a field listed in any category
      * (live/idle/startup) is supported. UI components branch on this to

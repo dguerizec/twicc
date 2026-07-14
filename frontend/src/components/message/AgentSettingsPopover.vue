@@ -20,6 +20,7 @@ import AgentSettingsBenchmarkWeights from './AgentSettingsBenchmarkWeights.vue'
 import AgentSettingsSwitches from './AgentSettingsSwitches.vue'
 import HelpTextLink from '../help/HelpTextLink.vue'
 import ProviderIcon from '../ui/ProviderIcon.vue'
+import PermissionModeIcon from '../ui/PermissionModeIcon.vue'
 import { buildSwitchRows } from '../../utils/agentSwitchRows'
 
 const props = defineProps({
@@ -293,6 +294,9 @@ const selectRows = computed(() => {
             defaultLabel: helpers.getDefaultValueLabel(field, defaults.value[field]),
             fieldDisabled: helpers.isFieldDisabled(field, ctx),
             helpText: helpers.getFieldHelpText(field, ctx),
+            // Glyph for the closed select: the effective mode (forced selection
+            // or resolved default), so it always reflects what will apply.
+            iconInfo: helpers.getChoiceIcon(field, currentEffective.value[field]),
             choices: helpers.getFieldChoices(field).map(opt => {
                 const disabled = helpers.isChoiceDisabled(field, opt.value, ctx)
                 const disabledReason = disabled ? helpers.getChoiceDisabledReason(field, opt.value, ctx) : null
@@ -302,6 +306,8 @@ const selectRows = computed(() => {
                     description: disabledReason ?? opt.description ?? null,
                     labelWithSuffix: disabled ? `${opt.label} (not available)` : opt.label,
                     disabled,
+                    icon: opt.icon ?? null,
+                    color: opt.color ?? null,
                 }
             }),
         })
@@ -549,6 +555,12 @@ onBeforeUnmount(() => {
                     size="small"
                     :disabled="row.fieldDisabled"
                 >
+                    <PermissionModeIcon
+                        v-if="row.iconInfo"
+                        slot="start"
+                        :icon="row.iconInfo.icon"
+                        :color="row.iconInfo.color"
+                    />
                     <wa-option :value="DEFAULT_SENTINEL">Default: {{ row.defaultLabel }}</wa-option>
                     <small class="select-group-label">Force to:</small>
                     <wa-option
@@ -558,6 +570,12 @@ onBeforeUnmount(() => {
                         :label="opt.labelWithSuffix"
                         :disabled="opt.disabled"
                     >
+                        <PermissionModeIcon
+                            v-if="opt.icon"
+                            :icon="opt.icon"
+                            :color="opt.color"
+                            class="permission-option-icon"
+                        />
                         <span>{{ opt.labelWithSuffix }}</span>
                         <span v-if="opt.description" class="option-description">{{ opt.description }}</span>
                     </wa-option>
@@ -756,6 +774,11 @@ onBeforeUnmount(() => {
     display: block;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
+}
+
+.permission-option-icon {
+    margin-right: 0.5em;
+    vertical-align: -0.15em;
 }
 
 .preset-item::part(label),

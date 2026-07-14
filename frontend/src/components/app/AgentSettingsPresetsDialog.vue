@@ -24,6 +24,7 @@ import { RESERVED_PRESET_NAMES, useAgentSettingsPresetsStore } from '../../store
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 import AgentSettingsDefaultsPicker from '../message/AgentSettingsDefaultsPicker.vue'
+import PermissionModeIcon from '../ui/PermissionModeIcon.vue'
 import HelpTextLink from '../help/HelpTextLink.vue'
 
 const props = defineProps({
@@ -129,6 +130,12 @@ function formDataToPreset(data) {
 
 function toSentinel(value) {
     return value === null || value === undefined ? DEFAULT_SENTINEL : String(value)
+}
+
+// Per-mode glyph for the closed select — only when a concrete mode is forced
+// (an unset/"Default" field inherits and shows no icon).
+function permissionSelectIcon(field) {
+    return providerHelpers.value?.getChoiceIcon(field, formData.value[field]) ?? null
 }
 
 // Reads the wa-select's current string back into the typed value used by
@@ -331,6 +338,12 @@ function handleSave() {
                     :value.prop="toSentinel(formData[field])"
                     @change="formData[field] = fromSentinel(field, $event.target.value)"
                 >
+                    <PermissionModeIcon
+                        v-if="permissionSelectIcon(field)"
+                        slot="start"
+                        :icon="permissionSelectIcon(field).icon"
+                        :color="permissionSelectIcon(field).color"
+                    />
                     <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
                     <small class="select-group-label">Force to:</small>
                     <wa-option
@@ -339,6 +352,12 @@ function handleSave() {
                         :value="String(opt.value)"
                         :label="opt.label"
                     >
+                        <PermissionModeIcon
+                            v-if="opt.icon"
+                            :icon="opt.icon"
+                            :color="opt.color"
+                            class="permission-option-icon"
+                        />
                         <span>{{ opt.label }}</span>
                         <span v-if="opt.description" class="option-description">{{ opt.description }}</span>
                     </wa-option>
@@ -495,6 +514,11 @@ function handleSave() {
 .form-label-quiet {
     color: var(--wa-color-text-quiet);
     font-weight: var(--wa-font-weight-normal);
+}
+
+.permission-option-icon {
+    margin-right: 0.5em;
+    vertical-align: -0.15em;
 }
 
 .select-group-label {
