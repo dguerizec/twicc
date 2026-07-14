@@ -136,6 +136,10 @@ Cycles make Vite HMR fall back to full reloads (recurring issue).
 - Never statically import components from composables when those components close a cycle → `defineAsyncComponent(() => import(...))`.
 - Common shapes: `main.js → … → main.js` (extract shared code), `router → views → components → util → router` (lazy router), `store ↔ store`, `store ↔ composable`, `composable → component → store → composable`.
 
+### Public assets (icons, images) — base-prefix trap
+
+`frontend/public/` files are served at `/` in dev but under `/static/` in the built bundle (Vite `base: '/static/'`). A hardcoded absolute string like `/icons/foo.svg` isn't rewritten by Vite, so it 404s (→ SPA index HTML) in the built app served by the backend — works on Vite (5173), silently broken on the backend (3500). ALWAYS resolve public-asset paths through `resolvePublicAssetUrl()` (`utils/publicAsset.js`), never a raw `/icons/...` literal in JS.
+
 ### Drafts
 
 Draft sessions/messages/media persisted to IndexedDB (`frontend/src/utils/draftStorage.js`), hydrated on startup before app mount.
