@@ -13,6 +13,7 @@
 import { ref, useId } from 'vue'
 import { useBenchmarkWeightsStore, WEIGHT_PRESETS } from '../../stores/benchmarkWeights'
 import AppTooltip from '../ui/AppTooltip.vue'
+import HelpIconButton from '../help/HelpIconButton.vue'
 
 defineProps({
     // Providers shown in the matrix; the "Default provider only" switch only
@@ -75,13 +76,17 @@ function isActivePreset(p) {
                     @input="onSlide('capability', $event)"
                 ></wa-slider>
                 <button type="button" class="weights-toggle" @click="showAll = true">More controls</button>
+                <HelpIconButton help-key="model-effort-score" label="How scores are computed" />
             </div>
         </template>
 
         <!-- Expanded ("More controls"): the full weighting block. -->
         <template v-else>
             <div class="weights-head">
-                <span class="weights-title">Score weighting</span>
+                <span class="weights-title">
+                    Scoring priorities
+                    <HelpIconButton help-key="model-effort-score" label="How scores are computed" />
+                </span>
                 <div class="weights-presets">
                     <template v-for="p in presets" :key="p.id">
                         <wa-button
