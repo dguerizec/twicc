@@ -256,18 +256,28 @@ function computeQuota(utilization, resetsAt, fetchedAt, windowMs, refLong, refSh
  * Compute derived data for a period cost block.
  *
  * @param {object|null} raw - Raw period cost data
+ * @param {string|null} resetsAt - ISO datetime of the window reset (for cutoff positioning)
+ * @param {number|null} windowMs - Window duration in ms (for cutoff positioning)
  * @returns {object} Period cost info
  */
-function computePeriodCost(raw) {
+function computePeriodCost(raw, resetsAt = null, windowMs = null) {
     if (!raw) {
-        return { spent: null, estimatedPeriod: null, estimatedMonthly: null, capped: false, cutoffAt: null }
+        return { spent: null, estimatedPeriod: null, estimatedMonthly: null, capped: false, cutoffAt: null, cutoffPct: null }
     }
+    const cutoffAt = raw.cutoff_at ?? null
+    // Position of the projected cutoff on the window timeline (0–100%), so the UI
+    // can mark where the quota will run out on the time lane. Only meaningful when
+    // the window has started (resetsAt known) and a cutoff was projected.
+    const cutoffPct = (cutoffAt && resetsAt && windowMs)
+        ? temporalPct(cutoffAt, resetsAt, windowMs)
+        : null
     return {
         spent: raw.spent ?? null,
         estimatedPeriod: raw.estimated_period ?? null,
         estimatedMonthly: raw.estimated_monthly ?? null,
         capped: raw.capped ?? false,
-        cutoffAt: raw.cutoff_at ?? null,
+        cutoffAt,
+        cutoffPct,
     }
 }
 
@@ -429,7 +439,7 @@ export function computeUsageData(raw) {
         },
 
         // Period cost estimates
-        fiveHourCost: computePeriodCost(periodCosts.five_hour),
-        sevenDayCost: computePeriodCost(periodCosts.seven_day),
+        fiveHourCost: computePeriodCost(periodCosts.five_hour, raw.five_hour_resets_at, FIVE_HOURS_MS),
+        sevenDayCost: computePeriodCost(periodCosts.seven_day, raw.seven_day_resets_at, SEVEN_DAYS_MS),
     }
 }

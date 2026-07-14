@@ -2345,6 +2345,10 @@ function updateSidebarClosedClass(closed) {
                             </div>
                             <div class="usage-lane">
                                 <div class="usage-lane-fill usage-lane-time" :style="{ width: timeLaneWidth(quotaFiveHour) }"></div>
+                                <template v-if="quotaFiveHourCost && quotaFiveHourCost.cutoffPct != null">
+                                    <div class="usage-cutoff-hatch" :style="{ left: quotaFiveHourCost.cutoffPct + '%' }"></div>
+                                    <div class="usage-cutoff-tick" :style="{ left: quotaFiveHourCost.cutoffPct + '%' }"></div>
+                                </template>
                             </div>
                         </div>
                         <span v-if="quotaFiveHourChip" class="usage-burn-chip" :style="burnChipStyle(quotaFiveHourRingColor)">{{ quotaFiveHourChip.text }}</span>
@@ -2389,6 +2393,10 @@ function updateSidebarClosedClass(closed) {
                             </div>
                             <div class="usage-lane">
                                 <div class="usage-lane-fill usage-lane-time" :style="{ width: timeLaneWidth(quotaSevenDay) }"></div>
+                                <template v-if="quotaSevenDayCost && quotaSevenDayCost.cutoffPct != null">
+                                    <div class="usage-cutoff-hatch" :style="{ left: quotaSevenDayCost.cutoffPct + '%' }"></div>
+                                    <div class="usage-cutoff-tick" :style="{ left: quotaSevenDayCost.cutoffPct + '%' }"></div>
+                                </template>
                             </div>
                         </div>
                         <span v-if="quotaSevenDayChip" class="usage-burn-chip" :style="burnChipStyle(quotaSevenDayRingColor)">{{ quotaSevenDayChip.text }}</span>
@@ -3239,7 +3247,6 @@ wa-dropdown-item:hover .row-menu-trigger,
     height: 6px;
     border-radius: var(--wa-border-radius-pill);
     background: var(--wa-color-neutral-fill-quiet);
-    overflow: hidden;
 }
 /* Dark: lift the empty track off the dark footer so the remaining (unfilled)
    portion of each bar stays readable instead of blending into the background. */
@@ -3261,6 +3268,32 @@ html.wa-dark .usage-lane {
 }
 html.wa-dark .usage-lane-time {
     background: var(--wa-color-neutral-fill-loud);
+}
+
+/* Projected cutoff on the time lane (shown when burning over 100%): the tail of
+   the window from the forecast cutoff to the reset is hatched red, with a 2px
+   vertical tick marking the exact cutoff point. Same "cutoff" the tooltip reports.
+   left is set inline to the cutoff percentage on both. */
+.usage-cutoff-hatch {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    background: repeating-linear-gradient(135deg, var(--wa-color-danger) 0 3px, transparent 3px 7px);
+    border-radius: 0 var(--wa-border-radius-pill) var(--wa-border-radius-pill) 0;
+    pointer-events: none;
+}
+
+.usage-cutoff-tick {
+    position: absolute;
+    top: -1px;
+    bottom: -1px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--wa-color-danger);
+    transform: translateX(-50%);
+    pointer-events: none;
+    z-index: 1;
 }
 
 /* Extra usage has no pace: a single solo lane (Claude %) or a balance readout (Codex). */
