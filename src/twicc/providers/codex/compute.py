@@ -93,7 +93,9 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   ``TOOL_USE``, except a single resolved nested ``write_stdin`` → ``SYSTEM``
   and rebound to its nested ``exec_command`` parent; ``function_call name=wait`` → ``SYSTEM`` (via
   :data:`_NON_TOOL_FUNCTION_NAMES`), its output chunks rebound to the
-  owning ``exec`` through the cell map — see
+  owning ``exec`` through the cell map. A single resolved nested
+  ``update_plan`` also refreshes :attr:`Session.tasks` without changing the
+  outer wrapper's tool identity — see
   :data:`_CODE_MODE_EXEC_TOOL` and ``code_mode_script.py``.
 - top-level ``compacted`` → ``COMPACT_SUMMARY`` (lands at ``ALWAYS``).
   Codex CLI writes this line on auto-compaction; the payload carries
@@ -844,6 +846,45 @@ def _extract_write_stdin_exec_command_id(parsed_json: dict) -> int | None:
 # (a full-list replacement). Source spec: ``codex-rs/core/src/tools/handlers/
 # plan_spec.rs``.
 _UPDATE_PLAN_FUNCTION_NAME = "update_plan"
+
+
+def _update_plan_args_from_payload(payload: dict) -> dict | None:
+    """Return resolved ``update_plan`` arguments from direct or code mode calls.
+
+    Pre-5.6 Codex persists ``update_plan`` as a native ``function_call`` with
+    JSON-encoded ``arguments``. GPT-5.6 code mode instead persists only the
+    outer ``custom_tool_call name=exec`` JavaScript, which may invoke
+    ``tools.update_plan({...})`` alongside unrelated nested tools. A single
+    statically resolved update is unambiguous enough to recover; dynamic or
+    repeated updates are ignored because the scanner cannot prove which
+    control-flow branch ran.
+    """
+    sub_type = payload.get("type")
+    if sub_type == "function_call":
+        if payload.get("name") != _UPDATE_PLAN_FUNCTION_NAME:
+            return None
+        raw_args = payload.get("arguments")
+        if not isinstance(raw_args, str):
+            return None
+        try:
+            args = orjson.loads(raw_args)
+        except orjson.JSONDecodeError:
+            return None
+        return args if isinstance(args, dict) else None
+
+    if sub_type != "custom_tool_call" or payload.get("name") != _CODE_MODE_EXEC_TOOL:
+        return None
+    plan_calls = [
+        call
+        for call in parse_code_mode_script(payload.get("input")).calls
+        if call.name == _UPDATE_PLAN_FUNCTION_NAME
+    ]
+    if len(plan_calls) != 1:
+        return None
+    call = plan_calls[0]
+    if not call.resolved or not isinstance(call.arg, dict):
+        return None
+    return call.arg
 
 
 def _plan_to_todos(plan) -> list[dict] | None:
@@ -2235,26 +2276,20 @@ class CodexSessionCompute(BaseSessionCompute):
     def extract_tasks_payload(self, parsed_json: dict) -> dict | None:
         """Latest plan state on a Codex ``update_plan`` line, in the common shape.
 
-        ``update_plan`` is a ``response_item`` ``function_call`` whose
-        ``arguments`` is a JSON-encoded string ``{plan: [{step, status}, ...],
-        explanation?}`` — a full replacement each call. Returns ``None`` for any
-        other line or a malformed / empty plan.
+        Before GPT-5.6, ``update_plan`` is a native ``function_call`` whose
+        ``arguments`` is a JSON-encoded string. In GPT-5.6 code mode it may be
+        one statically resolved nested call inside an ``exec`` JavaScript that
+        also invokes unrelated tools. Both carry ``{plan: [{step, status},
+        ...], explanation?}`` as a full replacement. Returns ``None`` for any
+        other line, an ambiguous wrapper, or a malformed / empty plan.
         """
         if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
             return None
         payload = _payload(parsed_json)
-        if payload is None or payload.get("type") != "function_call":
+        if payload is None:
             return None
-        if payload.get("name") != _UPDATE_PLAN_FUNCTION_NAME:
-            return None
-        raw_args = payload.get("arguments")
-        if not isinstance(raw_args, str):
-            return None
-        try:
-            args = orjson.loads(raw_args)
-        except orjson.JSONDecodeError:
-            return None
-        if not isinstance(args, dict):
+        args = _update_plan_args_from_payload(payload)
+        if args is None:
             return None
         items = _plan_to_todos(args.get("plan"))
         if items is None:

@@ -153,7 +153,16 @@ This exactly reuses the chain design already proven for `exec_command`/`write_st
 
 The same chain also collapses a canonical JavaScript `write_stdin` wrapper onto the JavaScript `exec_command` that printed `SESSION_ID=<id>`. If the `write_stdin` wrapper reports `Script running with cell ID <id>`, the later native `wait` output is rebound transitively to that original shell card rather than to the invisible intermediate wrapper.
 
-### 6.3 Doc-edit / plan detection
+### 6.3 Derived task and plan-document metadata
+
+`extract_tasks_payload` also runs the script extractor for code-mode `exec`
+calls. When exactly one `tools.update_plan({...})` call has statically resolved
+object arguments, its plan becomes the same last-wins `Session.tasks` snapshot
+as a native pre-5.6 `function_call`. The surrounding script may contain other
+nested tools (the common GPT-5.6 shape); repeated, dynamic, or malformed
+`update_plan` calls are ignored because static analysis cannot establish the
+executed state safely. This metadata extraction does not change the wrapper's
+display tier or tool-result pairing.
 
 `extract_doc_edit_events` gains an `exec` branch: run the extractor on `payload.input`;
 

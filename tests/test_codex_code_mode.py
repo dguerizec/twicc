@@ -351,6 +351,109 @@ class TestCodeModeKinds:
         ) == {"call_stdin_dynamic": "exec"}
 
 
+class TestCodeModeTasks:
+    @staticmethod
+    def _mixed_plan_script() -> str:
+        # Shape observed in session 019f61f0-de78-7551-85ff-46fa6792bf98,
+        # line 22: update_plan shares one exec cell with unrelated tools.
+        return (
+            'const p = await tools.update_plan({plan:['
+            '{step:"Inspect the session",status:"completed"},'
+            '{step:"Implement the fix",status:"in_progress"}'
+            '],explanation:"Recovered from code mode"});\n'
+            'const [s,c] = await Promise.all(['
+            'tools.exec_command({cmd:"pwd"}),'
+            'tools.exec_command({cmd:"rg update_plan src"})'
+            ']);\ntext(JSON.stringify(p));'
+        )
+
+    def test_mixed_exec_extracts_nested_update_plan(self):
+        parsed = orjson.loads(_exec_call_line("call_plan_nested", self._mixed_plan_script()))
+        compute = get_compute()
+
+        assert compute.compute_item_kind(parsed) == ItemKind.TOOL_USE
+        assert compute.extract_tool_use_entries(
+            parsed, session_id="test-session",
+        ) == {"call_plan_nested": "exec"}
+        assert compute.extract_tasks_payload(parsed) == {
+            "source": "update_plan",
+            "items": [
+                {"content": "Inspect the session", "status": "completed"},
+                {"content": "Implement the fix", "status": "in_progress"},
+            ],
+            "explanation": "Recovered from code mode",
+        }
+
+    def test_dynamic_or_repeated_nested_updates_are_ignored(self):
+        dynamic = orjson.loads(_exec_call_line(
+            "call_plan_dynamic", "await tools.update_plan(buildPlan());",
+        ))
+        repeated = orjson.loads(_exec_call_line(
+            "call_plan_repeated",
+            'await tools.update_plan({plan:[{step:"a",status:"pending"}]});\n'
+            'await tools.update_plan({plan:[{step:"b",status:"in_progress"}]});',
+        ))
+
+        compute = get_compute()
+        assert compute.extract_tasks_payload(dynamic) is None
+        assert compute.extract_tasks_payload(repeated) is None
+
+    def test_native_update_plan_remains_supported(self):
+        parsed = orjson.loads(_codex_line("response_item", {
+            "type": "function_call",
+            "call_id": "call_plan_native",
+            "name": "update_plan",
+            "arguments": json.dumps({
+                "plan": [{"step": "Keep compatibility", "status": "completed"}],
+            }),
+        }))
+
+        assert get_compute().extract_tasks_payload(parsed) == {
+            "source": "update_plan",
+            "items": [{"content": "Keep compatibility", "status": "completed"}],
+            "explanation": None,
+        }
+
+    def test_batch_recompute_persists_nested_plan_snapshot(self, codex_session):
+        _create_items(codex_session, [
+            _exec_call_line("call_plan_batch", self._mixed_plan_script()),
+        ])
+
+        _run_batch_compute(codex_session)
+
+        codex_session.refresh_from_db()
+        assert codex_session.tasks == {
+            "provider": "codex",
+            "line": 1,
+            "updated_at": _NOW.isoformat(),
+            "source": "update_plan",
+            "items": [
+                {"content": "Inspect the session", "status": "completed"},
+                {"content": "Implement the fix", "status": "in_progress"},
+            ],
+            "explanation": "Recovered from code mode",
+        }
+
+    def test_live_sync_persists_nested_plan_snapshot(self, codex_session, tmp_path):
+        rollout = tmp_path / "rollout.jsonl"
+        rollout.write_text(
+            _exec_call_line("call_plan_live", self._mixed_plan_script()) + "\n",
+            encoding="utf-8",
+        )
+
+        get_compute().sync_session_items_from_file(codex_session, rollout)
+
+        codex_session.refresh_from_db()
+        assert codex_session.tasks["provider"] == "codex"
+        assert codex_session.tasks["line"] == 1
+        assert codex_session.tasks["source"] == "update_plan"
+        assert codex_session.tasks["items"][1] == {
+            "content": "Implement the fix",
+            "status": "in_progress",
+        }
+        assert codex_session.tasks["explanation"] == "Recovered from code mode"
+
+
 class TestCodeModeCompute:
     def test_atomic_completed_exec(self, codex_session):
         """One-shot script: single link, terminated on arrival, no error."""
