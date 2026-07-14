@@ -22,13 +22,8 @@
 import { computed, ref } from 'vue'
 import { getProviderHelpers, getProviderIcon } from '../../providers'
 import { useSettingsStore } from '../../stores/settings'
-import { useBenchmarksStore } from '../../stores/benchmarks'
-import { buildEffortColumns, buildMatrixBlocks } from '../../utils/agentMatrix'
-import { buildSwitchRows } from '../../utils/agentSwitchRows'
 import AgentSettingsPresetsDialog from './AgentSettingsPresetsDialog.vue'
-import AgentSettingsMatrix from '../message/AgentSettingsMatrix.vue'
-import AgentSettingsBenchmarkWeights from '../message/AgentSettingsBenchmarkWeights.vue'
-import AgentSettingsSwitches from '../message/AgentSettingsSwitches.vue'
+import AgentSettingsDefaultsPicker from '../message/AgentSettingsDefaultsPicker.vue'
 import HelpTextLink from '../help/HelpTextLink.vue'
 import HybridModeExplainer from '../message/HybridModeExplainer.vue'
 
@@ -41,7 +36,6 @@ const props = defineProps({
 
 const helpers = computed(() => getProviderHelpers(props.provider))
 const providerIcon = computed(() => getProviderIcon(props.provider))
-const benchmarksStore = useBenchmarksStore()
 
 // Permission selects rendered below the switches. Concrete defaults (no
 // sentinel); ``permission_mode_if_untrusted`` is the default-shaping pseudo-
@@ -55,40 +49,12 @@ const PERMISSION_LABELS = {
     permission_mode_if_untrusted: 'Default permission mode (untrusted projects)',
 }
 
-// The persisted default (model, effort) reconciled through the provider's
-// consistency rules: a retired/disabled stored model resolves to its available
-// substitute and the effort demotes to what that model supports — so the matrix
-// always highlights a valid, enabled cell (mirrors the effective state the
-// popover shows after its consistency watcher).
-const effectiveDefault = computed(() => helpers.value.enforceAgentSettingsConsistency({
-    selectedModel: helpers.value.getDefaultValue('selected_model'),
-    effort: helpers.value.getDefaultValue('effort'),
-}))
-const effectiveModel = computed(() => effectiveDefault.value.selectedModel)
-
-// Render context fed to the switch/permission hooks. Out of a session, the only
-// gating comes from the default model's capabilities (effort/context/fast).
-function fieldContext(field) {
-    return {
-        field,
-        effectiveModel: effectiveModel.value,
-        selectedValue: helpers.value.getDefaultValue(field),
-        defaultValue: helpers.value.getDefaultValue(field),
-    }
+// ─── Matrix + weights + switches (shared AgentSettingsDefaultsPicker) ──────
+// Values ARE the persisted defaults, so the picker reads them raw (no null
+// layer) and never shows a separate default dot — the selection IS the default.
+function defaultValueFor(field) {
+    return helpers.value.getDefaultValue(field)
 }
-
-// ─── Matrix (default model × effort) ──────────────────────────────────────
-const effortColumns = computed(() => buildEffortColumns([props.provider]))
-const matrixBlocks = computed(() => buildMatrixBlocks({
-    providers: [props.provider],
-    effortColumns: effortColumns.value,
-    currentProvider: props.provider,
-    selectedModel: effectiveModel.value,
-    selectedEffort: effectiveDefault.value.effort,
-    // No separate default dot: the selected cell IS the default here.
-    defaultCell: null,
-    benchmarksStore,
-}))
 
 function onMatrixSelect({ model, effort }) {
     // Set the model first: the provider setter re-runs consistency (cascading
@@ -98,18 +64,19 @@ function onMatrixSelect({ model, effort }) {
     helpers.value.setDefaultValue('effort', effort)
 }
 
-const modelFallbackNotice = computed(() =>
-    helpers.value?.getModelFallbackNotice(helpers.value.getDefaultValue('selected_model')) ?? null,
-)
-
-// ─── Switches (context toggle, thinking, Chrome MCP, fast mode) ────────────
-const switchRows = computed(() => buildSwitchRows(helpers.value, {
-    fieldContext,
-    valueFor: (field) => helpers.value.getDefaultValue(field),
-}))
-
 function onSwitchChange({ field, value }) {
     helpers.value.setDefaultValue(field, value)
+}
+
+// Render context fed to the permission hooks. Out of a session, the only gating
+// comes from the default model's capabilities.
+function fieldContext(field) {
+    return {
+        field,
+        effectiveModel: helpers.value.resolveToAvailableModel(helpers.value.getDefaultValue('selected_model')),
+        selectedValue: helpers.value.getDefaultValue(field),
+        defaultValue: helpers.value.getDefaultValue(field),
+    }
 }
 
 // ─── Permission selects (concrete defaults, string-valued) ─────────────────
@@ -214,20 +181,12 @@ function onOrchestrationToggle(event) {
                 <label class="setting-group-label">Model &amp; effort picker</label>
                 <HelpTextLink help-key="model-effort-score" label="What are those numbers?" />
             </div>
-            <wa-callout
-                v-if="modelFallbackNotice"
-                variant="warning"
-                class="model-fallback-callout"
-            >
-                {{ modelFallbackNotice }}
-            </wa-callout>
-            <AgentSettingsMatrix
-                :blocks="matrixBlocks"
-                :effort-columns="effortColumns"
+            <AgentSettingsDefaultsPicker
+                :provider="provider"
+                :value-for="defaultValueFor"
                 @select="onMatrixSelect"
+                @change="onSwitchChange"
             />
-            <AgentSettingsBenchmarkWeights :provider-count="1" :show-auto-select="false" />
-            <AgentSettingsSwitches :rows="switchRows" @change="onSwitchChange" />
         </div>
 
         <!-- No divider here: the weights block ends with its own trailing divider
@@ -310,23 +269,19 @@ function onOrchestrationToggle(event) {
     color: var(--wa-color-brand);
 }
 
-.model-fallback-callout {
-    display: block;
-    font-size: var(--wa-font-size-s);
-}
-
-/* Matrix + weights + switches stack. A dedicated class (not .setting-group) so
-   the section's `.setting-group > label ~ :not(label)` indent rule never shifts
+/* Heading + picker stack. A dedicated class (not .setting-group) so the
+   section's `.setting-group > label ~ :not(label)` indent rule never shifts
    the wide matrix grid; the label still gets its styling from the class-keyed
-   `.settings-sections .setting-group-label` rule. */
+   `.settings-sections .setting-group-label` rule. The callout / matrix /
+   weights / switches layout lives in AgentSettingsDefaultsPicker. */
 .agent-defaults-group {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-m);
 }
 
-/* Heading above the matrix ("Model & effort" + help link). Pull the next block
-   (fallback callout / matrix) up to a tight gap under the label. */
+/* Heading above the matrix ("Model & effort picker" + help link). Pull the
+   picker up to a tight gap under the label. */
 .matrix-heading {
     display: flex;
     align-items: center;
@@ -334,11 +289,5 @@ function onOrchestrationToggle(event) {
     column-gap: var(--wa-space-s);
     row-gap: var(--wa-space-3xs);
     margin-bottom: calc(var(--wa-space-2xs) - var(--wa-space-m));
-}
-
-/* Pull the weighting block up toward the matrix (the uniform space-m gap is a
-   touch airy right there), matching the popover's tightened matrix→weights gap. */
-.agent-defaults-group :deep(.weights) {
-    margin-top: calc(var(--wa-space-2xs) - var(--wa-space-m));
 }
 </style>

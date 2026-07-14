@@ -1,11 +1,17 @@
 <script setup>
 // Provider-agnostic dialog to manage the agent settings presets of a given
-// provider. Opens the list view by default; "Add" / "Edit" switch to a
-// form that renders one row per agent setting field the provider supports.
+// provider. Opens the list view by default; "Add" / "Edit" switch to a form
+// built on the shared matrix design: the model × effort picker (matrix +
+// weights + switches, via ``AgentSettingsDefaultsPicker`` — with the provider-
+// default cell dotted), then the permission selects, which keep their explicit
+// "Default" sentinel (a preset's permission stays independently unset-able).
 //
-// Each row uses the same rendering hooks as ``AgentSettingsPopover``
-// (``getFieldLabel``, ``getFieldChoices``, ``getModelSelectGroups``) so a
-// new provider that ships its own catalog needs zero template changes here.
+// Preset fields are NULLABLE (null = follow the provider default at apply
+// time). The picker displays effective values (preset ?? default); a matrix
+// pick or switch toggle writes a concrete value, and ``handleSave`` normalises
+// any picker-owned value equal to the provider's current default back to null —
+// so clicking the dotted default cell (or toggling a switch back to its
+// default) un-forces the field, mirroring the popover's snapshot convention.
 //
 // Preset persistence is cross-provider: the dialog reads/writes through the
 // shared ``useAgentSettingsPresetsStore`` (one keyed bucket per provider),
@@ -17,6 +23,8 @@ import { getProviderHelpers } from '../../providers'
 import { RESERVED_PRESET_NAMES, useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
 import { formatPresetSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
+import AgentSettingsDefaultsPicker from '../message/AgentSettingsDefaultsPicker.vue'
+import HelpTextLink from '../help/HelpTextLink.vue'
 
 const props = defineProps({
     open: { type: Boolean, default: false },
@@ -60,24 +68,31 @@ const dialogLabel = computed(() => {
     return editIndex.value === null ? 'Add preset' : 'Edit preset'
 })
 
-// Fields the provider declares — drives the rows of the edit form. The
-// model row uses ``getModelSelectGroups``; the rest use a flat
-// ``getFieldChoices`` list.
-const supportedFields = computed(() => {
+// Fields owned by the shared picker (matrix + switches). Everything the picker
+// shows is written concrete; ``handleSave`` nulls the ones equal to the current
+// provider default (see the top comment).
+const PICKER_FIELDS = ['selected_model', 'effort', 'context_max', 'thinking_enabled', 'claude_in_chrome', 'fast_mode']
+
+// Permission fields keep their sentinel selects, below the picker.
+const permissionFields = computed(() => {
     const helpers = providerHelpers.value
     if (!helpers) return []
-    return FIELD_ORDER.filter(f => helpers.supportsAgentSetting(f))
+    return ['permission_mode', 'permission_mode_if_untrusted'].filter(f => helpers.supportsAgentSetting(f))
 })
 
-const modelGroups = computed(() => {
-    const helpers = providerHelpers.value
-    if (!helpers) return []
-    return helpers.getModelSelectGroups(helpers.getModelRegistry())
-})
+// The picker reads the preset's RAW nullable values (null = follow default).
+function presetValueFor(field) {
+    return formData.value[field]
+}
 
-const modelFallbackNotice = computed(() =>
-    providerHelpers.value?.getModelFallbackNotice(formData.value.selected_model) ?? null,
-)
+function onMatrixSelect({ model, effort }) {
+    formData.value.selected_model = model
+    formData.value.effort = effort
+}
+
+function onSwitchChange({ field, value }) {
+    formData.value[field] = value
+}
 
 function emptyFormData() {
     return {
@@ -121,7 +136,6 @@ function toSentinel(value) {
 // shouldn't happen with the static catalogues we ship today).
 function fromSentinel(field, raw) {
     if (raw === DEFAULT_SENTINEL) return null
-    if (field === 'selected_model') return raw
     const choices = providerHelpers.value?.getFieldChoices(field) ?? []
     const match = choices.find(opt => String(opt.value) === raw)
     return match ? match.value : raw
@@ -209,7 +223,17 @@ function handleSave() {
         errorMessage.value = 'A preset with this name already exists'
         return
     }
-    const payload = formDataToPreset({ ...formData.value, name: trimmedName })
+    // Picker-owned fields have no explicit "Default" control: a value equal to
+    // the provider's CURRENT default is stored as null ("follow default"), so
+    // picking the dotted default cell / toggling a switch back un-forces the
+    // field. Permission fields keep their explicit sentinel and are untouched.
+    const normalized = { ...formData.value, name: trimmedName }
+    for (const field of PICKER_FIELDS) {
+        if (normalized[field] !== null && normalized[field] === providerHelpers.value.getDefaultValue(field)) {
+            normalized[field] = null
+        }
+    }
+    const payload = formDataToPreset(normalized)
     if (editIndex.value === null) {
         presetsStore.add(props.provider, payload)
     } else {
@@ -282,57 +306,44 @@ function handleSave() {
                 ></wa-input>
             </div>
 
-            <template v-for="field in supportedFields" :key="field">
-                <!-- Model row uses registry-driven groups instead of a flat choices list -->
-                <div v-if="field === 'selected_model'" class="form-group">
-                    <label class="form-label">{{ providerHelpers.getFieldLabel('selected_model') }}</label>
-                    <wa-callout v-if="modelFallbackNotice" variant="warning" class="model-fallback-callout">
-                        {{ modelFallbackNotice }}
-                    </wa-callout>
-                    <wa-select
-                        size="small"
-                        :value.prop="toSentinel(providerHelpers.resolveToAvailableModel(formData.selected_model))"
-                        @change="formData.selected_model = fromSentinel('selected_model', $event.target.value)"
-                    >
-                        <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
-                        <small class="select-group-label">Force to:</small>
-                        <template v-for="(group, gi) in modelGroups" :key="gi">
-                            <wa-divider v-if="gi > 0 && group.entries.length"></wa-divider>
-                            <wa-option
-                                v-for="entry in group.entries"
-                                :key="entry.value"
-                                :value="entry.value"
-                                :label="entry.labelWithSuffix"
-                                :disabled="entry.disabled"
-                            >
-                                <span>{{ entry.labelWithSuffix }}</span>
-                                <span v-if="entry.description" class="option-description">{{ entry.description }}</span>
-                            </wa-option>
-                        </template>
-                    </wa-select>
+            <!-- Model & effort picker (shared matrix + weights + switches). The
+                 provider-default cell keeps its dot here — a preset field left
+                 on the default follows it at apply time. -->
+            <div class="form-group">
+                <div class="matrix-heading">
+                    <label class="form-label">Model &amp; effort picker</label>
+                    <HelpTextLink help-key="model-effort-score" label="What are those numbers?" />
                 </div>
-                <!-- Generic row: flat list of choices from the provider -->
-                <div v-else class="form-group">
-                    <label class="form-label">{{ providerHelpers.getFieldLabel(field) }}</label>
-                    <wa-select
-                        size="small"
-                        :value.prop="toSentinel(formData[field])"
-                        @change="formData[field] = fromSentinel(field, $event.target.value)"
+                <AgentSettingsDefaultsPicker
+                    :provider="props.provider"
+                    :value-for="presetValueFor"
+                    show-default-dot
+                    @select="onMatrixSelect"
+                    @change="onSwitchChange"
+                />
+            </div>
+
+            <!-- Permission rows: flat list of choices, explicit Default sentinel -->
+            <div v-for="field in permissionFields" :key="field" class="form-group">
+                <label class="form-label">{{ providerHelpers.getFieldLabel(field) }}</label>
+                <wa-select
+                    size="small"
+                    :value.prop="toSentinel(formData[field])"
+                    @change="formData[field] = fromSentinel(field, $event.target.value)"
+                >
+                    <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
+                    <small class="select-group-label">Force to:</small>
+                    <wa-option
+                        v-for="opt in providerHelpers.getFieldChoices(field)"
+                        :key="String(opt.value)"
+                        :value="String(opt.value)"
+                        :label="opt.label"
                     >
-                        <wa-option :value="DEFAULT_SENTINEL">Default</wa-option>
-                        <small class="select-group-label">Force to:</small>
-                        <wa-option
-                            v-for="opt in providerHelpers.getFieldChoices(field)"
-                            :key="String(opt.value)"
-                            :value="String(opt.value)"
-                            :label="opt.label"
-                        >
-                            <span>{{ opt.label }}</span>
-                            <span v-if="opt.description" class="option-description">{{ opt.description }}</span>
-                        </wa-option>
-                    </wa-select>
-                </div>
-            </template>
+                        <span>{{ opt.label }}</span>
+                        <span v-if="opt.description" class="option-description">{{ opt.description }}</span>
+                    </wa-option>
+                </wa-select>
+            </div>
 
             <wa-callout v-if="errorMessage" variant="danger">{{ errorMessage }}</wa-callout>
         </form>
@@ -500,8 +511,12 @@ function handleSave() {
     color: var(--wa-color-text-quiet);
 }
 
-.model-fallback-callout {
-    font-size: var(--wa-font-size-s);
-    margin-bottom: var(--wa-space-xs);
+/* Heading above the picker ("Model & effort picker" + help link). */
+.matrix-heading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    column-gap: var(--wa-space-s);
+    row-gap: var(--wa-space-3xs);
 }
 </style>
