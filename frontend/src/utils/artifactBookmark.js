@@ -30,3 +30,60 @@ const EXT_ICON = {
 export function artifactTypeIcon(ext) {
     return EXT_ICON[(ext || '').toLowerCase()] || 'file'
 }
+
+export function isHtmlArtifactPath(path) {
+    return /\.html?$/i.test(path || '')
+}
+
+// Turn a path segment into a human title: drop the extension, split on
+// separators, collapse whitespace, Title Case. "sales-report.svg" → "Sales
+// Report", "dashboard.html" → "Dashboard".
+function humanizeSegment(segment) {
+    const base = (segment || '').replace(/\.[^.]+$/, '') || segment || ''
+    const words = base.replace(/[-_.]+/g, ' ').replace(/\s+/g, ' ').trim()
+    if (!words) return ''
+    return words.replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+// Derive a name from the file path alone (no content). An index.html borrows
+// its parent folder name (that's the artifact's real identity); anything else
+// uses its own basename. Both are humanized.
+function deriveNameFromPath(relativePath) {
+    const parts = String(relativePath || '').split('/').filter(Boolean)
+    if (!parts.length) return ''
+    const base = parts[parts.length - 1]
+    if (/^index\.html?$/i.test(base) && parts.length >= 2) {
+        return humanizeSegment(parts[parts.length - 2])
+    }
+    return humanizeSegment(base)
+}
+
+// Extract a title from HTML content: <title> first, then the first <h1>. Used
+// verbatim (whitespace-collapsed) — it's already a human-authored title, no
+// humanization. Returns '' when neither is present or non-empty. DOMParser runs
+// no scripts and loads no resources, so parsing arbitrary artifact HTML is safe.
+function extractHtmlTitle(htmlContent) {
+    if (!htmlContent) return ''
+    let doc
+    try {
+        doc = new DOMParser().parseFromString(htmlContent, 'text/html')
+    } catch {
+        return ''
+    }
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim()
+    return clean(doc.querySelector('title')?.textContent) || clean(doc.querySelector('h1')?.textContent) || ''
+}
+
+// Suggest a default bookmark name. For HTML with content available, prefer its
+// <title>/<h1>; otherwise (non-HTML, or HTML without a usable title) derive a
+// humanized name from the path. Synchronous and pure — callers fetch the HTML
+// and pass it in. Truncated to the model's name max_length (255).
+export function suggestArtifactBookmarkName({ relativePath, htmlContent = null } = {}) {
+    if (!relativePath) return ''
+    let name = ''
+    if (isHtmlArtifactPath(relativePath) && htmlContent) {
+        name = extractHtmlTitle(htmlContent)
+    }
+    if (!name) name = deriveNameFromPath(relativePath)
+    return name.slice(0, 255).trim()
+}

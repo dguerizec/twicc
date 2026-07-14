@@ -1154,6 +1154,7 @@ defineExpose({
                 class="files-panel-header-artifact-bookmark-btn"
                 :session-id="artifactBookmarkSessionId"
                 :relative-path="selectedFile"
+                :file-abs-path="selectedAbsPath"
             />
         </div>
 

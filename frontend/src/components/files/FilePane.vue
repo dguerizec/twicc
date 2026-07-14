@@ -1467,6 +1467,8 @@ function goToNextDiff() {
                     class="file-path-artifact-bookmark-btn"
                     :session-id="artifactBookmarkSessionId"
                     :relative-path="relativeArtifactPath"
+                    :file-abs-path="filePath"
+                    :html-content="isHtmlFile ? currentContent : null"
                 />
             </div>
             <wa-divider></wa-divider>

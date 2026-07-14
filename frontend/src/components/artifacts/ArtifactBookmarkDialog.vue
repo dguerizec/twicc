@@ -6,12 +6,19 @@ import { useDataStore } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { getSessionGrantsForBookmark } from '../../artifact-broker/host'
 import { apiFetch } from '../../utils/api'
+import { isHtmlArtifactPath, suggestArtifactBookmarkName } from '../../utils/artifactBookmark'
 import ShareDialog from '../share/ShareDialog.vue'
 import AccessLogList from '../share/AccessLogList.vue'
 
 const props = defineProps({
     sessionId: { type: String, default: null },
     relativePath: { type: String, default: null },
+    // Absolute path of the artifact file, and its HTML content when the host
+    // already has it in memory (desktop preview). Both feed the create-mode name
+    // suggestion: content is parsed for a <title>/<h1>; when absent for an HTML
+    // artifact (e.g. mobile), the dialog fetches it via the abs path.
+    fileAbsPath: { type: String, default: null },
+    htmlContent: { type: String, default: null },
     // When mounted as a network-access helper from a ShareDialog, the share entry
     // point is suppressed to avoid share→bookmark→share recursion (the user is
     // already in a share dialog).
@@ -202,6 +209,9 @@ const saveButtonRef = ref(null)
 
 const existingId = ref(null)
 const localName = ref('')
+// True once the user typed in the name field — freezes the auto-filled
+// suggestion so an async title extraction never overwrites their edit.
+const nameUserEdited = ref(false)
 const localScope = ref('project')
 const isSaving = ref(false)
 const errorMessage = ref('')
@@ -235,10 +245,43 @@ function handleDialogAfterShow(e) {
     focusName()
 }
 
+// Fetch the artifact's raw content (create mode, HTML without in-memory content)
+// via the same session-scoped endpoint FilePane uses. Returns null on any miss.
+async function fetchArtifactHtml() {
+    const abs = props.fileAbsPath
+    const projectId = store.sessions[props.sessionId]?.project_id
+    if (!abs || !projectId || !props.sessionId) return null
+    try {
+        const res = await apiFetch(
+            `/api/projects/${projectId}/sessions/${props.sessionId}/file-content/?path=${encodeURIComponent(abs)}`,
+        )
+        if (!res.ok) return null
+        const data = await res.json()
+        if (data.binary || data.error) return null
+        return data.content || null
+    } catch {
+        return null
+    }
+}
+
+// Try to upgrade the path-derived suggestion to the HTML <title>/<h1>. Applied
+// only if still in create mode on the same artifact and the user hasn't typed.
+async function maybeUpgradeNameFromHtml() {
+    if (!isHtmlArtifactPath(props.relativePath)) return
+    const rp = props.relativePath
+    const html = props.htmlContent || (await fetchArtifactHtml())
+    if (!html) return
+    const better = suggestArtifactBookmarkName({ relativePath: rp, htmlContent: html })
+    if (better && !isEditMode.value && !nameUserEdited.value && props.relativePath === rp) {
+        localName.value = better
+    }
+}
+
 /** Open in create mode (existing = null) or edit mode (an existing bookmark). */
 function open(existing = null) {
     errorMessage.value = ''
     isSaving.value = false
+    nameUserEdited.value = false
     resetNetworkSection()
     if (existing) {
         existingId.value = existing.id
@@ -248,8 +291,11 @@ function open(existing = null) {
         fetchDenials()
     } else {
         existingId.value = null
-        localName.value = ''
+        // Auto-fill a suggested name: the path-derived fallback shows instantly,
+        // then an HTML <title>/<h1> replaces it if found and untouched.
+        localName.value = suggestArtifactBookmarkName({ relativePath: props.relativePath })
         localScope.value = 'project'
+        maybeUpgradeNameFromHtml()
     }
     syncFormState()
     if (dialogRef.value) dialogRef.value.open = true
@@ -320,7 +366,7 @@ defineExpose({ open, close })
                 <wa-input
                     ref="nameInputRef"
                     :value.prop="localName"
-                    @input="localName = $event.target.value"
+                    @input="localName = $event.target.value; nameUserEdited = true"
                     placeholder="Bookmark name"
                     maxlength="255"
                 ></wa-input>

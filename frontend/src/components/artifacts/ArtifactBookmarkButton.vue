@@ -13,11 +13,15 @@ import { useNetworkDenials } from '../../composables/useNetworkDenials'
 import { toast } from '../../composables/useToast'
 import ArtifactBookmarkDialog from './ArtifactBookmarkDialog.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
-import { ARTIFACT_ICON } from '../../utils/artifactBookmark'
+import { ARTIFACT_ICON, suggestArtifactBookmarkName } from '../../utils/artifactBookmark'
 
 const props = defineProps({
     sessionId: { type: String, required: true },
     relativePath: { type: String, required: true },
+    // Fed to the dialog / share path to auto-suggest a bookmark name (abs path
+    // for the on-demand HTML fetch; content when the host already has it).
+    fileAbsPath: { type: String, default: null },
+    htmlContent: { type: String, default: null },
 })
 
 // Multi-root template (view + toggle buttons, their tooltips, the dialog) → Vue
@@ -63,7 +67,7 @@ function openDialog() {
 }
 
 // Share entry point. A share targets a bookmark, so an as-yet-unbookmarked
-// artifact is bookmarked first (name = the file's basename, project scope) and
+// artifact is bookmarked first (name = the suggested name, project scope) and
 // then shared. Routes through the globally-mounted artifact ShareDialog
 // (ProjectView) via the shared window event.
 const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
@@ -92,7 +96,10 @@ async function shareArtifact() {
     if (!sharingEnabled.value) return
     let b = bookmark.value
     if (!b) {
-        const name = (props.relativePath.split('/').pop() || props.relativePath).trim()
+        const name = suggestArtifactBookmarkName({
+            relativePath: props.relativePath,
+            htmlContent: props.htmlContent,
+        })
         try {
             b = await store.createArtifactBookmark({
                 sessionId: props.sessionId, relativePath: props.relativePath, name, scope: 'project',
@@ -170,7 +177,13 @@ function viewInArtifacts() {
         <wa-icon name="bookmark" :variant="bookmark ? 'solid' : 'regular'" label="Bookmark"></wa-icon>
     </wa-button>
     <AppTooltip :for="buttonId">{{ bookmarkTooltip }}</AppTooltip>
-    <ArtifactBookmarkDialog ref="dialogRef" :session-id="sessionId" :relative-path="relativePath" />
+    <ArtifactBookmarkDialog
+        ref="dialogRef"
+        :session-id="sessionId"
+        :relative-path="relativePath"
+        :file-abs-path="fileAbsPath"
+        :html-content="htmlContent"
+    />
 </template>
 
 <style scoped>
