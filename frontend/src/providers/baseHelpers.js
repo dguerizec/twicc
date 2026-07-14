@@ -1,4 +1,10 @@
 /**
+ * Effort values (low→max, ascending rank) that have a matching 5-bar level
+ * icon under ``public/icons/effort/``. Both providers share these strings.
+ */
+const SUMMARY_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+
+/**
  * Base class for per-provider frontend helpers.
  *
  * Mirrors the backend `BaseProviderHelpers` pattern: each provider ships a
@@ -807,36 +813,117 @@ export class BaseProviderHelpers {
 
     /**
      * Build the parts list rendered by the inline summary in the popover
-     * trigger button. Each entry is ``{ text, forced }`` — ``forced=true``
-     * adds a dashed underline so the user notices a non-default choice.
+     * trigger button. Each entry is either a text part ``{ text, forced }``
+     * or an icon part ``{ icon, iconFamily?, on, forced, label }`` — the
+     * shared ``AgentSettingsSummaryView`` renders icons for boolean flags
+     * (thinking, Chrome MCP), dimmed when off. ``forced=true`` adds a dashed
+     * underline so the user notices a non-default choice.
      *
      * ``state`` shape:
      * ```
      * { selected: { selected_model, effort, …}, defaults: {…} }
      * ```
      *
-     * Default: one part per supported field, in registration order.
-     * Providers override to merge or reorder fields (e.g. Claude appends
-     * "[1m]" to the model when context_max is forced to EXTENDED, and
-     * collapses model+context into a single part).
+     * Layout: model and effort collapse into one ``{model} × {effort}`` part
+     * (the model uses the compact matrix label, see ``getSummaryModelLabel``),
+     * then thinking and Chrome MCP as icons, permission mode as text, and
+     * fast mode only when on. ``context_max`` is never shown as its own part;
+     * providers fold it into the model label via ``getSummaryModelSuffix``
+     * (Claude's "[1m]"). Providers tweak the model rendering through the
+     * ``getSummaryModel*`` hooks rather than overriding this whole method.
      */
     getSummaryParts(state) {
-        const parts = []
         const sel = state?.selected ?? {}
         const def = state?.defaults ?? {}
-        const fieldOrder = ['selected_model', 'effort', 'thinking_enabled', 'permission_mode', 'claude_in_chrome', 'fast_mode', 'context_max']
-        for (const field of fieldOrder) {
-            if (!this.supportsAgentSetting(field)) continue
-            const selected = sel[field] ?? null
-            const defaultValue = def[field]
-            const effective = selected ?? defaultValue
-            const text = field === 'selected_model'
-                ? this.getModelLabel(effective)
-                : (this.getChoiceDisplayLabel(field, effective) ?? this.getChoiceLabel(field, effective) ?? String(effective ?? ''))
-            const forced = selected !== null && selected !== undefined && selected !== defaultValue
-            parts.push({ text, forced })
+        const eff = (field) => sel[field] ?? def[field]
+        const forced = (field) => sel[field] !== null && sel[field] !== undefined && sel[field] !== def[field]
+        const parts = []
+
+        // Model + effort — a single part. The model carries the compact matrix
+        // label plus any provider suffix (Claude's "[1m]"); the effort renders
+        // as a 5-bar level icon glued after the model (see getEffortIconSrc).
+        const modelText = this.getSummaryModelLabel(eff('selected_model')) + this.getSummaryModelSuffix(state)
+        const modelForced = forced('selected_model') || this.isSummaryContextForced(state)
+        if (this.supportsAgentSetting('effort')) {
+            const effortValue = eff('effort')
+            parts.push({
+                text: modelText,
+                effortSrc: this.getEffortIconSrc(effortValue),
+                effortLabel: this.getChoiceDisplayLabel('effort', effortValue) ?? this.getChoiceLabel('effort', effortValue) ?? String(effortValue ?? ''),
+                forced: modelForced || forced('effort'),
+            })
+        } else {
+            parts.push({ text: modelText, forced: modelForced })
         }
+
+        // Permission mode — text.
+        if (this.supportsAgentSetting('permission_mode')) {
+            parts.push({ text: this.getChoiceLabel('permission_mode', eff('permission_mode')) ?? '', forced: forced('permission_mode') })
+        }
+
+        // The boolean flags render as a grouped icon cluster (brain, bolt,
+        // chrome), coloured when on and dimmed + struck when off.
+
+        // Thinking — brain icon, brand colour when on.
+        if (this.supportsAgentSetting('thinking_enabled')) {
+            const on = eff('thinking_enabled') === true
+            parts.push({ icon: 'brain', on, color: 'brand', forced: forced('thinking_enabled'), label: on ? 'Thinking' : 'No thinking' })
+        }
+
+        // Fast mode — bolt icon, yellow, only when on.
+        if (this.supportsAgentSetting('fast_mode') && eff('fast_mode')) {
+            parts.push({ icon: 'bolt', on: true, color: 'yellow', forced: forced('fast_mode'), label: 'Fast mode' })
+        }
+
+        // Chrome MCP — chrome brand icon, Chrome blue, kept last.
+        if (this.supportsAgentSetting('claude_in_chrome')) {
+            const on = eff('claude_in_chrome') === true
+            parts.push({ icon: 'chrome', iconFamily: 'brands', on, color: 'chrome', forced: forced('claude_in_chrome'), label: on ? 'Chrome MCP' : 'No Chrome MCP' })
+        }
+
         return parts
+    }
+
+    /**
+     * Compact model label for the inline summary, based on the agent-settings
+     * matrix short tier label (``getModelShortLabel``). The registry version
+     * is appended for older aliases only — the latest model of a family stays
+     * versionless (e.g. "opus" → "Opus", "gpt-terra" → "Terra", but
+     * "opus-4.7" → "Opus 4.7").
+     */
+    getSummaryModelLabel(selectedModel) {
+        if (!selectedModel) return ''
+        const short = this.getModelShortLabel(selectedModel)
+        const entry = (this.getModelRegistry?.() ?? []).find(e => e.selected_model === selectedModel)
+        if (!entry || entry.latest === true) return short
+        const version = entry.version != null ? String(entry.version) : ''
+        return version && !short.endsWith(version) ? `${short} ${version}` : short
+    }
+
+    /**
+     * Path to the 5-bar effort-level icon for the inline summary. Always five
+     * bars; the first N (matching the effort rank low→max) are brand-coloured,
+     * the rest currentColor. Returns null for an unknown effort value.
+     */
+    getEffortIconSrc(effort) {
+        return SUMMARY_EFFORT_LEVELS.includes(effort) ? `/icons/effort/${effort}.svg` : null
+    }
+
+    /**
+     * Provider-specific suffix appended to the summary model label. Base adds
+     * nothing; Claude appends "[1m]" when context_max is extended.
+     */
+    getSummaryModelSuffix(_state) {
+        return ''
+    }
+
+    /**
+     * Whether the context choice diverges from the default in a way that
+     * should mark the (context-carrying) model part as forced. Base never
+     * surfaces context in the summary, so it never forces.
+     */
+    isSummaryContextForced(_state) {
+        return false
     }
 
     /**
