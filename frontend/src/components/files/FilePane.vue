@@ -1540,7 +1540,7 @@ function goToNextDiff() {
                     >Spacer</wa-button>
                 </template>
             </div>
-            <div v-if="diffMode && !showMarkdownPreview" class="header-center">
+            <div v-if="diffMode && !isPreviewing" class="header-center">
                 <div class="diff-nav-buttons">
                     <wa-button
                         size="small"
@@ -1938,7 +1938,7 @@ function goToNextDiff() {
 
             <!-- CodeMirror diff editor (diff mode) -->
             <DiffEditor
-                v-if="diffMode && showEditor && !showMarkdownPreview && widthMeasured"
+                v-if="diffMode && showEditor && !isPreviewing && widthMeasured"
                 ref="diffEditorRef"
                 :original="originalContent ?? ''"
                 :modified="currentContent"
