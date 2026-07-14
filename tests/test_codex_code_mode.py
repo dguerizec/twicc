@@ -326,6 +326,30 @@ class TestCodeModeKinds:
         assert compute.compute_item_kind(exec_line) == ItemKind.TOOL_USE
         assert compute.compute_item_kind(wait_line) == ItemKind.SYSTEM
 
+    def test_resolved_write_stdin_wrapper_is_an_invisible_write_stdin(self):
+        compute = get_compute()
+        wrapped = orjson.loads(_exec_call_line(
+            "call_stdin",
+            'const r = await tools.write_stdin({"session_id":78213,"chars":""});\ntext(r.output);',
+        ))
+
+        assert compute.compute_item_kind(wrapped) == ItemKind.SYSTEM
+        assert compute.extract_tool_use_entries(
+            wrapped, session_id="test-session",
+        ) == {"call_stdin": "write_stdin"}
+
+    def test_unresolved_write_stdin_wrapper_stays_a_visible_exec(self):
+        compute = get_compute()
+        wrapped = orjson.loads(_exec_call_line(
+            "call_stdin_dynamic",
+            "await tools.write_stdin(buildArgs());",
+        ))
+
+        assert compute.compute_item_kind(wrapped) == ItemKind.TOOL_USE
+        assert compute.extract_tool_use_entries(
+            wrapped, session_id="test-session",
+        ) == {"call_stdin_dynamic": "exec"}
+
 
 class TestCodeModeCompute:
     def test_atomic_completed_exec(self, codex_session):
@@ -362,6 +386,80 @@ class TestCodeModeCompute:
         # chunk flips is_terminated.
         assert links[0].extra is None
         assert json.loads(links[1].extra) == {"is_terminated": True}
+
+    def test_wrapped_write_stdin_and_its_wait_rebind_to_wrapped_exec_command(
+        self, codex_session,
+    ):
+        """Real GPT-5.6 shape: both wrapper layers collapse onto one card."""
+        exec_script = (
+            'const r = await tools.exec_command({"cmd":"npx vite build","yield_time_ms":1000});\n'
+            'text(r.output);\nif (r.session_id) text(`SESSION_ID=${r.session_id}`);'
+        )
+        stdin_script = (
+            'const r = await tools.write_stdin({"session_id":78213,"chars":"",'
+            '"yield_time_ms":10000});\ntext(r.output);'
+        )
+        exec_output = [
+            {"type": "input_text", "text": "Script completed\nWall time 1.2 seconds\nOutput:\n"},
+            {"type": "input_text", "text": "transforming...\nSESSION_ID=78213\n"},
+        ]
+        _create_items(codex_session, [
+            _exec_call_line("call_exec_parent", exec_script),
+            _custom_output_line("call_exec_parent", exec_output),
+            _exec_call_line("call_stdin_wrapper", stdin_script),
+            _custom_output_line(
+                "call_stdin_wrapper",
+                "Script running with cell ID 25\nWall time 10.0 seconds\nOutput:\n",
+            ),
+            _wait_call_line("call_wait_stdin", "25"),
+            _function_output_line("call_wait_stdin", _COMPLETED_ARRAY),
+        ])
+        _run_batch_compute(codex_session)
+
+        wrapped_item = SessionItem.objects.get(session=codex_session, line_num=3)
+        assert wrapped_item.kind == ItemKind.SYSTEM
+        links = list(
+            ToolResultLink.objects.filter(session=codex_session).order_by("tool_result_line_num")
+        )
+        assert [link.tool_use_id for link in links] == [
+            "call_exec_parent", "call_exec_parent", "call_exec_parent",
+        ]
+        assert [link.tool_use_line_num for link in links] == [1, 1, 1]
+        assert [link.tool_name for link in links] == ["exec", "exec", "exec"]
+        assert json.loads(links[0].extra) == {"is_terminated": True}
+        assert links[1].extra is None
+        assert json.loads(links[2].extra) == {"is_terminated": True}
+
+    def test_wrapped_exec_command_wait_can_announce_session_id(self, codex_session):
+        """The parent code cell may need a wait before it yields session_id."""
+        exec_script = (
+            'const r = await tools.exec_command({"cmd":"sleep 60","yield_time_ms":30000});\n'
+            'text(r.output);\nif (r.session_id) text(`SESSION_ID=${r.session_id}`);'
+        )
+        stdin_script = (
+            'const r = await tools.write_stdin({"session_id":7,"chars":""});\ntext(r.output);'
+        )
+        parent_completed = [
+            {"type": "input_text", "text": "Script completed\nWall time 10.1 seconds\nOutput:\n"},
+            {"type": "input_text", "text": "SESSION_ID=7\n"},
+        ]
+        _create_items(codex_session, [
+            _exec_call_line("call_exec_parent", exec_script),
+            _custom_output_line("call_exec_parent", _RUNNING_CELL_2),
+            _wait_call_line("call_wait_parent", "2"),
+            _function_output_line("call_wait_parent", parent_completed),
+            _exec_call_line("call_stdin_wrapper", stdin_script),
+            _custom_output_line("call_stdin_wrapper", _COMPLETED_ARRAY),
+        ])
+        _run_batch_compute(codex_session)
+
+        links = list(
+            ToolResultLink.objects.filter(session=codex_session).order_by("tool_result_line_num")
+        )
+        assert [link.tool_use_id for link in links] == [
+            "call_exec_parent", "call_exec_parent", "call_exec_parent",
+        ]
+        assert [link.tool_result_line_num for link in links] == [2, 4, 6]
 
     def test_failed_script_surfaces_error(self, codex_session):
         failed_output = [
@@ -724,6 +822,119 @@ class TestCodeModeLiveRemap:
             item=stdin_output_item,
         )
         assert remapped == "call_ec_1"
+
+    def test_wrapped_write_stdin_output_remaps_to_wrapped_exec_command_live(
+        self, codex_session,
+    ):
+        exec_script = (
+            'const r = await tools.exec_command({"cmd":"sleep 60"});\n'
+            'text(r.output);\nif (r.session_id) text(`SESSION_ID=${r.session_id}`);'
+        )
+        stdin_script = (
+            'const r = await tools.write_stdin({"session_id":7,"chars":""});\ntext(r.output);'
+        )
+        _create_items(codex_session, [
+            _exec_call_line("call_exec_wrapped", exec_script),
+            _custom_output_line(
+                "call_exec_wrapped",
+                [
+                    {"type": "input_text", "text": "Script completed\nWall time 1.0 seconds\nOutput:\n"},
+                    {"type": "input_text", "text": "SESSION_ID=7\n"},
+                ],
+            ),
+            _exec_call_line("call_stdin_wrapped", stdin_script),
+        ])
+        stdin_output_item = SessionItem.objects.create(
+            session=codex_session,
+            line_num=4,
+            content=_custom_output_line("call_stdin_wrapped", _COMPLETED_ARRAY),
+        )
+
+        remapped = get_compute().remap_tool_result_id_live(
+            orjson.loads(stdin_output_item.content),
+            "call_stdin_wrapped",
+            session_id=codex_session.id,
+            item=stdin_output_item,
+        )
+
+        assert remapped == "call_exec_wrapped"
+
+    def test_wrapped_write_stdin_finds_session_id_from_parent_wait_live(
+        self, codex_session,
+    ):
+        exec_script = (
+            'const r = await tools.exec_command({"cmd":"sleep 60","yield_time_ms":30000});\n'
+            'text(r.output);\nif (r.session_id) text(`SESSION_ID=${r.session_id}`);'
+        )
+        stdin_script = (
+            'const r = await tools.write_stdin({"session_id":7,"chars":""});\ntext(r.output);'
+        )
+        _create_items(codex_session, [
+            _exec_call_line("call_exec_wrapped", exec_script),
+            _custom_output_line("call_exec_wrapped", _RUNNING_CELL_2),
+            _wait_call_line("call_wait_parent", "2"),
+            _function_output_line(
+                "call_wait_parent",
+                [
+                    {"type": "input_text", "text": "Script completed\nWall time 10.1 seconds\nOutput:\n"},
+                    {"type": "input_text", "text": "SESSION_ID=7\n"},
+                ],
+            ),
+            _exec_call_line("call_stdin_wrapped", stdin_script),
+        ])
+        stdin_output_item = SessionItem.objects.create(
+            session=codex_session,
+            line_num=6,
+            content=_custom_output_line("call_stdin_wrapped", _COMPLETED_ARRAY),
+        )
+
+        remapped = get_compute().remap_tool_result_id_live(
+            orjson.loads(stdin_output_item.content),
+            "call_stdin_wrapped",
+            session_id=codex_session.id,
+            item=stdin_output_item,
+        )
+
+        assert remapped == "call_exec_wrapped"
+
+    def test_wait_for_wrapped_write_stdin_remaps_transitively_live(self, codex_session):
+        exec_script = (
+            'const r = await tools.exec_command({"cmd":"sleep 60"});\n'
+            'text(r.output);\nif (r.session_id) text(`SESSION_ID=${r.session_id}`);'
+        )
+        stdin_script = (
+            'const r = await tools.write_stdin({"session_id":7,"chars":""});\ntext(r.output);'
+        )
+        _create_items(codex_session, [
+            _exec_call_line("call_exec_wrapped", exec_script),
+            _custom_output_line(
+                "call_exec_wrapped",
+                [
+                    {"type": "input_text", "text": "Script completed\nWall time 1.0 seconds\nOutput:\n"},
+                    {"type": "input_text", "text": "SESSION_ID=7\n"},
+                ],
+            ),
+            _exec_call_line("call_stdin_wrapped", stdin_script),
+            _custom_output_line(
+                "call_stdin_wrapped",
+                "Script running with cell ID 25\nWall time 10.0 seconds\nOutput:\n",
+            ),
+            _wait_call_line("call_wait_wrapped_stdin", "25"),
+        ])
+        wait_output_item = SessionItem.objects.create(
+            session=codex_session,
+            line_num=6,
+            content=_function_output_line("call_wait_wrapped_stdin", _COMPLETED_ARRAY),
+        )
+
+        remapped = get_compute().remap_tool_result_id_live(
+            orjson.loads(wait_output_item.content),
+            "call_wait_wrapped_stdin",
+            session_id=codex_session.id,
+            item=wait_output_item,
+        )
+
+        assert remapped == "call_exec_wrapped"
 
 
 class TestGetToolResults:

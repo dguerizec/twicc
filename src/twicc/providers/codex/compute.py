@@ -90,7 +90,8 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   per polling write_stdin; for everything else there's a single row
   (plus the matching event_msg.*_end when applicable).
 - Code mode (GPT-5.6+): ``custom_tool_call name=exec`` (JS script) →
-  ``TOOL_USE``; ``function_call name=wait`` → ``SYSTEM`` (via
+  ``TOOL_USE``, except a single resolved nested ``write_stdin`` → ``SYSTEM``
+  and rebound to its nested ``exec_command`` parent; ``function_call name=wait`` → ``SYSTEM`` (via
   :data:`_NON_TOOL_FUNCTION_NAMES`), its output chunks rebound to the
   owning ``exec`` through the cell map — see
   :data:`_CODE_MODE_EXEC_TOOL` and ``code_mode_script.py``.
@@ -349,7 +350,8 @@ _CODE_MODE_WAIT_TOOL = "wait"
 
 # Function-call ``name`` values whose tool_use is bucketed as SYSTEM (no
 # tool card rendered) because the relevant exchange is captured elsewhere.
-# ``write_stdin`` belongs to a previously-spawned ``exec_command`` session;
+# ``write_stdin`` (direct or a single resolved code-mode wrapper) belongs to
+# a previously-spawned ``exec_command`` session;
 # its ``function_call_output`` is rebound to the parent exec_command's
 # ``call_id`` via :meth:`CodexSessionCompute.remap_tool_result_id` so the
 # polled chunks all land on the same ``ToolResultLink`` chain. ``wait``
@@ -780,29 +782,62 @@ def _wait_cell_id_from_payload(payload: dict | None) -> str | None:
     return None
 
 
-def _extract_write_stdin_exec_command_id(parsed_json: dict) -> int | None:
-    """Read ``arguments.session_id`` from a ``write_stdin`` function_call line.
+def _resolved_code_mode_nested_args(payload: dict | None, nested_name: str) -> dict | None:
+    """Return one resolved nested tool's object arguments from an ``exec``.
 
-    Codex stores function arguments as a JSON-encoded **string** on the
-    tool_use line (not a nested object), so we orjson-decode them.
-    The ``session_id`` field is the unified-exec process id (named
-    ``exec_command_id`` everywhere on TwiCC's side). Returns ``None`` for
-    malformed payloads, missing fields, or non-integer ids.
+    Only the unambiguous tier-1 shape qualifies: a code-mode
+    ``custom_tool_call name=exec`` whose script contains exactly one resolved
+    ``tools.<nested_name>({...})`` call. Multi-tool or dynamically-built
+    scripts keep their ordinary ``exec`` semantics.
     """
-    payload = _payload(parsed_json)
+    if (
+        payload is None
+        or payload.get("type") != "custom_tool_call"
+        or payload.get("name") != _CODE_MODE_EXEC_TOOL
+    ):
+        return None
+    calls = parse_code_mode_script(payload.get("input")).calls
+    if len(calls) != 1:
+        return None
+    call = calls[0]
+    if call.name != nested_name or not call.resolved or not isinstance(call.arg, dict):
+        return None
+    return call.arg
+
+
+def _write_stdin_exec_command_id_from_payload(payload: dict | None) -> int | None:
+    """Read the unified-exec id from direct or code-mode ``write_stdin``.
+
+    Pre-5.6 direct calls store a JSON string in ``payload.arguments``. GPT-5.6
+    code mode stores the same object inside the outer ``exec`` JavaScript.
+    """
     if payload is None:
         return None
-    raw_args = payload.get("arguments")
-    if not isinstance(raw_args, str):
-        return None
-    try:
-        args = orjson.loads(raw_args)
-    except orjson.JSONDecodeError:
-        return None
-    if not isinstance(args, dict):
-        return None
-    sid = args.get("session_id")
-    return sid if isinstance(sid, int) else None
+    if payload.get("type") == "function_call" and payload.get("name") == "write_stdin":
+        raw_args = payload.get("arguments")
+        if not isinstance(raw_args, str):
+            return None
+        try:
+            args = orjson.loads(raw_args)
+        except orjson.JSONDecodeError:
+            return None
+        if not isinstance(args, dict):
+            return None
+    else:
+        args = _resolved_code_mode_nested_args(payload, "write_stdin")
+        if args is None:
+            return None
+    session_id = args.get("session_id")
+    return session_id if isinstance(session_id, int) else None
+
+
+def _extract_write_stdin_exec_command_id(parsed_json: dict) -> int | None:
+    """Read the unified-exec id from a direct or code-mode ``write_stdin``.
+
+    The ``session_id`` field is named ``exec_command_id`` everywhere on
+    TwiCC's side. Returns ``None`` for malformed or ambiguous wrappers.
+    """
+    return _write_stdin_exec_command_id_from_payload(_payload(parsed_json))
 
 
 # Codex's ``update_plan`` is the moral equivalent of Claude Code's ``TodoWrite``
@@ -893,6 +928,44 @@ def _qualified_function_call_name(payload: dict) -> str:
     if isinstance(namespace, str) and namespace:
         return f"{namespace}__{name}"
     return name
+
+
+def _tool_use_name(payload: dict) -> str:
+    """Return the effective tool name used by pairing and rendering.
+
+    A tier-1 code-mode wrapper around ``write_stdin`` deliberately adopts the
+    nested name. That puts it on the same invisible/remapped path as the
+    direct pre-5.6 call while every other code-mode script remains ``exec``.
+    """
+    sub_type = payload.get("type")
+    native_name = _NATIVE_TOOL_NAME_BY_SUB_TYPE.get(sub_type)
+    if native_name is not None:
+        return native_name
+    if _write_stdin_exec_command_id_from_payload(payload) is not None:
+        return "write_stdin"
+    return _qualified_function_call_name(payload)
+
+
+_CODE_MODE_EXEC_COMMAND_ID_RE = re.compile(r"(?:^|\n)SESSION_ID=(\d+)(?=\n|$)")
+
+
+def _code_mode_exec_command_id_from_output(output: object) -> int | None:
+    """Extract the nested unified-exec id printed by the canonical wrapper.
+
+    The GPT-5.6 wrapper prints ``SESSION_ID=<id>`` when nested
+    ``exec_command`` returned a background process. The line lives in the
+    code-mode output body, after the ``Script ...`` header.
+    """
+    parsed = parse_code_mode_output(output)
+    if parsed is None:
+        return None
+    matches = list(_CODE_MODE_EXEC_COMMAND_ID_RE.finditer(parsed.body))
+    if not matches:
+        return None
+    try:
+        return int(matches[-1].group(1))
+    except ValueError:
+        return None
 
 
 def _subagent_notification_text(parsed_json: dict) -> str | None:
@@ -1712,47 +1785,47 @@ class CodexSessionCompute(BaseSessionCompute):
                     )
             # Direct apply_patch / MCP end events keep their own call_id.
             return naive_tool_use_id
-        parent_payload = self._lookup_function_call_payload(
+        parent_payload = self._lookup_tool_call_payload(
             session_id, item.line_num, naive_tool_use_id
         )
         if parent_payload is None:
             return naive_tool_use_id
-        parent_name = parent_payload.get("name")
+        parent_name = _tool_use_name(parent_payload)
         if parent_name == _CODE_MODE_WAIT_TOOL:
             cell_id = _wait_cell_id_from_payload(parent_payload)
             if cell_id is None:
                 return naive_tool_use_id
-            return self._lookup_code_cell_call_id(
+            owner_call_id = self._lookup_code_cell_call_id(
                 session_id, item.line_num, cell_id, naive_tool_use_id
+            )
+            # The owning cell can itself be an invisible exec wrapper around
+            # write_stdin. Collapse that intermediate hop to the original
+            # exec_command so the wait's final chunk reaches the visible card.
+            owner_payload = self._lookup_tool_call_payload(
+                session_id, item.line_num, owner_call_id
+            )
+            exec_command_id = _write_stdin_exec_command_id_from_payload(owner_payload)
+            if exec_command_id is None:
+                return owner_call_id
+            return self._lookup_exec_command_call_id(
+                session_id, item.line_num, exec_command_id, owner_call_id
             )
         if parent_name != "write_stdin":
             return naive_tool_use_id
-        raw_args = parent_payload.get("arguments")
-        if not isinstance(raw_args, str):
-            return naive_tool_use_id
-        try:
-            args = orjson.loads(raw_args)
-        except orjson.JSONDecodeError:
-            return naive_tool_use_id
-        if not isinstance(args, dict):
-            return naive_tool_use_id
-        exec_command_id = args.get("session_id")
-        if not isinstance(exec_command_id, int):
+        exec_command_id = _write_stdin_exec_command_id_from_payload(parent_payload)
+        if exec_command_id is None:
             return naive_tool_use_id
         return self._lookup_exec_command_call_id(
             session_id, item.line_num, exec_command_id, naive_tool_use_id
         )
 
-    def _lookup_function_call_payload(
+    def _lookup_tool_call_payload(
         self, session_id: str, max_line_num: int, naive_tool_use_id: str
     ) -> dict | None:
-        """Find the ``function_call`` payload owning ``naive_tool_use_id``.
+        """Find the tool-call payload owning ``naive_tool_use_id``.
 
-        Returns the payload dict of the ``function_call`` line matching
-        the given call_id — the caller branches on its ``name``
-        (``write_stdin`` / ``wait``); anything else (non-function_call
-        tool_uses, or text merely containing the id) yields ``None`` so
-        callers can fall through to identity remap.
+        Direct ``function_call`` and code-mode ``custom_tool_call`` shapes
+        qualify; text merely containing the id is rejected.
         """
         candidates = SessionItem.objects.filter(
             session_id=session_id,
@@ -1769,7 +1842,7 @@ class CodexSessionCompute(BaseSessionCompute):
             payload = _payload(parsed)
             if payload is None:
                 continue
-            if payload.get("type") != "function_call":
+            if payload.get("type") not in _TOOL_CALL_PAYLOAD_TYPES:
                 continue
             if payload.get("call_id") != naive_tool_use_id:
                 continue
@@ -1892,18 +1965,20 @@ class CodexSessionCompute(BaseSessionCompute):
     ) -> str:
         """Resolve the exec_command call_id that owns ``exec_command_id``.
 
-        Searches for the function_call_output line carrying the
-        ``Process running with session ID <exec_command_id>`` marker —
-        that line's ``call_id`` IS the parent exec_command's call_id
-        (Codex routes the response through the same identifier).
+        Searches either a direct output's ``Process running with session ID
+        <id>`` marker or a code-mode output's canonical ``SESSION_ID=<id>``
+        line. The latter is accepted only when its call_id belongs to a
+        tier-1 ``exec`` wrapper around ``exec_command``.
         Returns ``fallback`` when nothing is found, so the live link is
         still created (just under the naive id).
         """
-        marker = f"Process running with session ID {exec_command_id}"
+        direct_marker = f"Process running with session ID {exec_command_id}"
+        code_mode_marker = f"SESSION_ID={exec_command_id}"
         candidates = SessionItem.objects.filter(
             session_id=session_id,
             line_num__lt=max_line_num,
-            content__contains=marker,
+        ).filter(
+            Q(content__contains=direct_marker) | Q(content__contains=code_mode_marker)
         ).order_by('line_num')
         for candidate in candidates.iterator(chunk_size=10):
             try:
@@ -1918,8 +1993,29 @@ class CodexSessionCompute(BaseSessionCompute):
             if payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
                 continue
             call_id = payload.get("call_id")
-            if isinstance(call_id, str) and call_id:
+            if not isinstance(call_id, str) or not call_id:
+                continue
+            output = payload.get("output")
+            if isinstance(output, str) and direct_marker in output:
                 return call_id
+            if _code_mode_exec_command_id_from_output(output) != exec_command_id:
+                continue
+            owner_payload = self._lookup_tool_call_payload(
+                session_id, candidate.line_num, call_id
+            )
+            owner_call_id = call_id
+            if owner_payload is not None and _tool_use_name(owner_payload) == _CODE_MODE_WAIT_TOOL:
+                cell_id = _wait_cell_id_from_payload(owner_payload)
+                if cell_id is not None:
+                    owner_call_id = self._lookup_code_cell_call_id(
+                        session_id, candidate.line_num, cell_id, call_id
+                    )
+                    owner_payload = self._lookup_tool_call_payload(
+                        session_id, candidate.line_num, owner_call_id
+                    )
+            nested_args = _resolved_code_mode_nested_args(owner_payload, "exec_command")
+            if nested_args is not None and isinstance(nested_args.get("cmd"), str):
+                return owner_call_id
         return fallback
 
     def _maintain_exec_command_map(
@@ -1934,8 +2030,8 @@ class CodexSessionCompute(BaseSessionCompute):
         Called from :meth:`analyze_content` for every Codex
         ``function_call_output`` / ``custom_tool_call_output``. Looks up
         the parent tool_use in ``tool_use_map`` to identify
-        exec_command / write_stdin lines and updates the map for the
-        ``exec_command`` side only:
+        direct exec_command / write_stdin lines plus their canonical code-mode
+        wrappers, and updates the map for the ``exec_command`` side only:
 
         - On an exec_command output reporting ``Process running with
           session ID N``, register ``map[N] = call_id`` so future
@@ -1944,6 +2040,8 @@ class CodexSessionCompute(BaseSessionCompute):
           evict any entry that points to this call_id (covers both the
           synchronous one-shot — no entry to evict — and the long-running
           parent's own final poll).
+        - On a code-mode exec_command wrapper (or its wait) printing
+          ``SESSION_ID=N``, register the outer exec call_id under the same map.
 
         write_stdin's contribution to the map is handled in
         :meth:`remap_tool_result_id` instead, so the eviction happens
@@ -1955,7 +2053,30 @@ class CodexSessionCompute(BaseSessionCompute):
         into ``ContentAnalysis.tool_result_error``.
         """
         parent = tool_use_map.get(call_id)
-        if parent is None or parent.tool_name not in _EXEC_COMMAND_TOOLS:
+        if parent is None:
+            return None
+
+        # GPT-5.6's canonical nested exec_command wrapper prints the
+        # background process id as ``SESSION_ID=N`` in the outer code-mode
+        # output. Register it against the outer exec call_id so a later
+        # JavaScript-wrapped write_stdin can reuse the native remap path.
+        parent_call_id = call_id
+        parent_payload = _payload(parent.parsed_json)
+        if parent.tool_name == _CODE_MODE_WAIT_TOOL:
+            cell_id = _wait_cell_id_from_payload(parent_payload)
+            owner_call_id = self._cell_map(session_id).get(cell_id) if cell_id is not None else None
+            owner = tool_use_map.get(owner_call_id) if owner_call_id is not None else None
+            if owner is not None:
+                parent_call_id = owner_call_id
+                parent_payload = _payload(owner.parsed_json)
+        nested_exec_args = _resolved_code_mode_nested_args(parent_payload, "exec_command")
+        if nested_exec_args is not None and isinstance(nested_exec_args.get("cmd"), str):
+            exec_command_id = _code_mode_exec_command_id_from_output(payload.get("output"))
+            if exec_command_id is not None:
+                self._proc_map(session_id)[exec_command_id] = parent_call_id
+            return None
+
+        if parent.tool_name not in _EXEC_COMMAND_TOOLS:
             return None
         output = payload.get("output", "")
         if not isinstance(output, str):
@@ -1979,9 +2100,9 @@ class CodexSessionCompute(BaseSessionCompute):
         """Code-mode counterpart of :meth:`_maintain_exec_command_map`.
 
         Called from :meth:`analyze_content` for every Codex tool result.
-        Only acts when the parent tool_use is a code-mode ``exec``
-        (custom_tool_call) or ``wait`` (function_call); updates the cell
-        map for the ``exec`` side only:
+        Only acts when the payload owning the result is a code-mode ``exec``
+        (including one effectively named ``write_stdin``) or ``wait``;
+        updates the cell map for the ``exec`` side only:
 
         - On an exec output reporting ``Script running with cell ID
           <id>``, register ``map[<id>] = call_id`` so future ``wait``
@@ -1998,16 +2119,29 @@ class CodexSessionCompute(BaseSessionCompute):
         ``ContentAnalysis.tool_result_error``.
         """
         parent = tool_use_map.get(call_id)
-        if parent is None or parent.tool_name not in (
-            _CODE_MODE_EXEC_TOOL, _CODE_MODE_WAIT_TOOL,
-        ):
+        if parent is None:
+            return None
+        parent_payload = _payload(parent.parsed_json)
+        is_code_mode_exec = (
+            parent_payload is not None
+            and parent_payload.get("type") == "custom_tool_call"
+            and parent_payload.get("name") == _CODE_MODE_EXEC_TOOL
+        )
+        if not is_code_mode_exec and parent.tool_name != _CODE_MODE_WAIT_TOOL:
             return None
         parsed = parse_code_mode_output(payload.get("output"))
         if parsed is None:
             return None
-        if parent.tool_name == _CODE_MODE_EXEC_TOOL:
+        if is_code_mode_exec:
             if parsed.status == "running" and parsed.cell_id is not None:
-                self._cell_map(session_id)[parsed.cell_id] = call_id
+                # A wrapped write_stdin may itself outlive the code cell's
+                # yield window. Point its later wait chunks straight at the
+                # original exec_command rather than at the invisible wrapper.
+                target_call_id = call_id
+                exec_command_id = _write_stdin_exec_command_id_from_payload(parent_payload)
+                if exec_command_id is not None:
+                    target_call_id = self._proc_map(session_id).get(exec_command_id, call_id)
+                self._cell_map(session_id)[parsed.cell_id] = target_call_id
             elif parsed.status != "running":
                 self._release_code_cell_for_call(session_id, call_id)
         if parsed.status == "failed":
@@ -2231,6 +2365,11 @@ class CodexSessionCompute(BaseSessionCompute):
         if wrapper_type == _TYPE_RESPONSE_ITEM and payload is not None:
             sub_type = payload.get("type")
             if sub_type in _TOOL_CALL_PAYLOAD_TYPES:
+                # A tier-1 code-mode wrapper around write_stdin is the same
+                # polling operation as the direct function_call: no separate
+                # card, and its results are rebound to the exec_command parent.
+                if _write_stdin_exec_command_id_from_payload(payload) is not None:
+                    return ItemKind.SYSTEM
                 # ``write_stdin`` doesn't get its own tool card —
                 # its result chunks are rebound to the parent
                 # ``exec_command``'s ``ToolResultLink`` chain by
@@ -2573,7 +2712,8 @@ class CodexSessionCompute(BaseSessionCompute):
         # One tool_use per JSONL line in Codex (no nesting like Claude),
         # so the returned mapping has at most one entry. Keyed by the
         # OpenAI ``call_id`` — that's what the matching output also carries.
-        # ``write_stdin`` is included here even though its
+        # Direct and single-resolved code-mode ``write_stdin`` calls are
+        # included here even though their
         # :meth:`compute_item_kind` returns ``SYSTEM`` (no tool card):
         # we still need its call_id in ``tool_use_map`` so
         # :meth:`remap_tool_result_id` can recognise its
@@ -2595,10 +2735,7 @@ class CodexSessionCompute(BaseSessionCompute):
         call_id = payload.get("call_id")
         if not isinstance(call_id, str) or not call_id:
             return _EMPTY_TOOL_USE_ENTRIES
-        native_name = _NATIVE_TOOL_NAME_BY_SUB_TYPE.get(sub_type)
-        if native_name is not None:
-            return {call_id: native_name}
-        return {call_id: _qualified_function_call_name(payload)}
+        return {call_id: _tool_use_name(payload)}
 
     def extract_tool_result_info(
         self,
@@ -3474,11 +3611,7 @@ class CodexSessionCompute(BaseSessionCompute):
                     and payload.get("name") in _IGNORED_FUNCTION_NAMES
                 ):
                     return _EMPTY_ANALYSIS
-                native_name = _NATIVE_TOOL_NAME_BY_SUB_TYPE.get(sub_type)
-                if native_name is not None:
-                    name = native_name
-                else:
-                    name = _qualified_function_call_name(payload)
+                name = _tool_use_name(payload)
                 tool_use_entries = {call_id: name}
                 # Register code-mode execs whose script declares a nested
                 # apply_patch or MCP call, so the later orphan

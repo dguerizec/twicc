@@ -124,7 +124,8 @@ Failure of any step degrades to tier 2/3, never throws. The extractor is pure an
 - `exec_command` — arg object with `cmd` (string), optional `workdir`. `cmd` feeds the existing shell heuristics.
 - `apply_patch` — arg is the patch envelope string (v4a `*** Begin Patch` grammar), feeds the existing patch parsing.
 - `mcp__*` — recognized and listed in summaries (tier 2); dedicated MCP rendering for tier 1 is optional polish, not required initially.
-- everything else (incl. `write_stdin` inside scripts, `view_image`, …) — listed by name only.
+- `write_stdin` — a single resolved wrapper with an integer `session_id` is invisible and rebound to the owning `exec_command`, including a transitive `wait` when the wrapper itself outlives its code cell.
+- everything else (`view_image`, unresolved/multi-tool `write_stdin` scripts, …) — listed by name only.
 
 ## 6. Backend changes (`src/twicc/providers/codex/compute.py`)
 
@@ -149,6 +150,8 @@ Wired into `extract_tool_result_info`: the current `else: error_text = None` bra
 - `compute_link_extra` gains the code-mode branch: `is_terminated` false while the last chained output is `running`, true on a final status — the existing spinner logic then works unchanged.
 
 This exactly reuses the chain design already proven for `exec_command`/`write_stdin`; `exec` joins a new `_CODE_MODE_TOOLS`-style constant rather than `_SHELL_FAMILY_TOOLS` (its input is JS, not a shell command — keeping the sets separate avoids accidental reuse of shell-only paths).
+
+The same chain also collapses a canonical JavaScript `write_stdin` wrapper onto the JavaScript `exec_command` that printed `SESSION_ID=<id>`. If the `write_stdin` wrapper reports `Script running with cell ID <id>`, the later native `wait` output is rebound transitively to that original shell card rather than to the invisible intermediate wrapper.
 
 ### 6.3 Doc-edit / plan detection
 
