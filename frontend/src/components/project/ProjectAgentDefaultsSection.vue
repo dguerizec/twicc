@@ -25,6 +25,7 @@ import { useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
 import { ancestorChain } from '../../utils/projectAgentDefaults'
 import { formatBundleSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
+import { effortIconSrc } from '../../utils/effortIcon'
 import TabBar from '../ui/TabBar.vue'
 
 const props = defineProps({
@@ -128,6 +129,13 @@ function isEnabled(provider) {
 
 function toSentinel(value) {
     return value === null || value === undefined ? DEFAULT_SENTINEL : String(value)
+}
+// Effort-level icon for the closed select of the effort field — shown only when
+// a concrete effort is forced (not "Inherit").
+function effortSelectIcon(provider, field) {
+    if (field !== 'effort') return null
+    if (toSentinel(fieldValue(provider, field)) === DEFAULT_SENTINEL) return null
+    return effortIconSrc(fieldValue(provider, field))
 }
 function fromSentinel(provider, field, raw) {
     if (raw === DEFAULT_SENTINEL) return null
@@ -372,6 +380,12 @@ defineExpose({ getChangedFields, reset: initLocal })
                             :value.prop="toSentinel(fieldValue(p.value, field))"
                             @change="setField(p.value, field, $event.target.value)"
                         >
+                            <wa-icon
+                                v-if="effortSelectIcon(p.value, field)"
+                                slot="start"
+                                auto-width
+                                :src="effortSelectIcon(p.value, field)"
+                            ></wa-icon>
                             <wa-option :value="DEFAULT_SENTINEL">Inherit</wa-option>
                             <small class="ad-group-label">Force to:</small>
                             <wa-option
@@ -380,6 +394,12 @@ defineExpose({ getChangedFields, reset: initLocal })
                                 :value="String(opt.value)"
                                 :label="opt.label"
                             >
+                                <wa-icon
+                                    v-if="field === 'effort' && effortIconSrc(opt.value)"
+                                    auto-width
+                                    :src="effortIconSrc(opt.value)"
+                                    class="ad-effort-option-icon"
+                                ></wa-icon>
                                 <span>{{ opt.label }}</span>
                                 <span v-if="opt.description" class="ad-option-description">{{ opt.description }}</span>
                             </wa-option>
@@ -464,6 +484,11 @@ defineExpose({ getChangedFields, reset: initLocal })
     color: var(--wa-color-text-quiet);
     font-size: var(--wa-font-size-xs);
     font-style: italic;
+}
+
+.ad-effort-option-icon {
+    margin-right: 0.5em;
+    vertical-align: -0.15em;
 }
 
 .ad-option-description {
