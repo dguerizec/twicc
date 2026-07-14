@@ -27,6 +27,65 @@ export function scoreKey(provider, model, effort) {
     return `${provider} ${model} ${effort}`
 }
 
+/**
+ * Human-facing detail rows for a matrix cell's "Benchmark data" panel: our own
+ * computed ``score`` (the cell's number) first, then the metrics derived from the
+ * raw benchmark row (pass rates are fractions in 0..1). Rates render as integer
+ * %, costs as $ with 2 decimals, time in minutes with 1 decimal; a missing metric
+ * or a zero divisor renders as an em dash.
+ *
+ * @param {{pass_at_1:number, pass_at_4:number, mean_cost_usd:number,
+ *          median_duration_seconds:number}} row
+ * @param {number|null} [score] the cell's computed score (0..100).
+ * @returns {{label:string, value:string, description:string}[]}
+ */
+export function formatBenchmarkDetails(row, score = null) {
+    const DASH = '—'
+    const pct = (x) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : DASH)
+    const usd = (x) => (Number.isFinite(x) ? `$${x.toFixed(2)}` : DASH)
+    const p1 = row?.pass_at_1
+    const p4 = row?.pass_at_4
+    const cost = row?.mean_cost_usd
+    const dur = row?.median_duration_seconds
+    return [
+        {
+            label: 'Score',
+            value: score != null ? String(score) : DASH,
+            description: 'Based on our own calculation from the metrics below.',
+        },
+        {
+            label: 'Success rate',
+            value: pct(p1),
+            description: 'How often a single attempt solves the task.',
+        },
+        {
+            label: 'Coverage',
+            value: pct(p4),
+            description: "Share of tasks solved at least once across the benchmark's 4 attempts.",
+        },
+        {
+            label: 'Consistency',
+            value: (Number.isFinite(p1) && Number.isFinite(p4) && p4 > 0) ? pct(p1 / p4) : DASH,
+            description: 'On the tasks it can solve, how reliably it lands them per attempt.',
+        },
+        {
+            label: 'Cost / task',
+            value: usd(cost),
+            description: 'Average cost of one attempt.',
+        },
+        {
+            label: 'Cost per solve',
+            value: (Number.isFinite(cost) && Number.isFinite(p1) && p1 > 0) ? usd(cost / p1) : DASH,
+            description: 'Expected cost to actually get one task solved — it pays for failed attempts too, so it runs higher than Cost / task. Lower is better.',
+        },
+        {
+            label: 'Typical time',
+            value: Number.isFinite(dur) ? `${(dur / 60).toFixed(1)} min` : DASH,
+            description: 'Median duration of one attempt.',
+        },
+    ]
+}
+
 // Clamp a note into [EPS, 1] so its natural log stays finite and negative.
 function clampNote(x) {
     return Math.max(EPS, Math.min(1, x))

@@ -7,19 +7,35 @@
 // sub-matrix, with a divider between providers. Disabled cells are efforts the
 // (provider, model) pair doesn't support; a dot marks the default cell; the
 // current selection is highlighted; "Show older models" reveals non-latest rows.
-import { computed, ref } from 'vue'
+import { computed, ref, useId, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { useSettingsStore } from '../../stores/settings'
+import HoverInfoPanel from '../ui/HoverInfoPanel.vue'
+import { formatBenchmarkDetails } from '../../utils/benchmarkScores'
 
 const props = defineProps({
     // [{ provider, label, icon, isCurrent, rows: [{ model, label, isLatest,
-    //    cells: [{ effort, enabled, selected, isDefault, score }] }] }]
+    //    cells: [{ effort, enabled, selected, isDefault, score, benchmark }] }] }]
     // score is the benchmark score (integer 0..100) or null when there's no
-    // benchmark data for that (model, effort).
+    // benchmark data for that (model, effort); benchmark is the raw benchmark row
+    // (or null) feeding the per-cell details tooltip.
     blocks: { type: Array, default: () => [] },
     // [{ effort, label }] — shared columns across every block
     effortColumns: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits(['select'])
+
+// Unique prefix for per-cell tooltip anchor ids (several matrices may coexist —
+// the message popover and the Settings panel).
+const uid = useId()
+
+// Stable id shared by a cell's button and its "Benchmark data" tooltip. Model
+// aliases carry dots (e.g. "opus-4.5"); neutralise anything outside [A-Za-z0-9_-]
+// so the id stays safe for wa-tooltip's ``for`` anchor resolution.
+function cellId(provider, model, effort) {
+    const key = `${provider}-${model}-${effort}`.replace(/[^A-Za-z0-9_-]/g, '_')
+    return `${uid}-cell-${key}`
+}
 
 const showOldModels = ref(false)
 
@@ -78,14 +94,228 @@ const gridStyle = computed(() => ({
 }))
 
 function onCellClick(provider, model, cell) {
+    // Swallow the click a long-press synthesised, so long-press (which opens the
+    // panel) never also selects the cell.
+    if (longPressFired) { longPressFired = false; return }
     if (!cell.enabled) return
     emit('select', { provider, model, effort: cell.effort })
 }
+
+// One "Benchmark data" tooltip per visible enabled cell: the six derived metrics
+// when the benchmark covers the (model, effort), else a short "no data" note (the
+// "?" cells). Disabled (unsupported-effort) cells get none. Built off ``layout``
+// so it only covers the currently-rendered cells.
+const cellTips = computed(() => {
+    const effortLabel = (effort) => props.effortColumns.find(c => c.effort === effort)?.label ?? String(effort)
+    const tips = []
+    for (const block of layout.value.blocks) {
+        for (const r of block.rows) {
+            const modelLabel = [r.name, r.version].filter(Boolean).join(' ')
+            for (const cell of r.cells) {
+                if (!cell.enabled) continue
+                const hasData = cell.score != null && !!cell.benchmark
+                tips.push({
+                    id: cellId(block.provider, r.model, cell.effort),
+                    title: `Benchmark data for ${modelLabel} × ${effortLabel(cell.effort)}`,
+                    details: hasData ? formatBenchmarkDetails(cell.benchmark, cell.score) : null,
+                })
+            }
+        }
+    }
+    return tips
+})
+
+const tipsById = computed(() => {
+    const m = new Map()
+    for (const t of cellTips.value) m.set(t.id, t)
+    return m
+})
+
+// ─── Floating "Benchmark data" panel ──────────────────────────────────────
+// One persistent HoverInfoPanel shows the hovered / long-pressed cell's details.
+// Desktop: it follows the pointer (always below it). Touch: long-press toggles it
+// below the cell. All the geometry lives here; the panel just renders at left/top.
+const settingsStore = useSettingsStore()
+const gridRef = ref(null)
+const panelRef = ref(null)
+
+const activeTip = ref(null)
+const panelLeft = ref(0)
+const panelTop = ref(0)
+
+const PANEL_OFFSET = 14 // gap between the pointer and the panel (cursor mode)
+const VIEWPORT_MARGIN = 8
+
+// Place the panel: prefer RIGHT + BELOW; flip to LEFT / ABOVE only when that side
+// would run past the visible edge (so "right + below by default" holds while
+// there's room, and it never gets cut off). Clamp inside the viewport either way.
+// The anchor carries both candidates per axis:
+//   leftIfRight  — panel left when placed to the right
+//   rightIfLeft  — x its RIGHT edge aligns to when flipped left
+//   topIfBelow   — panel top when placed below
+//   bottomIfAbove— y its BOTTOM edge aligns to when flipped above
+let lastAnchor = null
+
+function positionPanel(anchor) {
+    lastAnchor = anchor
+    applyPosition()
+}
+
+// Recompute from the stored anchor with the panel's CURRENT measured size (or a
+// rough fallback before the first paint). Re-run on nextTick after a show so the
+// first frame — and every touch long-press — lands with the real dimensions.
+function applyPosition() {
+    if (!lastAnchor) return
+    const { leftIfRight, rightIfLeft, topIfBelow, bottomIfAbove } = lastAnchor
+    const el = panelRef.value?.rootEl
+    const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+    const w = el?.offsetWidth || 20 * rootPx
+    const h = el?.offsetHeight || (activeTip.value?.details ? 15 * rootPx : 4.5 * rootPx)
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const M = VIEWPORT_MARGIN
+
+    let left = (leftIfRight + w <= vw - M) ? leftIfRight : (rightIfLeft - w)
+    left = Math.max(M, Math.min(left, vw - w - M))
+    let top = (topIfBelow + h <= vh - M) ? topIfBelow : (bottomIfAbove - h)
+    top = Math.max(M, Math.min(top, vh - h - M))
+
+    panelLeft.value = left
+    panelTop.value = top
+}
+
+function tipForEvent(e) {
+    const btn = e.target.closest?.('.matrix-cell')
+    const id = btn?.dataset.tipId
+    return { btn: id ? btn : null, tip: id ? (tipsById.value.get(id) ?? null) : null }
+}
+
+// Small hide delay: crossing the gap between cells (or a header) briefly lands on
+// a non-cell — without the delay the panel would blink off then on. Re-entering
+// any cell within the delay cancels the pending hide.
+let hideTimer = null
+function scheduleHide() {
+    if (hideTimer) return
+    hideTimer = setTimeout(() => { hideTimer = null; activeTip.value = null }, 120)
+}
+function cancelHide() {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null }
+}
+
+// ── Desktop: the panel follows the pointer ────────────────────────────────
+function onGridPointerMove(e) {
+    if (settingsStore.isTouchDevice) return
+    const { tip } = tipForEvent(e)
+    if (!tip) { scheduleHide(); return }
+    cancelHide()
+    activeTip.value = tip
+    positionPanel({
+        leftIfRight: e.clientX + PANEL_OFFSET,
+        rightIfLeft: e.clientX - PANEL_OFFSET,
+        topIfBelow: e.clientY + PANEL_OFFSET,
+        bottomIfAbove: e.clientY - PANEL_OFFSET,
+    })
+}
+
+function onGridPointerLeave() {
+    if (settingsStore.isTouchDevice) return
+    scheduleHide()
+}
+
+// ── Touch: long-press toggles an anchored panel ───────────────────────────
+let lpTimer = null
+let lpStart = null
+let lpTarget = null
+let longPressFired = false
+
+function clearLongPress() {
+    if (lpTimer) { clearTimeout(lpTimer); lpTimer = null }
+    lpStart = null
+    lpTarget = null
+}
+
+function onTouchStart(e) {
+    longPressFired = false
+    const { btn, tip } = tipForEvent(e)
+    if (!tip) return
+    const t = e.touches[0]
+    lpStart = { x: t.clientX, y: t.clientY }
+    lpTarget = { btn, tip }
+    clearTimeout(lpTimer)
+    lpTimer = setTimeout(fireLongPress, 450)
+}
+
+function onTouchMove(e) {
+    if (!lpStart) return
+    const t = e.touches[0]
+    if (Math.abs(t.clientX - lpStart.x) > 10 || Math.abs(t.clientY - lpStart.y) > 10) clearLongPress()
+}
+
+function onTouchEnd() {
+    clearLongPress()
+}
+
+function fireLongPress() {
+    lpTimer = null
+    const target = lpTarget
+    if (!target?.tip) return
+    longPressFired = true // swallow the ensuing click so the cell isn't selected
+    // A long-press on the cell that already owns the panel closes it.
+    if (activeTip.value?.id === target.tip.id) { activeTip.value = null; return }
+    const r = target.btn.getBoundingClientRect()
+    activeTip.value = target.tip
+    positionPanel({
+        leftIfRight: r.left,
+        rightIfLeft: r.right,
+        topIfBelow: r.bottom + 8,
+        bottomIfAbove: r.top - 8,
+    })
+}
+
+// Close an open (touch) panel when tapping outside the matrix, or on any scroll.
+function onDocPointerDown(e) {
+    if (activeTip.value && !gridRef.value?.contains(e.target)) activeTip.value = null
+}
+function onScroll() {
+    if (activeTip.value) activeTip.value = null
+}
+
+// Keep the shown tip pointing at the fresh object after a recompute (weights /
+// show-older toggle); drop it if its cell is gone.
+watch(cellTips, () => {
+    if (activeTip.value) activeTip.value = tipsById.value.get(activeTip.value.id) ?? null
+})
+
+// Re-place with the real measured size once the (new) content has painted — the
+// first show and every touch long-press otherwise use the fallback estimate.
+watch(activeTip, (t) => { if (t) nextTick(applyPosition) })
+
+onMounted(() => {
+    document.addEventListener('pointerdown', onDocPointerDown, true)
+    window.addEventListener('scroll', onScroll, true)
+})
+onBeforeUnmount(() => {
+    clearLongPress()
+    cancelHide()
+    document.removeEventListener('pointerdown', onDocPointerDown, true)
+    window.removeEventListener('scroll', onScroll, true)
+})
 </script>
 
 <template>
     <div class="matrix">
-        <div class="matrix-grid" :style="gridStyle">
+        <div
+            class="matrix-grid"
+            ref="gridRef"
+            :style="gridStyle"
+            @mousemove="onGridPointerMove"
+            @mouseleave="onGridPointerLeave"
+            @touchstart.passive="onTouchStart"
+            @touchmove.passive="onTouchMove"
+            @touchend="onTouchEnd"
+            @touchcancel="onTouchEnd"
+            @contextmenu.prevent
+        >
             <!-- Effort header row (col 1-2 empty corner, efforts from col 3) -->
             <div class="matrix-corner" style="grid-column: 1 / 3; grid-row: 1"></div>
             <div
@@ -129,6 +359,7 @@ function onCellClick(provider, model, cell) {
                     <button
                         v-for="cell in r.cells"
                         :key="cell.effort"
+                        :data-tip-id="cell.enabled ? cellId(block.provider, r.model, cell.effort) : undefined"
                         type="button"
                         class="matrix-cell"
                         :class="{ selected: cell.selected, unavailable: !cell.enabled, 'top-solid': cell.borderStyle === 'solid', 'top-dashed': cell.borderStyle === 'dashed', 'score-high': cell.enabled && cell.score != null && cell.score > 80 }"
@@ -162,6 +393,30 @@ function onCellClick(provider, model, cell) {
                 <span class="matrix-legend-item"><wa-icon class="matrix-legend-check" name="check"></wa-icon> selected</span>
             </span>
         </div>
+
+        <!-- Single floating "Benchmark data" panel for the hovered / long-pressed
+             cell. Teleported to <body> (see HoverInfoPanel); the geometry lives in
+             this component's script. -->
+        <HoverInfoPanel
+            ref="panelRef"
+            :visible="activeTip != null"
+            :left="panelLeft"
+            :top="panelTop"
+        >
+            <div v-if="activeTip" class="cell-tip">
+                <div class="cell-tip-title">{{ activeTip.title }}</div>
+                <template v-if="activeTip.details">
+                    <div v-for="d in activeTip.details" :key="d.label" class="cell-tip-row">
+                        <div class="cell-tip-metric">
+                            <span class="cell-tip-label">{{ d.label }}</span>
+                            <span class="cell-tip-value">{{ d.value }}</span>
+                        </div>
+                        <div class="cell-tip-desc">{{ d.description }}</div>
+                    </div>
+                </template>
+                <div v-else class="cell-tip-empty">The benchmark provides no data for this model &times; effort.</div>
+            </div>
+        </HoverInfoPanel>
     </div>
 </template>
 
@@ -387,5 +642,58 @@ function onCellClick(provider, model, cell) {
 .matrix-legend-check {
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-normal);
+}
+
+/* ─── "Benchmark data" panel content (slotted into HoverInfoPanel) ──────── */
+.cell-tip {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
+    text-align: left;
+}
+
+.cell-tip-title {
+    font-weight: var(--wa-font-weight-bold);
+    font-size: var(--wa-font-size-s);
+    margin-bottom: var(--wa-space-3xs);
+}
+
+.cell-tip-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-3xs);
+}
+
+/* Label left, value right (tabular, bold). */
+.cell-tip-metric {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--wa-space-l);
+    font-size: var(--wa-font-size-s);
+    line-height: 1.2;
+}
+
+/* Both the metric label and its value are bolded to stand out from the muted
+   description line below. */
+.cell-tip-label {
+    font-weight: var(--wa-font-weight-bold);
+}
+
+.cell-tip-value {
+    font-variant-numeric: tabular-nums;
+    font-weight: var(--wa-font-weight-bold);
+    white-space: nowrap;
+}
+
+.cell-tip-desc {
+    font-size: var(--wa-font-size-xs);
+    opacity: 0.75;
+    line-height: 1.25;
+}
+
+.cell-tip-empty {
+    font-size: var(--wa-font-size-s);
+    line-height: 1.3;
 }
 </style>

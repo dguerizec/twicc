@@ -34,6 +34,16 @@ export const useBenchmarksStore = defineStore('benchmarks', {
             return (provider, model, effort) =>
                 this.scoreLookup.get(scoreKey(provider, model, effort)) ?? null
         },
+
+        /** Raw benchmark row for a (provider, model, effort) triple, or null when
+         *  absent. ``model`` is the internal SDK ``full_name`` (as carried on the
+         *  model-registry entry). Powers the matrix cell's details tooltip. */
+        getRow() {
+            return (provider, model, effort) =>
+                this.rows.find(
+                    r => r.provider === provider && r.model === model && r.reasoning_effort === effort,
+                ) ?? null
+        },
     },
 
     actions: {

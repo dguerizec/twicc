@@ -81,6 +81,9 @@ export function buildMatrixBlocks({
                     // Benchmark score joins on the internal SDK id (full_name),
                     // not the picker alias (selected_model). null -> "?".
                     score: benchmarksStore.getScore(provider, entry.full_name, effort),
+                    // Raw benchmark row (same join) for the cell's details
+                    // tooltip; null when the benchmark doesn't cover the pair.
+                    benchmark: benchmarksStore.getRow(provider, entry.full_name, effort),
                 }
             })
             // Split name + version into two grid spans. The short label carries
