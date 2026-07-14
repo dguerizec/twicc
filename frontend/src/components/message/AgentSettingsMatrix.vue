@@ -498,8 +498,11 @@ onBeforeUnmount(() => {
 .matrix-cell {
     /* Shared foreground for the score, the selected check and the default dot.
        Flipped to the surface color above score 80 in light mode only (see
-       .score-high) so it stays readable on the strong fill. */
+       .score-high) so it stays readable on the strong fill. --cell-check-fg is
+       its counter-color, used inside the selected-check badge (disc = fg,
+       glyph = counter) so the badge reads on any fill. */
     --cell-fg: var(--wa-color-text-normal);
+    --cell-check-fg: var(--wa-color-surface-default);
     position: relative;
     box-sizing: border-box;
     display: flex;
@@ -521,6 +524,7 @@ onBeforeUnmount(() => {
    text-normal already reads on the fill, so we leave it (no inversion). */
 :root:not(.wa-dark) .matrix-cell.score-high {
     --cell-fg: var(--wa-color-surface-default);
+    --cell-check-fg: var(--wa-color-text-normal);
 }
 
 /* Benchmark score (integer 0..100, or "?" when there's no benchmark data). */
@@ -564,17 +568,28 @@ onBeforeUnmount(() => {
     border-style: dashed;
 }
 
-/* Selection marker — green check in the bottom-right corner (score-sized).
-   The selection no longer draws a border: that's reserved for later use. */
+/* Selection marker — a badge straddling the bottom-right corner: a filled disc
+   in the cell's foreground color with the check in the counter-color, plus a
+   surface-colored ring to detach it from the fill. Stays legible whatever the
+   score fill or the user's brand color. */
 .matrix-cell-check {
     position: absolute;
-    right: 3px;
-    bottom: 2px;
+    right: -4px;
+    bottom: -4px;
     display: inline-flex;
-    font-size: var(--wa-font-size-s);
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--cell-fg);
+    color: var(--cell-check-fg);
+    font-size: 9px;
     line-height: 1;
-    color: var(--cell-fg);
-    transform: translateX(3px);
+    border: 1px solid var(--wa-color-surface-default);
+    box-sizing: content-box;
+    z-index: 1;
+    pointer-events: none;
 }
 
 .matrix-cell.unavailable {
