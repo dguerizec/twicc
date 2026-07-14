@@ -835,8 +835,10 @@ export class BaseProviderHelpers {
      *
      * Layout: model and effort collapse into one ``{model} × {effort}`` part
      * (the model uses the compact matrix label, see ``getSummaryModelLabel``),
-     * then thinking and Chrome MCP as icons, permission mode as text, and
-     * fast mode only when on. ``context_max`` is never shown as its own part;
+     * immediately followed by the thinking icon (grouped with no separator, as
+     * model + effort + thinking read as one cluster), then permission mode as
+     * text, and fast mode / Chrome MCP as icons when applicable.
+     * ``context_max`` is never shown as its own part;
      * providers fold it into the model label via ``getSummaryModelSuffix``
      * (Claude's "[1m]"). Providers tweak the model rendering through the
      * ``getSummaryModel*`` hooks rather than overriding this whole method.
@@ -865,6 +867,15 @@ export class BaseProviderHelpers {
             parts.push({ text: modelText, forced: modelForced })
         }
 
+        // Thinking — grouped with model + effort (no separator before it), as
+        // the three form one "how the model reasons" cluster. Rendered as a
+        // coloured icon (brain-bulb) from AGENT_SETTING_ICONS, dimmed + struck
+        // when off. ``groupWithPrevious`` suppresses the summary separator.
+        if (this.supportsAgentSetting('thinking_enabled')) {
+            const on = eff('thinking_enabled') === true
+            parts.push({ field: 'thinking_enabled', on, forced: forced('thinking_enabled'), label: on ? 'Thinking' : 'No thinking', groupWithPrevious: true })
+        }
+
         // Permission mode — label prefixed by the coloured mode glyph (same
         // icon/tint as the permission selects, from getChoiceIcon).
         if (this.supportsAgentSetting('permission_mode')) {
@@ -878,15 +889,9 @@ export class BaseProviderHelpers {
             })
         }
 
-        // The boolean flags render as a grouped icon cluster (brain-bulb,
-        // bolt, chrome), coloured when on and dimmed + struck when off. The glyph
+        // The remaining boolean flags render as a grouped icon cluster (bolt,
+        // chrome), coloured when on and dimmed + struck when off. The glyph
         // and tint per field live in AGENT_SETTING_ICONS; parts carry only ``field``.
-
-        // Thinking.
-        if (this.supportsAgentSetting('thinking_enabled')) {
-            const on = eff('thinking_enabled') === true
-            parts.push({ field: 'thinking_enabled', on, forced: forced('thinking_enabled'), label: on ? 'Thinking' : 'No thinking' })
-        }
 
         // Fast mode — only when on.
         if (this.supportsAgentSetting('fast_mode') && eff('fast_mode')) {

@@ -46,9 +46,12 @@ const uid = useId()
 const iconId = (i) => `${uid}-icon-${i}`
 
 // Suppress the "·" separator between two adjacent icon parts so the boolean
-// flags read as one grouped cluster; text boundaries keep their dot.
+// flags read as one grouped cluster; text boundaries keep their dot. A part may
+// also opt out explicitly via ``groupWithPrevious`` (thinking, glued to the
+// model + effort cluster).
 function showSeparator(i) {
     if (!i) return false
+    if (props.parts[i].groupWithPrevious) return false
     return !(props.parts[i].field && props.parts[i - 1]?.field)
 }
 </script>
