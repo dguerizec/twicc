@@ -14,6 +14,29 @@ export function isRenderableArtifactPath(path) {
 // source of truth so it can be swapped in one place.
 export const ARTIFACT_ICON = 'shapes'
 
+/**
+ * Build the sidebar destination for a bookmarked artifact while preserving the
+ * current project/all-projects frame and active workspace filter.
+ *
+ * @param {{ id: string|number, project_id: string }} bookmark
+ * @param {import('vue-router').RouteLocationNormalized} route
+ * @returns {import('vue-router').RouteLocationRaw}
+ */
+export function artifactBookmarkRouteLocation(bookmark, route) {
+    const isAllProjects = route.name?.startsWith('projects-')
+    const location = isAllProjects
+        ? { name: 'projects-artifacts', params: { bookmarkId: String(bookmark.id) } }
+        : {
+            name: 'project-artifacts',
+            params: {
+                projectId: route.params.projectId || bookmark.project_id,
+                bookmarkId: String(bookmark.id),
+            },
+        }
+    if (route.query.workspace) location.query = { workspace: route.query.workspace }
+    return location
+}
+
 // File-type icon (Font Awesome free, solid) for an artifact extension.
 const EXT_ICON = {
     md: 'file-lines', markdown: 'file-lines',

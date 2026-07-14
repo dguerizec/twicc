@@ -6,19 +6,21 @@
 // mirroring session pins) and
 // filtered by the shared matchQuery util on name + relative_path.
 //
-// Rows reuse the exact session-list styling: each row is a wa-button rendered
-// `plain`/`neutral` by default and `outlined`/`brand` when it is the artifact
-// currently open in the main pane (--active), with a focus-ring --highlighted
-// state for keyboard navigation. Bookmark lists are small, so there is no
-// virtual scroller — but the keyboard-navigation contract mirrors SessionList
-// (handleKeyNavigation exposed, focus-search emitted on ArrowUp from the top).
+// Rows reuse the exact session-list styling and link behaviour: each row is a
+// wa-button rendered as an anchor, `plain`/`neutral` by default and
+// `outlined`/`brand` when it is the artifact currently open in the main pane
+// (--active), with a focus-ring --highlighted state for keyboard navigation.
+// Bookmark lists are small, so there is no virtual scroller — but the
+// keyboard-navigation contract mirrors SessionList (handleKeyNavigation
+// exposed, focus-search emitted on ArrowUp from the top).
 import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { useSettingsStore } from '../../stores/settings'
 import { computeArtifactBookmarkList } from '../../utils/sidebarArtifactBookmarks'
 import { matchQuery } from '../../utils/textFilter'
-import { artifactTypeIcon } from '../../utils/artifactBookmark'
+import { artifactBookmarkRouteLocation, artifactTypeIcon } from '../../utils/artifactBookmark'
 import { formatDate } from '../../utils/date'
 import { dateBucketSeparator } from '../../utils/datePresets'
 import { SESSION_TIME_FORMAT } from '../../constants'
@@ -46,6 +48,8 @@ const emit = defineEmits(['select', 'focus-search'])
 const dataStore = useDataStore()
 const workspacesStore = useWorkspacesStore()
 const settingsStore = useSettingsStore()
+const route = useRoute()
+const router = useRouter()
 
 const list = computed(() => {
     const projectScopeIds = dataStore.getProjectScopeIds(props.effectiveProjectId)
@@ -131,6 +135,20 @@ const separatorBeforeIds = computed(() => {
 
 function onSelect(b) {
     emit('select', b)
+}
+
+// Real hrefs give every row native browser link behaviour (context menu,
+// middle-click, Ctrl/Cmd-click, Shift-click). Plain left-click remains an SPA
+// navigation through ProjectView's existing selection handler.
+function bookmarkHref(b) {
+    return router.resolve(artifactBookmarkRouteLocation(b, route)).href
+}
+
+function handleClick(event, b) {
+    if (event.button !== 0) return
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+    event.preventDefault()
+    onSelect(b)
 }
 
 // Row Share action — only when a share host is configured. Routes through the
@@ -309,6 +327,7 @@ defineExpose({ handleKeyNavigation })
                 :class="{ 'bookmark-item-wrapper--compact': compactView }"
             >
             <wa-button
+                :href="bookmarkHref(b)"
                 :appearance="isActive(b) ? 'outlined' : 'plain'"
                 :variant="isActive(b) ? 'brand' : 'neutral'"
                 class="bookmark-item"
@@ -317,7 +336,7 @@ defineExpose({ handleKeyNavigation })
                     'bookmark-item--highlighted': index === highlightedIndex,
                     'bookmark-item--compact': compactView,
                 }"
-                @click="onSelect(b)"
+                @click="(event) => handleClick(event, b)"
             >
                 <div class="bookmark-name-row">
                     <!-- Compact: inline project color dot (worktree inherits its parent's color) -->

@@ -50,6 +50,7 @@ import { getUsageRingColor, formatRecentDelta, formatBurnChip } from '../utils/u
 import { buildProjectTree, flattenProjectTree } from '../utils/projectTree'
 import { projectPathTitle } from '../utils/projectName'
 import { sessionRouteLocation } from '../utils/sessionRoute'
+import { artifactBookmarkRouteLocation } from '../utils/artifactBookmark'
 import CostDisplay from '../components/ui/CostDisplay.vue'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import UsageGraphDialog from '../components/app/UsageGraphDialog.vue'
@@ -978,10 +979,7 @@ function toggleSidebarView() {
 
 // Open an artifact bookmark in the main pane (artifacts route with :bookmarkId).
 function onArtifactBookmarkSelect(b) {
-    if (isAllProjectsMode.value)
-        router.push({ name: 'projects-artifacts', params: { bookmarkId: String(b.id) }, query: queryWithWorkspace() })
-    else
-        router.push({ name: 'project-artifacts', params: { projectId: projectId.value, bookmarkId: String(b.id) } })
+    router.push(artifactBookmarkRouteLocation(b, route))
 }
 
 // Handle project/workspace selection from the dropdown selector
