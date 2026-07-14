@@ -26,6 +26,8 @@ import { ancestorChain } from '../../utils/projectAgentDefaults'
 import { formatBundleSummary } from '../../utils/presetFormat'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
 import { effortIconSrc } from '../../utils/effortIcon'
+import { AGENT_SETTING_ICONS } from '../../utils/agentSettingIcons'
+import SettingFlagIcon from '../ui/SettingFlagIcon.vue'
 import TabBar from '../ui/TabBar.vue'
 
 const props = defineProps({
@@ -137,6 +139,13 @@ function effortSelectIcon(provider, field) {
     if (toSentinel(fieldValue(provider, field)) === DEFAULT_SENTINEL) return null
     return effortIconSrc(fieldValue(provider, field))
 }
+// Boolean flag fields (thinking / fast mode / Chrome MCP) carry an on/off icon.
+const isFlagField = (field) => field in AGENT_SETTING_ICONS
+// Show the flag icon in the closed select only when a concrete value is forced.
+function flagSelectShown(provider, field) {
+    return isFlagField(field) && toSentinel(fieldValue(provider, field)) !== DEFAULT_SENTINEL
+}
+const flagValueOn = (provider, field) => fieldValue(provider, field) === true
 function fromSentinel(provider, field, raw) {
     if (raw === DEFAULT_SENTINEL) return null
     if (field === 'selected_model') return raw
@@ -386,6 +395,12 @@ defineExpose({ getChangedFields, reset: initLocal })
                                 auto-width
                                 :src="effortSelectIcon(p.value, field)"
                             ></wa-icon>
+                            <SettingFlagIcon
+                                v-if="flagSelectShown(p.value, field)"
+                                slot="start"
+                                :field="field"
+                                :on="flagValueOn(p.value, field)"
+                            />
                             <wa-option :value="DEFAULT_SENTINEL">Inherit</wa-option>
                             <small class="ad-group-label">Force to:</small>
                             <wa-option
@@ -400,6 +415,12 @@ defineExpose({ getChangedFields, reset: initLocal })
                                     :src="effortIconSrc(opt.value)"
                                     class="ad-effort-option-icon"
                                 ></wa-icon>
+                                <SettingFlagIcon
+                                    v-if="isFlagField(field)"
+                                    :field="field"
+                                    :on="opt.value === true"
+                                    class="ad-flag-option-icon"
+                                />
                                 <span>{{ opt.label }}</span>
                                 <span v-if="opt.description" class="ad-option-description">{{ opt.description }}</span>
                             </wa-option>
@@ -486,7 +507,8 @@ defineExpose({ getChangedFields, reset: initLocal })
     font-style: italic;
 }
 
-.ad-effort-option-icon {
+.ad-effort-option-icon,
+.ad-flag-option-icon {
     margin-right: 0.5em;
     vertical-align: -0.15em;
 }

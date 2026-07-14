@@ -20,14 +20,14 @@
 // effective value plainly.
 import { computed, useId } from 'vue'
 import { getProviderIcon } from '../../providers'
-import { AGENT_SETTING_ICONS } from '../../utils/agentSettingIcons'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ProviderIcon from '../ui/ProviderIcon.vue'
+import SettingFlagIcon from '../ui/SettingFlagIcon.vue'
 
 const props = defineProps({
     provider: { type: String, default: null },
-    // [{ text, forced } | { icon, iconFamily?, on, forced, label }] — already
-    // resolved by the caller.
+    // [{ text, forced } | { field, on, forced, label }] — already resolved by
+    // the caller.
     parts: { type: Array, default: () => [] },
     markForced: { type: Boolean, default: true },
 })
@@ -36,17 +36,6 @@ const providerIcon = computed(() => getProviderIcon(props.provider))
 
 const uid = useId()
 const iconId = (i) => `${uid}-icon-${i}`
-
-// Icon parts carry a ``field``; the glyph/family/tint come from the shared map.
-// The tint applies only when the flag is on — off icons stay dimmed/struck in
-// the neutral text colour.
-function iconInfo(part) {
-    return part.field ? AGENT_SETTING_ICONS[part.field] : null
-}
-function iconColor(part) {
-    const info = iconInfo(part)
-    return part.on && info ? info.color : null
-}
 
 // Suppress the "·" separator between two adjacent icon parts so the boolean
 // flags read as one grouped cluster; text boundaries keep their dot.
@@ -70,19 +59,10 @@ function showSeparator(i) {
                     class="part-icon-wrap"
                     :class="{
                         'setting-forced': markForced && part.forced,
-                        struck: !part.on,
                         'icon-grouped': i > 0 && parts[i - 1]?.field,
                     }"
                 >
-                    <wa-icon
-                        auto-width
-                        :name="iconInfo(part)?.icon"
-                        :family="iconInfo(part)?.family || undefined"
-                        :label="part.label"
-                        class="part-icon"
-                        :class="{ dimmed: !part.on }"
-                        :style="iconColor(part) ? { color: iconColor(part) } : null"
-                    ></wa-icon>
+                    <SettingFlagIcon :field="part.field" :on="part.on" :label="part.label" />
                 </span>
                 <AppTooltip :for="iconId(i)">{{ part.label }}</AppTooltip>
             </template>
@@ -153,25 +133,5 @@ function showSeparator(i) {
 /* Adjacent icons have no "·" between them — give them a small gap instead. */
 .part-icon-wrap.icon-grouped {
     margin-left: 0.3em;
-}
-
-/* Off flags stay visible but dimmed so both states read at a glance. */
-.part-icon.dimmed {
-    opacity: 0.4;
-}
-
-/* An off flag also gets a "/" slash across it — the icon stays dimmed while
-   the slash keeps the normal text colour so the disabled state pops. */
-.part-icon-wrap.struck::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 1.45em;
-    height: 1.5px;
-    background: currentColor;
-    border-radius: 1px;
-    transform: translate(-50%, -50%) rotate(-45deg);
-    pointer-events: none;
 }
 </style>
