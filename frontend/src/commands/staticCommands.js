@@ -21,6 +21,7 @@ import { isSessionUnread } from '../utils/sessions'
 import { worktreeLabel } from '../utils/worktree'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { ARTIFACT_ICON } from '../utils/artifactBookmark'
+import { AGENT_SETTING_ICONS } from '../utils/agentSettingIcons'
 import { lastSessionsLocation, lastArtifactsLocation } from '../utils/sidebarViewMemory'
 import { apiFetch } from '../utils/api'
 import { toast } from '../composables/useToast'
@@ -36,6 +37,18 @@ import {
     WA_BRAND_LABELS,
 } from '../constants'
 
+// Top-level command glyph for a boolean flag, aligned with the shared flag
+// icon system (AGENT_SETTING_ICONS) so the command uses the same glyph/family/
+// tint as the settings summary strip and the switch rows.
+const flagCommandIcon = (field) => {
+    const info = AGENT_SETTING_ICONS[field]
+    return { icon: info.icon, iconFamily: info.family ?? null, iconColor: info.color }
+}
+
+// The boolean-flag fields whose nested On/Off choices render the flag icon
+// (coloured when on, dimmed + struck when off) via SettingFlagIcon.
+const FLAG_ICON_FIELDS = new Set(['thinking_enabled', 'fast_mode', 'claude_in_chrome'])
+
 // Per-provider "Change Default …" palette command descriptors. Each entry
 // targets one agent-setting wire-name; ``selected_model`` is handled out
 // of band because it consumes the model registry's groupings.
@@ -43,11 +56,32 @@ const PROVIDER_DEFAULTS_SIMPLE_FIELDS = [
     { field: 'effort',                       idSuffix: 'effort',               label: 'Change Default Effort…',                       icon: 'gauge' },
     { field: 'permission_mode',              idSuffix: 'permission',           label: 'Change Default Permission Mode…',              icon: 'shield-halved' },
     { field: 'permission_mode_if_untrusted', idSuffix: 'permission-untrusted', label: 'Change Default Permission Mode (Untrusted)…',   icon: 'shield-halved' },
-    { field: 'thinking_enabled',             idSuffix: 'thinking',             label: 'Change Default Thinking…',                     icon: 'brain' },
+    { field: 'thinking_enabled',             idSuffix: 'thinking',             label: 'Change Default Thinking…',                     ...flagCommandIcon('thinking_enabled') },
     { field: 'context_max',                  idSuffix: 'context',              label: 'Change Default Context Size…',                 icon: 'window-maximize' },
-    { field: 'claude_in_chrome',             idSuffix: 'chrome',               label: 'Change Default Claude in Chrome MCP…',         icon: 'globe' },
-    { field: 'fast_mode',                    idSuffix: 'fast-mode',            label: 'Change Default Fast Mode…',                    icon: 'gauge-high' },
+    { field: 'claude_in_chrome',             idSuffix: 'chrome',               label: 'Change Default Claude in Chrome MCP…',         ...flagCommandIcon('claude_in_chrome') },
+    { field: 'fast_mode',                    idSuffix: 'fast-mode',            label: 'Change Default Fast Mode…',                    ...flagCommandIcon('fast_mode') },
 ]
+
+// Resolve the per-choice icon props for a nested "Change Default …" sub-item,
+// reusing the value's real icon from the shared agent-setting icon system:
+//   effort            → coloured 5-bar level SVG (iconSrc)
+//   permission_mode*  → tinted permission glyph (permIcon + permColor)
+//   flag fields       → on/off flag glyph (flagField + flagOn)
+// Returns {} for fields without a per-value icon (e.g. context_max).
+function choiceIconProps(helpers, field, value) {
+    if (field === 'effort') {
+        const iconSrc = helpers.getEffortIconSrc(value)
+        return iconSrc ? { iconSrc } : {}
+    }
+    if (field === 'permission_mode' || field === 'permission_mode_if_untrusted') {
+        const info = helpers.getChoiceIcon('permission_mode', value)
+        return info ? { permIcon: info.icon, permColor: info.color } : {}
+    }
+    if (FLAG_ICON_FIELDS.has(field)) {
+        return { flagField: field, flagOn: value === true }
+    }
+    return {}
+}
 
 /**
  * Build the "Change Default …" palette commands for every registered
@@ -97,12 +131,14 @@ function buildProviderDefaultsCommands(settings) {
             })
         }
 
-        for (const { field, idSuffix, label, icon } of PROVIDER_DEFAULTS_SIMPLE_FIELDS) {
+        for (const { field, idSuffix, label, icon, iconFamily, iconColor } of PROVIDER_DEFAULTS_SIMPLE_FIELDS) {
             if (!helpers.supportsAgentSetting(field)) continue
             commands.push({
                 id: `${category}.${idSuffix}`,
                 label,
                 icon,
+                iconFamily,
+                iconColor,
                 category,
                 when: whenEnabled,
                 items: () => {
@@ -115,6 +151,7 @@ function buildProviderDefaultsCommands(settings) {
                             label: choice.label,
                             action: () => helpers.setDefaultValue(field, choice.value),
                             active: current === choice.value,
+                            ...choiceIconProps(helpers, field, choice.value),
                         }))
                 },
             })

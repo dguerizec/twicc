@@ -19,6 +19,8 @@ import { ref, computed, watch, nextTick, shallowRef } from 'vue'
 import { useCommandRegistry } from '../../composables/useCommandRegistry'
 import { fuzzyMatch } from '../../utils/fuzzyMatch'
 import ProcessIndicator from '../ui/ProcessIndicator.vue'
+import PermissionModeIcon from '../ui/PermissionModeIcon.vue'
+import SettingFlagIcon from '../ui/SettingFlagIcon.vue'
 
 const { isOpen, availableCommands, commandsByCategory, categoryLabelByKey, openPalette, closePalette } = useCommandRegistry()
 
@@ -373,7 +375,11 @@ defineExpose({ open, close })
                     aria-label="Back to previous level"
                 >
                     <wa-icon name="chevron-left" class="breadcrumb-back-icon" />
-                    <wa-icon :name="parentCommand.icon" />
+                    <wa-icon
+                        :name="parentCommand.icon"
+                        :family="parentCommand.iconFamily || undefined"
+                        :style="parentCommand.iconColor ? { color: parentCommand.iconColor } : null"
+                    />
                     <span>{{ parentCommand.label }}</span>
                     <wa-icon name="chevron-right" />
                 </button>
@@ -405,7 +411,12 @@ defineExpose({ open, close })
                             @click="selectCommand(cmd)"
                             @pointerenter="activeId = cmd.id"
                         >
-                            <wa-icon :name="cmd.icon" class="command-icon" />
+                            <wa-icon
+                                :name="cmd.icon"
+                                :family="cmd.iconFamily || undefined"
+                                :style="cmd.iconColor ? { color: cmd.iconColor } : null"
+                                class="command-icon"
+                            />
                             <template v-if="cmd.target">
                                 <template v-for="t in [cmd.target()]" :key="cmd.id + '-target'">
                                     <span v-if="t" class="command-text-col">
@@ -449,7 +460,12 @@ defineExpose({ open, close })
                         @click="selectCommand(result.cmd)"
                         @pointerenter="activeId = result.cmd.id"
                     >
-                        <wa-icon :name="result.cmd.icon" class="command-icon" />
+                        <wa-icon
+                            :name="result.cmd.icon"
+                            :family="result.cmd.iconFamily || undefined"
+                            :style="result.cmd.iconColor ? { color: result.cmd.iconColor } : null"
+                            class="command-icon"
+                        />
                         <template v-if="result.cmd.target">
                             <template v-for="t in [result.cmd.target()]" :key="result.cmd.id + '-target'">
                                 <span v-if="t" class="command-text-col">
@@ -523,9 +539,18 @@ defineExpose({ open, close })
                                     :style="item.project.color ? { '--dot-color': item.project.color } : null"
                                 ></span>
                             </template>
-                            <!-- Regular sub-item: active check, icon (FA name or custom src), or spacer -->
+                            <!-- Regular sub-item: active check wins; otherwise the value's
+                                 own icon (permission glyph, on/off flag, custom src, FA name)
+                                 or a spacer. Component icons are wrapped in a .command-icon
+                                 span so they keep the shared 1.25em column alignment. -->
                             <template v-else>
                                 <wa-icon v-if="item.active" name="check" class="command-icon active-check" />
+                                <span v-else-if="item.permIcon" class="command-icon">
+                                    <PermissionModeIcon :icon="item.permIcon" :color="item.permColor" />
+                                </span>
+                                <span v-else-if="item.flagField" class="command-icon">
+                                    <SettingFlagIcon :field="item.flagField" :on="item.flagOn" />
+                                </span>
                                 <wa-icon v-else-if="item.iconSrc" :src="item.iconSrc" class="command-icon" />
                                 <wa-icon v-else-if="item.icon" :name="item.icon" class="command-icon" />
                                 <span v-else class="command-icon-spacer" />
