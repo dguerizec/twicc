@@ -30,6 +30,10 @@ One self-hosted web interface for both [Claude Code](https://docs.anthropic.com/
 
 ![Settings](https://raw.githubusercontent.com/twidi/twicc/main/frontend/public/screenshots/settings-view.webp)
 
+> Pick a model and reasoning effort in seconds:
+
+https://github.com/user-attachments/assets/65033859-ed67-42fc-8b64-fa13204659da
+
 [![Crafted with love](https://img.shields.io/badge/crafted_with-love-red?style=social&logo=githubsponsors&logoColor=red)](https://github.com/sponsors/twidi)
 [![PyPI version](https://img.shields.io/pypi/v/twicc?logo=pypi&logoColor=blue&style=social)](https://pypi.org/project/twicc/)
 [![Python versions](https://img.shields.io/pypi/pyversions/twicc?logo=pypi&logoColor=blue&style=social)](https://pypi.org/project/twicc/)
@@ -103,6 +107,7 @@ uv tool upgrade twicc
 - **Snippets and history**: reusable text snippets with placeholders (global or per-project), plus a picker to reuse earlier messages
 - **Drafts**: unsent messages and new sessions are saved locally and survive a reload
 - **Artifacts**: agents produce rendered artifacts — images, reports, interactive HTML playgrounds (with network calls you approve per host) — shown inside TwiCC in the session's Artifacts tab, and bookmarkable in a dedicated view
+- **Public sharing**: publish revocable, read-only links to session transcripts or bookmarked artifacts, with optional password protection, expiry, view controls, and live or frozen modes — see [Sharing](#sharing)
 
 ### Code and files
 
