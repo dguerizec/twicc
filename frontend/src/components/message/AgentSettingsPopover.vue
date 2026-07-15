@@ -346,6 +346,56 @@ function resetField(field) {
 }
 
 const popoverRef = ref(null)
+let frozenAnchorRect = null
+let resizeTimer = null
+
+function handleShow(e) {
+    // The trigger's width changes with the settings summary, and the Reset
+    // button can appear beside it after the first edit. Freeze the trigger's
+    // current viewport rect for this opening so Floating UI does not move the
+    // popover while the controls underneath it reflow.
+    if (e.target !== popoverRef.value) return
+    const trigger = document.getElementById(props.for)
+    frozenAnchorRect = trigger?.getBoundingClientRect() ?? null
+}
+
+function handleAfterHide(e) {
+    // Restore the live element so the next opening starts from wherever the
+    // trigger ended up after the previous settings changes.
+    if (e.target !== popoverRef.value) return
+    const pop = popoverRef.value
+    if (resizeTimer !== null) clearTimeout(resizeTimer)
+    resizeTimer = null
+    frozenAnchorRect = null
+    if (pop?.popup) pop.popup.anchor = pop.anchor
+}
+
+function repositionFromTrigger() {
+    const pop = popoverRef.value
+    if (!pop?.open || !pop.popup || !frozenAnchorRect) return
+    const trigger = document.getElementById(props.for)
+    if (!trigger) return
+    // A real viewport resize is allowed to move the frozen reference: the
+    // toolbar itself may have reflowed, and the old coordinates may now be
+    // outside the viewport. Ordinary settings-driven reflows do not reach
+    // this path, so they still leave the popover fixed.
+    frozenAnchorRect = trigger.getBoundingClientRect()
+    pop.popup.reposition()
+}
+
+function handleViewportResize() {
+    if (resizeTimer !== null) clearTimeout(resizeTimer)
+    // Browser window resizing can expose an intermediate layout for several
+    // frames. Reposition after the resize settles, then take a second sample
+    // because the first popup placement can itself finish a responsive reflow.
+    resizeTimer = setTimeout(() => {
+        repositionFromTrigger()
+        resizeTimer = setTimeout(() => {
+            resizeTimer = null
+            repositionFromTrigger()
+        }, 100)
+    }, 100)
+}
 
 function focusFirstElement() {
     const pop = popoverRef.value
@@ -363,6 +413,13 @@ function handleAfterShow(e) {
     // wa-dropdown menus — only the popover's own open event should trigger
     // first-element focus.
     if (e.target !== popoverRef.value) return
+    const pop = popoverRef.value
+    // WaPopover writes its live element anchor during the opening update, after
+    // wa-show. Replace it only once that update and animation have completed.
+    if (pop?.popup && frozenAnchorRect) {
+        const initialRect = frozenAnchorRect
+        pop.popup.anchor = { getBoundingClientRect: () => frozenAnchorRect ?? initialRect }
+    }
     focusFirstElement()
 }
 
@@ -398,10 +455,13 @@ function handlePopoverKeydown(e) {
 
 onMounted(() => {
     window.addEventListener('twicc:toggle-agent-settings', handleToggleShortcut)
+    window.addEventListener('resize', handleViewportResize)
 })
 
 onBeforeUnmount(() => {
     window.removeEventListener('twicc:toggle-agent-settings', handleToggleShortcut)
+    window.removeEventListener('resize', handleViewportResize)
+    if (resizeTimer !== null) clearTimeout(resizeTimer)
 })
 </script>
 
@@ -409,7 +469,9 @@ onBeforeUnmount(() => {
     <wa-popover
         ref="popoverRef"
         v-popover-focus-fix
+        @wa-show="handleShow"
         @wa-after-show="handleAfterShow"
+        @wa-after-hide="handleAfterHide"
         @keydown="handlePopoverKeydown"
         :for="props.for"
         placement="top"
@@ -595,12 +657,36 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .settings-popover {
-    --max-width: min(30rem, 100vw);
+    --max-width: min(30rem, calc(100vw - 2rem));
     --arrow-size: 12px;
     &::part(body) {
+        /* Keep the horizontal geometry stable when pending-change actions
+           appear. The Web Awesome default is width:max-content, which made
+           this panel grow from its matrix width to --max-width and recenter. */
+        width: var(--max-width);
         max-height: calc(100vh - 8rem);
         display: flex;
         flex-direction: column;
+    }
+}
+
+@media (width <= 400px) {
+    .settings-popover {
+        /* At phone width, touch both viewport edges instead of retaining the
+           desktop gutter. Floating UI's shift middleware pins the panel at 0. */
+        --max-width: 100vw;
+
+        &::part(body) {
+            padding: var(--wa-space-xs);
+        }
+    }
+
+    .settings-panel :deep(.matrix-row-header) {
+        gap: var(--wa-space-3xs);
+    }
+
+    .settings-panel :deep(.matrix-grid) {
+        gap: 1px;
     }
 }
 
