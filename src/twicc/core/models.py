@@ -465,7 +465,7 @@ class Session(models.Model):
     # does not interpret it and the UI does not expose editing controls for it.
     annotations = models.JSONField(default=dict, blank=True)
     # Per-session dockable-layout intention (user UI state): tab->dock assignment,
-    # minimized docks, resize fractions, active-tab-per-region memory, etc. ``{}``
+    # minimized docks, resize fractions, tab order, active-tab-per-region memory, etc. ``{}``
     # means single pane (no docks). Seeded at creation from the resolved
     # global/project default layout, then freely mutated and persisted by the
     # frontend (debounced ``PATCH /api/projects/<id>/sessions/<id>/``). Excludes the

@@ -835,6 +835,14 @@ const layoutTabsMode = computed(() => layout.measured.value && layout.render.val
 function showInCenter(tabId) {
     return !layout.dockingRendered.value || layout.dockOf(tabId) === 'center'
 }
+const orderedCenterToolTabs = computed(() =>
+    layout.orderedTabs.value.filter((tab) => !tab.fixedCenter && showInCenter(tab.id))
+)
+function toolTabCommentsCount(tabId) {
+    if (tabId === 'files') return filesCommentsCount.value
+    if (tabId === 'git') return gitCommentsCount.value
+    return null
+}
 function isCenterTab(tabId) {
     if (tabId === 'main' || tabId.startsWith('agent-')) return true
     return showInCenter(tabId)
@@ -946,6 +954,20 @@ function onLayoutSelectTab(tabId) {
 // its content, whether the tab was already the region's shown one or a background tab being brought up.
 function onLayoutTabActivate(tabId) {
     if (ACTIVATION_FOCUS_TABS.includes(tabId)) requestPanelFocus(tabId)
+}
+
+// A pointer drag must outlive the surface it started from. Reveal the full layout as soon as the
+// gesture activates; the SessionLayout owns the window listeners, so closing an overlay or restoring
+// a maximized region cannot cancel the drag. The successful drop then focuses the moved tab.
+function onLayoutTabDragStart() {
+    cancelPaneFocus()
+    if (layout.maximizedRegion.value) layout.restoreMaximized()
+    if (layout.openOverlayEdge.value) onOverlayDismiss()
+}
+function onLayoutTabDrop(tabId, { activate = true } = {}) {
+    if (!activate) return
+    onLayoutSelectTab(tabId)
+    onLayoutTabActivate(tabId)
 }
 
 // ─── Tool-panel activation focus ──────────────────────────────────────────────
@@ -2081,6 +2103,8 @@ onBeforeUnmount(() => {
             @restore-maximized="onLayoutRestoreMaximized"
             @overlay-activate="onOverlayActivate"
             @overlay-dismiss="onOverlayDismiss"
+            @tab-drag-start="onLayoutTabDragStart"
+            @tab-drop="onLayoutTabDrop"
         >
         <TabBar
             ref="sessionTabsRef"
@@ -2135,71 +2159,26 @@ onBeforeUnmount(() => {
                 </wa-tab>
             </template>
 
-            <!-- Tool tabs — shown in the center strip unless docked; arrow places them -->
-            <wa-tab v-if="showInCenter('files')" slot="nav" panel="files" @click="onCenterTabClick('files')">
-                <SessionTabLink :href="sessionTabHref('files')">
-                    <wa-icon :name="TAB_ICONS.files"></wa-icon>
-                    Files
-                    <CodeCommentsIndicator :count="filesCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
+            <!-- Tool tabs — actual keyed DOM order follows the persisted drag order, so visual,
+                 keyboard and overflow-scroller order always agree. Chat/subagents remain anchored. -->
+            <wa-tab
+                v-for="tab in orderedCenterToolTabs"
+                :key="tab.id"
+                slot="nav"
+                :panel="tab.id"
+                @click="onCenterTabClick(tab.id)"
+            >
+                <SessionTabLink :href="sessionTabHref(tab.id)">
+                    <wa-icon :name="tab.icon"></wa-icon>
+                    {{ tab.label }}
+                    <CodeCommentsIndicator
+                        v-if="toolTabCommentsCount(tab.id) !== null"
+                        :count="toolTabCommentsCount(tab.id)"
+                        :show-tooltip="false"
+                        class="tab-comments-indicator"
+                    />
                 </SessionTabLink>
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="files" current="center" @place="(dest) => layout.place('files', dest)" />
-            </wa-tab>
-            <wa-tab v-if="isToolTabPresent('git') && showInCenter('git')" slot="nav" panel="git" @click="onCenterTabClick('git')">
-                <SessionTabLink :href="sessionTabHref('git')">
-                    <wa-icon :name="TAB_ICONS.git"></wa-icon>
-                    Git
-                    <CodeCommentsIndicator :count="gitCommentsCount" :show-tooltip="false" class="tab-comments-indicator" />
-                </SessionTabLink>
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="git" current="center" @place="(dest) => layout.place('git', dest)" />
-            </wa-tab>
-            <wa-tab v-if="showInCenter('terminal')" slot="nav" panel="terminal" @click="onCenterTabClick('terminal')">
-                <SessionTabLink :href="sessionTabHref('terminal')">
-                    <wa-icon :name="TAB_ICONS.terminal"></wa-icon>
-                    Terminal
-                </SessionTabLink>
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="terminal" current="center" @place="(dest) => layout.place('terminal', dest)" />
-            </wa-tab>
-            <wa-tab v-if="isToolTabPresent('tasks') && showInCenter('tasks')" slot="nav" panel="tasks" @click="onCenterTabClick('tasks')">
-                <SessionTabLink :href="sessionTabHref('tasks')">
-                    <wa-icon :name="TAB_ICONS.tasks"></wa-icon>
-                    Tasks
-                </SessionTabLink>
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="tasks" current="center" @place="(dest) => layout.place('tasks', dest)" />
-            </wa-tab>
-            <wa-tab v-if="isToolTabPresent('plan') && showInCenter('plan')" slot="nav" panel="plan" @click="onCenterTabClick('plan')">
-                <SessionTabLink :href="sessionTabHref('plan')">
-                    <wa-icon :name="TAB_ICONS.plan"></wa-icon>
-                    Plan
-                </SessionTabLink>
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="plan" current="center" @place="(dest) => layout.place('plan', dest)" />
-            </wa-tab>
-            <wa-tab v-if="isToolTabPresent('artifacts') && showInCenter('artifacts')" slot="nav" panel="artifacts" @click="onCenterTabClick('artifacts')">
-                <SessionTabLink :href="sessionTabHref('artifacts')">
-                    <wa-icon :name="TAB_ICONS.artifacts"></wa-icon>
-                    Artifacts
-                </SessionTabLink>
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="artifacts" current="center" @place="(dest) => layout.place('artifacts', dest)" />
-            </wa-tab>
-            <wa-tab v-if="isToolTabPresent('orchestration') && showInCenter('orchestration')" slot="nav" panel="orchestration" @click="onCenterTabClick('orchestration')">
-                <SessionTabLink :href="sessionTabHref('orchestration')">
-                    <wa-icon :name="TAB_ICONS.orchestration"></wa-icon>
-                    Orchestration
-                </SessionTabLink>
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="orchestration" current="center" @place="(dest) => layout.place('orchestration', dest)" />
-            </wa-tab>
-            <wa-tab v-if="isToolTabPresent('workflows') && showInCenter('workflows')" slot="nav" panel="workflows" @click="onCenterTabClick('workflows')">
-                <SessionTabLink :href="sessionTabHref('workflows')">
-                    <wa-icon :name="TAB_ICONS.workflows"></wa-icon>
-                    Workflows
-                </SessionTabLink>
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="workflows" current="center" @place="(dest) => layout.place('workflows', dest)" />
-            </wa-tab>
-            <wa-tab v-if="showInCenter('browser')" slot="nav" panel="browser" @click="onCenterTabClick('browser')">
-                <SessionTabLink :href="sessionTabHref('browser')">
-                    <wa-icon :name="TAB_ICONS.browser"></wa-icon>
-                    Browser
-                </SessionTabLink>
-                <TabPlacementMenu v-if="showCenterPlacementArrows" tab-id="browser" current="center" @place="(dest) => layout.place('browser', dest)" />
+                <TabPlacementMenu v-if="showCenterPlacementArrows" :tab-id="tab.id" current="center" @place="(dest) => layout.place(tab.id, dest)" />
             </wa-tab>
 
             <!-- Right-aligned nav cluster: [Layout menu ▾] [Maximize]. A real-box wrapper carries the

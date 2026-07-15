@@ -152,6 +152,8 @@ onUnmounted(cancelPending)
                 :href="tabHref(entry.tab.id)"
                 tabbable
                 class="g-chip"
+                :data-layout-tab-id="entry.tab.id"
+                :data-layout-dock-id="entry.item.dockId"
                 :class="{ open: isOpen(entry) }"
                 :title="chipTitle(entry)"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"
@@ -168,6 +170,8 @@ onUnmounted(cancelPending)
                 :href="tabHref(entry.tab.id)"
                 tabbable
                 class="g-chip"
+                :data-layout-tab-id="entry.tab.id"
+                :data-layout-dock-id="entry.item.dockId"
                 :class="{ open: isOpen(entry) }"
                 :title="chipTitle(entry)"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"

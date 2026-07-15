@@ -14,6 +14,7 @@ function sanitizeIntention(intention) {
         assignment: { ...(i.assignment || {}) },
         collapsed: Array.isArray(i.collapsed) ? [...i.collapsed] : [],
         resizeFractions: { ...(i.resizeFractions || {}) },
+        tabOrder: Array.isArray(i.tabOrder) ? [...new Set(i.tabOrder.filter((id) => typeof id === 'string'))] : [],
     }
 }
 
@@ -26,7 +27,7 @@ function sortByName(layouts) {
 
 export const useLayoutsStore = defineStore('layouts', {
     state: () => ({
-        layouts: [],              // Array of { id, name, intention: { assignment, collapsed, resizeFractions } }
+        layouts: [],              // Array of { id, name, intention: { assignment, collapsed, resizeFractions, tabOrder } }
         _isApplyingRemote: false, // Guard to prevent echo on WS receive
     }),
 

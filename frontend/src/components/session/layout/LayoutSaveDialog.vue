@@ -12,7 +12,7 @@ import { useDataStore } from '../../../stores/data'
 import { apiFetch } from '../../../utils/api'
 
 const props = defineProps({
-    // The template intention to store (assignment / collapsed / resizeFractions) — the session's
+    // The template intention to store (assignment / collapsed / resizeFractions / tabOrder) — the session's
     // current layout at save time, supplied by the parent.
     intention: { type: Object, default: () => ({}) },
     // "Set as default" scope descriptors from the parent, in display order (worktree → project →

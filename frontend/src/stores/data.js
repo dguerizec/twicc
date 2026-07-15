@@ -85,7 +85,7 @@ const LAYOUT_PERSIST_DEBOUNCE_MS = 500
 /** A fresh empty intention — single pane. Matches EMPTY_INTENTION in useSessionLayout.js. */
 function emptyLayoutIntention() {
     return { assignment: {}, collapsed: [], activeSide: 'left', activeResize: 'left',
-             activeByGroup: {}, resizeFractions: {}, maximized: null }
+             activeByGroup: {}, resizeFractions: {}, tabOrder: [], maximized: null }
 }
 
 /** The persisted subset, in a FIXED key order (so echo / cross-device compares are stable). Everything
@@ -99,6 +99,7 @@ function stripLayoutForPersist(intention) {
         activeResize: i.activeResize === 'right' ? 'right' : 'left',
         activeByGroup: { ...(i.activeByGroup || {}) },
         resizeFractions: { ...(i.resizeFractions || {}) },
+        tabOrder: [...(i.tabOrder || [])],
     }
 }
 
@@ -113,6 +114,7 @@ function hydrateLayoutIntention(persisted) {
     if (p.activeResize === 'left' || p.activeResize === 'right') e.activeResize = p.activeResize
     if (p.activeByGroup && typeof p.activeByGroup === 'object') e.activeByGroup = { ...p.activeByGroup }
     if (p.resizeFractions && typeof p.resizeFractions === 'object') e.resizeFractions = { ...p.resizeFractions }
+    if (Array.isArray(p.tabOrder)) e.tabOrder = [...new Set(p.tabOrder.filter((id) => typeof id === 'string'))]
     return e
 }
 
@@ -124,6 +126,7 @@ function layoutTemplate(intention) {
         assignment: { ...(i.assignment || {}) },
         collapsed: [...(i.collapsed || [])],
         resizeFractions: { ...(i.resizeFractions || {}) },
+        tabOrder: [...(i.tabOrder || [])],
     }
 }
 
@@ -507,7 +510,8 @@ export const useDataStore = defineStore('data', {
             // Dockable layout intention per session (ephemeral; persistence deferred).
             // { sessionId: { assignment: { tabId: dockId }, collapsed: [dockId], activeSide,
             //                activeResize, activeByGroup: { groupKey: tabId },
-            //                resizeFractions: { configKey: number }, maximized: [dockId] | null } }
+            //                resizeFractions: { configKey: number }, tabOrder: [tabId],
+            //                maximized: [dockId] | null } }
             // Geometry is NOT stored here — only the user's drag intention (fractions). The pure
             // layout resolver recomputes px from these (clamped) on every render. `maximized` is a
             // transient view state (a region's dockIds, or ['center']) — excluded from persistence.
@@ -3867,6 +3871,21 @@ export const useDataStore = defineStore('data', {
             this.persistSessionLayoutDebounced(sessionId)
         },
 
+        /** Atomically place and order a draggable tool tab. One global order is filtered by dock at
+         *  render time, so it also orders merged regions, gutters and overlays. */
+        moveLayoutTab(sessionId, { tabId, dest, tabOrder, restoreDestination = true }) {
+            const layout = this.ensureSessionLayout(sessionId)
+            if (!dest || dest === 'center') delete layout.assignment[tabId]
+            else layout.assignment[tabId] = dest
+            layout.tabOrder = [...tabOrder]
+            // A drag onto a minimized destination is an explicit restore/create action: reveal it.
+            if (restoreDestination && dest && dest !== 'center') {
+                const collapsedIndex = layout.collapsed.indexOf(dest)
+                if (collapsedIndex > -1) layout.collapsed.splice(collapsedIndex, 1)
+            }
+            this.persistSessionLayoutDebounced(sessionId)
+        },
+
         /** Minimize a dock to its edge gutter. */
         minimizeDock(sessionId, dockId) {
             const layout = this.ensureSessionLayout(sessionId)
@@ -4005,7 +4024,7 @@ export const useDataStore = defineStore('data', {
         },
 
         /** Replace a session's live layout with a copy of a catalog layout's template intention
-         *  (assignment / collapsed / resizeFractions). Runtime fields and maximized reset to defaults.
+         *  (assignment / collapsed / resizeFractions / tabOrder). Runtime fields and maximized reset to defaults.
          *  ``intention`` = {} ⇒ single pane. Persists (debounced). */
         loadLayoutIntoSession(sessionId, intention) {
             const e = emptyLayoutIntention()
@@ -4013,6 +4032,7 @@ export const useDataStore = defineStore('data', {
             e.assignment = t.assignment
             e.collapsed = t.collapsed
             e.resizeFractions = t.resizeFractions
+            e.tabOrder = t.tabOrder
             this.localState.sessionLayout[sessionId] = e
             this.persistSessionLayoutDebounced(sessionId)
         },

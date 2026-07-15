@@ -11,6 +11,8 @@ import DockRegion from './DockRegion.vue'
 import DockGutter from './DockGutter.vue'
 import LayoutOverlay from './LayoutOverlay.vue'
 import { useFramePoolStore } from '../../../stores/framePool'
+import { dropZoneAt, layoutDropZones } from '../../../utils/layoutDrag'
+import { DOCK_ICONS, DOCK_LABELS } from './dockMeta'
 
 const props = defineProps({
     layout: { type: Object, required: true },       // the useSessionLayout() return
@@ -18,7 +20,7 @@ const props = defineProps({
     registerTarget: { type: Function, required: true },
     unregisterTarget: { type: Function, required: true },
 })
-const emit = defineEmits(['select-tab', 'tab-activate', 'minimize', 'maximize', 'restore-maximized', 'focus-pane', 'overlay-activate', 'overlay-dismiss'])
+const emit = defineEmits(['select-tab', 'tab-activate', 'minimize', 'maximize', 'restore-maximized', 'focus-pane', 'overlay-activate', 'overlay-dismiss', 'tab-drag-start', 'tab-drop'])
 
 // props.layout is the useSessionLayout() return — a bag of refs/functions. Refs accessed
 // through a prop object are NOT auto-unwrapped, so read them via .value here.
@@ -176,10 +178,291 @@ function onSplitterDown(event, s) {
     document.body.style.cursor = s.axis === 'v' ? 'col-resize' : 'row-resize'
 }
 onBeforeUnmount(endDrag)
+
+// ---- Tab drag and drop -------------------------------------------------------
+// Pointer-based rather than native HTML DnD: one implementation covers mouse, pen and touch, and
+// the gesture survives its source disappearing when an overlay/maximized region closes. Mouse starts
+// after a short movement; touch/pen starts after a stationary long press so normal taps stay native.
+const MOUSE_DRAG_DISTANCE = 5
+const TOUCH_MOVE_TOLERANCE = 9
+const TOUCH_LONG_PRESS_MS = 425
+
+const tabDrag = ref(null)
+const activeDrop = ref(null)
+let pendingTabDrag = null
+let suppressClickUntil = 0
+let previousUserSelect = ''
+
+const tabDropZones = computed(() => layoutDropZones(
+    props.layout.width.value,
+    props.layout.height.value,
+    props.layout.render.value,
+))
+
+function tabIdFromHandle(node) {
+    if (!(node instanceof Element)) return null
+    const gutterChip = node.closest('.g-chip[data-layout-tab-id]')
+    if (gutterChip) return gutterChip.dataset.layoutTabId
+    const tab = node.closest('wa-tab[slot="nav"]')
+    if (!tab) return null
+    const group = tab.parentElement
+    if (!group?.matches?.('.session-tabs, .dock-tabnav, .overlay-tabnav')) return null
+    return tab.panel || tab.getAttribute('panel')
+}
+
+function eventHitsDragControl(event) {
+    return event.composedPath().some((node) => node instanceof Element && node.matches(
+        '.placement-menu, .layout-nav-cluster, .dock-winbtn, .overlay-close, wa-button, wa-dropdown, button, input, textarea, select, [contenteditable="true"]'
+    ))
+}
+
+function sourceTabForEvent(event) {
+    if (eventHitsDragControl(event)) return null
+    const tabId = tabIdFromHandle(event.target)
+    const tab = tabId && props.layout.tabById(tabId)
+    return tab && !tab.fixedCenter ? tab : null
+}
+
+function addTabPointerListeners() {
+    window.addEventListener('pointermove', onTabPointerMove, { passive: false })
+    window.addEventListener('pointerup', onTabPointerUp)
+    window.addEventListener('pointercancel', cancelTabPointer)
+}
+function removeTabPointerListeners() {
+    window.removeEventListener('pointermove', onTabPointerMove)
+    window.removeEventListener('pointerup', onTabPointerUp)
+    window.removeEventListener('pointercancel', cancelTabPointer)
+}
+function clearLongPress() {
+    if (pendingTabDrag?.timer) clearTimeout(pendingTabDrag.timer)
+    if (pendingTabDrag) pendingTabDrag.timer = null
+}
+
+function onTabPointerDown(event) {
+    if (pendingTabDrag || tabDrag.value || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+    const tab = sourceTabForEvent(event)
+    if (!tab) return
+    pendingTabDrag = {
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        x: event.clientX,
+        y: event.clientY,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        tab,
+        timer: null,
+    }
+    addTabPointerListeners()
+    if (event.pointerType !== 'mouse') {
+        pendingTabDrag.timer = setTimeout(() => startTabDrag(pendingTabDrag.lastX, pendingTabDrag.lastY), TOUCH_LONG_PRESS_MS)
+    }
+}
+
+function startTabDrag(clientX, clientY) {
+    if (!pendingTabDrag || tabDrag.value) return
+    clearLongPress()
+    const { pointerId, pointerType, tab } = pendingTabDrag
+    tabDrag.value = {
+        pointerId,
+        pointerType,
+        tab,
+        clientX,
+        clientY,
+        startX: clientX,
+        startY: clientY,
+        moved: pointerType === 'mouse',
+    }
+    previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+    document.body.classList.add('layout-tab-dragging')
+    framePool.beginDividerDrag()
+    window.addEventListener('keydown', onTabDragKeydown)
+    emit('tab-drag-start', tab.id)
+    if (tabDrag.value.moved) updateTabDrop(clientX, clientY)
+}
+
+function tabHeaderAt(clientX, clientY) {
+    for (const node of document.elementsFromPoint(clientX, clientY)) {
+        if (!(node instanceof Element)) continue
+        const gutterChip = node.closest?.('.g-chip[data-layout-tab-id]')
+        if (gutterChip) {
+            const targetTabId = gutterChip.dataset.layoutTabId
+            const targetTab = props.layout.tabById(targetTabId)
+            const gutter = gutterChip.closest('.dock-gutter')
+            if (!targetTab || targetTab.fixedCenter || !gutter) continue
+            const edge = ['left', 'right', 'bottom'].find((name) => gutter.classList.contains(name))
+            const rect = gutterChip.getBoundingClientRect()
+            const rootRect = sessionLayoutEl.value.getBoundingClientRect()
+            const verticalRail = edge !== 'bottom'
+            // Side-gutter groups are rotated -90deg: DOM "before" is toward the visual bottom,
+            // while "after" is toward the visual top. The bottom gutter keeps normal left/right order.
+            const position = verticalRail
+                ? (clientY < rect.top + rect.height / 2 ? 'after' : 'before')
+                : (clientX < rect.left + rect.width / 2 ? 'before' : 'after')
+            return {
+                dockId: gutterChip.dataset.layoutDockId || props.layout.dockOf(targetTabId),
+                targetTabId,
+                position,
+                activate: false,
+                restoreDestination: false,
+                indicator: verticalRail
+                    ? {
+                        axis: 'h',
+                        x: rect.left - rootRect.left + 3,
+                        y: (position === 'before' ? rect.bottom : rect.top) - rootRect.top,
+                        w: Math.max(18, rect.width - 6),
+                    }
+                    : {
+                        axis: 'v',
+                        x: (position === 'before' ? rect.left : rect.right) - rootRect.left,
+                        y: rect.top - rootRect.top + 3,
+                        h: Math.max(18, rect.height - 6),
+                    },
+            }
+        }
+        const tabEl = node.closest?.('wa-tab[slot="nav"]')
+        if (!tabEl) continue
+        const group = tabEl.parentElement
+        if (!group?.matches?.('.session-tabs, .dock-tabnav, .overlay-tabnav')) continue
+        const targetTabId = tabEl.panel || tabEl.getAttribute('panel')
+        const targetTab = props.layout.tabById(targetTabId)
+        if (!targetTab || targetTab.fixedCenter) continue
+        const rect = tabEl.getBoundingClientRect()
+        const inCenter = group.matches('.session-tabs') || !props.layout.dockingRendered.value
+        const dockId = inCenter ? 'center' : props.layout.dockOf(targetTabId)
+        const position = clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+        const rootRect = sessionLayoutEl.value.getBoundingClientRect()
+        return {
+            dockId,
+            targetTabId,
+            position,
+            indicator: {
+                axis: 'v',
+                x: (position === 'before' ? rect.left : rect.right) - rootRect.left,
+                y: rect.top - rootRect.top + 3,
+                h: Math.max(18, rect.height - 6),
+            },
+        }
+    }
+    return null
+}
+
+function updateTabDrop(clientX, clientY) {
+    if (!tabDrag.value || !sessionLayoutEl.value) return
+    tabDrag.value.clientX = clientX
+    tabDrag.value.clientY = clientY
+    const header = tabHeaderAt(clientX, clientY)
+    if (header) {
+        activeDrop.value = header
+        return
+    }
+    const rect = sessionLayoutEl.value.getBoundingClientRect()
+    const zone = dropZoneAt(tabDropZones.value, clientX - rect.left, clientY - rect.top)
+    activeDrop.value = zone ? { dockId: zone.dockId, targetTabId: null, position: 'after' } : null
+}
+
+function onTabPointerMove(event) {
+    if (!pendingTabDrag || event.pointerId !== pendingTabDrag.pointerId) return
+    pendingTabDrag.lastX = event.clientX
+    pendingTabDrag.lastY = event.clientY
+    if (!tabDrag.value) {
+        const distance = Math.hypot(event.clientX - pendingTabDrag.x, event.clientY - pendingTabDrag.y)
+        if (pendingTabDrag.pointerType === 'mouse') {
+            if (distance >= MOUSE_DRAG_DISTANCE) startTabDrag(event.clientX, event.clientY)
+        } else if (distance > TOUCH_MOVE_TOLERANCE) {
+            cancelTabPointer()
+            return
+        }
+    }
+    if (!tabDrag.value) return
+    event.preventDefault()
+    if (!tabDrag.value.moved && Math.hypot(
+        event.clientX - tabDrag.value.startX,
+        event.clientY - tabDrag.value.startY,
+    ) > 2) tabDrag.value.moved = true
+    if (!tabDrag.value.moved) return
+    updateTabDrop(event.clientX, event.clientY)
+}
+
+function finishTabDrag() {
+    const wasDragging = !!tabDrag.value
+    clearLongPress()
+    pendingTabDrag = null
+    tabDrag.value = null
+    activeDrop.value = null
+    removeTabPointerListeners()
+    if (wasDragging) {
+        suppressClickUntil = Date.now() + 500
+        document.body.style.userSelect = previousUserSelect
+        document.body.classList.remove('layout-tab-dragging')
+        framePool.endDividerDrag()
+    }
+    window.removeEventListener('keydown', onTabDragKeydown)
+}
+
+function onTabPointerUp(event) {
+    if (!pendingTabDrag || event.pointerId !== pendingTabDrag.pointerId) return
+    const dragState = tabDrag.value
+    const drop = activeDrop.value
+    if (dragState && drop) {
+        props.layout.moveTab(dragState.tab.id, drop.dockId, {
+            targetTabId: drop.targetTabId,
+            position: drop.position,
+            restoreDestination: drop.restoreDestination,
+        })
+        emit('tab-drop', dragState.tab.id, { activate: drop.activate !== false })
+    }
+    finishTabDrag()
+}
+function cancelTabPointer(event) {
+    if (event?.pointerId != null && pendingTabDrag && event.pointerId !== pendingTabDrag.pointerId) return
+    finishTabDrag()
+}
+function onTabDragKeydown(event) {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    cancelTabPointer()
+}
+function onCapturedClick(event) {
+    if (Date.now() >= suppressClickUntil) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+}
+function onCapturedContextMenu(event) {
+    if (tabDrag.value || (pendingTabDrag && pendingTabDrag.pointerType !== 'mouse')) event.preventDefault()
+}
+function onNativeDragStart(event) {
+    if (sourceTabForEvent(event)) event.preventDefault()
+}
+
+const dragGhostStyle = computed(() => tabDrag.value ? {
+    left: `${tabDrag.value.clientX + 14}px`,
+    top: `${tabDrag.value.clientY + 14}px`,
+} : {})
+function zoneStyle(zone) {
+    return { left: `${zone.x}px`, top: `${zone.y}px`, width: `${zone.w}px`, height: `${zone.h}px` }
+}
+function insertionStyle(indicator) {
+    return {
+        left: `${indicator.x}px`,
+        top: `${indicator.y}px`,
+        ...(indicator.axis === 'h' ? { width: `${indicator.w}px` } : { height: `${indicator.h}px` }),
+    }
+}
+
+onBeforeUnmount(cancelTabPointer)
 </script>
 
 <template>
-    <div ref="sessionLayoutEl" class="session-layout" :class="[rootClasses, { resizing: draggingId !== null }]">
+    <div
+        ref="sessionLayoutEl"
+        class="session-layout"
+        :class="[rootClasses, { resizing: draggingId !== null, 'tab-drag-active': !!tabDrag }]"
+        @pointerdown.capture="onTabPointerDown"
+        @click.capture="onCapturedClick"
+        @contextmenu.capture="onCapturedContextMenu"
+        @dragstart.capture="onNativeDragStart"
+    >
         <div class="center-slot" :style="centerStyle" v-show="centerVisible">
             <slot></slot>
         </div>
@@ -255,6 +538,34 @@ onBeforeUnmount(endDrag)
                 @place="(id, dest) => layout.place(id, dest)"
             />
         </template>
+
+        <div v-if="tabDrag" class="tab-drop-layer" aria-hidden="true">
+            <div
+                v-for="zone in tabDropZones"
+                :key="zone.dockId"
+                class="tab-drop-zone"
+                :class="{ active: activeDrop?.dockId === zone.dockId }"
+                :style="zoneStyle(zone)"
+            >
+                <div class="tab-drop-card">
+                    <wa-icon :src="DOCK_ICONS[zone.dockId]"></wa-icon>
+                    <span>{{ DOCK_LABELS[zone.dockId] }}</span>
+                </div>
+            </div>
+            <div
+                v-if="activeDrop?.indicator"
+                class="tab-drop-insertion"
+                :class="`axis-${activeDrop.indicator.axis}`"
+                :style="insertionStyle(activeDrop.indicator)"
+            ></div>
+        </div>
+
+        <!-- A real WA tab provides the exact normal-tab rendering for the drag ghost, regardless of
+             whether the source came from an overlay or a minimized gutter. -->
+        <wa-tab v-if="tabDrag" class="layout-tab-drag-ghost" :style="dragGhostStyle" active>
+            <wa-icon v-if="tabDrag.tab.icon" :name="tabDrag.tab.icon"></wa-icon>
+            <span>{{ tabDrag.tab.label }}</span>
+        </wa-tab>
     </div>
 </template>
 
@@ -272,6 +583,80 @@ onBeforeUnmount(endDrag)
    to the parent document so the drag keeps tracking. */
 .session-layout.resizing :deep(iframe) {
     pointer-events: none;
+}
+.session-layout.tab-drag-active :deep(iframe) {
+    pointer-events: none;
+}
+/* A long press on the icon/name is reserved for tab dragging. The surrounding tab strip still owns
+   its native horizontal touch pan through its empty space and placement controls. */
+.session-layout :deep(.session-tab-link),
+.session-layout :deep(.g-chip) {
+    touch-action: none;
+    -webkit-user-drag: none;
+}
+.tab-drop-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--wa-color-surface-default, #fff) 18%, transparent);
+}
+.tab-drop-zone {
+    position: absolute;
+    padding: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.tab-drop-card {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    border: 1px dashed color-mix(in srgb, var(--wa-color-brand-600, #2563eb) 58%, transparent);
+    border-radius: var(--wa-border-radius-m, 8px);
+    background: color-mix(in srgb, var(--wa-color-brand-500, #3b82f6) 8%, transparent);
+    color: var(--wa-color-text-quiet);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--wa-space-2xs);
+    font-size: var(--wa-font-size-s, 0.85rem);
+    transition: background-color 100ms ease, border-color 100ms ease, color 100ms ease;
+}
+.tab-drop-card wa-icon {
+    width: 28px;
+    height: 28px;
+}
+.tab-drop-zone.active .tab-drop-card {
+    border-style: solid;
+    border-color: var(--wa-color-brand-600, #2563eb);
+    background: color-mix(in srgb, var(--wa-color-brand-500, #3b82f6) 24%, transparent);
+    color: var(--wa-color-text-normal);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wa-color-brand-600, #2563eb) 35%, transparent);
+}
+.tab-drop-insertion {
+    position: absolute;
+    z-index: 2;
+    border-radius: 2px;
+    background: var(--wa-color-brand-600, #2563eb);
+    box-shadow: 0 0 0 1px var(--wa-color-surface-default, #fff);
+}
+.tab-drop-insertion.axis-v { width: 3px; }
+.tab-drop-insertion.axis-h { height: 3px; }
+.layout-tab-drag-ghost {
+    position: fixed;
+    z-index: 10000;
+    pointer-events: none;
+    opacity: 0.94;
+    filter: drop-shadow(0 5px 12px rgba(0, 0, 0, 0.25));
+    background: var(--wa-color-surface-default, #fff);
+    border-radius: var(--wa-border-radius-s, 4px);
+}
+.layout-tab-drag-ghost::part(base) {
+    padding: var(--wa-space-2xs) var(--wa-space-xs);
+    gap: var(--wa-space-2xs);
 }
 .center-slot {
     position: absolute;

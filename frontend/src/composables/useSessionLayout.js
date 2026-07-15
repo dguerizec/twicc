@@ -16,6 +16,7 @@ import { computed, ref, watch } from 'vue'
 import { useElementSize } from '@vueuse/core'
 import { resolveLayout, DOCKS } from '../utils/layoutResolver'
 import { edgeOfDock } from '../components/session/layout/dockMeta'
+import { moveLayoutTabOrder, orderLayoutTabs } from '../utils/layoutDrag'
 import { useDataStore } from '../stores/data'
 import { useHelpStore } from '../stores/help'
 import { useSettingsStore } from '../stores/settings'
@@ -27,6 +28,7 @@ const EMPTY_INTENTION = Object.freeze({
     activeResize: 'left',
     activeByGroup: Object.freeze({}),
     resizeFractions: Object.freeze({}),
+    tabOrder: Object.freeze([]),
     maximized: null,
 })
 
@@ -74,8 +76,9 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     })
 
     // ---- Resolve ----
+    const orderedTabs = computed(() => orderLayoutTabs(tabs.value, intention.value.tabOrder))
     const render = computed(() => resolveLayout({
-        tabs: tabs.value,
+        tabs: orderedTabs.value,
         assignment: intention.value.assignment,
         viewport: { w: width.value, h: height.value },
         activeSide: intention.value.activeSide,
@@ -119,6 +122,10 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     // The dock a tab is assigned to ('center' when unassigned).
     function dockOf(tabId) {
         return intention.value.assignment[tabId] || 'center'
+    }
+
+    function tabById(tabId) {
+        return tabs.value.find((tab) => tab.id === tabId) || null
     }
 
     // ---- Teleport target resolution (logical keys; SessionView maps key -> element) ----
@@ -181,6 +188,28 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         // disabled, or another help is open. place() is the single funnel for
         // every manual placement (tab-header arrow, overlay, command palette),
         // and is never hit by programmatic layout loads.
+        if (dest && dest !== 'center') {
+            helpStore.maybeAutoShow('layout-docks', {
+                platform: settings._isTouchDevice ? 'mobile' : 'desktop',
+                os: settings.os,
+                enabledProviders: settings.enabledProviders,
+            })
+        }
+    }
+    function moveTab(tabId, dest, {
+        targetTabId = null,
+        position = 'after',
+        restoreDestination = true,
+    } = {}) {
+        const draggableIds = tabs.value.filter((tab) => !tab.fixedCenter).map((tab) => tab.id)
+        const tabOrder = moveLayoutTabOrder({
+            tabOrder: intention.value.tabOrder,
+            knownTabIds: draggableIds,
+            tabId,
+            targetTabId,
+            position,
+        })
+        store.moveLayoutTab(sessionId.value, { tabId, dest, tabOrder, restoreDestination })
         if (dest && dest !== 'center') {
             helpStore.maybeAutoShow('layout-docks', {
                 platform: settings._isTouchDevice ? 'mobile' : 'desktop',
@@ -266,11 +295,11 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
 
     return {
         width, height, measured,
-        render, isDockingActive, dockingRendered,
-        regionActiveTabId, dockActiveTabId, dockOf, groupKeyOf,
+        render, orderedTabs, isDockingActive, dockingRendered,
+        regionActiveTabId, dockActiveTabId, dockOf, tabById, groupKeyOf,
         targetKeyForTab, isToolPanelVisible, overlayEdgeForTab,
         openOverlayEdge, routeActiveTabId,
-        place, minimize, restore, swapSide, rememberActive,
+        place, moveTab, minimize, restore, swapSide, rememberActive,
         setActiveResize, setResizeFraction,
         maximize, restoreMaximized, maximizedRegion, isCenterMaximized,
     }

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Drag-and-drop layouts** — Arrange tool tabs by dragging them between the main area and docks.
+
 ### Fixed
 
 - **Agent settings popover** — stays in place while settings update, and now displays correctly on mobile.
