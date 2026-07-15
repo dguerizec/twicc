@@ -774,7 +774,7 @@ function switchToTab(panel) {
     // Ignore if already on this tab (avoid infinite loop)
     if (panel === activeTabId.value) return
     const location = sessionTabRouteLocation(panel)
-    if (location) router.push(location)
+    if (location) return router.push(location)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1060,10 +1060,13 @@ function onCenterTabClick(tabId) {
 
 // Minimizing the dock that holds the focused tab would leave the URL on a now-hidden panel —
 // hand focus back to the center's active tab.
-function onLayoutMinimize(dockIds) {
+async function onLayoutMinimize(dockIds) {
     const focusedLeaving = dockIds.includes(layout.dockOf(activeTabId.value))
-    layout.minimize(dockIds)
-    if (focusedLeaving) switchToTab(centerActiveTab.value)
+    await layout.withRouteRevealSuspended(async () => {
+        cancelPaneFocus()
+        layout.minimize(dockIds)
+        if (focusedLeaving) await switchToTab(centerActiveTab.value)
+    })
 }
 
 // Maximize (transient view state; the only exit is restore). Maximizing a region routes + focuses its
@@ -1175,13 +1178,19 @@ const layoutManagerDialogRef = ref(null)
 function onManageLayouts() {
     layoutManagerDialogRef.value?.open()
 }
-function onCenterMaximize() {
-    layout.maximize(['center'])
-    switchToTab(centerActiveTab.value)
+async function onCenterMaximize() {
+    await layout.withRouteRevealSuspended(async () => {
+        cancelPaneFocus()
+        layout.maximize(['center'])
+        await switchToTab(centerActiveTab.value)
+    })
 }
-function onLayoutMaximize(dockIds, tabId) {
-    layout.maximize(dockIds)
-    if (tabId) switchToTab(tabId)
+async function onLayoutMaximize(dockIds, tabId) {
+    await layout.withRouteRevealSuspended(async () => {
+        cancelPaneFocus()
+        layout.maximize(dockIds)
+        if (tabId) await switchToTab(tabId)
+    })
 }
 function onLayoutRestoreMaximized() {
     // A region maximized straight from the rail (a minimized or swapped-out dock) keeps its

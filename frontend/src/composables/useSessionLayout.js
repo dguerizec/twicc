@@ -12,7 +12,7 @@
 // clicks navigate the route (handled by the caller); a watch here records the memory and
 // makes a routed tab visible if its dock was collapsed.
 
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useElementSize } from '@vueuse/core'
 import { resolveLayout, DOCKS } from '../utils/layoutResolver'
 import { edgeOfDock } from '../components/session/layout/dockMeta'
@@ -249,6 +249,21 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     // layout is hydrated. Watching only routeActiveTabId therefore missed a dock that became known as
     // collapsed a moment later. Primitive sources for the routed dock's swap/group state also rerun
     // after tab-presence, measurement and responsive changes, but avoid every unrelated resize.
+    // Explicit window actions (minimize / maximize) may intentionally make the currently routed
+    // pane disappear and move the route as part of the same gesture. Keep the route-reveal watcher
+    // from undoing the layout half of that atomic transition before Vue Router finishes the route
+    // half. The extra tick keeps the guard active while route-driven watchers flush.
+    let routeRevealSuspensions = 0
+    async function withRouteRevealSuspended(action) {
+        routeRevealSuspensions += 1
+        try {
+            return await action()
+        } finally {
+            await nextTick()
+            routeRevealSuspensions -= 1
+        }
+    }
+
     watch([
         routeActiveTabId,
         () => intention.value.assignment[routeActiveTabId.value] || null,
@@ -267,6 +282,7 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         },
     ], ([id, dock, collapsed, maximized, swapEdge, groupKey]) => {
         if (!id) return
+        if (routeRevealSuspensions > 0) return
         // Demaximize when focusing a tab outside the maximized region — covers any programmatic focus
         // into a tab the maximized region hides (View Agent from a workflow in a maximized dock,
         // opening a file in Files from a maximized Git, …). Must run BEFORE the dock guard below,
@@ -302,5 +318,6 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
         place, moveTab, minimize, restore, swapSide, rememberActive,
         setActiveResize, setResizeFraction,
         maximize, restoreMaximized, maximizedRegion, isCenterMaximized,
+        withRouteRevealSuspended,
     }
 }

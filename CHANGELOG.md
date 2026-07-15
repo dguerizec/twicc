@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Dock controls** — docks now minimize and maximize on the first click.
 - **Agent settings popover** — stays in place while settings update, and now displays correctly on mobile.
 
 ## [1.92.0] - 2026-07-14
