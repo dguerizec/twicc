@@ -1429,12 +1429,14 @@ class ClaudeCodeAgent(BaseAgent):
         return "\n".join(parts)
 
     async def _update_live_monitor_tasks(self, msg: UserMessage) -> None:
-        """Track Monitor starts and terminal task notifications from the SDK.
+        """Track Monitor starts and terminal notifications from the SDK.
 
         A Monitor acknowledgement carries ``tool_use_result.taskId`` and the
         literal ``Monitor started`` text. Its eventual task notification carries
         the same id plus a ``status`` field. Event-only notifications carry no
-        status and intentionally leave the monitor live.
+        status and intentionally leave the monitor live. A successful ``TaskStop``
+        is another terminal path: its result has ``task_id`` either in the
+        structured tool result or in its JSON text payload.
         """
         text = self._message_content_text(msg.content)
         tool_use_result = msg.tool_use_result
@@ -1447,6 +1449,25 @@ class ClaudeCodeAgent(BaseAgent):
                     self.session_id, task_id, len(self._live_monitor_tasks),
                 )
                 return
+
+        stopped_task_id = tool_use_result.get("task_id") if isinstance(tool_use_result, dict) else None
+        if not isinstance(stopped_task_id, str):
+            try:
+                tool_result_payload = orjson.loads(text)
+            except orjson.JSONDecodeError:
+                tool_result_payload = None
+            if isinstance(tool_result_payload, dict):
+                stopped_task_id = tool_result_payload.get("task_id")
+
+        if isinstance(stopped_task_id, str) and stopped_task_id in self._live_monitor_tasks:
+            self._live_monitor_tasks.remove(stopped_task_id)
+            logger.debug(
+                "Session %s: Monitor %s stopped by TaskStop (%d live)",
+                self.session_id, stopped_task_id, len(self._live_monitor_tasks),
+            )
+            if self._waiting_label_active:
+                await self._refresh_waiting_label()
+            return
 
         task_id_match = _TASK_NOTIFICATION_TASK_ID_RE.search(text)
         status_match = _TASK_NOTIFICATION_STATUS_RE.search(text)

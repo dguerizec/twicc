@@ -44,6 +44,20 @@ def test_monitor_start_holds_liveness_until_terminal_notification() -> None:
     assert agent._live_monitor_tasks == set()
 
 
+def test_task_stop_result_ends_monitor_from_its_json_text_payload() -> None:
+    agent = _agent()
+    agent._live_monitor_tasks.add("monitor-1")
+
+    asyncio.run(agent._update_live_monitor_tasks(UserMessage(
+        content=(
+            '{"message":"Successfully stopped task: monitor-1",'
+            '"task_id":"monitor-1","task_type":"local_bash"}'
+        ),
+    )))
+
+    assert agent._live_monitor_tasks == set()
+
+
 def test_monitor_label_is_used_while_no_higher_priority_wait_exists() -> None:
     agent = _agent()
     agent._live_monitor_tasks.add("monitor-1")
