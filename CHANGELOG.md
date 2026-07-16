@@ -4,13 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As a small deviation, each release opens with a one-line **Summary** recapping its highlights, and some entries include illustrative screenshots in nested sub-lists.
 
-## [Unreleased]
+## [1.92.2] - 2026-07-17
+
+### Summary
+
+- **v1.92.2: Codex Plan mode & Auto-review** — Codex gains a Plan mode and a new Auto-review permission mode, plus small adjustments and reliability fixes.
 
 ### Added
 
 - **Codex Plan mode** — Plan before coding with the `/plan` command: Codex explores and proposes a plan, then one click implements it — in the same session or in a new one seeded with the plan.
 - **Multiple saved browser URLs** — Save several URLs per project or workspace for the Browser tab, with optional labels and a Home default; manage them from the Browser toolbar or the edit dialogs.
-- **Codex Auto-review permissions** — Let Codex automatically review sandbox escalation requests, providing a guarded counterpart to Claude's Auto mode.
+- **Codex new permission mode** — Auto-review has Codex vet its own risky actions: it keeps going on the safe ones and only asks you about the ones it refuses.
 - **Divider double-click** — Double-click the divider next to a dock to maximize it.
 
 ### Changed
