@@ -48,6 +48,9 @@ export const useDataStore = defineStore('shareData', {
             return items[lineNum - 1] || null
         },
         getSessionVisualItems: (s) => (id) => s.visualItems[id] || [],
+        // No per-session debug override in a share (the dev-mode toggle has no
+        // counterpart here), so the viewer's mode is always the effective one.
+        getEffectiveDisplayMode: () => () => useSettingsStore().getDisplayMode,
         getExpandedGroups: (s) => (id) => s.expandedGroups[id] || [],
         getInternalExpandedGroups: (s) => (id, lineNum) => (s.internalExpandedGroups[id]?.[lineNum]) || [],
         isBlockDetailed: (s) => (id, u) => (s.detailedBlocks[id] || []).includes(u),
