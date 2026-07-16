@@ -195,6 +195,7 @@ class CodexAgent(BaseAgent):
         codex: TwiccAsyncCodex,
         thread: TwiccAsyncThread,
         untrusted: bool = False,
+        work_dirs: list[str] | None = None,
     ) -> None:
         super().__init__(session_id, project_id, cwd, agent_settings=settings)
         self._codex = codex
@@ -263,10 +264,11 @@ class CodexAgent(BaseAgent):
         self._user_terminated_tool_ids: dict[str, str] = {}
 
         # This session's work dirs (own artifacts/scratch + the orchestration
-        # root's shared scratch), resolved + pre-created once on the first turn
-        # (where the canonical thread id is final) and reused as the
-        # workspace-write ``writable_roots`` on every turn. ``None`` until then.
-        self._work_dirs: list[str] | None = None
+        # root's shared scratch), normally resolved + pre-created by the manager
+        # once the canonical thread id is final. Reused as workspace-write
+        # ``writable_roots`` on every turn; ``None`` only for direct/test
+        # construction paths that still resolve them lazily in ``start``.
+        self._work_dirs: list[str] | None = work_dirs
 
         # Captured lazily in ``start()`` — that's the first place we're
         # guaranteed to be inside a running asyncio loop. The SDK's worker
@@ -360,13 +362,11 @@ class CodexAgent(BaseAgent):
         # via ``asyncio.run_coroutine_threadsafe`` (see ``_sync_approval_handler``).
         self._loop = asyncio.get_running_loop()
 
-        # Pre-create this session's work dirs and cache them for the
-        # workspace-write ``writable_roots`` (reused on every turn). Done here,
-        # before the hardcoded-command short-circuit below, so the pre-creation
-        # contract ("every start/resume, all modes") still holds when we wake a
-        # cold session just to run a command (e.g. /compact) and never reach
-        # ``_run_turn``.
-        self._work_dirs = await self._resolve_and_create_work_dirs()
+        # The manager normally resolves these before binding the thread-level
+        # workspace-write config. Keep a lazy fallback for direct construction
+        # paths, but never redo the filesystem/DB work during ordinary startup.
+        if self._work_dirs is None:
+            self._work_dirs = await self._resolve_and_create_work_dirs()
 
         if command is not None:
             # Run a hardcoded command (e.g. ``/compact`` on a cold session, or

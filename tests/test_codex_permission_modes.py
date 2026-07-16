@@ -115,10 +115,12 @@ class TestToSandboxPolicy:
         assert result.root.type == "readOnly"
 
     def test_workspace_write_returns_workspace_write_policy(self):
-        result = _to_sandbox_policy(SandboxMode.workspace_write)
+        roots = ["/data/artifacts/session", "/data/scratch/session"]
+        result = _to_sandbox_policy(SandboxMode.workspace_write, roots)
         assert isinstance(result, SandboxPolicy)
         assert isinstance(result.root, WorkspaceWriteSandboxPolicy)
         assert result.root.type == "workspaceWrite"
+        assert [path.root for path in result.root.writable_roots] == roots
 
     def test_danger_full_access_returns_danger_full_access_policy(self):
         result = _to_sandbox_policy(SandboxMode.danger_full_access)

@@ -20,6 +20,7 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
 from twicc.agent.work_dir_autoapprove import all_targets_within_work_dirs
+from twicc.agent.work_dirs import resolve_and_create_work_dirs
 from twicc.context_injection import clear_context, reconcile, reset_baseline
 from twicc.core.enums import Provider
 from twicc.logging_context import provider_log_context
@@ -133,7 +134,8 @@ class BaseAgent:
         # ``_resolve_and_create_work_dirs``. Used both to grant prompt-free
         # access at agent build and to auto-approve tool approvals that target
         # only these dirs (``_targets_only_work_dirs``). Empty until resolved
-        # (Codex narrows it to ``None`` until the first turn — see its __init__).
+        # (Codex may narrow it to ``None`` only on direct construction paths —
+        # its manager normally resolves the list before agent startup).
         self._work_dirs: list[str] = []
 
     # ------------------------------------------------------------------
@@ -649,7 +651,11 @@ class BaseAgent:
         """Forget the reconciliation baseline (resume) → next reconcile re-injects all."""
         reset_baseline(self.session_id)
 
-    async def _resolve_and_create_work_dirs(self) -> list[str]:
+    async def _resolve_and_create_work_dirs(
+        self,
+        *,
+        pending_id: str | None = None,
+    ) -> list[str]:
         """Pre-create this session's work dirs and return them as absolute paths.
 
         Always covers the session's own ``artifacts/<id>`` and ``scratch/<id>``.
@@ -666,86 +672,16 @@ class BaseAgent:
         prune empty dirs later, and we recreate them here on the next
         start/resume.
 
-        Runs once per agent instance (Claude: at ``start``; Codex: lazily on the
-        first turn, where the canonical thread id is final). The ``spawn_root``
-        id is read from the ``Session`` row, falling back to the pending-session
-        buffer for a brand-new session whose row the watcher has not written
-        yet. Each id must be a single safe path component (no empty value,
-        ``.``/``..``, or path separators) so a work dir can only ever be
-        ``<root>/<id>``; a malformed id is dropped. (TwiCC owns the whole data
-        dir and only ever builds ``<root>/<known id>``, so this is a cheap
-        robustness net against a malformed id, not a defense against a hostile
-        filesystem.) Best-effort: a failed ``mkdir`` (or a rejected id) is logged
-        and that dir is omitted, never raised — it must never abort agent
-        startup.
+        ``pending_id`` is forwarded for providers whose canonical id differs
+        from the pending-session buffer key during startup (Codex draft ids).
+        Resolution and validation live in
+        :func:`twicc.agent.work_dirs.resolve_and_create_work_dirs` so a provider
+        manager can establish the same grants before constructing an agent.
         """
-        from twicc.core.models import Session
-        from twicc.paths import get_artifacts_dir, get_scratch_dir
-        from twicc.pending_session_attributes import get_pending_session_attributes
-
-        session_id = self.session_id
-
-        def _build() -> list[str]:
-            # (root, segment) pairs to grant. ``segment`` is a session id used as
-            # a single path component under ``root``; the guard below rejects any
-            # id that is not a single safe component (empty, ``.``/``..``, or with
-            # separators) so a malformed id can never reach another session.
-            candidates = [
-                (get_artifacts_dir(), session_id),
-                (get_scratch_dir(), session_id),
-            ]
-            # Shared scratch of the orchestration root: the spawn_root id comes
-            # from the Session row (resume) or the pending buffer (fresh start,
-            # row not written yet). A top-level session has no spawn_root; a
-            # session that IS the root already has its own scratch above.
-            spawn_root_id = (
-                Session.objects
-                .filter(id=session_id)
-                .values_list("spawn_root_id", flat=True)
-                .first()
-            )
-            if spawn_root_id is None:
-                pending = get_pending_session_attributes(session_id)
-                spawn_root_id = pending.spawn_root_id if pending else None
-            if spawn_root_id and spawn_root_id != session_id:
-                candidates.append((get_scratch_dir(), spawn_root_id))
-
-            work_dirs: list[str] = []
-            for root, segment in candidates:
-                # The id must be a single safe path component, so the dir can
-                # only be ``<root>/<id>`` (rejects empty, ``.``/``..`` and path
-                # separators). TwiCC owns the data dir and only ever builds
-                # ``<root>/<known id>`` — no agent can write the roots, only its
-                # own pre-created subdir — so this is a cheap robustness net
-                # against a malformed id, not a defense against a hostile FS
-                # (e.g. symlinks planted in the roots, which cannot happen here).
-                if (
-                    not segment
-                    or segment in (".", "..")
-                    or "/" in segment
-                    or "\\" in segment
-                    or "\x00" in segment
-                ):
-                    logger.warning(
-                        "Skipping unsafe work dir id %r under %s for session %s",
-                        segment, root, session_id,
-                    )
-                    continue
-                target = root / segment
-                # Only grant a dir we could actually create: a failed mkdir
-                # leaves no usable dir, so don't promise access to it.
-                try:
-                    target.mkdir(parents=True, exist_ok=True)
-                except OSError as exc:
-                    logger.warning(
-                        "Could not pre-create work dir %s for session %s: %s",
-                        target, session_id, exc,
-                    )
-                    continue
-                work_dirs.append(str(target))
-            return work_dirs
-
-        work_dirs = await sync_to_async(_build)()
+        work_dirs = await resolve_and_create_work_dirs(
+            self.session_id,
+            pending_id=pending_id,
+        )
         # Cache for the auto-approval path (``_targets_only_work_dirs``); the
         # caller also passes these to the provider's directory-scope grant.
         self._work_dirs = work_dirs

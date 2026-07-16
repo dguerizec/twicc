@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Browser tab warnings** — When a page can't be embedded, the warning now links to the Browser tab guide to help you get your dev server showing.
 
+### Fixed
+
+- **Codex work directories** — Keep session scratch and artifact directories writable for Codex-owned continuations such as `/goal`, including when a command starts a new session.
+
 ## [1.92.1] - 2026-07-16
 
 ### Summary

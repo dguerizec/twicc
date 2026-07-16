@@ -161,7 +161,7 @@ def get_session_artifacts_dir(session_id: str) -> Path:
     """Return the artifact directory for a given session (path only).
 
     The directory itself is pre-created (``mkdir -p``) at agent start/resume by
-    ``twicc.agent.base_agent.BaseAgent._resolve_and_create_work_dirs`` so the
+    ``twicc.agent.work_dirs.resolve_and_create_work_dirs`` so the
     agent can write into it prompt-free; this helper only computes the path.
     """
     return get_artifacts_dir() / session_id
@@ -193,7 +193,7 @@ def get_session_scratch_dir(session_id: str) -> Path:
     """Return the per-session scratch directory (path only).
 
     The directory itself is pre-created (``mkdir -p``) at agent start/resume by
-    ``twicc.agent.base_agent.BaseAgent._resolve_and_create_work_dirs`` so the
+    ``twicc.agent.work_dirs.resolve_and_create_work_dirs`` so the
     agent can write into it prompt-free; this helper only computes the path.
     """
     return get_scratch_dir() / session_id

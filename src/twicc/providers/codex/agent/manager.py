@@ -20,6 +20,7 @@ from typing import Any, ClassVar
 from asgiref.sync import sync_to_async
 
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager, SendDeliveryError
+from twicc.agent.work_dirs import resolve_and_create_work_dirs
 from twicc.context_injection import inject_context
 from twicc.core.enums import Provider
 from twicc.logging_context import provider_log_context
@@ -614,6 +615,13 @@ class CodexAgentManager(BaseAgentManager):
             # collaboration mode, not just Plan. Applied on both start and resume.
             _force_request_user_input(thread_config)
             if resume:
+                # The canonical id is already known, so establish the extra
+                # workspace-write roots in the first resume request. This is
+                # the thread-level counterpart to the per-turn sandbox policy:
+                # Codex-owned continuations (notably /goal) do not pass through
+                # TwiCC's turn/start path and therefore need the roots here.
+                work_dirs = await resolve_and_create_work_dirs(session_id)
+                _apply_codex_work_dirs(thread_config, work_dirs)
                 # Model is sticky to the existing thread server-side — leave it
                 # unset so the resumed thread keeps whatever model it was started
                 # with. Sandbox / approval are re-asserted because the SDK
@@ -656,6 +664,18 @@ class CodexAgentManager(BaseAgentManager):
                     developer_instructions=developer_instructions,
                 )
 
+                # The canonical id only exists after thread/start, while the
+                # work directories are deliberately scoped to that id. Create
+                # them now, then immediately bind them through thread/resume
+                # before a user turn or Codex-owned goal continuation can run.
+                # ``pending_id`` preserves access to the draft-keyed
+                # orchestration metadata until the watcher creates the row.
+                work_dirs = await resolve_and_create_work_dirs(
+                    thread.id,
+                    pending_id=session_id,
+                )
+                _apply_codex_work_dirs(thread_config, work_dirs)
+
                 # Codex just minted the canonical thread id — the one piece of
                 # context that could not go into the (already-frozen)
                 # developer_instructions. Queue it so the first user message
@@ -671,6 +691,14 @@ class CodexAgentManager(BaseAgentManager):
                 from twicc.mcp.identity import register_draft_alias
 
                 register_draft_alias(session_id, thread.id)
+
+                thread = await codex.thread_resume_with_policy(
+                    thread.id,
+                    sandbox=sandbox,
+                    approval_policy=approval_policy,
+                    approvals_reviewer=approvals_reviewer,
+                    config=thread_config,
+                )
 
             # Re-home the debug stderr log from the draft id (all we had before
             # thread_start) onto the canonical id, so it matches the JSONL
@@ -691,6 +719,7 @@ class CodexAgentManager(BaseAgentManager):
                 codex=codex,
                 thread=thread,
                 untrusted=untrusted,
+                work_dirs=work_dirs,
             )
 
             # Prime the environment-reconciliation baseline (best-effort; the
@@ -786,6 +815,18 @@ def _force_request_user_input(thread_config: dict) -> None:
     features = thread_config.setdefault("features", {})
     features["default_mode_request_user_input"] = True
     thread_config["suppress_unstable_features_warning"] = True
+
+
+def _apply_codex_work_dirs(thread_config: dict, work_dirs: list[str]) -> None:
+    """Bind TwiCC's pre-created work dirs to Codex workspace-write threads.
+
+    The nested config is retained even when the current sandbox mode is
+    read-only or danger-full-access. It is harmless there and ensures a later
+    workspace-write continuation sees the same roots. Per-turn policy still
+    reasserts the list independently.
+    """
+    workspace_write = thread_config.setdefault("sandbox_workspace_write", {})
+    workspace_write["writable_roots"] = work_dirs
 
 
 def get_codex_agent_manager() -> CodexAgentManager:

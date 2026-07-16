@@ -2,7 +2,7 @@
 
 TwiCC pre-creates ``<data_dir>/artifacts/<session_id>/`` and
 ``<data_dir>/scratch/<session_id>/`` at agent start/resume
-(:meth:`twicc.agent.base_agent.BaseAgent._resolve_and_create_work_dirs`). Most
+(:func:`twicc.agent.work_dirs.resolve_and_create_work_dirs`). Most
 sessions never write anything into them, so over time the two roots accumulate
 empty directories. This task prunes them once a day.
 
