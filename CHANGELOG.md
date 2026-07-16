@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Codex Plan mode** — Plan before coding with the `/plan` command: Codex explores and proposes a plan, then one click implements it — in the same session or in a new one seeded with the plan.
 - **Multiple saved browser URLs** — Save several URLs per project or workspace for the Browser tab, with optional labels and a Home default; manage them from the Browser toolbar or the edit dialogs.
 - **Codex Auto-review permissions** — Let Codex automatically review sandbox escalation requests, providing a guarded counterpart to Claude's Auto mode.
 - **Divider double-click** — Double-click the divider next to a dock to maximize it.
