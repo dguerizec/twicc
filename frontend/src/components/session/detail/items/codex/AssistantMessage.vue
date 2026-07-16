@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, nextTick, onMounted } from 'vue'
 import { useDataStore } from '../../../../../stores/data'
+import { splitProposedPlan } from '../../../../../providers/codex/proposedPlan'
 import TextContent from '../TextContent.vue'
 import MarkdownContent from '../../../../ui/MarkdownContent.vue'
 
@@ -21,28 +22,10 @@ const props = defineProps({
     }
 })
 
-// Codex Plan collaboration mode wraps its final plan in literal
-// ``<proposed_plan>`` / ``</proposed_plan>`` tags so clients can render it
-// specially. The mode's built-in instructions make the shape a stable
-// contract: exact tags (never translated), each on its own line, markdown
-// inside, at most one block per turn, possibly surrounded by ordinary
-// assistant text. Split the message around the block; the closing tag is
-// optional so a streaming placeholder already shows the details while the
-// plan text is still growing (the block always ends the message in that
-// case). No opening tag → plain assistant text, untouched.
-const OPEN_TAG_RE = /(?:^|\n)[ \t]*<proposed_plan>[ \t]*(?:\n|$)/
-const CLOSE_TAG_RE = /(?:^|\n)[ \t]*<\/proposed_plan>[ \t]*(?:\n|$)/
-
-const segments = computed(() => {
-    const openMatch = props.text.match(OPEN_TAG_RE)
-    if (!openMatch) return null
-    const before = props.text.slice(0, openMatch.index)
-    const rest = props.text.slice(openMatch.index + openMatch[0].length)
-    const closeMatch = rest.match(CLOSE_TAG_RE)
-    const plan = closeMatch ? rest.slice(0, closeMatch.index) : rest
-    const after = closeMatch ? rest.slice(closeMatch.index + closeMatch[0].length) : ''
-    return { before: before.trim(), plan: plan.trim(), after: after.trim() }
-})
+// Codex Plan-mode final answers carry a ``<proposed_plan>`` block — see
+// ``providers/codex/proposedPlan.js`` for the tag contract and the split
+// semantics (streaming-tolerant). No block → plain assistant text, untouched.
+const segments = computed(() => splitProposedPlan(props.text))
 
 const dataStore = useDataStore()
 

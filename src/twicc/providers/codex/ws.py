@@ -208,12 +208,14 @@ class CodexWSHandler:
         if tool_name == "planImplementation":
             # TwiCC-owned post-plan prompt (no SDK wire behind it — the agent
             # interprets the decision itself, see
-            # ``CodexAgent._prompt_plan_implementation``).
-            if isinstance(decision, str) and decision in {"implement", "stay"}:
+            # ``CodexAgent._prompt_plan_implementation``). ``newSession`` is
+            # agent-side identical to ``stay``: the frontend creates the
+            # fresh session seeded with the plan itself.
+            if isinstance(decision, str) and decision in {"implement", "newSession", "stay"}:
                 return {"decision": decision}
             logger.error(
                 "codex planImplementation: invalid decision=%r "
-                "(expected 'implement' or 'stay')",
+                "(expected 'implement', 'newSession' or 'stay')",
                 decision,
             )
             return None

@@ -183,9 +183,14 @@ def test_plan_item_completed_arms_the_prompt(monkeypatch: pytest.MonkeyPatch) ->
     assert agent._plan_item_this_turn is True
 
 
-def test_plan_prompt_stay_settles_in_plan_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("decision", ["stay", "newSession"])
+def test_plan_prompt_stay_settles_in_plan_mode(
+    monkeypatch: pytest.MonkeyPatch, decision: str,
+) -> None:
+    # ``newSession`` is agent-side identical to ``stay``: the frontend owns
+    # the fresh-session creation.
     agent = _make_agent(monkeypatch)
-    agent._await_pending_request = AsyncMock(return_value={"decision": "stay"})
+    agent._await_pending_request = AsyncMock(return_value={"decision": decision})
     agent._run_turn = AsyncMock()
 
     asyncio.run(agent._prompt_plan_implementation())
@@ -245,6 +250,7 @@ def test_plan_implementation_ws_response_validation() -> None:
     build = CodexWSHandler._build_codex_response
     assert build(handler, "planImplementation", {"decision": "implement"}) == {"decision": "implement"}
     assert build(handler, "planImplementation", {"decision": "stay"}) == {"decision": "stay"}
+    assert build(handler, "planImplementation", {"decision": "newSession"}) == {"decision": "newSession"}
     assert build(handler, "planImplementation", {"decision": "accept"}) is None
     assert CodexWSHandler._safe_default_for(handler, "planImplementation") == {"decision": "stay"}
 

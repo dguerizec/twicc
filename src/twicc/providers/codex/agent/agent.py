@@ -1195,11 +1195,12 @@ class CodexAgent(BaseAgent):
           Default (the session's own settings stay untouched — model and
           permission mode remain whatever the user picked), then run the
           TUI's fixed "Implement the plan." message as a normal turn.
+        - ``newSession`` → agent-side identical to ``stay``: the frontend
+          creates the fresh session seeded with the plan itself (the TUI's
+          "clear context and implement", reframed — this session keeps its
+          Plan mode and full history).
         - ``stay`` (also the safe default) → settle to ``USER_TURN``; Plan
           mode stays active for further planning.
-
-        First increment: no "clear context and implement" (fresh-session)
-        option — deliberately deferred.
         """
         request = PendingRequest(
             request_id=f"planImplementation-{uuid.uuid4()}",
@@ -1241,8 +1242,8 @@ class CodexAgent(BaseAgent):
             await self._run_turn(_PLAN_IMPLEMENTATION_MESSAGE, None)
             return
 
-        # ``stay`` (or a malformed response resolved to the safe default):
-        # remain in Plan mode, hand control back to the user.
+        # ``stay`` / ``newSession`` (or a malformed response resolved to the
+        # safe default): remain in Plan mode, hand control back to the user.
         self._set_state(AgentState.USER_TURN)
         self.last_activity = time.time()
         await self._notify_state_change()
