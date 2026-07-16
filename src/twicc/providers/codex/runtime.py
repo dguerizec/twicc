@@ -117,6 +117,14 @@ def _store_dir() -> Path:
     return _cache_root() / CODEX_VERSION
 
 
+def _version_key(value: str) -> tuple[int, ...] | None:
+    """Return a comparable key for the stable numeric Codex versions we cache."""
+    parts = value.split(".")
+    if not parts or any(not part.isdecimal() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
 def _ready_marker() -> Path:
     return _store_dir() / ".ready"
 
@@ -167,7 +175,9 @@ def _download(url: str, dest: Path) -> None:
                     if pct >= next_pct:
                         logger.info(
                             "Codex runtime download: %d%% (%d/%d MB)",
-                            pct, downloaded // (1024 * 1024), total // (1024 * 1024),
+                            pct,
+                            downloaded // (1024 * 1024),
+                            total // (1024 * 1024),
                         )
                         next_pct += 10
     logger.info("Codex runtime download complete (%d bytes)", downloaded)
@@ -184,6 +194,53 @@ def _verify_sha256(path: Path, expected: str) -> None:
         raise CodexRuntimeIntegrityError(
             f"sha256 mismatch for {path.name}: expected {expected}, got {got}"
         )
+
+
+def _cleanup_previous_runtimes() -> None:
+    """Remove cached runtime directories older than the bundled version.
+
+    Each old version's download lock is held while deleting its directory, so
+    cleanup cannot race an extraction of that version in another TwiCC
+    process. Lock files themselves are tiny and deliberately retained: unlinking
+    a lock that another process still has open would break ``flock`` mutual
+    exclusion by allowing a second inode to be created at the same path.
+
+    Cleanup is best-effort because a cache permission issue must not make an
+    otherwise ready Codex runtime unusable.
+    """
+    cache_root = _cache_root()
+    current_key = _version_key(CODEX_VERSION)
+    if current_key is None or not cache_root.is_dir():
+        return
+
+    try:
+        entries = list(cache_root.iterdir())
+    except OSError:
+        logger.warning(
+            "Could not inspect the Codex runtime cache for old versions", exc_info=True
+        )
+        return
+
+    for entry in entries:
+        version_key = _version_key(entry.name)
+        if (
+            version_key is None
+            or version_key >= current_key
+            or entry.is_symlink()
+            or not entry.is_dir()
+        ):
+            continue
+        try:
+            with _file_lock(cache_root / f"{entry.name}.lock"):
+                if entry.is_dir() and not entry.is_symlink():
+                    shutil.rmtree(entry)
+                    logger.info(
+                        "Removed old Codex runtime %s from %s", entry.name, entry
+                    )
+        except OSError:
+            logger.warning(
+                "Could not remove old Codex runtime at %s", entry, exc_info=True
+            )
 
 
 def _download_and_extract() -> None:
@@ -232,10 +289,10 @@ def ensure_codex_runtime_sync() -> Path:
     instead so the download runs off the event loop.
     """
     global _ready_in_process
-    if _ready_in_process or is_runtime_ready():
-        _ready_in_process = True
-        return _store_dir()
-    _download_and_extract()
+    if not _ready_in_process:
+        if not is_runtime_ready():
+            _download_and_extract()
+        _cleanup_previous_runtimes()
     _ready_in_process = True
     return _store_dir()
 
