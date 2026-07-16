@@ -1035,14 +1035,17 @@ function onHomeSelect(event) {
             </template>
             <template v-else>
                 This site refuses to be embedded ({{ probeResult.reason }}) — the frame
-                below will likely stay blank. Use "Open in a new browser tab" instead.
+                below will likely stay blank. Use "Open in a new browser tab" instead, or
+                see the <a href="#" class="browser-empty-help-link" @click.prevent="openBrowserHelp">Browser tab guide</a>
+                to allow framing in dev.
             </template>
         </wa-callout>
 
         <wa-callout v-if="mixedContentBlocked" variant="warning" size="small" class="browser-banner">
             <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
             TwiCC is served over https, so the browser blocks embedding this http://
-            URL (mixed content). Open it in a new tab instead, or serve it over https.
+            URL (mixed content). Open it in a new tab instead, or serve it over https —
+            see the <a href="#" class="browser-empty-help-link" @click.prevent="openBrowserHelp">Browser tab guide</a>.
         </wa-callout>
 
         <wa-callout v-if="showCompanionHint" variant="neutral" size="small" class="browser-banner">
@@ -1052,7 +1055,8 @@ function onHomeSelect(event) {
                     This page doesn't include the TwiCC companion script. Add it
                     to your dev page to unlock real navigation history, element
                     selection (click a part of the page to describe it to the
-                    agent), and page-error capture:
+                    agent), and page-error capture (see the
+                    <a href="#" class="browser-empty-help-link" @click.prevent="openBrowserHelp">Browser tab guide</a>):
                 </span>
                 <code class="companion-snippet">{{ companionSnippet }}</code>
                 <div class="companion-hint-actions">
