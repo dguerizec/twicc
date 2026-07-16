@@ -1,8 +1,8 @@
 // frontend/src/utils/visualItems.js
 
-import { DISPLAY_LEVEL, DISPLAY_MODE, SYNTHETIC_ITEM } from '../constants'
-import { getParsedContent, setParsedContent } from './parsedContent'
-import { formatDayKey, formatDaySeparatorLabel } from './date'
+import { DISPLAY_LEVEL, DISPLAY_MODE, SYNTHETIC_ITEM } from '../constants.js'
+import { getParsedContent, setParsedContent } from './parsedContent.js'
+import { formatDayKey, formatDaySeparatorLabel } from './date.js'
 
 /**
  * Decide whether an item is visible in conversation mode (non-detailed branch).
@@ -65,6 +65,8 @@ function isVisibleInConversation(item, keptAssistantLineNums) {
  *   - kind: the item's kind
  *   - groupHead: the item's group_head
  *   - groupTail: the item's group_tail
+ *   - externallyGrouped: true when the whole item is owned by a session-level
+ *     collapsible group (its content must not add another nested group toggle)
  *   - isGroupHead?: true if this COLLAPSIBLE starts a group (shows toggle before it)
  *   - isExpanded?: true if the group is expanded
  *   - prefixGroupHead?: group_head for prefix (ALWAYS items)
@@ -91,6 +93,7 @@ export function computeVisualItems(items, mode, expandedGroups = [], isAssistant
             kind: item.kind,
             groupHead: item.group_head ?? null,
             groupTail: item.group_tail ?? null,
+            externallyGrouped: item.display_level === DISPLAY_LEVEL.COLLAPSIBLE,
             timestamp: item.timestamp ?? null,
             ...extras
         }

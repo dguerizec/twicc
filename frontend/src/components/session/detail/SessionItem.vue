@@ -50,6 +50,13 @@ const props = defineProps({
         type: Number,
         required: true
     },
+    // True when simplified mode already controls this whole item through a
+    // session-level GroupToggle. Claude's ContentList must then render the
+    // item's blocks directly instead of adding a second internal toggle.
+    externallyGrouped: {
+        type: Boolean,
+        default: false
+    },
     // Group props for ALWAYS items with prefix/suffix
     groupHead: {
         type: Number,
@@ -217,6 +224,7 @@ function toggleJsonView() {
                     :session-id="sessionId"
                     :parent-session-id="parentSessionId"
                     :line-num="lineNum"
+                    :externally-grouped="externallyGrouped"
                     :group-head="groupHead"
                     :group-tail="groupTail"
                     :prefix-expanded="prefixExpanded"

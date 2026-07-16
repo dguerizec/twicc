@@ -1748,6 +1748,7 @@ defineExpose({
                         :session-id="sessionId"
                         :parent-session-id="parentSessionId"
                         :line-num="item.lineNum"
+                        :externally-grouped="item.externallyGrouped || false"
                         :is-block-end="item.isBlockEnd || false"
                     />
                 </template>
@@ -1763,6 +1764,7 @@ defineExpose({
                     :session-id="sessionId"
                     :parent-session-id="parentSessionId"
                     :line-num="item.lineNum"
+                    :externally-grouped="item.externallyGrouped || false"
                     :group-head="item.groupHead"
                     :group-tail="item.groupTail"
                     :prefix-expanded="item.prefixExpanded || false"

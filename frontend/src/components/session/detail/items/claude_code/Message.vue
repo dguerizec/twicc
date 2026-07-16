@@ -31,6 +31,10 @@ const props = defineProps({
         type: Number,
         required: true
     },
+    externallyGrouped: {
+        type: Boolean,
+        default: false
+    },
     // Group props for prefix/suffix
     groupHead: {
         type: Number,
@@ -89,6 +93,7 @@ const contentItems = computed(() => {
         :parent-session-id="parentSessionId"
         :line-num="lineNum"
         :timestamp="data?.timestamp || null"
+        :externally-grouped="externallyGrouped"
         :group-head="groupHead"
         :group-tail="groupTail"
         :prefix-expanded="prefixExpanded"

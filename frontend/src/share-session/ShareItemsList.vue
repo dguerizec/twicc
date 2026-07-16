@@ -126,13 +126,15 @@ watch(() => [settings.displayMode, settings.areMessageTimestampsShown],
                     <SessionItem v-if="item.isExpanded" :class="{ 'is-block-end': item.isBlockEnd }"
                         :content="getParsedContent(item)" :kind="item.kind" :synthetic-kind="null"
                         :project-id="projectId" :session-id="sessionId" :parent-session-id="parentSessionId"
-                        :line-num="item.lineNum" :is-block-end="item.isBlockEnd || false" />
+                        :line-num="item.lineNum" :externally-grouped="item.externallyGrouped || false"
+                        :is-block-end="item.isBlockEnd || false" />
                 </template>
                 <SessionItem v-else
                     :class="{ 'is-block-start': item.isBlockStart, 'is-block-end': item.isBlockEnd }"
                     :content="getParsedContent(item)" :kind="item.kind" :synthetic-kind="null"
                     :project-id="projectId" :session-id="sessionId" :parent-session-id="parentSessionId"
-                    :line-num="item.lineNum" :group-head="item.groupHead" :group-tail="item.groupTail"
+                    :line-num="item.lineNum" :externally-grouped="item.externallyGrouped || false"
+                    :group-head="item.groupHead" :group-tail="item.groupTail"
                     :prefix-expanded="item.prefixExpanded || false" :suffix-expanded="item.suffixExpanded || false"
                     :detail-toggle-for="item.detailToggleFor ?? null" :is-block-end="item.isBlockEnd || false"
                     @toggle-suffix="toggleGroup(item.suffixGroupHead)" />

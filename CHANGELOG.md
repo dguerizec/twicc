@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Codex work directories** — Keep session scratch and artifact directories writable for Codex-owned continuations such as `/goal`, including when a command starts a new session.
+- **Simplified session view** — Expanding live Claude thinking no longer shows a duplicate switch.
 
 ## [1.92.1] - 2026-07-16
 

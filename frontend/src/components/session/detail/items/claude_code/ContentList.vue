@@ -47,6 +47,13 @@ const props = defineProps({
         type: Number,
         required: true
     },
+    // The whole SessionItem is already behind a session-level GroupToggle.
+    // Once that group is expanded, render its content without another nested
+    // toggle. Internal groups remain available for ALWAYS messages.
+    externallyGrouped: {
+        type: Boolean,
+        default: false
+    },
     timestamp: {
         type: String,
         default: null
@@ -118,7 +125,7 @@ const visibleItems = computed(() => {
     const result = []
 
     // In non-simplified modes, show everything without toggles
-    if (!isSimplifiedMode.value || props.role === 'items') {
+    if (!isSimplifiedMode.value || props.role === 'items' || props.externallyGrouped) {
         for (let itemIndex = 0; itemIndex < props.items.length; itemIndex++) {
             result.push({ index: itemIndex, item: props.items[itemIndex], show: true })
         }
