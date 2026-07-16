@@ -1,14 +1,31 @@
 /**
- * Resolve the artifact bookmarks visible from a session's real project
- * context. Unlike the sidebar Artifacts mode, a session tab inherits visible
- * bookmarks from shared workspaces and from the global scope.
- *
- * Returned rows are copies carrying a presentation-only `_visibilitySource`
- * field (`local` | `workspace` | `all`).
+ * Resolve the artifact bookmarks visible from a real project context. Session
+ * tabs and the dedicated Artifacts view share these inclusion rules.
  *
  * Visibility and presentation are deliberately separate: scope decides
- * whether a bookmark is present, while the tree always groups a visible row by
- * its raw owning project (including a distinct group for each worktree).
+ * whether a bookmark is present, independently of how a caller renders it.
+ */
+export function getArtifactBookmarkVisibilitySource({
+    bookmark,
+    localProjectIds,
+    sharedWorkspaceIds,
+    workspaceContainsProject,
+}) {
+    if (localProjectIds.has(bookmark.project_id)) return 'local'
+
+    if (bookmark.scope === 'workspace' || bookmark.scope === 'all') {
+        const sharesWorkspace = sharedWorkspaceIds.some(workspaceId =>
+            workspaceContainsProject(workspaceId, bookmark.project_id)
+        )
+        if (sharesWorkspace) return 'workspace'
+    }
+
+    return bookmark.scope === 'all' ? 'all' : null
+}
+
+/**
+ * Return visible bookmarks for a session tree, annotated with the visibility
+ * source used to order their owning-project groups.
  */
 export function computeSessionArtifactBookmarks({
     bookmarks,
@@ -27,19 +44,12 @@ export function computeSessionArtifactBookmarks({
 
     const rows = []
     for (const bookmark of Object.values(bookmarks || {})) {
-        let visibilitySource = null
-        if (localProjectIds.has(bookmark.project_id)) {
-            visibilitySource = 'local'
-        } else if (bookmark.scope === 'workspace' || bookmark.scope === 'all') {
-            const sharesWorkspace = sharedWorkspaceIds.some(workspaceId =>
-                workspaceContainsProject(workspaceId, bookmark.project_id)
-            )
-            if (sharesWorkspace) visibilitySource = 'workspace'
-        }
-
-        if (!visibilitySource && bookmark.scope === 'all') {
-            visibilitySource = 'all'
-        }
+        const visibilitySource = getArtifactBookmarkVisibilitySource({
+            bookmark,
+            localProjectIds,
+            sharedWorkspaceIds,
+            workspaceContainsProject,
+        })
         if (!visibilitySource) continue
 
         rows.push({

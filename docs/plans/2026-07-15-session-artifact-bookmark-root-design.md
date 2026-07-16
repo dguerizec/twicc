@@ -23,9 +23,9 @@ The same navigator is used in both responsive layouts:
 
 ## 2. Scope semantics
 
-Bookmark scope is a visibility tier, not a stored workspace id. The session tab
-resolves visibility from the real project of the session, independent of the
-sidebar's current filter.
+Bookmark scope is a visibility tier, not a stored workspace id. Session tabs
+and the dedicated Artifacts view resolve visibility from the same real project
+context.
 
 Let `P` be the session's raw project and `M` its main repository when `P` is a
 worktree (otherwise `M = P`). A bookmark is visible when any of the following
@@ -45,9 +45,9 @@ groups. Consequently an `all` bookmark owned by any worktree or unrelated
 project remains visible everywhere without being presented in an `Everywhere`
 group.
 
-This is intentionally broader than the existing single-project Artifacts sidebar
-mode, whose original contract only lists bookmarks owned by the viewed project
-family. The existing sidebar behavior remains unchanged.
+The dedicated Artifacts view applies these same rules when a project or
+worktree is selected. Its flat, recency-sorted presentation remains unchanged;
+only inclusion is aligned with session tabs.
 
 ## 3. Navigator model
 
@@ -157,7 +157,8 @@ There is one navigator component and one state:
 
 - Files and Git retain their current single-tree behavior.
 - Existing alternative filesystem-root selection remains unchanged.
-- The global/sidebar Artifacts mode and its scope rules remain unchanged.
+- Workspace, All projects and `Show all (ignore scope)` keep their existing
+  dedicated-view rules.
 - No database migration or new backend endpoint is required.
 - `FilePane` continues to enforce every artifact root through
   `rootRestriction`; virtual navigation never weakens path confinement.

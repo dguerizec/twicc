@@ -52,13 +52,12 @@ const route = useRoute()
 const router = useRouter()
 
 const list = computed(() => {
-    const projectScopeIds = dataStore.getProjectScopeIds(props.effectiveProjectId)
     let rows = computeArtifactBookmarkList({
         bookmarks: dataStore.artifactBookmarks,
         workspaces: workspacesStore,
         effectiveProjectId: props.effectiveProjectId,
         activeWorkspaceId: props.activeWorkspaceId,
-        projectScopeIds,
+        mainProjectId: dataStore.getMainRepoProjectId(props.effectiveProjectId),
         showAll: props.showAllArtifacts,
     })
     const q = props.searchQuery.trim()
