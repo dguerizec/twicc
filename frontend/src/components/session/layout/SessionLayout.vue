@@ -144,6 +144,9 @@ const framePool = useFramePoolStore()
 let drag = null
 function onSplitterMove(event) {
     if (!drag || !sessionLayoutEl.value) return
+    if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > SPLITTER_CLICK_SLOP) {
+        drag.moved = true
+    }
     const rect = sessionLayoutEl.value.getBoundingClientRect()
     const pointer = drag.axis === 'h' ? event.clientY - rect.top : event.clientX - rect.left
     const frac = (drag.from === 'end' ? drag.origin - pointer : pointer - drag.origin) / drag.extent
@@ -154,14 +157,17 @@ function endDrag() {
     // no drag started (and again after one ends). An unguarded end would
     // decrement some OTHER live drag's depth. Neutralize pooled-iframe
     // pointer-events only for the duration of a real drag.
-    const wasDragging = drag !== null
+    const ended = drag
     drag = null
     draggingId.value = null
     window.removeEventListener('pointermove', onSplitterMove)
     window.removeEventListener('pointerup', endDrag)
     document.body.style.userSelect = ''
     document.body.style.cursor = ''
-    if (wasDragging) framePool.endDividerDrag()
+    if (ended) framePool.endDividerDrag()
+    // A press-and-release that never moved is a click on the splitter; a quick second one maximizes
+    // the zone it resizes. Runs after the cleanup so the maximize re-render starts from a clean state.
+    if (ended && !ended.moved) onSplitterClick(ended)
 }
 function onSplitterDown(event, s) {
     event.preventDefault()
@@ -169,7 +175,12 @@ function onSplitterDown(event, s) {
     // sibling and bottom-height splitters leave it untouched.
     if (s.configKey === 'leftColFrac') props.layout.setActiveResize('left')
     else if (s.configKey === 'rightColFrac') props.layout.setActiveResize('right')
-    drag = { axis: s.axis, origin: s.axis === 'h' ? s.originY : s.originX, from: s.from || 'start', extent: s.extent, configKey: s.configKey }
+    drag = {
+        axis: s.axis, origin: s.axis === 'h' ? s.originY : s.originX, from: s.from || 'start',
+        extent: s.extent, configKey: s.configKey,
+        // Double-click-to-maximize bookkeeping (see onSplitterClick).
+        id: s.id, docks: s.docks || [], startX: event.clientX, startY: event.clientY, moved: false,
+    }
     draggingId.value = s.id
     framePool.beginDividerDrag()
     window.addEventListener('pointermove', onSplitterMove)
@@ -178,6 +189,45 @@ function onSplitterDown(event, s) {
     document.body.style.cursor = s.axis === 'v' ? 'col-resize' : 'row-resize'
 }
 onBeforeUnmount(endDrag)
+
+// ---- Double-click a splitter = maximize the dock zone it resizes. preventDefault() on the
+// splitter's pointerdown suppresses the compatibility mouse events, so no native dblclick fires —
+// we detect it ourselves: two no-move press-releases on the SAME splitter within the delay. Keep
+// the delay in sync with the rest of the layout's double-click feel (DockGutter.vue). ----
+const SPLITTER_CLICK_SLOP = 4 // px of pointer travel beyond which a press counts as a drag
+const SPLITTER_DBLCLICK_DELAY = 250 // ms
+let lastSplitterClick = { id: null, at: 0 }
+
+function onSplitterClick(ended) {
+    const now = Date.now()
+    if (lastSplitterClick.id === ended.id && now - lastSplitterClick.at < SPLITTER_DBLCLICK_DELAY) {
+        lastSplitterClick = { id: null, at: 0 }
+        maximizeSplitterZone(ended.docks)
+        return
+    }
+    lastSplitterClick = { id: ended.id, at: now }
+}
+
+// Maximize the zone adjacent to a splitter (its shown docks, from the resolver). If the route's
+// active tab lives in one of them, maximize the region holding it (focusing that tab); otherwise
+// maximize the whole zone as one merged region, focusing the group's remembered active tab —
+// regionActiveTabId on the synthetic merged slots resolves memory (groupKeyOf) then first content.
+function maximizeSplitterZone(zoneDocks) {
+    if (!zoneDocks.length) return
+    const regions = render.value.regions.filter((r) => r.slots.some((s) => zoneDocks.includes(s.dockId)))
+    if (!regions.length) return
+    const routed = props.layout.routeActiveTabId.value
+    const routedDock = routed ? props.layout.dockOf(routed) : null
+    const target = zoneDocks.includes(routedDock)
+        ? regions.find((r) => r.slots.some((s) => s.dockId === routedDock))
+        : null
+    if (target) {
+        emit('maximize', target.slots.map((s) => s.dockId), routed)
+        return
+    }
+    const slots = regions.flatMap((r) => r.slots)
+    emit('maximize', slots.map((s) => s.dockId), props.layout.regionActiveTabId({ slots }))
+}
 
 // ---- Tab drag and drop -------------------------------------------------------
 // Pointer-based rather than native HTML DnD: one implementation covers mouse, pen and touch, and
@@ -520,6 +570,7 @@ onBeforeUnmount(cancelTabPointer)
                 class="layout-splitter"
                 :class="[`axis-${s.axis}`, `kind-${s.kind}`, { dragging: draggingId === s.id }]"
                 :style="splitterStyle(s)"
+                title="Drag to resize · double-click to maximize"
                 @pointerdown="onSplitterDown($event, s)"
             >
                 <wa-icon name="grip-lines-vertical" auto-width class="splitter-grip"></wa-icon>

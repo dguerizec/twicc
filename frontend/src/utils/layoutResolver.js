@@ -320,7 +320,7 @@ export function resolveLayout(input) {
       const topH = sideBandH * clampSplit(cfg[key]);
       regions.push({ id: top, kind: `col-${edge}`, x, y: 0, w: colW, h: topH, label: top, slots: [mkSlot(top)], merged: false });
       regions.push({ id: bot, kind: `col-${edge}`, x, y: topH, w: colW, h: sideBandH - topH, label: bot, slots: [mkSlot(bot)], merged: false });
-      splitters.push({ id: `${edge}-split`, kind: 'sib', axis: 'h', x, y: topH, w: colW, h: 0, originX: x, originY: 0, from: 'start', extent: sideBandH, configKey: key });
+      splitters.push({ id: `${edge}-split`, kind: 'sib', axis: 'h', x, y: topH, w: colW, h: 0, originX: x, originY: 0, from: 'start', extent: sideBandH, configKey: key, docks: [top, bot] });
     } else {
       const slots = m === 'merged' ? [mkSlot(top), mkSlot(bot)] : [mkSlot(demandOf(byDock, top, collapsed) ? top : bot)];
       regions.push({
@@ -348,7 +348,7 @@ export function resolveLayout(input) {
       const lw = bw * clampSplit(cfg.bottomSplitFrac);
       regions.push({ id: 'bottom-left', kind: 'bottom', x: bx, y: by, w: lw, h: bottomRegionH, label: 'bottom-left', slots: [mkSlot('bottom-left')], merged: false });
       regions.push({ id: 'bottom-right', kind: 'bottom', x: bx + lw, y: by, w: bw - lw, h: bottomRegionH, label: 'bottom-right', slots: [mkSlot('bottom-right')], merged: false });
-      splitters.push({ id: 'bottom-split', kind: 'sib', axis: 'v', x: bx + lw, y: by, w: 0, h: bottomRegionH, originX: bx, originY: by, from: 'start', extent: bw, configKey: 'bottomSplitFrac' });
+      splitters.push({ id: 'bottom-split', kind: 'sib', axis: 'v', x: bx + lw, y: by, w: 0, h: bottomRegionH, originX: bx, originY: by, from: 'start', extent: bw, configKey: 'bottomSplitFrac', docks: ['bottom-left', 'bottom-right'] });
     } else {
       const slots = mergeBottom ? [mkSlot('bottom-left'), mkSlot('bottom-right')] : [mkSlot(bL ? 'bottom-left' : 'bottom-right')];
       regions.push({
@@ -360,9 +360,13 @@ export function resolveLayout(input) {
   }
 
   // ---- Dock-size splitters: drag a column's width or the bottom's height vs the center ----
-  if (showLeft) splitters.push({ id: 'left-dock', kind: 'dock', axis: 'v', x: leftSpace, y: 0, w: 0, h: sideBandH, originX: railLeft, originY: 0, from: 'start', extent: innerW, configKey: 'leftColFrac' });
-  if (showRight) splitters.push({ id: 'right-dock', kind: 'dock', axis: 'v', x: W - rightSpace, y: 0, w: 0, h: sideBandH, originX: railLeft + innerW, originY: 0, from: 'end', extent: innerW, configKey: 'rightColFrac' });
-  if (bottomShown) splitters.push({ id: 'bottom-dock', kind: 'dock', axis: 'h', x: fullBottom ? 0 : leftSpace, y: H - bottomBandH, w: fullBottom ? W : centerW, h: 0, originX: 0, originY: H, from: 'end', extent: H, configKey: 'bottomFrac' });
+  // `docks` = the shown docks of the zone the splitter resizes (the whole side column / bottom band
+  // for 'dock' splitters, the two siblings for 'sib' ones) — lets the renderer map a splitter
+  // double-click to a maximize target without re-deriving layout rules from splitter ids.
+  const shownEdgeDocks = (edge) => EDGE_DOCKS[edge].filter((d) => demandOf(byDock, d, collapsed));
+  if (showLeft) splitters.push({ id: 'left-dock', kind: 'dock', axis: 'v', x: leftSpace, y: 0, w: 0, h: sideBandH, originX: railLeft, originY: 0, from: 'start', extent: innerW, configKey: 'leftColFrac', docks: shownEdgeDocks('left') });
+  if (showRight) splitters.push({ id: 'right-dock', kind: 'dock', axis: 'v', x: W - rightSpace, y: 0, w: 0, h: sideBandH, originX: railLeft + innerW, originY: 0, from: 'end', extent: innerW, configKey: 'rightColFrac', docks: shownEdgeDocks('right') });
+  if (bottomShown) splitters.push({ id: 'bottom-dock', kind: 'dock', axis: 'h', x: fullBottom ? 0 : leftSpace, y: H - bottomBandH, w: fullBottom ? W : centerW, h: 0, originX: 0, originY: H, from: 'end', extent: H, configKey: 'bottomFrac', docks: shownEdgeDocks('bottom') });
 
   // ---- Gutter rects (extent mirrors the region, per mode) + overlay rects ----
   const cov = cfg.overlayCoverage;
