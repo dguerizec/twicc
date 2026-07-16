@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **Drag-and-drop layouts** — Arrange tool tabs by dragging them between the main area and docks.
+- **Bookmarked artifacts in sessions** — Browse bookmarks available to the current project, workspace, or everywhere directly from a session's Artifacts tab.
 
 ### Fixed
 

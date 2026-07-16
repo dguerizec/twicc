@@ -2,6 +2,7 @@
 import { computed, watch, ref, reactive, readonly, provide, inject, onActivated, onDeactivated, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../stores/data'
+import { useWorkspacesStore } from '../stores/workspaces'
 import { useSettingsStore } from '../stores/settings'
 import { useHelpStore } from '../stores/help'
 import { getProviderHelpers } from '../providers'
@@ -56,10 +57,12 @@ import { getAgentDisplayLabel } from '../utils/agentLabel'
 import { focusChatPrimary, gotoChatFooterPanel } from '../utils/focusChat'
 import { fileRootsFromStore } from '../utils/projectRoots'
 import { normalizePosixPath } from '../utils/worktreePath'
+import { computeSessionArtifactBookmarks } from '../utils/sessionArtifactBookmarks'
 
 const route = useRoute()
 const router = useRouter()
 const store = useDataStore()
+const workspacesStore = useWorkspacesStore()
 const layoutsStore = useLayoutsStore()
 const settingsStore = useSettingsStore()
 const helpStore = useHelpStore()
@@ -121,13 +124,12 @@ onBeforeUnmount(() => {
 
 /**
  * The ArtifactsWatcher relayed changed file(s) under some session. Forward them
- * to this session's Artifacts panel for live-refresh, but only when this is the
- * matching, currently-active session view (avoids churning cached background
- * instances). Paths are relative to the session artifacts dir.
+ * to this session's active Artifacts panel. The panel decides whether the
+ * source is its physical root or the owner of its selected bookmark.
  */
 function handleArtifactFilesChanged(e) {
-    if (e.detail?.sessionId !== sessionId.value || !isActive.value) return
-    artifactsPanelRef.value?.onArtifactFilesChanged(e.detail.paths || [])
+    if (!e.detail?.sessionId || !isActive.value) return
+    artifactsPanelRef.value?.onArtifactFilesChanged(e.detail.sessionId, e.detail.paths || [])
 }
 
 /**
@@ -352,11 +354,27 @@ const planRouteDocPath = computed(() => {
 const session = computed(() => store.getSession(sessionId.value))
 
 // ─── Artifacts tab ───────────────────────────────────────────────────────────
-// has_artifacts is monotonic (flips false->true once the session's
-// <data_dir>/artifacts/<id>/ dir is non-empty; never reset). The tab browses
-// that fixed dir through the standalone file API (apiPrefix '/api') with a
-// server-side root restriction, exactly like the Files tab otherwise.
-const hasArtifacts = computed(() => !!session.value?.has_artifacts)
+// The tab remains present when the session owns artifacts OR when its project
+// context can see at least one bookmark. A worktree inherits its main project's
+// bookmarks; workspace and global scopes then expand visibility independently
+// of the owning project's raw main/worktree identity.
+const artifactMainProjectId = computed(() => {
+    const projectId = session.value?.project_id
+    return projectId ? store.getMainRepoProjectId(projectId) : null
+})
+const sessionArtifactBookmarks = computed(() => computeSessionArtifactBookmarks({
+    bookmarks: store.artifactBookmarks,
+    projectId: session.value?.project_id,
+    mainProjectId: artifactMainProjectId.value,
+    projectScopeIds: session.value?.project_id
+        ? [...new Set([session.value.project_id, artifactMainProjectId.value].filter(Boolean))]
+        : [],
+    workspaces: workspacesStore.workspaces,
+    workspaceContainsProject: workspacesStore.workspaceContainsProject,
+}))
+const hasArtifacts = computed(() =>
+    !!session.value?.has_artifacts || sessionArtifactBookmarks.value.length > 0,
+)
 const artifactsDir = computed(() => session.value?.artifacts_dir || null)
 const artifactsExternalRoots = computed(() =>
     artifactsDir.value ? [{ key: 'artifacts', label: 'Artifacts', path: artifactsDir.value }] : []
@@ -523,7 +541,7 @@ const TOOL_TABS = [
     { id: 'terminal', label: 'Terminal', icon: 'terminal', present: () => true },
     { id: 'tasks', label: 'Tasks', icon: 'square-check', present: () => hasTasks.value, redirectReady: () => !!session.value },
     { id: 'plan', label: 'Plan', icon: 'list-check', present: () => hasPlan.value, redirectReady: () => !!session.value },
-    { id: 'artifacts', label: 'Artifacts', icon: 'shapes', present: () => hasArtifacts.value, redirectReady: () => !!session.value },
+    { id: 'artifacts', label: 'Artifacts', icon: 'shapes', present: () => hasArtifacts.value, redirectReady: () => !!session.value && store.artifactBookmarksLoaded },
     { id: 'orchestration', label: 'Orchestration', icon: 'diagram-project', present: () => hasSpawnRoot.value, redirectReady: () => !!session.value },
     { id: 'workflows', label: 'Workflows', icon: 'sitemap', present: () => hasWorkflows.value, redirectReady: () => !!session.value },
     { id: 'browser', label: 'Browser', icon: 'globe', present: () => true },
@@ -2388,9 +2406,12 @@ onBeforeUnmount(() => {
                         :external-roots="artifactsExternalRoots"
                         :root-restriction="artifactsDir"
                         :show-root-selector="false"
-                        root-label="Artifacts"
+                        root-label="Session artifacts"
                         :preview-by-default="true"
                         :artifact-bookmark-session-id="session?.id"
+                        :artifact-bookmarks="sessionArtifactBookmarks"
+                        :artifact-bookmark-project-id="session?.project_id"
+                        :artifact-bookmark-main-project-id="artifactMainProjectId"
                         :route-root-key="activeTabId === 'artifacts' ? artifactsRouteRootKey : undefined"
                         :route-file-path="activeTabId === 'artifacts' ? artifactsRouteFilePath : undefined"
                         :route-owner="ownsRoute('artifacts')"

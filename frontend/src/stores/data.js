@@ -411,6 +411,7 @@ export const useDataStore = defineStore('data', {
         projects: {},       // { id: { id, sessions_count, mtime, stale, worktree_of } } — worktree_of: parent project id when this project is a git worktree, else null
         sessions: {},       // { id: { id, project_id, provider, last_line, mtime, stale } }
         artifactBookmarks: {},      // { id: { id, name, scope, session_id, project_id, relative_path, root, file_ext, available? } } — artifact bookmarks
+        artifactBookmarksLoaded: false,
         // Session items indexed by session ID.
         // { sessionId: [{ line_num, content, display_level, ... }] } - line_num is 1-based
         //
@@ -2327,6 +2328,8 @@ export const useDataStore = defineStore('data', {
                 this.setArtifactBookmarks(data.bookmarks)
             } catch (error) {
                 console.error('Failed to load artifact bookmarks:', error)
+            } finally {
+                this.artifactBookmarksLoaded = true
             }
         },
         // Replace the whole bookmark set from a full snapshot (boot REST load and
@@ -2338,6 +2341,7 @@ export const useDataStore = defineStore('data', {
             const next = {}
             for (const b of list || []) next[b.id] = b
             this.artifactBookmarks = next
+            this.artifactBookmarksLoaded = true
         },
         async fetchArtifactBookmarkDetail(id) {
             // Always GET the detail (fresh server-side `available` flag), upsert

@@ -149,6 +149,37 @@ const props = defineProps({
         type: String,
         default: null,
     },
+    /** Whether a parent-provided virtual tree root should share this navigator. */
+    hasExtraTree: {
+        type: Boolean,
+        default: false,
+    },
+    /** Selection metadata supplied by a virtual root (for the compact header). */
+    externalSelectionLabel: {
+        type: String,
+        default: null,
+    },
+    externalSelectionTooltip: {
+        type: String,
+        default: null,
+    },
+    /** Bookmark action inputs supplied by a virtual artifact selection. */
+    externalArtifactSessionId: {
+        type: String,
+        default: null,
+    },
+    externalArtifactRelativePath: {
+        type: String,
+        default: null,
+    },
+    externalArtifactAbsPath: {
+        type: String,
+        default: null,
+    },
+    searchPlaceholder: {
+        type: String,
+        default: 'Filter files...',
+    },
 })
 
 const emit = defineEmits(['file-select', 'refresh', 'option-select', 'filter-input', 'git-stage', 'git-unstage', 'git-discard'])
@@ -161,6 +192,10 @@ function toggleFileTree() {
     fileTreeOpen.value = !fileTreeOpen.value
 }
 
+function closeFileTree() {
+    fileTreeOpen.value = false
+}
+
 /**
  * Placeholder text for the mobile header when no file is selected.
  * Mirrors the placeholder states from the template.
@@ -169,7 +204,7 @@ const headerPlaceholder = computed(() => {
     if (isSearching.value && !searchTree.value?.children?.length && searchResponded.value) {
         return 'No matches'
     }
-    if (!props.rootPath) {
+    if (!props.rootPath && !props.hasExtraTree) {
         return props.mode === 'git' ? 'No changes' : 'No directory'
     }
     return 'Select a file'
@@ -211,7 +246,12 @@ function onSearchInput(event) {
 }
 
 async function executeSearch(query) {
-    if (!props.searchFn || !props.rootPath) return
+    if (!props.searchFn || !props.rootPath) {
+        // A virtual root filters locally through the scoped slot. Mark the
+        // search as answered so an empty virtual result can show "No matches".
+        searchResponded.value = true
+        return
+    }
 
     searchLoading.value = true
     try {
@@ -271,15 +311,26 @@ function clearSearch(reveal = true) {
 const selectedFile = ref(null)
 const selectedFileId = useId()
 
+const effectiveSelectionLabel = computed(() => props.externalSelectionLabel || selectedFile.value)
+const effectiveSelectionTooltip = computed(() =>
+    props.externalSelectionTooltip || effectiveSelectionLabel.value,
+)
+const effectiveArtifactSessionId = computed(() =>
+    props.externalArtifactSessionId || props.artifactBookmarkSessionId,
+)
+const effectiveArtifactRelativePath = computed(() =>
+    props.externalArtifactRelativePath || selectedFile.value,
+)
+
 const dataStore = useDataStore()
 // Mobile header artifact-bookmark integration (artifact context only).
 const headerArtifactBookmark = computed(() =>
-    props.artifactBookmarkSessionId && selectedFile.value
-        ? dataStore.artifactBookmarkFor(props.artifactBookmarkSessionId, selectedFile.value)
+    effectiveArtifactSessionId.value && effectiveArtifactRelativePath.value
+        ? dataStore.artifactBookmarkFor(effectiveArtifactSessionId.value, effectiveArtifactRelativePath.value)
         : null,
 )
 const headerArtifactBookmarkable = computed(() =>
-    !!props.artifactBookmarkSessionId && isRenderableArtifactPath(selectedFile.value),
+    !!effectiveArtifactSessionId.value && isRenderableArtifactPath(effectiveArtifactRelativePath.value),
 )
 const fileOptionsButtonId = useId()
 
@@ -321,7 +372,7 @@ function onFileSelect(path) {
 // condition is false. The watch only fires on these dep transitions, so a manual close persists and
 // selecting a file (which clears the condition) never reopens it.
 watch(
-    () => props.isMobile && !selectedFile.value && !!props.rootPath,
+    () => props.isMobile && !effectiveSelectionLabel.value && (!!props.rootPath || props.hasExtraTree),
     (shouldOpen) => {
         if (shouldOpen) fileTreeOpen.value = true
     },
@@ -1118,6 +1169,7 @@ defineExpose({
     focusSearchInput,
     rerunSearch,
     onFileSelect,
+    onNodeFocus,
     selectedAbsPath,
     selectedFile,
     autoOpen,
@@ -1125,6 +1177,7 @@ defineExpose({
     searchQuery,
     fileTreeOpen,
     toggleFileTree,
+    closeFileTree,
 })
 </script>
 
@@ -1140,9 +1193,9 @@ defineExpose({
                 @click="toggleFileTree"
             >
                 <span class="files-panel-header-label" :id="selectedFileId">
-                    {{ selectedFile || headerPlaceholder }}<span v-if="headerArtifactBookmark" class="files-panel-header-artifact-bookmark-name"> ({{ headerArtifactBookmark.name }})</span>
+                    {{ effectiveSelectionLabel || headerPlaceholder }}<span v-if="headerArtifactBookmark" class="files-panel-header-artifact-bookmark-name"> ({{ headerArtifactBookmark.name }})</span>
                 </span>
-                <AppTooltip v-if="selectedFile" :for="selectedFileId">{{ selectedFile }}<template v-if="headerArtifactBookmark"> ({{ headerArtifactBookmark.name }})</template></AppTooltip>
+                <AppTooltip v-if="effectiveSelectionTooltip" :for="selectedFileId">{{ effectiveSelectionTooltip }}<template v-if="headerArtifactBookmark"> ({{ headerArtifactBookmark.name }})</template></AppTooltip>
                 <GitStatusBadge v-if="selectedFileNode" :node="selectedFileNode" class="mobile-header-badge" />
                 <wa-icon
                     class="chevron"
@@ -1152,9 +1205,9 @@ defineExpose({
             <ArtifactBookmarkButton
                 v-if="headerArtifactBookmarkable"
                 class="files-panel-header-artifact-bookmark-btn"
-                :session-id="artifactBookmarkSessionId"
-                :relative-path="selectedFile"
-                :file-abs-path="selectedAbsPath"
+                :session-id="effectiveArtifactSessionId"
+                :relative-path="effectiveArtifactRelativePath"
+                :file-abs-path="externalArtifactAbsPath || selectedAbsPath"
             />
         </div>
 
@@ -1166,7 +1219,7 @@ defineExpose({
             class="file-tree-panel-content"
         >
             <!-- Search input + options (only shown when tree is loaded) -->
-            <div v-if="tree && searchFn" class="files-search">
+            <div v-if="(tree && searchFn) || hasExtraTree" class="files-search">
                 <wa-dropdown
                     placement="bottom-start"
                     class="files-options-dropdown"
@@ -1216,7 +1269,7 @@ defineExpose({
                 <wa-input
                     ref="searchInputRef"
                     :value="searchQuery"
-                    placeholder="Filter files..."
+                    :placeholder="searchPlaceholder"
                     size="small"
                     with-clear
                     class="files-search-input"
@@ -1229,10 +1282,10 @@ defineExpose({
             </div>
 
             <!-- Placeholder states -->
-            <div v-if="isSearching && !searchTree?.children?.length && !searchResponded" class="panel-placeholder">
+            <div v-if="isSearching && !hasExtraTree && !searchTree?.children?.length && !searchResponded" class="panel-placeholder">
                 <wa-spinner></wa-spinner>
             </div>
-            <div v-else-if="isSearching && !searchTree?.children?.length && searchResponded" class="panel-placeholder">
+            <div v-else-if="isSearching && !hasExtraTree && !searchTree?.children?.length && searchResponded" class="panel-placeholder">
                 No matches
             </div>
             <div v-else-if="!isSearching && loading" class="panel-placeholder">
@@ -1241,12 +1294,12 @@ defineExpose({
             <div v-else-if="!isSearching && error" class="panel-placeholder panel-error">
                 {{ error }}
             </div>
-            <div v-else-if="!isSearching && !rootPath" class="panel-placeholder">
+            <div v-else-if="!isSearching && !rootPath && !hasExtraTree" class="panel-placeholder">
                 {{ mode === 'git' ? 'No changes' : 'No directory' }}
             </div>
 
             <!-- Tree (same structure for both browse and search) -->
-            <template v-else-if="displayTree">
+            <template v-else-if="displayTree || hasExtraTree">
                 <div
                     ref="treeContainerRef"
                     class="tree-container"
@@ -1255,6 +1308,7 @@ defineExpose({
                     @keydown="handleTreeKeydown"
                 >
                     <FileTree
+                        v-if="displayTree && (!isSearching || searchTree?.children?.length)"
                         :node="displayTree"
                         :path="rootPath"
                         :root-label="rootLabel"
@@ -1275,6 +1329,11 @@ defineExpose({
                         @select="onFileSelect"
                         @focus="onNodeFocus"
                         @context-menu="enableContextMenu ? onContextMenu($event) : null"
+                    />
+                    <slot
+                        name="tree-after"
+                        :search-query="searchQuery"
+                        :is-searching="isSearching"
                     />
                 </div>
                 <div v-if="isSearching && searchTruncated" class="search-truncated">

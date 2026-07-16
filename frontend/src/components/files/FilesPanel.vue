@@ -5,6 +5,7 @@ import { useContainerBreakpoint } from '../../composables/useContainerBreakpoint
 import { usePanelContentFocus } from '../../composables/usePanelContentFocus'
 import FileTreePanel from './FileTreePanel.vue'
 import FilePane from './FilePane.vue'
+import ArtifactBookmarkTree from '../artifacts/ArtifactBookmarkTree.vue'
 import { useCodeCommentsStore, buildCommentedPathsSet } from '../../stores/codeComments'
 import { useSettingsStore } from '../../stores/settings'
 import { useDataStore } from '../../stores/data'
@@ -88,6 +89,19 @@ const props = defineProps({
         default: false,
     },
     artifactBookmarkSessionId: {
+        type: String,
+        default: null,
+    },
+    // Contextually visible bookmarks rendered as a second, virtual tree root.
+    artifactBookmarks: {
+        type: Array,
+        default: () => [],
+    },
+    artifactBookmarkProjectId: {
+        type: String,
+        default: null,
+    },
+    artifactBookmarkMainProjectId: {
         type: String,
         default: null,
     },
@@ -186,6 +200,10 @@ function clearSelectedFile() {
     }
 }
 
+function clearSelectedBookmark() {
+    selectedBookmarkId.value = null
+}
+
 function emitNavigate({ rootKey = selectedRootKey.value, filePath = undefined, replace = false }) {
     if (!props.active) return
     emit('navigate', { rootKey, filePath, replace })
@@ -224,6 +242,7 @@ function handleRootSelect(key) {
     if (key !== selectedRootKey.value && !missingRoots.value.has(key)) {
         selectedRootKey.value = key
         clearSelectedFile()
+        clearSelectedBookmark()
         emitNavigate({ rootKey: key })
     }
 }
@@ -471,7 +490,7 @@ async function refreshTreeSoft() {
 
 // Pending changed paths (relative to the artifacts root) accumulated across a
 // burst of WebSocket messages, flushed once after a short debounce.
-let pendingArtifactPaths = new Set()
+let pendingArtifactPathsBySession = new Map()
 let artifactFlushTimer = null
 
 /**
@@ -497,16 +516,18 @@ function changeAffectsHtmlPage(renderedRel, paths) {
 
 function flushArtifactChanges() {
     artifactFlushTimer = null
-    const paths = [...pendingArtifactPaths]
-    pendingArtifactPaths = new Set()
+    const pathsBySession = pendingArtifactPathsBySession
+    pendingArtifactPathsBySession = new Map()
 
-    // Always refresh the tree so new files appear — softly, so it never disturbs
-    // the open file or a rendered HTML preview (see refreshTreeSoft).
-    refreshTreeSoft()
+    // Refresh the physical root only for changes from the session which owns it.
+    if (pathsBySession.has(props.artifactBookmarkSessionId)) refreshTreeSoft()
 
     // Reload the *displayed* content only when the change is relevant to it.
-    const renderedRel = selectedFile.value
-    if (!renderedRel) return
+    const renderedRel = selectedContentPath.value
+    const renderedSessionId = selectedArtifactSessionId.value
+    const changedPaths = pathsBySession.get(renderedSessionId)
+    if (!renderedRel || !changedPaths) return
+    const paths = [...changedPaths]
     if (filePaneRef.value?.isHtmlPreviewActive) {
         // HTML page: reload the rendered iframe when an asset in its folder changed.
         if (changeAffectsHtmlPage(renderedRel, paths)) {
@@ -521,14 +542,26 @@ function flushArtifactChanges() {
 
 /**
  * Live-reload hook for the Artifacts tab, called by SessionView when the backend
- * relays artifact file change(s) for this session. No-op until the panel has
- * been opened once (the tree fetches fresh on first open anyway).
+ * relays artifact file change(s) for any session. Changes from the physical
+ * root refresh its tree; changes from the owner of a selected virtual bookmark
+ * refresh only that preview.
  *
+ * @param {string} sourceSessionId — session whose artifacts changed
  * @param {string[]} paths — changed files, relative to the artifacts root
  */
-function onArtifactFilesChanged(paths) {
+function onArtifactFilesChanged(sourceSessionId, paths) {
+    // Compatibility with callers predating cross-session bookmark previews.
+    if (Array.isArray(sourceSessionId)) {
+        paths = sourceSessionId
+        sourceSessionId = props.artifactBookmarkSessionId
+    }
     if (!started.value || !paths?.length) return
-    for (const p of paths) pendingArtifactPaths.add(p)
+    const relevant = sourceSessionId === props.artifactBookmarkSessionId
+        || sourceSessionId === selectedArtifactSessionId.value
+    if (!relevant) return
+    const pending = pendingArtifactPathsBySession.get(sourceSessionId) || new Set()
+    for (const p of paths) pending.add(p)
+    pendingArtifactPathsBySession.set(sourceSessionId, pending)
     if (artifactFlushTimer) clearTimeout(artifactFlushTimer)
     artifactFlushTimer = setTimeout(flushArtifactChanges, 250)
 }
@@ -543,7 +576,7 @@ function onArtifactFilesChanged(paths) {
 async function reloadAll() {
     if (!started.value) return
     await refreshTreeSoft()
-    const renderedRel = selectedFile.value
+    const renderedRel = selectedContentPath.value
     if (!renderedRel) return
     if (filePaneRef.value?.isHtmlPreviewActive) {
         filePaneRef.value.reloadHtmlPreview()
@@ -562,6 +595,37 @@ onBeforeUnmount(() => {
  * Selected file relative path — proxied from the FileTreePanel ref.
  */
 const selectedFile = computed(() => fileTreePanelRef.value?.selectedFile ?? null)
+const selectedAbsPath = computed(() => {
+    if (!selectedFile.value || !directory.value) return null
+    const dir = directory.value
+    return `${dir === '/' ? '' : dir}/${selectedFile.value}`
+})
+const selectedBookmarkId = ref(null)
+const selectedBookmark = computed(() => {
+    if (selectedBookmarkId.value == null) return null
+    return props.artifactBookmarks.find(
+        bookmark => String(bookmark.id) === String(selectedBookmarkId.value),
+    ) || null
+})
+
+const selectedContentPath = computed(() =>
+    selectedBookmark.value?.relative_path || selectedFile.value,
+)
+const selectedContentRoot = computed(() =>
+    selectedBookmark.value?.root || props.rootRestriction,
+)
+const selectedContentAbsPath = computed(() => {
+    if (selectedBookmark.value) {
+        const root = selectedBookmark.value.root?.replace(/\/$/, '')
+        const relativePath = selectedBookmark.value.relative_path?.replace(/^\//, '')
+        return root && relativePath ? `${root}/${relativePath}` : null
+    }
+    return selectedAbsPath.value
+})
+const selectedArtifactSessionId = computed(() =>
+    selectedBookmark.value?.session_id || props.artifactBookmarkSessionId,
+)
+const hasContentSelection = computed(() => !!selectedContentPath.value)
 
 // Mobile only: the file-tree overlay covers the whole panel when open. A
 // pooled HTML-preview frame paints above pane content and would show through
@@ -573,24 +637,35 @@ const treeOverlayOpen = computed(() => isMobile.value && !!fileTreePanelRef.valu
 // panel's primary content: the file viewer when a file is open (so keyboard nav keeps reading/scrolling
 // it), otherwise the tree's search filter. Deferred until the host sub-panel ref appears (it can mount a
 // frame or more after the request on a cold load), so the request is never dropped — see usePanelContentFocus.
-usePanelContentFocus({ focusRequest: () => props.focusRequest, selectedFile, filePaneRef, fileTreePanelRef })
-
-/**
- * Absolute path of the currently selected file.
- */
-const selectedAbsPath = computed(() => {
-    if (!selectedFile.value || !directory.value) return null
-    const dir = directory.value
-    return `${dir === '/' ? '' : dir}/${selectedFile.value}`
+usePanelContentFocus({
+    focusRequest: () => props.focusRequest,
+    selectedFile: selectedContentPath,
+    filePaneRef,
+    fileTreePanelRef,
 })
 
 function handleFileSelect(path) {
     if (!props.active || syncingFromRoute) return
+    clearSelectedBookmark()
     routeFileIssue.value = null
     emitNavigate({
         rootKey: selectedRootKey.value,
         filePath: path || undefined,
     })
+}
+
+function handleBookmarkSelect(bookmark) {
+    if (!props.active || !bookmark) return
+    selectedBookmarkId.value = bookmark.id
+    clearSelectedFile()
+    routeRootIssue.value = null
+    routeFileIssue.value = null
+    emitNavigate({ rootKey: 'bookmarks', filePath: String(bookmark.id) })
+    if (isMobile.value) fileTreePanelRef.value?.closeFileTree()
+}
+
+function handleBookmarkFocus(path) {
+    fileTreePanelRef.value?.onNodeFocus(path)
 }
 
 async function waitForTreePanelReady() {
@@ -619,6 +694,12 @@ watch(
     () => [props.active, props.routeRootKey, availableRoots.value.map(root => root.key).join('|'), props.routeOwner],
     ([active, routeRootKey]) => {
         if (!active || !props.routeOwner) return
+        if (routeRootKey === 'bookmarks') {
+            routeRootIssue.value = null
+            return
+        }
+
+        clearSelectedBookmark()
         const roots = availableRoots.value
         if (!roots.length) return
 
@@ -678,8 +759,47 @@ watch(
 )
 
 watch(
+    () => [
+        props.active,
+        props.routeOwner,
+        props.routeRootKey,
+        props.routeFilePath,
+        props.artifactBookmarks.map(bookmark => bookmark.id).join('|'),
+    ],
+    async ([active, routeOwner, routeRootKey, routeFilePath]) => {
+        if (!active || !routeOwner || routeRootKey !== 'bookmarks') return
+
+        const bookmark = props.artifactBookmarks.find(
+            row => String(row.id) === String(routeFilePath),
+        )
+        syncingFromRoute = true
+        clearSelectedFile()
+        if (routeFilePath == null) {
+            selectedBookmarkId.value = null
+            routeFileIssue.value = routeFilePath === null
+                ? makeRouteIssue('Requested bookmark id is invalid.')
+                : null
+        } else if (bookmark) {
+            selectedBookmarkId.value = bookmark.id
+            routeFileIssue.value = null
+        } else {
+            selectedBookmarkId.value = null
+            routeFileIssue.value = makeRouteIssue(
+                'Bookmarked artifact ',
+                routeFilePath,
+                ' is no longer available in this session scope.',
+            )
+        }
+        await nextTick()
+        syncingFromRoute = false
+    },
+    { immediate: true },
+)
+
+watch(
     () => [props.active, tree.value, directory.value, loadedDirectory.value, props.routeFilePath, props.routeRootKey, loading.value, props.routeOwner],
     async ([active, treeData, dirPath, loadedDir, routeFilePath, , isLoading]) => {
+        if (props.routeRootKey === 'bookmarks') return
         if (!active || !props.routeOwner || !dirPath || !selectedRootKey.value) return
 
         if (!treeData || isLoading || loadedDir !== dirPath) {
@@ -962,6 +1082,13 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged, reloadAll })
                 :show-refresh="true"
                 :is-mobile="isMobile"
                 :artifact-bookmark-session-id="artifactBookmarkSessionId"
+                :has-extra-tree="artifactBookmarks.length > 0"
+                :external-selection-label="selectedBookmark?.relative_path || null"
+                :external-selection-tooltip="selectedBookmark?.relative_path || null"
+                :external-artifact-session-id="selectedBookmark?.session_id || null"
+                :external-artifact-relative-path="selectedBookmark?.relative_path || null"
+                :external-artifact-abs-path="selectedBookmark ? selectedContentAbsPath : null"
+                :search-placeholder="artifactBookmarks.length ? 'Filter artifacts...' : 'Filter files...'"
                 :commented-paths="commentedPaths"
                 enable-context-menu
                 mode="files"
@@ -1007,6 +1134,18 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged, reloadAll })
                     </template>
                     <wa-divider></wa-divider>
                 </template>
+                <template #tree-after="{ searchQuery }">
+                    <ArtifactBookmarkTree
+                        v-if="artifactBookmarks.length"
+                        :bookmarks="artifactBookmarks"
+                        :current-project-id="artifactBookmarkProjectId"
+                        :main-project-id="artifactBookmarkMainProjectId"
+                        :selected-bookmark-id="selectedBookmarkId"
+                        :search-query="searchQuery"
+                        @select="handleBookmarkSelect"
+                        @focus="handleBookmarkFocus"
+                    />
+                </template>
             </FileTreePanel>
         </div>
 
@@ -1014,23 +1153,23 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged, reloadAll })
             <div class="files-content-inner">
                 <FilePane
                     ref="filePaneRef"
-                    v-show="selectedFile"
-                    :project-id="projectId"
-                    :session-id="sessionId"
-                    :file-path="selectedAbsPath"
-                    :display-path="!isMobile ? selectedFile : null"
+                    v-show="hasContentSelection"
+                    :project-id="selectedBookmark ? null : projectId"
+                    :session-id="selectedBookmark ? null : sessionId"
+                    :file-path="selectedContentAbsPath"
+                    :display-path="!isMobile ? selectedContentPath : null"
                     :active="active"
                     :is-draft="isDraft"
-                    :api-prefix="resolvedApiPrefix"
-                    :root-restriction="rootRestriction"
+                    :api-prefix="selectedBookmark ? '/api' : resolvedApiPrefix"
+                    :root-restriction="selectedContentRoot"
                     :preview-by-default="previewByDefault"
                     :render-only="renderOnly"
-                    :artifact-bookmark-session-id="artifactBookmarkSessionId"
+                    :artifact-bookmark-session-id="selectedArtifactSessionId"
                     :frame-elevated="frameElevated"
                     :frame-suppressed="treeOverlayOpen"
                 />
-                <div v-show="!selectedFile" class="panel-placeholder">
-                    Select a file
+                <div v-show="!hasContentSelection" class="panel-placeholder">
+                    {{ artifactBookmarkSessionId || artifactBookmarks.length ? 'Select an artifact' : 'Select a file' }}
                 </div>
             </div>
         </div>

@@ -11,6 +11,7 @@ import { useSharesStore } from '../../stores/shares'
 import { isShareOutdated } from '../../utils/shareStatus'
 import { useNetworkDenials } from '../../composables/useNetworkDenials'
 import { toast } from '../../composables/useToast'
+import { buildFilesRouteParams } from '../../utils/granularRoutes'
 import ArtifactBookmarkDialog from './ArtifactBookmarkDialog.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import { ARTIFACT_ICON, suggestArtifactBookmarkName } from '../../utils/artifactBookmark'
@@ -27,8 +28,7 @@ const props = defineProps({
 // Multi-root template (view + toggle buttons, their tooltips, the dialog) → Vue
 // can't auto-inherit a fallthrough class onto a single root, and warns. Consumers
 // (the file-path header, the mobile files-panel header) pass a positioning class,
-// so route $attrs explicitly onto the primary (toggle) button — the always-present,
-// right-most element, which is also where a trailing margin belongs.
+// so route $attrs explicitly onto the right-most visible button.
 defineOptions({ inheritAttrs: false })
 
 const store = useDataStore()
@@ -39,6 +39,7 @@ const router = useRouter()
 const dialogRef = ref(null)
 const buttonId = `artifact-bookmark-${useId()}`
 const viewButtonId = `artifact-view-${useId()}`
+const sessionButtonId = `artifact-session-${useId()}`
 const shareButtonId = `artifact-share-${useId()}`
 
 const bookmark = computed(() => store.artifactBookmarkFor(props.sessionId, props.relativePath))
@@ -129,6 +130,25 @@ function viewInArtifacts() {
         })
     }
 }
+
+// Open the bookmark's physical artifact in the session which created it. This
+// is also useful from another session's virtual bookmark root: it leaves the
+// bookmark preview and reveals the source file under Session artifacts.
+function openInSession() {
+    const b = bookmark.value
+    if (!b) return
+    const params = buildFilesRouteParams({ rootKey: 'artifacts', filePath: b.relative_path })
+    const allProjectsMode = route.name?.startsWith('projects-')
+    router.push({
+        name: allProjectsMode ? 'projects-session-artifacts' : 'session-artifacts',
+        params: {
+            projectId: b.project_id,
+            sessionId: b.session_id,
+            ...params,
+        },
+        query: route.query.workspace ? { workspace: route.query.workspace } : {},
+    })
+}
 </script>
 
 <template>
@@ -146,25 +166,22 @@ function viewInArtifacts() {
         <wa-icon :name="ARTIFACT_ICON" label="Open in the artifacts list"></wa-icon>
     </wa-button>
     <AppTooltip v-if="bookmark" :for="viewButtonId">Open in the artifacts list</AppTooltip>
-    <!-- Share this artifact (only when a share host is configured). Left of the
-         bookmark toggle so the toggle stays right-most (where $attrs + the
-         trailing margin land). -->
     <wa-button
-        v-if="sharingEnabled"
-        :id="shareButtonId"
+        v-if="bookmark"
+        :id="sessionButtonId"
         appearance="plain"
         size="small"
-        :variant="shareVariant"
-        :class="['bookmark-button', 'reduced-height', {
-            'bookmark-button--active': activeShareCount > 0 && outdatedShareCount === 0,
-            'bookmark-button--attention': outdatedShareCount > 0 }]"
-        @click.stop="shareArtifact"
+        variant="neutral"
+        class="bookmark-button reduced-height"
+        @click.stop="openInSession"
     >
-        <wa-icon name="share-nodes" label="Share artifact"></wa-icon>
+        <wa-icon name="house" label="Open in session"></wa-icon>
     </wa-button>
-    <AppTooltip v-if="sharingEnabled" :for="shareButtonId">{{ shareTooltip }}</AppTooltip>
+    <AppTooltip v-if="bookmark" :for="sessionButtonId">Open in session</AppTooltip>
+    <!-- Keep the bookmark toggle before Share. When sharing is unavailable it
+         remains the right-most button and receives the host's positioning attrs. -->
     <wa-button
-        v-bind="$attrs"
+        v-bind="sharingEnabled ? {} : $attrs"
         :id="buttonId"
         appearance="plain"
         size="small"
@@ -177,6 +194,23 @@ function viewInArtifacts() {
         <wa-icon name="bookmark" :variant="bookmark ? 'solid' : 'regular'" label="Bookmark"></wa-icon>
     </wa-button>
     <AppTooltip :for="buttonId">{{ bookmarkTooltip }}</AppTooltip>
+    <!-- Share this artifact only when a share host is configured. It is last in
+         the action row and therefore receives the host's positioning attrs. -->
+    <wa-button
+        v-if="sharingEnabled"
+        v-bind="$attrs"
+        :id="shareButtonId"
+        appearance="plain"
+        size="small"
+        :variant="shareVariant"
+        :class="['bookmark-button', 'reduced-height', {
+            'bookmark-button--active': activeShareCount > 0 && outdatedShareCount === 0,
+            'bookmark-button--attention': outdatedShareCount > 0 }]"
+        @click.stop="shareArtifact"
+    >
+        <wa-icon name="share-nodes" label="Share artifact"></wa-icon>
+    </wa-button>
+    <AppTooltip v-if="sharingEnabled" :for="shareButtonId">{{ shareTooltip }}</AppTooltip>
     <ArtifactBookmarkDialog
         ref="dialogRef"
         :session-id="sessionId"
