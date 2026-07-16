@@ -6,10 +6,12 @@ import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
 
-from openai_codex.generated.v2_all import ApprovalsReviewer
-
 from twicc.providers.codex.agent import manager as manager_module
-from twicc.providers.codex.agent.manager import CodexAgentManager, _apply_codex_work_dirs
+from twicc.providers.codex.agent.manager import (
+    CodexAgentManager,
+    _apply_auto_review_network,
+    _apply_codex_work_dirs,
+)
 from twicc.providers.helpers import AgentSettings
 
 
@@ -17,10 +19,12 @@ class _FakeCodex:
     def __init__(self) -> None:
         self.start_calls: list[dict] = []
         self.resume_calls: list[tuple[str, dict]] = []
+        self.started_thread: _FakeThread | None = None
 
     async def thread_start_with_policy(self, **kwargs):
         self.start_calls.append(deepcopy(kwargs))
-        return SimpleNamespace(id="canonical-id")
+        self.started_thread = _FakeThread("canonical-id")
+        return self.started_thread
 
     async def thread_resume_with_policy(self, thread_id, **kwargs):
         self.resume_calls.append((thread_id, deepcopy(kwargs)))
@@ -41,6 +45,15 @@ class _FakeAgent:
 
     def _reset_context_baseline(self) -> None:
         self.context_reset = True
+
+
+class _FakeThread:
+    def __init__(self, thread_id: str) -> None:
+        self.id = thread_id
+        self.settings_updates: list[dict] = []
+
+    async def update_settings_with_policy(self, **kwargs) -> None:
+        self.settings_updates.append(deepcopy(kwargs))
 
 
 def _install_factory_fakes(monkeypatch, work_dirs: list[str]):
@@ -71,7 +84,7 @@ def _install_factory_fakes(monkeypatch, work_dirs: list[str]):
     return codex, resolved
 
 
-def test_new_thread_is_resumed_with_canonical_work_dirs(monkeypatch) -> None:
+def test_new_thread_updates_canonical_work_dirs_without_resume(monkeypatch) -> None:
     roots = ["/data/artifacts/canonical-id", "/data/scratch/canonical-id"]
     codex, resolved = _install_factory_fakes(monkeypatch, roots)
 
@@ -89,14 +102,41 @@ def test_new_thread_is_resumed_with_canonical_work_dirs(monkeypatch) -> None:
 
     assert resolved == [("canonical-id", "draft-id")]
     assert len(codex.start_calls) == 1
-    assert "sandbox_workspace_write" not in codex.start_calls[0]["config"]
-    assert len(codex.resume_calls) == 1
-    thread_id, resume = codex.resume_calls[0]
-    assert thread_id == "canonical-id"
-    assert resume["config"]["sandbox_workspace_write"]["writable_roots"] == roots
-    assert resume["approvals_reviewer"] is ApprovalsReviewer.auto_review
+    start_config = codex.start_calls[0]["config"]
+    assert start_config["sandbox_workspace_write"]["network_access"] is True
+    assert "network_proxy" not in start_config["features"]
+    assert codex.resume_calls == []
+    assert codex.started_thread is not None
+    assert len(codex.started_thread.settings_updates) == 1
+    sandbox_policy = codex.started_thread.settings_updates[0]["sandbox_policy"]
+    assert sandbox_policy.model_dump(mode="json", by_alias=True)["writableRoots"] == roots
+    assert sandbox_policy.root.network_access is True
     assert agent.kwargs["work_dirs"] == roots
     assert agent.seeded_pending_id == "draft-id"
+
+
+def test_new_yolo_thread_does_not_resume_before_first_turn(monkeypatch) -> None:
+    roots = ["/data/artifacts/canonical-id", "/data/scratch/canonical-id"]
+    codex, resolved = _install_factory_fakes(monkeypatch, roots)
+
+    async def scenario():
+        manager = CodexAgentManager()
+        return await manager._create_agent(
+            "draft-id",
+            "project-id",
+            "/project",
+            resume=False,
+            settings=AgentSettings(permission_mode="yolo"),
+        )
+
+    agent = asyncio.run(scenario())
+
+    assert resolved == [("canonical-id", "draft-id")]
+    assert len(codex.start_calls) == 1
+    assert codex.resume_calls == []
+    assert codex.started_thread is not None
+    assert codex.started_thread.settings_updates == []
+    assert agent.kwargs["work_dirs"] == roots
 
 
 def test_existing_thread_gets_work_dirs_in_first_resume(monkeypatch) -> None:
@@ -120,6 +160,7 @@ def test_existing_thread_gets_work_dirs_in_first_resume(monkeypatch) -> None:
     assert len(codex.resume_calls) == 1
     _, resume = codex.resume_calls[0]
     assert resume["config"]["sandbox_workspace_write"]["writable_roots"] == roots
+    assert "network_proxy" not in resume["config"]["features"]
     assert agent.kwargs["work_dirs"] == roots
     assert agent.context_reset is True
 
@@ -132,3 +173,18 @@ def test_work_dir_config_preserves_existing_workspace_settings() -> None:
         "network_access": True,
         "writable_roots": ["/scratch/session"],
     }
+
+
+def test_auto_review_network_preserves_existing_features_and_roots() -> None:
+    config = {
+        "features": {"default_mode_request_user_input": True},
+        "sandbox_workspace_write": {"writable_roots": ["/scratch/session"]},
+    }
+    _apply_auto_review_network(config)
+
+    assert config["features"] == {"default_mode_request_user_input": True}
+    assert config["sandbox_workspace_write"] == {
+        "network_access": True,
+        "writable_roots": ["/scratch/session"],
+    }
+    assert "suppress_unstable_features_warning" not in config

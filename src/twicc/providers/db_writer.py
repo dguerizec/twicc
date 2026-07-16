@@ -139,6 +139,19 @@ class MarkSessionsStalePayload(NamedTuple):
     session_ids: list[str]
 
 
+class DeleteSessionsPayload(NamedTuple):
+    """Producer identified internal rollouts that must not exist in TwiCC.
+
+    The DB writer deletes the sessions and their cascaded data, then refreshes
+    the affected project and activity aggregates. Providers use this only for
+    exact, provider-owned classifications — never for missing user files,
+    which continue to use :class:`MarkSessionsStalePayload`.
+    """
+
+    provider: Provider
+    session_ids: list[str]
+
+
 class UpdateProjectMetadataPayload(NamedTuple):
     """End-of-sync metadata for one project.
 
@@ -2275,6 +2288,15 @@ async def _process_thread_message(msg) -> None:
             await sync_to_async(_apply_update_session_payload)(msg)
         elif isinstance(msg, MarkSessionsStalePayload):
             await sync_to_async(_apply_mark_sessions_stale_payload)(msg)
+        elif isinstance(msg, DeleteSessionsPayload):
+            deleted_ids = await sync_to_async(_apply_delete_sessions_payload)(msg)
+            if deleted_ids:
+                from twicc import search
+
+                if search.is_initialized():
+                    for session_id in deleted_ids:
+                        await asyncio.to_thread(search.delete_session_documents, session_id)
+                    await asyncio.to_thread(search.commit)
         elif isinstance(msg, UpdateProjectMetadataPayload):
             await sync_to_async(_apply_update_project_metadata_payload)(msg)
         elif isinstance(msg, ResolveProjectGitRootsPayload):
@@ -2412,6 +2434,53 @@ def _apply_mark_sessions_stale_payload(payload: MarkSessionsStalePayload) -> Non
             Project.objects.filter(id=project_id).update(
                 mtime=_compute_project_mtime(project_id)
             )
+
+
+def _apply_delete_sessions_payload(payload: DeleteSessionsPayload) -> list[str]:
+    """Delete ignored internal sessions and repair their derived aggregates."""
+    from collections import defaultdict
+
+    from twicc.core.models import DailyActivity, Session, SessionItem
+    from twicc.projects import update_project_metadata
+
+    if not payload.session_ids:
+        return []
+
+    rows = list(
+        Session.objects.filter(id__in=payload.session_ids, provider=payload.provider)
+        .values("id", "project_id", "created_at")
+    )
+    if not rows:
+        return []
+
+    deleted_ids = [row["id"] for row in rows]
+    project_days: dict[str, set[date_cls]] = defaultdict(set)
+    project_by_session = {row["id"]: row["project_id"] for row in rows}
+    for row in rows:
+        if row["created_at"] is not None:
+            project_days[row["project_id"]].add(row["created_at"].date())
+    for session_id, timestamp in SessionItem.objects.filter(
+        session_id__in=deleted_ids,
+        timestamp__isnull=False,
+    ).values_list("session_id", "timestamp"):
+        project_days[project_by_session[session_id]].add(timestamp.date())
+
+    with transaction.atomic():
+        Session.objects.filter(id__in=deleted_ids, provider=payload.provider).delete()
+        for project_id in {row["project_id"] for row in rows}:
+            update_project_metadata(project_id)
+
+        all_days: set[date_cls] = set()
+        for project_id, days in project_days.items():
+            DailyActivity.recalculate_for_days(
+                project_id, days, payload.provider, do_global=False,
+            )
+            all_days.update(days)
+        DailyActivity.recalculate_for_days(
+            None, all_days, payload.provider, do_global=False,
+        )
+
+    return deleted_ids
 
 
 def _apply_update_project_metadata_payload(payload: UpdateProjectMetadataPayload) -> None:

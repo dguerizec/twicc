@@ -55,6 +55,9 @@ export function sendCheckUsage() {
  *     { tool_name: 'toolRequestUserInput',
  *       answers: { [questionId]: { answers: [string, ...] } } }
  *
+ *   autoReviewDenial:
+ *     { tool_name: 'autoReviewDenial', decision: 'accept' | 'decline' }
+ *
  * The backend ``CodexWSHandler._build_codex_response`` validates this
  * strictly and falls back to a safe default on any malformed payload, so
  * the SDK is never left waiting.

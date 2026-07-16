@@ -20,10 +20,10 @@ PRIVATE SDK API: the implementation reaches into
 into ``AsyncCodex._ensure_initialized`` / ``AsyncCodex._client``. The
 goal helpers and ``inject_user_message`` additionally call
 ``AsyncCodex._client.request`` with raw ``thread/goal/*`` /
-``thread/inject_items`` method strings — these app-server RPCs have no
-generated SDK wrapper (only the goal notifications are generated). See the
-memory ``reference_codex_sdk_update_procedure.md`` for the upgrade checklist
-(these attribute paths must hold).
+``thread/inject_items`` / ``thread/settings/update`` method strings — these
+app-server RPCs have no generated SDK wrapper (only their notifications are
+generated). See the memory ``reference_codex_sdk_update_procedure.md`` for the
+upgrade checklist (these attribute paths must hold).
 """
 
 from __future__ import annotations
@@ -38,8 +38,10 @@ from openai_codex.generated.v2_all import (
     ReasoningEffort,
     SandboxMode,
     SandboxPolicy,
+    ThreadApproveGuardianDeniedActionResponse,
     ThreadGoal,
     ThreadResumeParams,
+    ThreadSetNameResponse,
     ThreadStartParams,
     TurnStartParams,
 )
@@ -62,6 +64,12 @@ class _ThreadGoalClearResponse(BaseModel):
 
 class _ThreadInjectItemsResponse(BaseModel):
     """``thread/inject_items`` response — an empty envelope."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class _ThreadSettingsUpdateResponse(BaseModel):
+    """``thread/settings/update`` response — an empty envelope."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -121,6 +129,48 @@ class TwiccAsyncThread(AsyncThread):
             response_model=_ThreadGoalEnvelope,
         )
         return response.goal
+
+    async def approve_guardian_denied_action(self, event: dict[str, Any]) -> None:
+        """Record one exact Guardian-denied action as manually approved.
+
+        Codex injects a developer authorization marker into the thread; when
+        the action is retried, Auto-review can match that exact payload without
+        treating similar actions as authorized. The app-server exposes this as
+        a raw RPC but the Python SDK does not currently wrap it.
+        """
+        await self._codex._ensure_initialized()
+        await self._codex._client.request(
+            "thread/approveGuardianDeniedAction",
+            {"threadId": self.id, "event": event},
+            response_model=ThreadApproveGuardianDeniedActionResponse,
+        )
+
+    async def update_settings_with_policy(
+        self,
+        *,
+        sandbox_policy: SandboxPolicy,
+    ) -> None:
+        """Update this loaded thread's next-turn sandbox without resuming it.
+
+        A new Codex thread gets its canonical id only after ``thread/start``,
+        while TwiCC's scratch/artifact roots are scoped to that id. Calling
+        ``thread/resume`` immediately is invalid before Codex has indexed the
+        fresh rollout. The app-server's ``thread/settings/update`` RPC is the
+        intended hot path for this case: it changes the loaded thread in place,
+        without starting a turn or adding transcript items.
+        """
+        await self._codex._ensure_initialized()
+        await self._codex._client.request(
+            "thread/settings/update",
+            {
+                "threadId": self.id,
+                "sandboxPolicy": sandbox_policy.model_dump(
+                    by_alias=True,
+                    exclude_none=True,
+                ),
+            },
+            response_model=_ThreadSettingsUpdateResponse,
+        )
 
     async def goal_set(self, objective: str) -> ThreadGoal | None:
         """Create or edit this thread's goal via ``thread/goal/set``.
@@ -189,6 +239,22 @@ class TwiccAsyncThread(AsyncThread):
 
 class TwiccAsyncCodex(AsyncCodex):
     """``AsyncCodex`` whose ``*_with_policy`` methods return :class:`TwiccAsyncThread`."""
+
+    async def thread_set_name(
+        self,
+        thread_id: str,
+        name: str,
+    ) -> ThreadSetNameResponse:
+        """Rename a persisted thread without loading its rollout.
+
+        The high-level SDK exposes ``set_name`` only on ``AsyncThread``, which
+        tempts callers to run an unnecessary ``thread/resume`` just to obtain
+        that object. Its typed client already exposes the underlying
+        ``thread/name/set`` RPC, and the app-server applies it directly to the
+        metadata store, so forward to that method instead.
+        """
+        await self._ensure_initialized()
+        return await self._client.thread_set_name(thread_id, name)
 
     async def thread_start_with_policy(
         self,

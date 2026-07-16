@@ -34,7 +34,9 @@ from openai_codex import (
 from openai_codex.generated.v2_all import (
     CodexErrorInfoValue,
     ErrorNotification,
+    GuardianApprovalReviewStatus,
     HttpConnectionFailedCodexErrorInfo,
+    ItemGuardianApprovalReviewCompletedNotification,
     ReasoningEffort,
     ResponseStreamConnectionFailedCodexErrorInfo,
     ThreadGoalStatus,
@@ -42,7 +44,7 @@ from openai_codex.generated.v2_all import (
 
 from asgiref.sync import sync_to_async
 
-from twicc.agent import AgentState, BaseAgent, SendDeliveryError, StateChangeCallback
+from twicc.agent import AgentState, BaseAgent, PendingRequest, SendDeliveryError, StateChangeCallback
 from twicc.context_injection import apply_pending_context
 from twicc.core.enums import Provider
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
@@ -88,6 +90,92 @@ _AUTH_STATUS_IN_MESSAGE = re.compile(r"\bstatus\s+40[13]\b", re.IGNORECASE)
 # Generous on purpose: overshooting only drops the label a little early — the
 # compaction, if still running, finishes server-side and its summary appears.
 COMPACTION_SAFETY_TIMEOUT_S = 300
+
+# A manual approval only injects Codex's exact-action authorization marker; it
+# does not itself start a model cycle. Steer the active turn with this truthful
+# representation of the user's click, or open a continuation turn if the
+# original turn finished while the approval card was waiting.
+_AUTO_REVIEW_RETRY_PROMPT = "Retry the exact action I just approved."
+
+_GUARDIAN_ACTION_TYPES_TO_CORE = {
+    "command": "command",
+    "execve": "execve",
+    "applyPatch": "apply_patch",
+    "networkAccess": "network_access",
+    "mcpToolCall": "mcp_tool_call",
+    "requestPermissions": "request_permissions",
+}
+
+
+def _guardian_action_to_core(
+    payload: ItemGuardianApprovalReviewCompletedNotification,
+) -> tuple[dict, dict] | None:
+    """Return one Guardian action in core-RPC and browser-display shapes."""
+    display_action = payload.action.model_dump(mode="json", by_alias=True)
+    action = payload.action.model_dump(mode="json", by_alias=False)
+    action_type = action.get("type")
+    core_action_type = _GUARDIAN_ACTION_TYPES_TO_CORE.get(action_type)
+    if core_action_type is None:
+        logger.error(
+            "Unsupported Codex Guardian action type %r for review %s",
+            action_type, payload.review_id,
+        )
+        return None
+    action["type"] = core_action_type
+    if action.get("source") == "unifiedExec":
+        action["source"] = "unified_exec"
+    return action, display_action
+
+
+def _guardian_denial_context(
+    payload: ItemGuardianApprovalReviewCompletedNotification,
+) -> tuple[dict, dict] | None:
+    """Return the native approval event and browser-safe display details.
+
+    The app-server notification uses its public camelCase action schema, while
+    ``thread/approveGuardianDeniedAction`` accepts a serialized core
+    ``GuardianAssessmentEvent`` with snake_case variants. Codex's own TUI makes
+    the same conversion before implementing ``/approve``.
+    """
+    review = payload.review
+    if review.status is not GuardianApprovalReviewStatus.denied:
+        return None
+
+    action_pair = _guardian_action_to_core(payload)
+    if action_pair is None:
+        return None
+    action, display_action = action_pair
+
+    event = {
+        "id": payload.review_id,
+        "turn_id": payload.turn_id,
+        "started_at_ms": payload.started_at_ms,
+        "completed_at_ms": payload.completed_at_ms,
+        "status": "denied",
+        "risk_level": review.risk_level.value if review.risk_level is not None else None,
+        "user_authorization": (
+            review.user_authorization.value
+            if review.user_authorization is not None
+            else None
+        ),
+        "rationale": review.rationale,
+        "decision_source": payload.decision_source.root,
+        "action": action,
+    }
+    if payload.target_item_id is not None:
+        event["target_item_id"] = payload.target_item_id
+
+    display = {
+        "action": display_action,
+        "rationale": review.rationale,
+        "riskLevel": review.risk_level.value if review.risk_level is not None else None,
+        "userAuthorization": (
+            review.user_authorization.value
+            if review.user_authorization is not None
+            else None
+        ),
+    }
+    return event, display
 
 
 def _capture_original_files_for_apply_patch(inner: Any, session_id: str) -> None:
@@ -262,6 +350,13 @@ class CodexAgent(BaseAgent):
         # ``interrupt_or_kill`` (with the rest of the side-tables) or by
         # re-creating the agent on a fresh session.
         self._user_terminated_tool_ids: dict[str, str] = {}
+
+        # Set when a user approves an Auto-review denial after Codex has already
+        # closed the originating turn. ``_run_turn`` consumes it by immediately
+        # opening a continuation whose only input asks Codex to retry the exact
+        # action covered by the native approval marker.
+        self._auto_review_retry_after_turn = False
+        self._auto_review_retry_action: dict | None = None
 
         # This session's work dirs (own artifacts/scratch + the orchestration
         # root's shared scratch), normally resolved + pre-created by the manager
@@ -629,6 +724,17 @@ class CodexAgent(BaseAgent):
         # ``turn/completed`` arriving before ``self._codex.close()``
         # propagates — and we don't want to overwrite the terminal state.
         if self.state == AgentState.DEAD:
+            return
+
+        if self._auto_review_retry_after_turn:
+            self._auto_review_retry_after_turn = False
+            self._auto_review_retry_action = None
+            logger.info(
+                "Starting Codex continuation after manual Auto-review approval "
+                "for session %s",
+                self.session_id,
+            )
+            await self._run_turn(_AUTO_REVIEW_RETRY_PROMPT, None)
             return
 
         # Turn completed normally → ready for the next user input.
@@ -1324,6 +1430,23 @@ class CodexAgent(BaseAgent):
         if payload_thread_id is not None and payload_thread_id != self.session_id:
             return
 
+        if (
+            method == "item/autoApprovalReview/completed"
+            and isinstance(payload, ItemGuardianApprovalReviewCompletedNotification)
+        ):
+            if payload.review.status is GuardianApprovalReviewStatus.approved:
+                action_pair = _guardian_action_to_core(payload)
+                if (
+                    action_pair is not None
+                    and action_pair[0] == self._auto_review_retry_action
+                ):
+                    # The exact action approved by the user was retried before
+                    # this turn ended. Do not launch the fallback continuation.
+                    self._auto_review_retry_after_turn = False
+                    self._auto_review_retry_action = None
+            await self._handle_auto_review_completed(payload)
+            return
+
         if method == "error" and isinstance(payload, ErrorNotification):
             # ``EventMsg::Error`` upstream → ``will_retry: false`` and a
             # ``turn/completed`` with ``status: failed`` follows on the same
@@ -1581,6 +1704,74 @@ class CodexAgent(BaseAgent):
                 # push regardless of how many summary parts streamed.
                 get_streamed_item_registry().push(self.session_id, item_id)
                 return
+
+    async def _handle_auto_review_completed(
+        self,
+        payload: ItemGuardianApprovalReviewCompletedNotification,
+    ) -> None:
+        """Escalate a Guardian denial to TwiCC's ordinary approval UI.
+
+        Approved and non-terminal reviews need no intervention. For a denial,
+        hold the exact native event on this coroutine's stack while the client
+        sees only display details. An approval invokes Codex's native override,
+        then steers the still-active turn to retry. If the turn ended server-side
+        while the user was deciding, ``_run_turn`` opens one continuation after
+        it drains the queued completion event.
+        """
+        context = _guardian_denial_context(payload)
+        if context is None:
+            return
+        event, display = context
+        if event["action"] == self._auto_review_retry_action:
+            # A retry did happen, but Guardian denied it again. The new card is
+            # now authoritative; do not also launch the older fallback turn.
+            self._auto_review_retry_after_turn = False
+            self._auto_review_retry_action = None
+        request = PendingRequest(
+            request_id=f"auto-review:{payload.review_id}",
+            request_type="tool_approval",
+            tool_name="autoReviewDenial",
+            tool_input=display,
+            created_at=time.time(),
+            permission_suggestions=None,
+        )
+        response = await self._await_pending_request(request)
+        if response.get("decision") != "accept":
+            logger.info(
+                "User kept Codex Auto-review denial %s for session %s",
+                payload.review_id, self.session_id,
+            )
+            return
+
+        await self._thread.approve_guardian_denied_action(event)
+        logger.info(
+            "User manually approved Codex Auto-review denial %s for session %s",
+            payload.review_id, self.session_id,
+        )
+
+        # Keep a one-shot continuation armed even when steering succeeds: the
+        # app-server may accept a late steer just as the turn is closing. A
+        # matching approved-review notification clears it; otherwise the turn
+        # tail consumes it exactly once.
+        self._auto_review_retry_after_turn = True
+        self._auto_review_retry_action = event["action"]
+
+        turn_handle = self._current_turn
+        if turn_handle is not None:
+            try:
+                await turn_handle.steer([TextInput(_AUTO_REVIEW_RETRY_PROMPT)])
+                return
+            except Exception as exc:
+                # The server keeps running while TwiCC waits for the click; in
+                # the common slow-response case its turn is already complete,
+                # even though our stream loop has not consumed that notification
+                # yet. Continue below rather than treating this expected race as
+                # a provider failure.
+                logger.info(
+                    "Could not steer completed Codex turn after Auto-review "
+                    "approval for session %s (%s); scheduling a continuation",
+                    self.session_id, exc,
+                )
 
     # ------------------------------------------------------------------
     # Approval handlers (sync ↔ async bridge)

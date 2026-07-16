@@ -1,14 +1,15 @@
 """
 Codex agent manager: tracks active Codex agents and creates new ones.
 
-Minimal v1: no live settings (Codex doesn't expose a hot path for permission
-or model changes on a running thread the way Claude Code does) and no
-subagents. Images are forwarded to the Codex SDK as ``ImageInput`` data
-URLs; documents (PDF / TXT) have no Codex protocol equivalent and are
-silently dropped with a warning. Approvals are routed through ``CodexAgent``'s
-sync ↔ async bridge to the shared ``PendingRequest`` plumbing; the sandbox +
-approval policy come from the user's ``permission_mode`` preset via
-:func:`resolve_codex_policy` (see ``permission_modes.py``).
+Minimal v1: no general live settings or subagents. The sole bootstrap-time
+exception uses Codex's experimental ``thread/settings/update`` RPC to attach
+canonical scratch/artifact roots after ``thread/start`` returns the thread id.
+Images are forwarded to the Codex SDK as ``ImageInput`` data URLs; documents
+(PDF / TXT) have no Codex protocol equivalent and are silently dropped with a
+warning. Approvals are routed through ``CodexAgent``'s sync ↔ async bridge
+to the shared ``PendingRequest`` plumbing; the sandbox + approval policy come
+from the user's ``permission_mode`` preset via :func:`resolve_codex_policy`
+(see ``permission_modes.py``).
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import logging
 from typing import Any, ClassVar
 
 from asgiref.sync import sync_to_async
+from openai_codex.generated.v2_all import ApprovalsReviewer, SandboxMode
 
 from twicc.agent import AgentState, BaseAgent, BaseAgentManager, SendDeliveryError
 from twicc.agent.work_dirs import resolve_and_create_work_dirs
@@ -28,7 +30,7 @@ from twicc.pending_session_attributes import get_pending_session_attributes
 from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from ..bin import make_codex_config
-from ..permission_modes import resolve_codex_policy
+from ..permission_modes import resolve_codex_policy, resolve_codex_turn_overrides
 from ..sdk_wrappers import TwiccAsyncCodex
 from .agent import CodexAgent
 from .hardcoded_commands import HardcodedCommand, parse_hardcoded_command
@@ -614,6 +616,14 @@ class CodexAgentManager(BaseAgentManager):
             # Offer request_user_input (the AskUserQuestion-equivalent) in every
             # collaboration mode, not just Plan. Applied on both start and resume.
             _force_request_user_input(thread_config)
+            if approvals_reviewer is ApprovalsReviewer.auto_review:
+                # Give the workspace sandbox direct network access. Do not turn
+                # on Codex's managed network proxy here: without an administrator
+                # requirements layer its allowlist misses are hard HTTP 403s, not
+                # Guardian decisions. Guardian still reviews real sandbox
+                # escalations, and TwiCC forwards its denials to the user.
+                # Per-turn policy independently reasserts network_access.
+                _apply_auto_review_network(thread_config)
             if resume:
                 # The canonical id is already known, so establish the extra
                 # workspace-write roots in the first resume request. This is
@@ -666,15 +676,28 @@ class CodexAgentManager(BaseAgentManager):
 
                 # The canonical id only exists after thread/start, while the
                 # work directories are deliberately scoped to that id. Create
-                # them now, then immediately bind them through thread/resume
-                # before a user turn or Codex-owned goal continuation can run.
-                # ``pending_id`` preserves access to the draft-keyed
+                # them now. ``pending_id`` preserves access to the draft-keyed
                 # orchestration metadata until the watcher creates the row.
                 work_dirs = await resolve_and_create_work_dirs(
                     thread.id,
                     pending_id=session_id,
                 )
-                _apply_codex_work_dirs(thread_config, work_dirs)
+
+                # A workspace-write thread needs the canonical scratch and
+                # artifact paths in its persistent next-turn settings too:
+                # Codex-owned continuations (notably /goal) do not pass through
+                # TwiCC's turn/start override. Update the already-loaded thread
+                # in place. An immediate thread/resume is invalid here because
+                # Codex has not indexed the brand-new rollout yet ("no rollout
+                # found"). Other sandbox modes do not carry writable roots.
+                if sandbox is SandboxMode.workspace_write:
+                    sandbox_policy, _, _ = resolve_codex_turn_overrides(
+                        settings.permission_mode,
+                        writable_roots=work_dirs,
+                    )
+                    await thread.update_settings_with_policy(
+                        sandbox_policy=sandbox_policy,
+                    )
 
                 # Codex just minted the canonical thread id — the one piece of
                 # context that could not go into the (already-frozen)
@@ -691,14 +714,6 @@ class CodexAgentManager(BaseAgentManager):
                 from twicc.mcp.identity import register_draft_alias
 
                 register_draft_alias(session_id, thread.id)
-
-                thread = await codex.thread_resume_with_policy(
-                    thread.id,
-                    sandbox=sandbox,
-                    approval_policy=approval_policy,
-                    approvals_reviewer=approvals_reviewer,
-                    config=thread_config,
-                )
 
             # Re-home the debug stderr log from the draft id (all we had before
             # thread_start) onto the canonical id, so it matches the JSONL
@@ -827,6 +842,20 @@ def _apply_codex_work_dirs(thread_config: dict, work_dirs: list[str]) -> None:
     """
     workspace_write = thread_config.setdefault("sandbox_workspace_write", {})
     workspace_write["writable_roots"] = work_dirs
+
+
+def _apply_auto_review_network(thread_config: dict) -> None:
+    """Give ``auto_review`` workspace commands direct sandboxed network access.
+
+    Workspace-write blocks network at the sandbox boundary by default, which
+    appears to commands as an un-actionable DNS failure. The managed network
+    proxy is deliberately not enabled: Codex only wires its allowlist misses
+    into Guardian when an administrator-provided network requirements layer is
+    active. In an ordinary local setup, enabling the feature alone converts
+    every unknown host into an opaque HTTP 403 instead.
+    """
+    workspace_write = thread_config.setdefault("sandbox_workspace_write", {})
+    workspace_write["network_access"] = True
 
 
 def get_codex_agent_manager() -> CodexAgentManager:

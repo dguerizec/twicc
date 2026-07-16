@@ -216,6 +216,20 @@ class TestBuildCodexResponse:
         result = handler._build_codex_response("totally_made_up", {})
         assert result is None
 
+    @pytest.mark.parametrize("decision", ["accept", "decline"])
+    def test_auto_review_denial_accepts_exact_decisions(self, handler, decision):
+        result = handler._build_codex_response(
+            "autoReviewDenial", {"decision": decision},
+        )
+        assert result == {"decision": decision}
+
+    @pytest.mark.parametrize("decision", ["cancel", "acceptForSession", None, {}])
+    def test_auto_review_denial_rejects_other_decisions(self, handler, decision):
+        result = handler._build_codex_response(
+            "autoReviewDenial", {"decision": decision},
+        )
+        assert result is None
+
 
 class TestSafeDefaultFor:
     def test_command_execution_returns_decline(self, handler):

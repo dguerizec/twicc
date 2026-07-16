@@ -141,6 +141,8 @@ def resolve_codex_policy(mode: str | None) -> CodexPermissionPolicy:
 def _to_sandbox_policy(
     sandbox_mode: SandboxMode,
     writable_roots: list[str] | None = None,
+    *,
+    network_access: bool = False,
 ) -> SandboxPolicy:
     """Convert a ``SandboxMode`` enum (used by ``thread_start(sandbox=...)``)
     to a ``SandboxPolicy`` ``RootModel`` (used by ``thread.turn(sandbox_policy=...)``).
@@ -155,12 +157,19 @@ def _to_sandbox_policy(
     already reads the whole filesystem and forbids writes, and
     ``danger-full-access`` writes everywhere — neither type even carries the
     field, so the list is silently irrelevant there.
+
+    ``network_access`` opens the workspace sandbox's network channel. TwiCC
+    enables it only for ``auto_review`` turns. Codex's managed network proxy is
+    intentionally left off: without an administrator requirements layer, an
+    allowlist miss is an opaque HTTP 403 rather than a Guardian decision. The
+    flag is ignored by the other sandbox variants.
     """
     if sandbox_mode is SandboxMode.read_only:
         return SandboxPolicy(root=ReadOnlySandboxPolicy(type="readOnly"))
     if sandbox_mode is SandboxMode.workspace_write:
         return SandboxPolicy(root=WorkspaceWriteSandboxPolicy(
             type="workspaceWrite",
+            network_access=network_access,
             writable_roots=writable_roots or [],
         ))
     if sandbox_mode is SandboxMode.danger_full_access:
@@ -184,7 +193,11 @@ def resolve_codex_turn_overrides(
     """
     sandbox_mode, approval_policy, approvals_reviewer = resolve_codex_policy(mode)
     return CodexTurnOverrides(
-        _to_sandbox_policy(sandbox_mode, writable_roots),
+        _to_sandbox_policy(
+            sandbox_mode,
+            writable_roots,
+            network_access=approvals_reviewer is ApprovalsReviewer.auto_review,
+        ),
         approval_policy,
         approvals_reviewer,
     )

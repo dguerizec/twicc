@@ -23,6 +23,7 @@ from django.db import transaction
 from twicc.core.enums import Provider
 
 from .bin import make_codex_config
+from .sdk_wrappers import TwiccAsyncCodex
 
 logger = logging.getLogger(__name__)
 
@@ -103,13 +104,14 @@ async def _broadcast_changed_titles(changed: list[dict]) -> None:
 async def rename_thread_via_sdk(thread_id: str, title: str) -> None:
     """Set the Codex thread's display name via ``thread/name/set``.
 
-    Spawns a short-lived ``AsyncCodex`` transport (one initialize + one
-    ``thread/resume`` + one ``thread/name/set`` RPC). Cannot piggy-back
-    on an existing ``AsyncCodex`` because the SDK only allows one
-    streamed turn consumer at a time across the whole client (see the
-    ``_active_turn_consumer`` guard in ``openai_codex.client``):
-    sharing it with an active agent would either starve the agent or
-    fail-fast on a name update.
+    Spawns a short-lived ``TwiccAsyncCodex`` transport (one initialize + one
+    ``thread/name/set`` RPC). The app-server applies that request directly to
+    the metadata store, so loading the rollout with ``thread/resume`` first is
+    unnecessary. Cannot piggy-back on an existing ``AsyncCodex`` because the
+    SDK only allows one streamed turn consumer at a time across the whole
+    client (see the ``_active_turn_consumer`` guard in
+    ``openai_codex.client``): sharing it with an active agent would either
+    starve the agent or fail-fast on a name update.
 
     Raises on failure so the caller can decide how to react. The HTTP
     rename endpoint currently swallows the error (the DB title is
@@ -117,9 +119,8 @@ async def rename_thread_via_sdk(thread_id: str, title: str) -> None:
     """
     config = await make_codex_config()
     try:
-        async with AsyncCodex(config=config) as codex:
-            thread = await codex.thread_resume(thread_id)
-            await thread.set_name(title)
+        async with TwiccAsyncCodex(config=config) as codex:
+            await codex.thread_set_name(thread_id, title)
     except Exception as e:
         logger.warning("Codex thread/name/set failed for %s: %s", thread_id, e)
         raise

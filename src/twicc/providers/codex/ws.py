@@ -86,7 +86,7 @@ class CodexWSHandler:
                 "request_id": "...",
                 "tool_name": "commandExecution" | "fileChange" | "permissions"
                              | "mcpToolCall" | "elicitationForm" | "elicitationUrl"
-                             | "toolRequestUserInput",
+                             | "toolRequestUserInput" | "autoReviewDenial",
                 "decision": <string-or-dict-variant>,  # see _build_codex_response
                 "permissions": {...},   // permissions only
                 "scope": "turn" | "session",  // permissions only
@@ -194,6 +194,16 @@ class CodexWSHandler:
 
         if tool_name == "toolRequestUserInput":
             return self._build_request_user_input_response(content)
+
+        if tool_name == "autoReviewDenial":
+            if isinstance(decision, str) and decision in {"accept", "decline"}:
+                return {"decision": decision}
+            logger.error(
+                "codex autoReviewDenial: invalid decision=%r "
+                "(expected 'accept' or 'decline')",
+                decision,
+            )
+            return None
 
         logger.error(
             "codex:pending_request_response: unknown tool_name=%r in %r",

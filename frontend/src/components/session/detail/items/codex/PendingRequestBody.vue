@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
+import AutoReviewDenialBody from './AutoReviewDenialBody.vue'
 import { getProviderLabel } from '../../../../../providers'
 import { useDataStore } from '../../../../../stores/data'
 import { fileIconFor } from '../../../../../providers/utils/path'
@@ -52,7 +53,7 @@ watch(() => props.pendingRequest?.request_id, focusApproveButton)
 
 // Codex tool_name — legacy kinds ('commandExecution' | 'fileChange' |
 // 'permissions') rendered inline below, and the routing key for the
-// self-contained bodies ('mcpToolCall' | 'toolRequestUserInput' |
+// self-contained bodies ('autoReviewDenial' | 'mcpToolCall' | 'toolRequestUserInput' |
 // 'elicitationForm' | 'elicitationUrl').
 const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
 
@@ -60,6 +61,7 @@ const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
 // body INCLUDING the action row (buttons differ per kind). Everything else
 // keeps the legacy shared Approve/Deny/Cancel-turn row below.
 const SELF_CONTAINED_BODIES = {
+    autoReviewDenial: AutoReviewDenialBody,
     mcpToolCall: McpToolCallApprovalBody,
     toolRequestUserInput: RequestUserInputBody,
     elicitationForm: ElicitationFormBody,

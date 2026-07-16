@@ -120,7 +120,16 @@ class TestToSandboxPolicy:
         assert isinstance(result, SandboxPolicy)
         assert isinstance(result.root, WorkspaceWriteSandboxPolicy)
         assert result.root.type == "workspaceWrite"
+        assert result.root.network_access is False
         assert [path.root for path in result.root.writable_roots] == roots
+
+    def test_workspace_write_can_enable_network_access(self):
+        result = _to_sandbox_policy(
+            SandboxMode.workspace_write,
+            network_access=True,
+        )
+        assert isinstance(result.root, WorkspaceWriteSandboxPolicy)
+        assert result.root.network_access is True
 
     def test_danger_full_access_returns_danger_full_access_policy(self):
         result = _to_sandbox_policy(SandboxMode.danger_full_access)
@@ -158,3 +167,12 @@ class TestResolveCodexTurnOverrides:
         assert isinstance(sandbox_policy.root, WorkspaceWriteSandboxPolicy)
         assert approval.root.value == "on-request"
         assert reviewer is ApprovalsReviewer.user
+
+    def test_only_auto_review_enables_workspace_network(self):
+        auto_policy, _, _ = resolve_codex_turn_overrides("auto")
+        review_policy, _, _ = resolve_codex_turn_overrides("auto_review")
+        autonomous_policy, _, _ = resolve_codex_turn_overrides("autonomous")
+
+        assert auto_policy.root.network_access is False
+        assert review_policy.root.network_access is True
+        assert autonomous_policy.root.network_access is False

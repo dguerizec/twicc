@@ -6,7 +6,8 @@ groups files by project (resolved from the first JSONL line's
 ``payload.cwd``), and pushes initial-sync payloads onto the DB writer's
 thread queue. Producer-side reads only — every DB write is delegated to
 the DB writer via ``CreateSessionPayload`` / ``UpdateSessionPayload`` /
-``MarkSessionsStalePayload`` / ``UpdateProjectMetadataPayload``.
+``DeleteSessionsPayload`` / ``MarkSessionsStalePayload`` /
+``UpdateProjectMetadataPayload``.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from twicc.core.models import Project, Session, SessionType
 from twicc.paths import path_to_project_id
 from twicc.providers.db_writer import (
     CreateSessionPayload,
+    DeleteSessionsPayload,
     MarkSessionsStalePayload,
     UpdateProjectMetadataPayload,
     UpdateSessionPayload,
@@ -34,6 +36,9 @@ from twicc.sync_helpers import BackpressureSyncQueue, check_file_has_content, re
 from .helpers import CodexHelpers
 
 logger = logging.getLogger(__name__)
+
+_AUTO_REVIEW_MODEL = "codex-auto-review"
+_GUARDIAN_SUBAGENT_KIND = "guardian"
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -49,11 +54,13 @@ class SessionMeta(NamedTuple):
 
     ``parent_session_id`` is set when the file is a subagent rollout
     (Codex marks the spawn through ``payload.source.subagent.thread_spawn``);
-    ``None`` for top-level sessions.
+    ``None`` for top-level sessions. ``ignored`` identifies provider-internal
+    rollouts that must never become TwiCC sessions.
     """
     session_id: str
     cwd: str
     parent_session_id: str | None = None
+    ignored: bool = False
 
 
 def extract_session_meta(file_path: Path) -> SessionMeta | None:
@@ -66,13 +73,17 @@ def extract_session_meta(file_path: Path) -> SessionMeta | None:
     directory at ``payload.cwd``. The session UUID is the canonical
     session id (the filename also contains it but we trust the payload).
 
-    For subagent rollouts the ``payload.source`` field carries
+    For user-visible subagent rollouts the ``payload.source`` field carries
     ``{"subagent": {"thread_spawn": {"parent_thread_id": "...", ...}}}``
     — we surface ``parent_thread_id`` so :func:`_sync_subagents` can wire
     the subagent to its parent ``Session`` row. Codex supports nested
     subagents (a subagent can itself spawn subagents) but
     ``parent_thread_id`` always points to the *direct* parent, so a
-    single field is enough to reconstruct the chain.
+    single field is enough to reconstruct the chain. Auto-review creates
+    internal reviewer rollouts marked as
+    ``{"subagent": {"other": "guardian"}}``; these are returned with
+    ``ignored=True`` so every ingestion path can discard them before creating
+    a TwiCC session.
 
     Returns ``None`` if the file is empty, unreadable, or missing either
     ``id`` or ``cwd`` — such files are skipped by the sync.
@@ -106,10 +117,12 @@ def extract_session_meta(file_path: Path) -> SessionMeta | None:
         return None
 
     parent_session_id: str | None = None
+    ignored = False
     source = payload.get("source")
     if isinstance(source, dict):
         subagent = source.get("subagent")
         if isinstance(subagent, dict):
+            ignored = subagent.get("other") == _GUARDIAN_SUBAGENT_KIND
             thread_spawn = subagent.get("thread_spawn")
             if isinstance(thread_spawn, dict):
                 candidate = thread_spawn.get("parent_thread_id")
@@ -120,7 +133,22 @@ def extract_session_meta(file_path: Path) -> SessionMeta | None:
         session_id=session_id,
         cwd=cwd,
         parent_session_id=parent_session_id,
+        ignored=ignored,
     )
+
+
+def _is_ignored_existing_session(session: Session, file_path: Path) -> bool:
+    """Confirm that a legacy DB row is an internal Guardian rollout.
+
+    New Guardian files are rejected from their first-line metadata before a
+    row exists. The model/compute prefilter limits first-line reads to known
+    Auto-review rows and sessions whose metadata was never computed; the
+    source marker remains the authoritative check before deletion.
+    """
+    if session.model != _AUTO_REVIEW_MODEL and session.compute_version is not None:
+        return False
+    meta = extract_session_meta(file_path)
+    return meta is not None and meta.ignored
 
 
 def scan_session_files() -> list[Path]:
@@ -516,6 +544,23 @@ def sync_all(
         )
     }
 
+    ignored_existing_paths = {
+        rel_path
+        for rel_path, session in db_sessions_by_path.items()
+        if (file_path := disk_files_by_relative_path.get(rel_path)) is not None
+        and _is_ignored_existing_session(session, file_path)
+    }
+    if ignored_existing_paths:
+        sync_queue.put(DeleteSessionsPayload(
+            provider=Provider.CODEX,
+            session_ids=[db_sessions_by_path[path].id for path in ignored_existing_paths],
+        ))
+        db_sessions_by_path = {
+            path: session
+            for path, session in db_sessions_by_path.items()
+            if path not in ignored_existing_paths
+        }
+
     new_by_project: dict[str, list[_NewEntry]] = {}
     existing_by_project: dict[str, list[_ExistingEntry]] = {}
 
@@ -527,7 +572,7 @@ def sync_all(
             )
         else:
             meta = extract_session_meta(file_path)
-            if meta is None:
+            if meta is None or meta.ignored:
                 continue
             project_id = path_to_project_id(meta.cwd)
             new_by_project.setdefault(project_id, []).append(

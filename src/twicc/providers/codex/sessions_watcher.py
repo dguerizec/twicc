@@ -16,7 +16,9 @@ matching exactly what :func:`twicc.providers.codex.initial_sync.sync_all`
 does for brand-new files. The same first-line read also surfaces a
 parent session id when ``payload.source.subagent.thread_spawn`` is set,
 so we can mark the file as a :class:`SessionType.SUBAGENT` and let the
-base watcher wire it under its parent.
+base watcher wire it under its parent. Provider-internal Guardian rollouts
+(``payload.source.subagent.other == "guardian"``) are rejected by the same
+metadata parser before the base watcher can create a TwiCC session.
 """
 from __future__ import annotations
 
@@ -75,9 +77,10 @@ class CodexSessionsWatcher(BaseSessionsWatcher):
         # orjson parse), so we offload it to a worker thread to keep
         # the watcher event loop snappy.
         meta = await asyncio.to_thread(extract_session_meta, path)
-        if meta is None:
+        if meta is None or meta.ignored:
             # Empty file, unreadable, or missing session_meta — silently
-            # skip; sync_and_broadcast won't be called.
+            # skip. Guardian reviewer rollouts are also deliberately ignored;
+            # sync_and_broadcast won't be called for any of these cases.
             return None
 
         project_id = path_to_project_id(meta.cwd)
