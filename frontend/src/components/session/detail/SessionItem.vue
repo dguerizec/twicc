@@ -5,7 +5,7 @@ import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import JsonViewer from '../../json/JsonViewer.vue'
 import ClaudeCodeMessage from './items/claude_code/Message.vue'
-import ClaudeCodeApiError from './items/claude_code/ApiError.vue'
+import ApiError from './items/ApiError.vue'
 import CompactSummary from './items/CompactSummary.vue'
 import CodexMessage from './items/codex/Message.vue'
 import CodexToolUse from './items/codex/ToolUse.vue'
@@ -232,7 +232,7 @@ function toggleJsonView() {
                     :parent-session-id="parentSessionId"
                     :line-num="lineNum"
                 />
-                <ClaudeCodeApiError
+                <ApiError
                     v-else-if="kind === 'api_error'"
                     :data="content"
                     :project-id="projectId"
@@ -279,6 +279,13 @@ function toggleJsonView() {
                 <CodexImageGeneration
                     v-else-if="kind === 'image'"
                     :data="content"
+                    :session-id="sessionId"
+                    :line-num="lineNum"
+                />
+                <ApiError
+                    v-else-if="kind === 'api_error'"
+                    :data="content"
+                    :project-id="projectId"
                     :session-id="sessionId"
                     :line-num="lineNum"
                 />

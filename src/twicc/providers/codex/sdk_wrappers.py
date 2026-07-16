@@ -159,13 +159,16 @@ class TwiccAsyncThread(AsyncThread):
         Records a ``message`` (role=user) item in the thread's rollout AND
         model-visible history WITHOUT starting or steering a turn (Codex
         ``inject_no_new_turn`` + ``flush_rollout``), so it is safe even while a
-        turn runs. TwiCC uses this to give ``/goal clear`` and ``/compact`` a
-        persistent transcript line — those RPCs write no "the user asked" line to
-        the rollout on their own (``/goal clear`` is a wire-only notification;
-        ``/compact`` writes only the ``compacted`` summary); the compute then
-        relabels the injected line as a real ``user_message`` (see
-        ``_injected_command_text``). Like the goal RPCs, ``thread/inject_items``
-        has no generated SDK wrapper.
+        turn runs. TwiCC uses this for two durable transcript gaps:
+
+        - ``/goal clear`` and ``/compact`` write no "the user asked" rollout
+          line, so their injected item is relabelled as a real ``user_message``;
+        - terminal provider errors exist only on the live app-server stream,
+          so their private marker is rewritten into an ``api_error`` item.
+
+        See ``CodexSessionCompute._transform_inline_provider`` for both
+        rewrites. Like the goal RPCs, ``thread/inject_items`` has no generated
+        SDK wrapper.
         """
         await self._codex._ensure_initialized()
         await self._codex._client.request(

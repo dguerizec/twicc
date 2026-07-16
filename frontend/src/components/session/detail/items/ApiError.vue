@@ -1,12 +1,12 @@
 <script setup>
 import { computed } from 'vue'
-import { parseApiErrorString, stripAnthropicDocsUrl } from '../../../../../utils/errorParsing'
-import { useDataStore } from '../../../../../stores/data'
-import { sendWsMessage } from '../../../../../composables/useWebSocket'
-import { generateUUID } from '../../../../../utils/crypto'
-import { getProviderHelpers } from '../../../../../providers'
-import { getParsedContent } from '../../../../../utils/parsedContent'
-import { PROCESS_STATE } from '../../../../../constants'
+import { parseApiErrorString, stripAnthropicDocsUrl } from '../../../../utils/errorParsing'
+import { useDataStore } from '../../../../stores/data'
+import { sendWsMessage } from '../../../../composables/useWebSocket'
+import { generateUUID } from '../../../../utils/crypto'
+import { getProviderHelpers, getProviderLabel } from '../../../../providers'
+import { getParsedContent } from '../../../../utils/parsedContent'
+import { PROCESS_STATE } from '../../../../constants'
 
 const props = defineProps({
     data: {
@@ -31,6 +31,11 @@ const props = defineProps({
 })
 
 const store = useDataStore()
+
+const provider = computed(() =>
+    props.data?.provider || store.getSession(props.sessionId)?.provider || null
+)
+const providerLabel = computed(() => getProviderLabel(provider.value))
 
 // Image-only messages carry no text to resend; fall back to a minimal nudge so
 // the resumed agent re-answers the attachments it already has in context.
@@ -76,6 +81,18 @@ function extractBastardErrorInfo(data) {
 }
 
 const errorInfo = computed(() => {
+    // TwiCC's provider-neutral shape, currently emitted for Codex terminal
+    // app-server errors after their private rollout marker is normalized.
+    if (props.data?.type === 'twicc_provider_error') {
+        return {
+            type: props.data?.error?.type || 'unknown_error',
+            message: props.data?.error?.message || 'Unknown error',
+            status: null,
+            retryAttempt: null,
+            maxRetries: null,
+        }
+    }
+
     // "Bastard" format: error is in content[0].text as a string
     if (props.data?.isApiErrorMessage) {
         return extractBastardErrorInfo(props.data)
@@ -194,7 +211,7 @@ function retry() {
         <wa-callout variant="danger" appearance="outlined" size="small">
             <wa-icon slot="icon" name="circle-exclamation"></wa-icon>
             <div class="error-content">
-                <div class="error-message">Error from Claude: {{ errorInfo.message }}</div>
+                <div class="error-message">Error from {{ providerLabel }}: {{ errorInfo.message }}</div>
                 <div v-if="errorInfo.status || errorInfo.retryAttempt" class="error-details">
                     <span v-if="errorInfo.status">Status: {{ errorInfo.status }}</span>
                     <span v-if="errorInfo.status && errorInfo.retryAttempt" class="separator">•</span>

@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Dock controls** — docks now minimize and maximize on the first click.
 - **Agent settings popover** — stays in place while settings update, and now displays correctly on mobile.
 - **Disk usage** — Old Codex versions are now removed automatically.
+- **Codex error recovery** — provider errors now stay visible in the conversation with a one-click resend or retry action.
 
 ## [1.92.0] - 2026-07-14
 

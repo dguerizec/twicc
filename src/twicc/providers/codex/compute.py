@@ -22,6 +22,12 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   Codex writes no "the user asked" rollout line of its own) is likewise
   rewritten into an ``event_msg.user_message`` carrying that command. Same
   ``twiccOriginalContent`` preservation.
+- A ``response_item.message`` carrying TwiCC's terminal provider-error marker
+  is rewritten into ``twicc_provider_error`` → ``API_ERROR`` (→ ``ALWAYS``).
+  Codex only emits these errors on its live app-server stream, so the agent
+  injects the marker before teardown to make the recovery block durable.
+- An ``event_msg.user_message`` starting with ``<twicc-resume>`` is TwiCC's
+  hidden mid-turn recovery instruction → ``SYSTEM`` (→ ``DEBUG_ONLY``).
 - ``event_msg.*`` whose sub-type is in :data:`_PERSISTED_END_EVENT_TYPES`
   (``patch_apply_end``, ``mcp_tool_call_end``) → kind stays ``None``;
   routed to ``DEBUG_ONLY`` via :meth:`is_tool_result_item`. Pairs with the
@@ -179,6 +185,11 @@ from twicc.providers.compute_base import (
 from .agent.original_files_cache import pop_original_files
 from .code_mode_script import parse_code_mode_output, parse_code_mode_script
 from .pricing import extract_model_info, to_token_usage
+from .provider_errors import (
+    PROVIDER_ERROR_MARKER,
+    CodexProviderError,
+    parse_provider_error_marker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +199,7 @@ logger = logging.getLogger(__name__)
 # go through ``payload`` to reach Codex-specific fields.
 _TYPE_EVENT_MSG = "event_msg"
 _TYPE_RESPONSE_ITEM = "response_item"
+_TYPE_TWICC_PROVIDER_ERROR = "twicc_provider_error"
 # ``session_meta`` is the opening line of a Codex JSONL (one per
 # session) — carries the initial cwd + native git branch. ``turn_context``
 # is emitted on every turn — carries the current cwd and model. Both
@@ -1115,6 +1127,36 @@ def _goal_context_objective(parsed_json: dict) -> str | None:
 # never takes this shape (it is an ``event_msg.user_message``), so an exact
 # match is unambiguous.
 _INJECTED_COMMANDS = frozenset({"/goal clear", "/compact"})
+
+
+def _injected_provider_error(parsed_json: dict) -> CodexProviderError | None:
+    """Return an error carried by a TwiCC-injected rollout item."""
+    if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+        return None
+    payload = _payload(parsed_json)
+    if payload is None or payload.get("type") != "message" or payload.get("role") != "user":
+        return None
+    content = payload.get("content")
+    if not isinstance(content, list) or len(content) != 1:
+        return None
+    first = content[0]
+    if not isinstance(first, dict) or first.get("type") != "input_text":
+        return None
+    text = first.get("text")
+    if not isinstance(text, str) or PROVIDER_ERROR_MARKER not in text:
+        return None
+    return parse_provider_error_marker(text)
+
+
+def _is_internal_resume_message(parsed_json: dict) -> bool:
+    """Whether an event is TwiCC's hidden instruction for a failed turn."""
+    if parsed_json.get("type") != _TYPE_EVENT_MSG:
+        return False
+    payload = _payload(parsed_json)
+    if payload is None or payload.get("type") != _PAYLOAD_USER_MESSAGE:
+        return False
+    message = payload.get("message")
+    return isinstance(message, str) and message.lstrip().startswith("<twicc-resume>")
 
 
 def _injected_command_text(parsed_json: dict) -> str | None:
@@ -2201,6 +2243,25 @@ class CodexSessionCompute(BaseSessionCompute):
         line_num: int,
         in_memory_items: list[tuple[int, datetime | None, dict]] | None = None,
     ) -> str | None:
+        # Terminal provider error → canonical visible API-error item. Codex
+        # only emits the error on its live notification stream, so the agent
+        # persists this private ``thread/inject_items`` marker before teardown.
+        # Keep the native injected payload for debugging while exposing one
+        # provider-neutral shape to the frontend.
+        provider_error = _injected_provider_error(parsed_json)
+        if provider_error is not None:
+            parsed_json["twiccOriginalContent"] = parsed_json.get("payload")
+            parsed_json["type"] = _TYPE_TWICC_PROVIDER_ERROR
+            parsed_json["provider"] = Provider.CODEX.value
+            parsed_json["isApiErrorMessage"] = True
+            parsed_json["turnId"] = provider_error.turn_id
+            parsed_json["error"] = {
+                "type": provider_error.error_type,
+                "message": provider_error.message,
+            }
+            parsed_json.pop("payload", None)
+            return orjson.dumps(parsed_json).decode("utf-8")
+
         # Goal-continuation context → synthetic ``/goal <objective>`` user
         # message. Codex drives an active goal by injecting a
         # ``response_item.message`` (role=user) wrapping the objective in a
@@ -2366,6 +2427,9 @@ class CodexSessionCompute(BaseSessionCompute):
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
 
+        if wrapper_type == _TYPE_TWICC_PROVIDER_ERROR:
+            return ItemKind.API_ERROR
+
         # ``compacted`` is the top-level wrapper Codex CLI writes when
         # auto-compacting the rolling context. We pick this one (rather
         # than the redundant ``event_msg.context_compacted`` event)
@@ -2379,6 +2443,8 @@ class CodexSessionCompute(BaseSessionCompute):
         if wrapper_type == _TYPE_EVENT_MSG and payload is not None:
             sub_type = payload.get("type")
             if sub_type == _PAYLOAD_USER_MESSAGE:
+                if _is_internal_resume_message(parsed_json):
+                    return ItemKind.SYSTEM
                 return ItemKind.USER_MESSAGE
             if sub_type == _PAYLOAD_AGENT_MESSAGE:
                 return ItemKind.ASSISTANT_MESSAGE
