@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Claude monitoring** — Prevent auto-stop for Claude sessions with a running Monitor tool.
 - **Codex work directories** — Keep session scratch and artifact directories writable for Codex-owned continuations such as `/goal`, including when a command starts a new session.
 - **Simplified session view** — Expanding live Claude thinking no longer shows a duplicate switch.
 

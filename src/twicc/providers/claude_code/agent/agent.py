@@ -72,6 +72,10 @@ _RG_REPLACE_DENY_REASON = (
     "`-rln` -> `-ln`)."
 )
 
+_MONITOR_STARTED_RE = re.compile(r"\bMonitor started \(task ([^,\s)]+),", re.IGNORECASE)
+_TASK_NOTIFICATION_TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
+_TASK_NOTIFICATION_STATUS_RE = re.compile(r"<status>\s*([^<\s]+)\s*</status>")
+
 
 def _rg_replace_trap(command: str) -> bool:
     """True if ``command`` runs ``rg`` with a glued ``-r<letter>`` (the
@@ -209,9 +213,18 @@ class ClaudeCodeAgent(BaseAgent):
         # agents are children of the CLI process, so they never outlive this
         # object.
         self._live_background_tasks: dict[str, str] = {}
+        # Monitors are asynchronous background commands that Claude can leave
+        # running after its own turn ends. Unlike generic background Bash work,
+        # a Monitor has a bounded lifecycle with a matching terminal task
+        # notification, so retain its task ids and hold ASSISTANT_TURN until
+        # all of them finish. This is deliberately separate from the compute
+        # pipeline's task_id -> tool_use_id map, which only correlates timeline
+        # result fragments for rendering.
+        self._live_monitor_tasks: set[str] = set()
         # True while a "waiting" process label is what the frontend shows —
-        # either "waiting for N subagents" (live background agents) or
-        # "waiting for scheduled wakeup (HH:MM)" (a pending ScheduleWakeup).
+        # either "waiting for N subagents" (live background agents),
+        # "monitoring" (live Monitor tools), or "waiting for scheduled wakeup
+        # (HH:MM)" (a pending ScheduleWakeup).
         # Broadcast when a turn ends held in ASSISTANT_TURN; refreshed as the
         # held state changes, cleared as soon as the parent streams its own
         # activity again. See _refresh_waiting_label.
@@ -1400,19 +1413,71 @@ class ClaudeCodeAgent(BaseAgent):
             if self._waiting_label_active:
                 await self._refresh_waiting_label()
 
+    @staticmethod
+    def _message_content_text(content: Any) -> str:
+        """Flatten SDK user-message content enough to identify Monitor signals."""
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+
+        parts: list[str] = []
+        for block in content:
+            block_content = block.get("content") if isinstance(block, dict) else getattr(block, "content", None)
+            if isinstance(block_content, str):
+                parts.append(block_content)
+        return "\n".join(parts)
+
+    async def _update_live_monitor_tasks(self, msg: UserMessage) -> None:
+        """Track Monitor starts and terminal task notifications from the SDK.
+
+        A Monitor acknowledgement carries ``tool_use_result.taskId`` and the
+        literal ``Monitor started`` text. Its eventual task notification carries
+        the same id plus a ``status`` field. Event-only notifications carry no
+        status and intentionally leave the monitor live.
+        """
+        text = self._message_content_text(msg.content)
+        tool_use_result = msg.tool_use_result
+        if isinstance(tool_use_result, dict):
+            task_id = tool_use_result.get("taskId")
+            if isinstance(task_id, str) and _MONITOR_STARTED_RE.search(text):
+                self._live_monitor_tasks.add(task_id)
+                logger.debug(
+                    "Session %s: Monitor %s started (%d live)",
+                    self.session_id, task_id, len(self._live_monitor_tasks),
+                )
+                return
+
+        task_id_match = _TASK_NOTIFICATION_TASK_ID_RE.search(text)
+        status_match = _TASK_NOTIFICATION_STATUS_RE.search(text)
+        if task_id_match is None or status_match is None:
+            return
+        task_id = task_id_match.group(1)
+        if task_id in self._live_monitor_tasks:
+            self._live_monitor_tasks.remove(task_id)
+            logger.debug(
+                "Session %s: Monitor %s stopped (status=%s, %d live)",
+                self.session_id, task_id, status_match.group(1), len(self._live_monitor_tasks),
+            )
+            if self._waiting_label_active:
+                await self._refresh_waiting_label()
+
     async def _refresh_waiting_label(self) -> None:
         """Broadcast/refresh the "waiting" process label held in ASSISTANT_TURN.
 
         Shown by ``WorkingAssistantMessage`` instead of the bare "thinking"
         while a turn ended held in ASSISTANT_TURN (see the ResultMessage
         handler). Live background agents win the label ("waiting for N
-        subagents"); with none left but a pending ScheduleWakeup it becomes
-        "waiting for scheduled wakeup (HH:MM)". Falls back to clearing when
-        neither holds — the activity that follows repaints the real status.
+        subagents"), then live Monitors ("monitoring"); with neither left but
+        a pending ScheduleWakeup it becomes "waiting for scheduled wakeup
+        (HH:MM)". Falls back to clearing when nothing holds — the activity that
+        follows repaints the real status.
         """
         count = len(self._live_background_tasks)
         if count > 0:
             label = f"waiting for {count} subagent{'s' if count > 1 else ''}"
+        elif self._live_monitor_tasks:
+            label = "monitoring"
         elif self._has_pending_wakeup():
             label = f"waiting for scheduled wakeup ({self._format_wakeup_time()})"
         else:
@@ -1661,6 +1726,9 @@ class ClaudeCodeAgent(BaseAgent):
                 if isinstance(msg, UserMessage) and isinstance(msg.tool_use_result, dict):
                     self._note_schedule_wakeup(msg.tool_use_result)
 
+                if isinstance(msg, UserMessage):
+                    await self._update_live_monitor_tasks(msg)
+
                 if isinstance(msg, StreamEvent):
                     # Stream events only carry the parent's own model output
                     # (subagent traffic arrives as full messages), so the
@@ -1904,8 +1972,9 @@ class ClaudeCodeAgent(BaseAgent):
                         await self._broadcast_process_tools()
 
                     hold_for_background = bool(self._live_background_tasks)
+                    hold_for_monitor = bool(self._live_monitor_tasks)
                     hold_for_wakeup = self._has_pending_wakeup()
-                    if (hold_for_background or hold_for_wakeup) and not was_soft_interrupt:
+                    if (hold_for_background or hold_for_monitor or hold_for_wakeup) and not was_soft_interrupt:
                         # The async-by-default CLI ends its turn as soon as the
                         # parent stops talking — while background agents it
                         # spawned keep running, and/or a ScheduleWakeup it set is
@@ -1928,6 +1997,14 @@ class ClaudeCodeAgent(BaseAgent):
                                     f"{tid} ({desc})" if desc else tid
                                     for tid, desc in self._live_background_tasks.items()
                                 ),
+                            )
+                        elif hold_for_monitor:
+                            logger.info(
+                                "Session %s: turn ended with %d live Monitor task(s) — "
+                                "holding ASSISTANT_TURN (%s)",
+                                self.session_id,
+                                len(self._live_monitor_tasks),
+                                ", ".join(sorted(self._live_monitor_tasks)),
                             )
                         else:
                             logger.info(
