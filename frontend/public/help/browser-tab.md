@@ -71,14 +71,25 @@ that limit and unlocks the richer features:
 - **page errors** — uncaught exceptions and `console.error` calls are
   collected, counted in the toolbar, and one click away from your message.
 
-When the embedded page has no companion, a banner in the tab offers the
-exact snippet to copy. Paste it into your page's `<html>` **head, as high
-as possible** — the earlier it loads, the earlier navigation and errors are
-captured (it uses `defer`, so it never blocks your page). It is invisible
-to the page itself and does nothing when the page runs outside TwiCC, so
-it's safe to keep in your dev template. If you access TwiCC from another
-machine, configure the [external URL](help/external-url) so the snippet
-points at an address your browser can reach.
+The snippet is a single `<script>` tag pointing at
+`/_twicc/browser-companion.js` on your TwiCC host:
+
+```html
+<script src="https://your-twicc-host/_twicc/browser-companion.js" defer></script>
+```
+
+Add it to your page's `<html>` **head, as early as possible** — ideally the
+very first tag in `<head>`, before any other script. The earlier it loads,
+the earlier navigation and errors are captured (it uses `defer`, so it never
+blocks your page). It is invisible to the page itself and does nothing when
+the page runs outside TwiCC, so it's safe to keep in your dev template.
+
+You don't have to type the URL by hand: when the embedded page has no
+companion, a banner in the tab (and the **plug** button) offers this exact
+snippet — already filled in with the right host — ready to copy. If you
+access TwiCC from another machine, configure the
+[external URL](help/external-url) so that copied snippet points at an address
+your browser can reach.
 
 The **plug** button shows the companion status: brand-colored when
 connected, red when the script is missing, dimmed while detecting.
