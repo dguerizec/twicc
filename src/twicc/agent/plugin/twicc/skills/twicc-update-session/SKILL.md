@@ -55,7 +55,7 @@ Agent settings flags (all optional; use `$TWICC info models agent-settings prese
 
 - `--model VALUE` — Claude Code: `fable`, `opus`, `sonnet`, `opus-4.7`, `opus-4.6`, `opus-4.5`, `sonnet-4.5`. Codex: `gpt-sol`, `gpt-terra`, `gpt-luna`, `gpt`, `gpt-mini`, `gpt-5.4`.
 - `--effort VALUE` — Claude Code: `low`, `medium`, `high`, `xhigh`, `max`. Codex: `low`, `medium`, `high`, `xhigh`, `max` (`max` needs a GPT-5.6 model; silently demoted otherwise).
-- `--permission-mode VALUE` — Claude Code: `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`. Codex: `read_only`, `strict`, `auto`, `autonomous`, `yolo`.
+- `--permission-mode VALUE` — Claude Code: `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`. Codex: `read_only`, `strict`, `auto`, `autonomous`, `auto_review`, `yolo`.
 - `--thinking / --no-thinking` — Claude Code only.
 - `--claude-in-chrome / --no-claude-in-chrome` — Claude Code only (Allows to manipulate browser tabs, take screenshots, etc.).
 - `--fast-mode / --no-fast-mode` — Claude Code only (Opus only).
@@ -73,7 +73,7 @@ Some settings also accept provider-agnostic aliases, resolved to the session's p
 
 A flag the session's provider doesn't support (e.g. `--thinking` on Codex) is silently ignored (no-op).
 
-**Untrusted projects.** If the session's project is *untrusted* (or unknown trust), `--permission-mode` resolves against the restricted subset — `bypassPermissions`/`yolo` are unavailable, `max` → the most permissive *allowed* mode (Claude Code `acceptEdits`, Codex `autonomous`), and an out-of-subset value is clamped to the project's untrusted default with a note on stderr. See `twicc info agent-settings` → `permission_mode_if_untrusted`.
+**Untrusted projects.** If the session's project is *untrusted* (or unknown trust), `--permission-mode` resolves against the restricted subset — `bypassPermissions`/`yolo` are unavailable, `max` → the most permissive *allowed* mode (Claude Code `acceptEdits`, Codex `auto_review`), and an out-of-subset value is clamped to the project's untrusted default with a note on stderr. See `twicc info agent-settings` → `permission_mode_if_untrusted`.
 
 **How settings reach a live process:** if a session currently has a process attached (a running agent), changes are propagated immediately per field category:
 - *Live* (`permission_mode` on Claude Code) — applied immediately.

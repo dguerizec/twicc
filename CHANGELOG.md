@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Codex Auto-review permissions** — Let Codex automatically review sandbox escalation requests, providing a guarded counterpart to Claude's Auto mode.
+
 ### Changed
 
 - **Browser tab warnings** — When a page can't be embedded, the warning now links to the Browser tab guide to help you get your dev server showing.

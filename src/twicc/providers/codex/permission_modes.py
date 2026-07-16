@@ -1,19 +1,20 @@
 """
 Map the user-facing ``Session.permission_mode`` preset (single string) to the
-``(SandboxMode, AskForApproval)`` couple that the Codex SDK expects at
-``thread_start`` / ``thread_resume``.
+``(SandboxMode, AskForApproval, ApprovalsReviewer)`` policy that the Codex SDK
+expects at ``thread_start`` / ``thread_resume``.
 
 Wire / preset table (kept in sync with the spec ``§4 Étape 7``):
 
-+-------------+-------------------+--------------------+-----------+----------------+
-| Mode (wire) | sandbox_mode      | approval_policy    | Prompts?  | Can write?     |
-+=============+===================+====================+===========+================+
-| read_only   | read-only         | on-request         | yes       | no             |
-| strict      | read-only         | never              | no        | no             |
-| auto        | workspace-write   | on-request         | yes       | workspace only |
-| autonomous  | workspace-write   | never              | no        | workspace only |
-| yolo        | danger-full-access| granular           | elicit    | anywhere       |
-+-------------+-------------------+--------------------+-----------+----------------+
++-------------+-------------------+-----------------+-------------+----------------+
+| Mode (wire) | sandbox_mode      | approval_policy | reviewer    | Escalations    |
++=============+===================+=================+=============+================+
+| read_only   | read-only         | on-request      | user        | ask user       |
+| strict      | read-only         | never           | user        | refuse         |
+| auto        | workspace-write   | on-request      | user        | ask user       |
+| autonomous  | workspace-write   | never           | user        | refuse         |
+| auto_review | workspace-write   | on-request      | auto_review | review         |
+| yolo        | danger-full-access| granular        | user        | unrestricted   |
++-------------+-------------------+-----------------+-------------+----------------+
 
 ``yolo`` uses a ``granular`` approval policy (not ``never``) so MCP servers can
 still elicit input from the user — see ``_YOLO_APPROVAL`` below for the full
@@ -28,7 +29,10 @@ to skip prompts, ``"yolo"`` for full unrestricted access) or a stricter one
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from openai_codex.generated.v2_all import (
+    ApprovalsReviewer,
     AskForApproval,
     DangerFullAccessSandboxPolicy,
     Granular,
@@ -38,6 +42,23 @@ from openai_codex.generated.v2_all import (
     SandboxPolicy,
     WorkspaceWriteSandboxPolicy,
 )
+
+
+class CodexPermissionPolicy(NamedTuple):
+    """Resolved thread-level permission controls for one user-facing preset."""
+
+    sandbox_mode: SandboxMode
+    approval_policy: AskForApproval
+    approvals_reviewer: ApprovalsReviewer
+
+
+class CodexTurnOverrides(NamedTuple):
+    """Per-turn form of :class:`CodexPermissionPolicy`."""
+
+    sandbox_policy: SandboxPolicy
+    approval_policy: AskForApproval
+    approvals_reviewer: ApprovalsReviewer
+
 
 # YOLO's approval policy: full autonomy that STILL forwards MCP elicitations to
 # the user. A plain ``never`` makes Codex auto-resolve every elicitation before
@@ -70,19 +91,32 @@ _YOLO_APPROVAL = AskForApproval(
     )
 )
 
-# Preset wire value → (SandboxMode enum, AskForApproval enum)
+# Preset wire value → sandbox, approval policy, and reviewer.
 #
 # AskForApproval is a Pydantic RootModel union; the wire strings live in
 # ``openai_codex.generated.v2_all``. We use AskForApproval(value) for
 # the explicit string variants ("on-request", "never") — that constructor
 # accepts a raw string and round-trips through validation — and the
 # ``_YOLO_APPROVAL`` granular object for ``yolo`` (see above).
-_PRESET_MAP: dict[str, tuple[SandboxMode, AskForApproval]] = {
-    "read_only":  (SandboxMode.read_only,           AskForApproval("on-request")),
-    "strict":     (SandboxMode.read_only,           AskForApproval("never")),
-    "auto":       (SandboxMode.workspace_write,     AskForApproval("on-request")),
-    "autonomous": (SandboxMode.workspace_write,     AskForApproval("never")),
-    "yolo":       (SandboxMode.danger_full_access,  _YOLO_APPROVAL),
+_PRESET_MAP: dict[str, CodexPermissionPolicy] = {
+    "read_only": CodexPermissionPolicy(
+        SandboxMode.read_only, AskForApproval("on-request"), ApprovalsReviewer.user,
+    ),
+    "strict": CodexPermissionPolicy(
+        SandboxMode.read_only, AskForApproval("never"), ApprovalsReviewer.user,
+    ),
+    "auto": CodexPermissionPolicy(
+        SandboxMode.workspace_write, AskForApproval("on-request"), ApprovalsReviewer.user,
+    ),
+    "autonomous": CodexPermissionPolicy(
+        SandboxMode.workspace_write, AskForApproval("never"), ApprovalsReviewer.user,
+    ),
+    "auto_review": CodexPermissionPolicy(
+        SandboxMode.workspace_write, AskForApproval("on-request"), ApprovalsReviewer.auto_review,
+    ),
+    "yolo": CodexPermissionPolicy(
+        SandboxMode.danger_full_access, _YOLO_APPROVAL, ApprovalsReviewer.user,
+    ),
 }
 
 # ``"auto"`` is the canonical default since PR2b: ``workspace-write`` sandbox
@@ -93,8 +127,8 @@ _PRESET_MAP: dict[str, tuple[SandboxMode, AskForApproval]] = {
 DEFAULT_MODE = "auto"
 
 
-def resolve_codex_policy(mode: str | None) -> tuple[SandboxMode, AskForApproval]:
-    """Return the ``(sandbox, approval_policy)`` for a preset.
+def resolve_codex_policy(mode: str | None) -> CodexPermissionPolicy:
+    """Return the sandbox, approval policy, and reviewer for a preset.
 
     Unknown / missing mode falls back to ``DEFAULT_MODE``. The two callers
     that matter are :meth:`CodexAgentManager._create_agent` (thread_start /
@@ -138,8 +172,8 @@ def _to_sandbox_policy(
 def resolve_codex_turn_overrides(
     mode: str | None,
     writable_roots: list[str] | None = None,
-) -> tuple[SandboxPolicy, AskForApproval]:
-    """Return the ``(SandboxPolicy, AskForApproval)`` pair for a per-turn override.
+) -> CodexTurnOverrides:
+    """Return the sandbox, approval policy, and reviewer for a turn override.
 
     Wraps :func:`resolve_codex_policy` and converts the sandbox to the
     ``RootModel`` shape ``thread.turn`` requires. Use this in
@@ -148,5 +182,9 @@ def resolve_codex_turn_overrides(
     dirs) are folded into the workspace-write policy; see
     :func:`_to_sandbox_policy`.
     """
-    sandbox_mode, approval_policy = resolve_codex_policy(mode)
-    return _to_sandbox_policy(sandbox_mode, writable_roots), approval_policy
+    sandbox_mode, approval_policy, approvals_reviewer = resolve_codex_policy(mode)
+    return CodexTurnOverrides(
+        _to_sandbox_policy(sandbox_mode, writable_roots),
+        approval_policy,
+        approvals_reviewer,
+    )

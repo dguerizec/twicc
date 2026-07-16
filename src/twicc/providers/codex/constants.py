@@ -53,12 +53,14 @@ AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
 
 # Permission modes a session may use in an UNTRUSTED (or unknown-trust) project:
 # every mode that keeps at least one structural guardrail (permission prompt,
-# read-only, or the workspace-write sandbox for ``auto``/``autonomous``). Only
+# read-only, workspace-write sandbox, or automatic approval review). Only
 # ``yolo`` — no guardrail at all — is excluded. The untrusted default seeds
 # sessions created in untrusted projects and is the fallback the backend trust
 # clamp applies to out-of-set values.
 # See docs/plans/2026-06-09-project-trust-design.md §13.2.
-UNTRUSTED_PERMISSION_MODES: frozenset[str] = frozenset({"read_only", "strict", "auto", "autonomous"})
+UNTRUSTED_PERMISSION_MODES: frozenset[str] = frozenset({
+    "read_only", "strict", "auto", "autonomous", "auto_review",
+})
 UNTRUSTED_PERMISSION_MODE_SYNCED_KEY: str = "codexDefaultUntrustedPermissionMode"
 
 
@@ -80,7 +82,8 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
         "read_only": "Read-only. Any write requires confirmation.",
         "strict": "Read-only. Writes are refused silently (no prompt).",
         "auto": "Writes freely in the project; asks to step outside.",
-        "autonomous": "Like Auto but uninterrupted (sandbox protects).",
+        "autonomous": "Writes in the project; rejects requests to step outside.",
+        "auto_review": "Writes in the project; automatically reviews requests to step outside.",
         "yolo": "No restrictions.",
     },
 }
@@ -115,10 +118,10 @@ AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
     # ``UNTRUSTED_PERMISSION_MODES``). These aliases resolve only to values
     # inside that set, so ``min``/``safe``/``max`` stay meaningful when a session
     # is created in an untrusted project. ``max`` is the most permissive mode
-    # still allowed there: ``autonomous`` (workspace-write sandbox, uninterrupted).
+    # still allowed there: ``auto_review`` (workspace sandbox + automatic reviewer).
     "permission_mode_if_untrusted": {
         "min": "strict", "safe": "strict",
-        "max": "autonomous",
+        "max": "auto_review",
     },
 }
 

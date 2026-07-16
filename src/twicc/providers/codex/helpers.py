@@ -78,7 +78,7 @@ AGENT_SETTINGS_CHOICES: dict[str, list] = {
     # ``max`` and ``ultra`` are model-gated (see ``CONSTRAINT_FLAG_MAPPING``):
     # this catalogue is model-agnostic, the constraints narrow it per model.
     "effort": ["low", "medium", "high", "xhigh", "max", "ultra"],
-    "permission_mode": ["read_only", "strict", "auto", "autonomous", "yolo"],
+    "permission_mode": ["read_only", "strict", "auto", "autonomous", "auto_review", "yolo"],
     # One entry per distinct ``CodexModelExtra.context_window`` value. Unlike
     # Claude's 200K/1M these are not a user choice: the window is pinned to
     # the model by ``enforce_agent_settings_consistency`` (272K pre-5.6, 372K

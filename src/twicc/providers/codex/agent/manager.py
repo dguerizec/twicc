@@ -521,7 +521,7 @@ class CodexAgentManager(BaseAgentManager):
         frontend-side draft id — Codex doesn't accept it, so we let
         ``thread_start`` mint a fresh canonical id and use that.
 
-        Sandbox + approval policy come from the user's preset (the
+        Sandbox, approval policy, and reviewer come from the user's preset (the
         ``permission_mode`` field on the bundle), translated by
         :func:`resolve_codex_policy`. The default preset is ``"auto"``
         (``workspace-write`` + ``on-request``) so a session without an
@@ -579,10 +579,10 @@ class CodexAgentManager(BaseAgentManager):
                 settings = settings._replace(permission_mode=clamped_mode)
 
             # Translate the user's preset (Session.permission_mode) into
-            # the SDK couple. Unset / unknown modes fall on
+            # the SDK policy. Unset / unknown modes fall on
             # ``permission_modes.DEFAULT_MODE`` (currently ``"auto"`` =
             # ``workspace-write`` + ``on-request``).
-            sandbox, approval_policy = resolve_codex_policy(
+            sandbox, approval_policy, approvals_reviewer = resolve_codex_policy(
                 settings.permission_mode,
             )
             # Per-thread config overrides. ``config`` on thread_start /
@@ -622,6 +622,7 @@ class CodexAgentManager(BaseAgentManager):
                     session_id,
                     sandbox=sandbox,
                     approval_policy=approval_policy,
+                    approvals_reviewer=approvals_reviewer,
                     config=thread_config,
                 )
             else:
@@ -650,6 +651,7 @@ class CodexAgentManager(BaseAgentManager):
                     model=sdk_model,
                     sandbox=sandbox,
                     approval_policy=approval_policy,
+                    approvals_reviewer=approvals_reviewer,
                     config=thread_config,
                     developer_instructions=developer_instructions,
                 )
@@ -724,9 +726,9 @@ class CodexAgentManager(BaseAgentManager):
     ) -> tuple[str, float, int] | None:
         """Delegate to the shared per-state policy — no Codex-specific skips.
 
-        The ``pending_requests`` skip (load-bearing for any session in
-        ``auto`` / ``read_only`` / ``autonomous`` modes — the sync ↔ async
-        approval bridge in :class:`CodexAgent` populates the map) lives in
+        The ``pending_requests`` skip (load-bearing whenever an approval is
+        routed through the sync ↔ async user bridge in :class:`CodexAgent`)
+        lives in
         :meth:`BaseAgentManager._state_based_timeout` and is shared with
         every provider that calls into it. No equivalent of Claude's
         ``SessionCron`` check because :class:`SessionCron` is Claude

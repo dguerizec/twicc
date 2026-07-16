@@ -86,11 +86,10 @@ const OPENAI_STATUS_DISPLAY = {
 const AGENT_SETTINGS_CHOICES = {
     // ``icon``/``color`` drive the per-mode glyph shown in the permission
     // selects (see utils/permissionModeIcon.js + PermissionModeIcon.vue). Modes
-    // mirror the same six cross-provider tiers as Claude (claude_code/helpers.js):
-    // strict↔dontAsk (shield-halved/blue), read_only↔default (eye/green),
-    // auto↔acceptEdits (pen-to-square/yellow), autonomous↔auto (shield-check/
-    // orange), yolo↔bypass (triangle-exclamation/red). Order = severity ramp,
-    // most restrictive → most permissive (blue → green → yellow → orange → red).
+    // mirror the same cross-provider tiers as Claude (claude_code/helpers.js):
+    // strict↔dontAsk (blue), read_only↔default (green), auto/autonomous↔
+    // acceptEdits (yellow), auto_review↔auto (orange), yolo↔bypass (red).
+    // Order = severity ramp, most restrictive → most permissive.
     permission_mode: [
         {
             value: PERMISSION_MODE.STRICT,
@@ -116,7 +115,14 @@ const AGENT_SETTINGS_CHOICES = {
         {
             value: PERMISSION_MODE.AUTONOMOUS,
             label: 'Autonomous',
-            description: 'Like Auto but uninterrupted (sandbox protects).',
+            description: 'Writes in the project; rejects requests to step outside.',
+            icon: 'shield-check',
+            color: 'var(--wa-color-yellow-60)',
+        },
+        {
+            value: PERMISSION_MODE.AUTO_REVIEW,
+            label: 'Auto-review',
+            description: 'Writes in the project; automatically reviews requests to step outside.',
             icon: 'shield-check',
             color: 'var(--wa-color-orange-60)',
         },

@@ -1,9 +1,9 @@
 """Unit tests for the Codex permission_mode preset mapping.
 
-5 wire-value presets (since PR3) translate to ``(SandboxMode, AskForApproval)``
-couples for ``thread_start`` / ``thread_resume`` and to ``(SandboxPolicy, AskForApproval)``
-for per-turn overrides via ``thread.turn``. Both surfaces are exercised here so
-any future regression in either path is caught immediately.
+Six wire-value presets translate to sandbox, approval-policy, and approval-reviewer
+controls for ``thread_start`` / ``thread_resume`` and their per-turn equivalents.
+Both surfaces are exercised here so any future regression in either path is
+caught immediately.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from openai_codex.generated.v2_all import (
+    ApprovalsReviewer,
     AskForApproval,
     DangerFullAccessSandboxPolicy,
     GranularAskForApproval,
@@ -27,17 +28,20 @@ from twicc.providers.codex.permission_modes import (
     resolve_codex_policy,
     resolve_codex_turn_overrides,
 )
+from twicc.providers.codex.constants import AGENT_SETTINGS_ALIASES, UNTRUSTED_PERMISSION_MODES
+from twicc.providers.codex.helpers import AGENT_SETTINGS_CHOICES
 
 
-# (wire_mode, sandbox_mode, approval_policy_expectation)
+# (wire_mode, sandbox_mode, approval_policy_expectation, reviewer)
 # The expectation is the wire string for the plain variants, or "granular" for
 # yolo (a GranularAskForApproval object — see _assert_approval_matches).
-PRESET_TABLE: list[tuple[str, SandboxMode, str]] = [
-    ("read_only", SandboxMode.read_only, "on-request"),
-    ("strict", SandboxMode.read_only, "never"),
-    ("auto", SandboxMode.workspace_write, "on-request"),
-    ("autonomous", SandboxMode.workspace_write, "never"),
-    ("yolo", SandboxMode.danger_full_access, "granular"),
+PRESET_TABLE: list[tuple[str, SandboxMode, str, ApprovalsReviewer]] = [
+    ("read_only", SandboxMode.read_only, "on-request", ApprovalsReviewer.user),
+    ("strict", SandboxMode.read_only, "never", ApprovalsReviewer.user),
+    ("auto", SandboxMode.workspace_write, "on-request", ApprovalsReviewer.user),
+    ("autonomous", SandboxMode.workspace_write, "never", ApprovalsReviewer.user),
+    ("auto_review", SandboxMode.workspace_write, "on-request", ApprovalsReviewer.auto_review),
+    ("yolo", SandboxMode.danger_full_access, "granular", ApprovalsReviewer.user),
 ]
 
 
@@ -63,8 +67,8 @@ def _assert_approval_matches(approval: AskForApproval, expected: str) -> None:
 
 
 class TestPresetMap:
-    def test_preset_map_has_exactly_5_entries(self):
-        assert len(_PRESET_MAP) == 5
+    def test_preset_map_has_exactly_6_entries(self):
+        assert len(_PRESET_MAP) == 6
 
     def test_default_mode_is_auto(self):
         assert DEFAULT_MODE == "auto"
@@ -72,13 +76,19 @@ class TestPresetMap:
     def test_default_mode_is_present_in_preset_map(self):
         assert DEFAULT_MODE in _PRESET_MAP
 
+    def test_auto_review_is_exposed_and_allowed_for_untrusted_projects(self):
+        assert "auto_review" in AGENT_SETTINGS_CHOICES["permission_mode"]
+        assert "auto_review" in UNTRUSTED_PERMISSION_MODES
+        assert AGENT_SETTINGS_ALIASES["permission_mode_if_untrusted"]["max"] == "auto_review"
+
 
 class TestResolveCodexPolicy:
-    @pytest.mark.parametrize("mode,sandbox,approval_str", PRESET_TABLE)
-    def test_known_mode_returns_expected_couple(self, mode, sandbox, approval_str):
-        result_sandbox, result_approval = resolve_codex_policy(mode)
+    @pytest.mark.parametrize("mode,sandbox,approval_str,reviewer", PRESET_TABLE)
+    def test_known_mode_returns_expected_policy(self, mode, sandbox, approval_str, reviewer):
+        result_sandbox, result_approval, result_reviewer = resolve_codex_policy(mode)
         assert result_sandbox is sandbox
         _assert_approval_matches(result_approval, approval_str)
+        assert result_reviewer is reviewer
 
     def test_none_falls_back_to_default(self):
         result = resolve_codex_policy(None)
@@ -118,11 +128,11 @@ class TestToSandboxPolicy:
 
 
 class TestResolveCodexTurnOverrides:
-    @pytest.mark.parametrize("mode,sandbox_mode,approval_str", PRESET_TABLE)
-    def test_known_mode_returns_sandbox_policy_and_approval(
-        self, mode, sandbox_mode, approval_str,
+    @pytest.mark.parametrize("mode,sandbox_mode,approval_str,reviewer", PRESET_TABLE)
+    def test_known_mode_returns_sandbox_policy_approval_and_reviewer(
+        self, mode, sandbox_mode, approval_str, reviewer,
     ):
-        sandbox_policy, approval = resolve_codex_turn_overrides(mode)
+        sandbox_policy, approval, result_reviewer = resolve_codex_turn_overrides(mode)
         assert isinstance(sandbox_policy, SandboxPolicy)
         # The inner SandboxPolicy variant matches the SandboxMode.
         type_map = {
@@ -132,14 +142,17 @@ class TestResolveCodexTurnOverrides:
         }
         assert isinstance(sandbox_policy.root, type_map[sandbox_mode])
         _assert_approval_matches(approval, approval_str)
+        assert result_reviewer is reviewer
 
     def test_none_falls_back_to_default(self):
-        sandbox_policy, approval = resolve_codex_turn_overrides(None)
+        sandbox_policy, approval, reviewer = resolve_codex_turn_overrides(None)
         # DEFAULT_MODE = "auto" → workspace_write + on-request
         assert isinstance(sandbox_policy.root, WorkspaceWriteSandboxPolicy)
         assert approval.root.value == "on-request"
+        assert reviewer is ApprovalsReviewer.user
 
     def test_unknown_mode_falls_back_to_default(self):
-        sandbox_policy, approval = resolve_codex_turn_overrides("bogus")
+        sandbox_policy, approval, reviewer = resolve_codex_turn_overrides("bogus")
         assert isinstance(sandbox_policy.root, WorkspaceWriteSandboxPolicy)
         assert approval.root.value == "on-request"
+        assert reviewer is ApprovalsReviewer.user

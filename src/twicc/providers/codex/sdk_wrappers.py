@@ -4,12 +4,10 @@ The public ``openai_codex`` SDK exposes ``AsyncCodex.thread_start``,
 ``AsyncCodex.thread_resume`` and ``AsyncThread.turn`` that only accept the
 coarse :class:`openai_codex.ApprovalMode` enum (``deny_all`` /
 ``auto_review``) for permission control. TwiCC needs the full granularity
-of :class:`AskForApproval` so the 5 user-facing presets
-(``read_only`` / ``strict`` / ``auto`` / ``autonomous`` / ``yolo``) map
-exactly to their intended wire combinations, and it must keep
-``approvals_reviewer=None`` so every approval request is routed to the
-user (never auto-resolved by Codex's reviewer subagent — which would
-short-circuit the TwiCC approval bridge).
+of :class:`AskForApproval` so the user-facing presets map exactly to their
+intended wire combinations. The wrappers also carry ``approvals_reviewer``
+explicitly: ordinary interactive modes route requests to TwiCC's user bridge,
+while ``auto_review`` routes eligible requests to Codex's reviewer agent.
 
 These subclasses add ``*_with_policy`` methods that bypass the high-level
 mapping and build the typed JSON-RPC params directly. The returned
@@ -35,6 +33,7 @@ from typing import Any
 from openai_codex import AsyncCodex, AsyncThread, AsyncTurnHandle, RunInput
 from openai_codex._inputs import _normalize_run_input, _to_wire_input
 from openai_codex.generated.v2_all import (
+    ApprovalsReviewer,
     AskForApproval,
     ReasoningEffort,
     SandboxMode,
@@ -75,6 +74,7 @@ class TwiccAsyncThread(AsyncThread):
         input: RunInput,
         *,
         approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
         sandbox_policy: SandboxPolicy | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -82,9 +82,9 @@ class TwiccAsyncThread(AsyncThread):
         """Start a turn with fine-grained approval/sandbox overrides.
 
         Bypasses :class:`openai_codex.ApprovalMode` so the per-turn
-        override carries the same 5-preset granularity as the start /
-        resume call. ``approvals_reviewer`` is hard-coded to ``None``
-        (``user``) so approvals stay routed to the TwiCC bridge.
+        override carries the same preset granularity as the start /
+        resume call. ``approvals_reviewer`` is explicit so switching permission
+        mode can also switch between TwiCC's user bridge and Codex Auto-review.
         """
         await self._codex._ensure_initialized()
         wire_input = _to_wire_input(_normalize_run_input(input))
@@ -92,7 +92,7 @@ class TwiccAsyncThread(AsyncThread):
             thread_id=self.id,
             input=wire_input,
             approval_policy=approval_policy,
-            approvals_reviewer=None,
+            approvals_reviewer=approvals_reviewer,
             effort=effort,
             model=model,
             sandbox_policy=sandbox_policy,
@@ -195,6 +195,7 @@ class TwiccAsyncCodex(AsyncCodex):
         *,
         sandbox: SandboxMode | None = None,
         approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
         cwd: str | None = None,
         config: dict[str, Any] | None = None,
         model: str | None = None,
@@ -211,7 +212,7 @@ class TwiccAsyncCodex(AsyncCodex):
         await self._ensure_initialized()
         params = ThreadStartParams(
             approval_policy=approval_policy,
-            approvals_reviewer=None,
+            approvals_reviewer=approvals_reviewer,
             config=config,
             cwd=cwd,
             developer_instructions=developer_instructions,
@@ -228,6 +229,7 @@ class TwiccAsyncCodex(AsyncCodex):
         *,
         sandbox: SandboxMode | None = None,
         approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
         cwd: str | None = None,
         config: dict[str, Any] | None = None,
         model: str | None = None,
@@ -241,7 +243,7 @@ class TwiccAsyncCodex(AsyncCodex):
         params = ThreadResumeParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
-            approvals_reviewer=None,
+            approvals_reviewer=approvals_reviewer,
             config=config,
             cwd=cwd,
             model=model,

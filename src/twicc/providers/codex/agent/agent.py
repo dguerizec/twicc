@@ -9,10 +9,9 @@ granularity. Approvals: the agent installs a sync ↔ async bridge on the SDK's 
 method families (commandExecution, fileChange, permissions, MCP
 elicitations, requestUserInput) through the shared
 ``BaseAgent._await_pending_request`` plumbing. Whether approvals actually
-fire depends on the resolved ``permission_mode`` for the session — the
-default (``auto`` = ``workspace-write`` + ``on-request``) does emit them;
-the ``yolo`` opt-out (``danger_full_access`` + ``never``) keeps the bridge
-dormant.
+reach that bridge depends on the resolved ``permission_mode`` for the session:
+the default ``auto`` mode routes them to the user, ``auto_review`` routes them
+to Codex's reviewer agent, and ``yolo`` keeps command approvals dormant.
 """
 
 from __future__ import annotations
@@ -544,8 +543,8 @@ class CodexAgent(BaseAgent):
         # ``send_to_session`` (which refreshes the bundle just before
         # calling ``send``) take effect on the next turn. ``effort=None``
         # / ``model=None`` lets Codex CLI use its own default. The SDK
-        # accepts ``approval_policy``, ``sandbox_policy``, ``effort`` and
-        # ``model`` as per-turn overrides on ``thread.turn`` — they're
+        # accepts ``approval_policy``, ``approvals_reviewer``, ``sandbox_policy``,
+        # ``effort`` and ``model`` as per-turn overrides on ``thread.turn`` — they're
         # forwarded as ``TurnStartParams`` on top of the values bound at
         # ``thread_start``, so the current turn keeps its policy but the
         # next one picks up the new picker value.
@@ -567,7 +566,7 @@ class CodexAgent(BaseAgent):
         # each turn's sandbox_policy replaces the previous one, so omitting it
         # would wipe the roots. No-op for read-only/strict (no writes) and yolo
         # (writes everywhere) — those sandbox types don't carry the field.
-        sandbox_policy, approval_policy = resolve_codex_turn_overrides(
+        sandbox_policy, approval_policy, approvals_reviewer = resolve_codex_turn_overrides(
             turn_mode, writable_roots=self._work_dirs,
         )
         sdk_model = get_provider_helpers(Provider.CODEX).resolve_sdk_model(
@@ -580,6 +579,7 @@ class CodexAgent(BaseAgent):
                 model=sdk_model,
                 effort=effort,
                 approval_policy=approval_policy,
+                approvals_reviewer=approvals_reviewer,
                 sandbox_policy=sandbox_policy,
             )
         except asyncio.CancelledError:
@@ -1746,7 +1746,7 @@ class CodexAgent(BaseAgent):
         """The session's permission mode after the untrusted trust clamp.
 
         Mirrors :meth:`_run_turn`: an untrusted project re-clamps to the
-        untrusted-allowed set (``yolo`` / ``autonomous`` stripped), so a caller
+        untrusted-allowed set (``yolo`` stripped), so a caller
         gating on a permissive mode (e.g. auto-approving MCP tool calls in
         ``yolo``) sees the SAME mode the turn's Codex policy was built from —
         never the raw, pre-clamp bundle value that would bypass the trust floor.

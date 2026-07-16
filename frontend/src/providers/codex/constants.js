@@ -21,13 +21,14 @@ export const CONTEXT_MAX = {
 
 /**
  * Permission mode values for Codex sessions. Mirrors the Codex CLI's
- * approval modes (read-only / auto / autonomous / yolo).
+ * permission presets (read-only / auto / autonomous / auto-review / yolo).
  */
 export const PERMISSION_MODE = {
     READ_ONLY: 'read_only',
     STRICT: 'strict',
     AUTO: 'auto',
     AUTONOMOUS: 'autonomous',
+    AUTO_REVIEW: 'auto_review',
     YOLO: 'yolo',
 }
 
@@ -41,6 +42,7 @@ export const UNTRUSTED_PERMISSION_MODES = [
     PERMISSION_MODE.STRICT,
     PERMISSION_MODE.AUTO,
     PERMISSION_MODE.AUTONOMOUS,
+    PERMISSION_MODE.AUTO_REVIEW,
 ]
 
 /**
