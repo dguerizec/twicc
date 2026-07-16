@@ -33,12 +33,15 @@ from openai_codex import (
 )
 from openai_codex.generated.v2_all import (
     CodexErrorInfoValue,
+    CollaborationMode,
     ErrorNotification,
     GuardianApprovalReviewStatus,
     HttpConnectionFailedCodexErrorInfo,
     ItemGuardianApprovalReviewCompletedNotification,
+    ModeKind,
     ReasoningEffort,
     ResponseStreamConnectionFailedCodexErrorInfo,
+    Settings as CollaborationModeSettings,  # the SDK name is too generic here
     ThreadGoalStatus,
 )
 
@@ -470,9 +473,10 @@ class CodexAgent(BaseAgent):
             # started in ``_create_agent``). The command drives its own state
             # (``compact`` flips to a synthetic ASSISTANT_TURN then back to
             # USER_TURN; ``/goal <objective>`` settles to ASSISTANT_TURN for the
-            # Codex goal continuation, ``/goal clear`` to USER_TURN). The agent
-            # is still STARTING here; the command's first ``_set_state`` moves
-            # it forward.
+            # Codex goal continuation, ``/goal clear`` to USER_TURN; bare
+            # ``/plan`` settles to USER_TURN while ``/plan <prompt>`` schedules
+            # a real turn itself). The agent is still STARTING here; the
+            # command's first ``_set_state`` moves it forward.
             await self.run_hardcoded_command(command)
             return
 
@@ -759,6 +763,8 @@ class CodexAgent(BaseAgent):
             await self.compact()
         elif command.name == "goal":
             await self.run_goal_command(command.args)
+        elif command.name == "plan":
+            await self.run_plan_command(command.args)
         else:
             raise RuntimeError(
                 f"No handler for hardcoded command {command.name!r}",
@@ -922,7 +928,7 @@ class CodexAgent(BaseAgent):
           drive/observe the app-server-driven goal turn.
 
         Either way the optimistic ``/goal`` bubble is dropped (see
-        :meth:`_settle_after_goal`). On failure the agent is left usable and
+        :meth:`_settle_after_command`). On failure the agent is left usable and
         the error surfaces as a ``RuntimeError`` for a clean, retry-able frame.
         """
         try:
@@ -961,11 +967,11 @@ class CodexAgent(BaseAgent):
                 "Codex /goal failed for session %s: %s", self.session_id, e,
             )
             self._goal_continuation_active = False
-            await self._settle_after_goal(AgentState.USER_TURN)
+            await self._settle_after_command(AgentState.USER_TURN, "goal_command_done")
             if isinstance(e, RuntimeError):
                 raise
             raise RuntimeError(f"/goal failed: {e}") from e
-        await self._settle_after_goal(settle_state)
+        await self._settle_after_command(settle_state, "goal_command_done")
 
     async def _set_goal(self, objective: str) -> None:
         """Create or update the thread's goal from ``/goal <objective>``.
@@ -982,16 +988,19 @@ class CodexAgent(BaseAgent):
             await self._thread.goal_clear()
         await self._thread.goal_set(objective)
 
-    async def _settle_after_goal(self, state: AgentState) -> None:
-        """Move to ``state`` and drop the optimistic ``/goal`` bubble.
+    async def _settle_after_command(self, state: AgentState, done_event: str) -> None:
+        """Move to ``state`` and tell the frontend a hardcoded command is done.
 
-        ``state`` is ``ASSISTANT_TURN`` after a set (a Codex goal continuation
-        is now running) or ``USER_TURN`` after a clear / failure (idle). The
-        transition also clears any optimistic STARTING placeholder from a
-        cold-woken session. Then emit ``goal_command_done`` so the frontend
-        retires the optimistic ``/goal`` bubble — no ``user_message`` JSONL
-        line is ever written for the command, so nothing else would. No-op once
-        ``DEAD`` (a teardown may race this).
+        Shared tail of the ``/goal`` and ``/plan`` actions. ``state`` is
+        ``ASSISTANT_TURN`` when the command left something running (a Codex
+        goal continuation) or ``USER_TURN`` when it settled idle (goal clear,
+        bare ``/plan``, any failure). The transition also clears any optimistic
+        STARTING placeholder from a cold-woken session. Then emit
+        ``done_event`` (``goal_command_done`` / ``plan_command_done``) so the
+        frontend retires the optimistic command bubble — the command opens no
+        turn, so no ``user_message`` JSONL line is guaranteed to do it (the
+        injected transcript markers are best-effort). No-op once ``DEAD`` (a
+        teardown may race this).
         """
         if self.state == AgentState.DEAD:
             return
@@ -999,7 +1008,7 @@ class CodexAgent(BaseAgent):
         self.last_activity = time.time()
         await self._notify_state_change()
         await self._broadcast_stream_event({
-            "type": "goal_command_done",
+            "type": done_event,
             "session_id": self.session_id,
         })
 
@@ -1035,6 +1044,104 @@ class CodexAgent(BaseAgent):
         self._set_state(AgentState.USER_TURN)
         self.last_activity = time.time()
         await self._notify_state_change()
+
+    # ------------------------------------------------------------------
+    # ``/plan`` — switch the thread into Plan collaboration mode
+    # ------------------------------------------------------------------
+
+    async def run_plan_command(self, args: str) -> None:
+        """Apply a user ``/plan`` command captured by the manager.
+
+        Switches the thread into Codex's Plan *collaboration mode* — a sticky
+        per-thread App Server setting applied to subsequent turns — via
+        ``thread/settings/update``. Orthogonal to TwiCC's ``permission_mode``
+        (the sandbox/approval axis, untouched here) and to the ``update_plan``
+        task tool (plan *progress*, not a mode). Enter-only by design: a
+        second bare ``/plan`` re-asserts Plan mode instead of toggling back to
+        Default — toggle parity needs a reliable current-mode source first
+        (cold resumes and backend restarts lose process-local state; another
+        client may have switched the thread), a deliberate follow-up.
+
+        Two forms, mirroring the official Codex clients:
+
+        - ``/plan`` — enter Plan mode, run nothing. A durable ``/plan`` user
+          line is injected (best-effort, same mechanism as ``/compact``) so
+          the switch survives in the transcript, then the agent settles to
+          ``USER_TURN``.
+        - ``/plan <prompt>`` — enter Plan mode, then run ``<prompt>`` as a
+          normal turn; the literal ``/plan`` prefix never reaches the model.
+          The turn writes the real ``user_message`` line itself (which also
+          retires the optimistic bubble), so no marker is injected.
+
+        Payload choices (see the 2026-07-16 hand-off): ``settings.model`` is
+        required by the wire shape — use the session's resolved SDK model, the
+        same value every ``_run_turn`` re-passes as a per-turn override anyway.
+        ``reasoning_effort`` deliberately stays ``null`` so Codex's own Plan
+        preset / ``plan_mode_reasoning_effort`` config decides — the ordinary
+        turn effort is NOT the Plan-mode effort. ``developer_instructions:
+        null`` means "use the built-in Plan instructions".
+
+        On failure the agent settles back to ``USER_TURN`` (never left stuck
+        in STARTING/ASSISTANT_TURN from a cold wake) and the error surfaces as
+        a ``RuntimeError`` for a clean, retry-able frame.
+        """
+        try:
+            sdk_model = get_provider_helpers(Provider.CODEX).resolve_sdk_model(
+                self.agent_settings.selected_model,
+            )
+            if not sdk_model:
+                # The bundle reaching a live agent is resolved to concrete
+                # defaults, so this is settings drift, not a user-reachable
+                # path — but the wire object cannot omit ``model``.
+                raise RuntimeError("Cannot run /plan: no model resolved for this session")
+            await self._thread.update_settings_with_policy(
+                collaboration_mode=CollaborationMode(
+                    mode=ModeKind.plan,
+                    settings=CollaborationModeSettings(
+                        model=sdk_model,
+                        reasoning_effort=None,
+                        developer_instructions=None,
+                    ),
+                ),
+            )
+        except Exception as e:
+            logger.warning(
+                "Codex /plan failed for session %s: %s", self.session_id, e,
+            )
+            await self._settle_after_command(AgentState.USER_TURN, "plan_command_done")
+            if isinstance(e, RuntimeError):
+                raise
+            raise RuntimeError(f"/plan failed: {e}") from e
+
+        logger.info(
+            "Codex /plan: session %s switched to Plan collaboration mode",
+            self.session_id,
+        )
+
+        if args:
+            # Inline prompt: the sticky mode is set, now run the prompt as an
+            # ordinary turn (same transition dance as ``send`` on an idle
+            # agent — this also moves a cold-woken agent out of STARTING).
+            self._set_state(AgentState.ASSISTANT_TURN)
+            self.last_activity = time.time()
+            await self._notify_state_change()
+            self._schedule_turn(args, None)
+            return
+
+        # Bare ``/plan``: give the mode switch a persistent transcript line.
+        # The settings RPC writes nothing to the rollout, so without this the
+        # command survives only as the transient optimistic bubble. Best-effort
+        # — the mode switch already succeeded; a failed injection just loses
+        # the line. The compute relabels the injected line into a real
+        # user_message (see the Codex compute's ``_injected_command_text``).
+        try:
+            await self._thread.inject_user_message("/plan")
+        except Exception:
+            logger.warning(
+                "Codex /plan: failed to inject the transcript line for session %s",
+                self.session_id, exc_info=True,
+            )
+        await self._settle_after_command(AgentState.USER_TURN, "plan_command_done")
 
     async def soft_interrupt(self) -> bool:
         """Interrupt the current turn but keep the thread alive (→ USER_TURN).

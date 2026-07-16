@@ -225,9 +225,10 @@ class CodexAgentManager(BaseAgentManager):
         # Hardcoded slash commands (e.g. ``/compact``) are captured here — the
         # single convergence point every send path funnels through (WS, CLI
         # ``send-message`` drop-file, …) — and routed to a direct SDK action
-        # instead of becoming a turn. The Codex CLI gives ``/`` no native
-        # meaning, so this is collision-free; parsing is a cheap pure check
-        # run before the lock.
+        # instead of becoming a turn. The App Server gives ``/`` no meaning
+        # (slash commands live in the interactive TUI, which never runs here),
+        # so this is collision-free; parsing is a cheap pure check run before
+        # the lock.
         command = parse_hardcoded_command(text)
 
         async with self._lock:

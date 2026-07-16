@@ -35,6 +35,7 @@ from openai_codex._inputs import _normalize_run_input, _to_wire_input
 from openai_codex.generated.v2_all import (
     ApprovalsReviewer,
     AskForApproval,
+    CollaborationMode,
     ReasoningEffort,
     SandboxMode,
     SandboxPolicy,
@@ -148,27 +149,47 @@ class TwiccAsyncThread(AsyncThread):
     async def update_settings_with_policy(
         self,
         *,
-        sandbox_policy: SandboxPolicy,
+        sandbox_policy: SandboxPolicy | None = None,
+        collaboration_mode: CollaborationMode | None = None,
     ) -> None:
-        """Update this loaded thread's next-turn sandbox without resuming it.
+        """Update this loaded thread's next-turn settings without resuming it.
 
-        A new Codex thread gets its canonical id only after ``thread/start``,
-        while TwiCC's scratch/artifact roots are scoped to that id. Calling
-        ``thread/resume`` immediately is invalid before Codex has indexed the
-        fresh rollout. The app-server's ``thread/settings/update`` RPC is the
-        intended hot path for this case: it changes the loaded thread in place,
-        without starting a turn or adding transcript items.
+        The app-server's ``thread/settings/update`` RPC changes the loaded
+        thread in place, without starting a turn or adding transcript items.
+        Two next-turn settings go through it today; each is sent only when
+        passed, so callers stay independent:
+
+        - ``sandbox_policy`` — a new Codex thread gets its canonical id only
+          after ``thread/start``, while TwiCC's scratch/artifact roots are
+          scoped to that id. Calling ``thread/resume`` immediately is invalid
+          before Codex has indexed the fresh rollout; this RPC is the intended
+          hot path for binding the id-scoped writable roots.
+        - ``collaboration_mode`` — switch the thread's collaboration mode
+          (e.g. ``/plan`` → Plan) for subsequent turns. Serialized WITHOUT
+          ``exclude_none``: ``settings.developer_instructions: null`` means
+          "use Codex's built-in instructions for this mode" and must stay an
+          explicit JSON ``null`` on the wire — dropping the key would change
+          the protocol meaning. Same for ``reasoning_effort: null`` (let the
+          mode preset / config decide).
         """
+        if sandbox_policy is None and collaboration_mode is None:
+            raise ValueError("update_settings_with_policy: nothing to update")
+        params: dict[str, Any] = {"threadId": self.id}
+        if sandbox_policy is not None:
+            params["sandboxPolicy"] = sandbox_policy.model_dump(
+                by_alias=True,
+                exclude_none=True,
+            )
+        if collaboration_mode is not None:
+            params["collaborationMode"] = collaboration_mode.model_dump(
+                by_alias=True,
+                exclude_none=False,
+                mode="json",
+            )
         await self._codex._ensure_initialized()
         await self._codex._client.request(
             "thread/settings/update",
-            {
-                "threadId": self.id,
-                "sandboxPolicy": sandbox_policy.model_dump(
-                    by_alias=True,
-                    exclude_none=True,
-                ),
-            },
+            params,
             response_model=_ThreadSettingsUpdateResponse,
         )
 

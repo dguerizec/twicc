@@ -217,6 +217,13 @@ _TYPE_TURN_CONTEXT = "turn_context"
 _TYPE_COMPACTED = "compacted"
 _PAYLOAD_USER_MESSAGE = "user_message"
 _PAYLOAD_AGENT_MESSAGE = "agent_message"
+# ``turn_context.payload.collaboration_mode.mode`` value for Codex's Plan
+# collaboration mode (entered via TwiCC's ``/plan`` hardcoded command). Every
+# turn_context carries the effective mode explicitly (``"default"``
+# otherwise), and the mode is sticky: all turns after a ``/plan`` report it
+# too — which is why the prefix restoration below keys on TRANSITIONS, not on
+# the mode itself.
+_PLAN_COLLABORATION_MODE = "plan"
 # ``event_msg.thread_goal_updated`` carries the current goal snapshot
 # (``payload.goal.status``). Used as the live signal that a goal continuation
 # stopped — see :meth:`CodexSessionCompute.is_goal_continuation_stopped`.
@@ -1122,11 +1129,14 @@ def _goal_context_objective(parsed_json: dict) -> str | None:
 #   - ``/compact`` — its RPC writes only the ``compacted`` summary (the divider),
 #     never a "the user asked to compact" line, so without this the command
 #     survives only as a transient optimistic bubble (retired on completion).
+#   - ``/plan`` (bare) — the collaboration-mode ``thread/settings/update`` RPC
+#     writes nothing to the rollout. Only the bare form injects; ``/plan
+#     <prompt>`` opens a real turn whose user_message needs no marker.
 # They land as a ``response_item.message`` (role=user) carrying the literal
 # command; the transform relabels them as real user messages. Real user input
 # never takes this shape (it is an ``event_msg.user_message``), so an exact
 # match is unambiguous.
-_INJECTED_COMMANDS = frozenset({"/goal clear", "/compact"})
+_INJECTED_COMMANDS = frozenset({"/goal clear", "/compact", "/plan"})
 
 
 def _injected_provider_error(parsed_json: dict) -> CodexProviderError | None:
@@ -1182,6 +1192,103 @@ def _injected_command_text(parsed_json: dict) -> str | None:
         return None
     stripped = text.strip()
     return stripped if stripped in _INJECTED_COMMANDS else None
+
+
+# Opening tag of a Plan-mode final answer, on its own line — the shape is a
+# stable contract from Codex's built-in Plan-mode instructions (exact tag,
+# never translated, own line). Mirrors the frontend detection in
+# ``codex/AssistantMessage.vue``.
+_PROPOSED_PLAN_OPEN_RE = re.compile(r"(?:^|\n)[ \t]*<proposed_plan>[ \t]*(?:\r?\n|$)")
+
+
+def _proposed_plan_message_text(parsed_json: dict) -> str | None:
+    """Return the text of a Plan-mode final answer ``response_item``, or ``None``.
+
+    A Plan collaboration-mode turn delivers its final answer as a ``Plan``
+    turn item, NOT an ``agentMessage`` — so Codex writes no
+    ``event_msg.agent_message`` for it (and ``task_complete`` carries
+    ``last_agent_message: null``). The only rollout line with the plan text
+    is the model-history ``response_item.message`` (role=assistant), which
+    normally classifies as SYSTEM because it duplicates the agent_message…
+    except here, where there is nothing to duplicate. Matches an assistant
+    ``response_item.message`` whose ``output_text`` content carries a
+    ``<proposed_plan>`` opening tag on its own line; the caller relabels it
+    into a canonical ``event_msg.agent_message`` so the plan actually shows.
+    """
+    if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+        return None
+    payload = _payload(parsed_json)
+    if payload is None or payload.get("type") != "message" or payload.get("role") != "assistant":
+        return None
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return None
+    texts = [
+        entry.get("text")
+        for entry in content
+        if isinstance(entry, dict) and entry.get("type") == "output_text"
+        and isinstance(entry.get("text"), str)
+    ]
+    if not texts:
+        return None
+    text = "\n\n".join(texts)
+    if not _PROPOSED_PLAN_OPEN_RE.search(text):
+        return None
+    return text
+
+
+def _turn_context_collaboration_mode(parsed_json: dict) -> str | None:
+    """Return a ``turn_context`` line's collaboration mode, or ``None``.
+
+    ``None`` for any other line shape. A ``turn_context`` without a
+    ``collaboration_mode`` (rollouts predating the field) counts as
+    ``"default"`` — for transition tracking, the field's absence IS the
+    default mode.
+    """
+    if parsed_json.get("type") != _TYPE_TURN_CONTEXT:
+        return None
+    payload = _payload(parsed_json)
+    if payload is None:
+        return None
+    collaboration = payload.get("collaboration_mode")
+    if isinstance(collaboration, dict):
+        mode = collaboration.get("mode")
+        if isinstance(mode, str) and mode:
+            return mode
+    return "default"
+
+
+class _PlanPrefixState:
+    """Per-session scan state for the ``/plan <prompt>`` display restoration.
+
+    A ``/plan <prompt>`` command runs ``<prompt>`` as a normal turn (the
+    literal ``/plan`` never reaches the model), so the durable
+    ``user_message`` line loses the prefix the user typed. The compute
+    restores it on the stored copy, deterministically from the file: the
+    command's turn is the one whose ``turn_context`` TRANSITIONS the
+    collaboration mode to ``plan`` with no injected ``/plan`` marker in
+    between (the bare form injects its marker before the next turn, and
+    the sticky mode makes every later plan turn a non-transition).
+
+    Mutable on purpose (unlike the repo's usual NamedTuple pattern): the
+    fields evolve line by line during a sequential scan.
+    """
+
+    __slots__ = ("last_mode", "marker_seen", "armed")
+
+    def __init__(self, last_mode: str | None = None) -> None:
+        # Collaboration mode of the last ``turn_context`` seen. ``None``
+        # means "not seen yet in this process" — the live path then seeds
+        # it from the DB on demand (batch mode starts at ``"default"``: a
+        # full replay that has seen no turn yet is in the default mode).
+        self.last_mode = last_mode
+        # An injected bare-``/plan`` marker was seen since the last
+        # ``turn_context``: the upcoming default→plan transition is the
+        # bare form's, whose next turn message is ordinary input.
+        self.marker_seen = False
+        # The next native user_message is a ``/plan <prompt>`` inline
+        # prompt and must be re-prefixed.
+        self.armed = False
 
 
 def _parse_subagent_notification(parsed_json: dict) -> tuple[str, dict] | None:
@@ -1529,6 +1636,14 @@ class CodexSessionCompute(BaseSessionCompute):
         # in batch mode and lazily seeded from the DB
         # (:meth:`_lookup_prev_total_tokens`) in live mode.
         self._prev_total_tokens: dict[str, int] = {}
+        # {session_id: _PlanPrefixState}. Sequential-scan state restoring
+        # the ``/plan `` prefix on the user message of a ``/plan <prompt>``
+        # command turn — see :meth:`_note_turn_context_mode` /
+        # :meth:`_restore_plan_prefix`. Initialised by
+        # :meth:`begin_session_compute` in batch mode; the live path
+        # lazily seeds ``last_mode`` from the DB
+        # (:meth:`_lookup_prev_plan_context`).
+        self._plan_prefix_states: dict[str, _PlanPrefixState] = {}
 
     def _proc_map(self, session_id: str) -> dict[int, str]:
         """Return the per-session ``{exec_command_id: call_id}`` map.
@@ -1565,6 +1680,15 @@ class CodexSessionCompute(BaseSessionCompute):
         """
         return self._agent_id_to_spawn_call_id.setdefault(session_id, {})
 
+    def _plan_prefix_state(self, session_id: str) -> _PlanPrefixState:
+        """Return the per-session ``/plan``-prefix scan state.
+
+        Lazily creates it on first access for the same reason as
+        :meth:`_proc_map`; the ``None`` ``last_mode`` of a lazy creation
+        is the live path's "seed from DB when it matters" sentinel.
+        """
+        return self._plan_prefix_states.setdefault(session_id, _PlanPrefixState())
+
     def begin_session_compute(self, session_id: str) -> None:
         # Reset per-session state at the start of a batch compute so a
         # previous run's leftover values can never leak into the new
@@ -1575,6 +1699,7 @@ class CodexSessionCompute(BaseSessionCompute):
         self._code_exec_targets[session_id] = []
         self._agent_id_to_spawn_call_id[session_id] = {}
         self._prev_total_tokens[session_id] = 0
+        self._plan_prefix_states[session_id] = _PlanPrefixState(last_mode="default")
 
     def end_session_compute(self, session_id: str) -> None:
         # Free the per-session caches after a batch compute finishes.
@@ -1588,6 +1713,7 @@ class CodexSessionCompute(BaseSessionCompute):
         self._code_exec_targets.pop(session_id, None)
         self._agent_id_to_spawn_call_id.pop(session_id, None)
         self._prev_total_tokens.pop(session_id, None)
+        self._plan_prefix_states.pop(session_id, None)
 
     def _release_exec_command_for_call(
         self, session_id: str, call_id: str
@@ -2243,6 +2369,16 @@ class CodexSessionCompute(BaseSessionCompute):
         line_num: int,
         in_memory_items: list[tuple[int, datetime | None, dict]] | None = None,
     ) -> str | None:
+        # ``turn_context`` → track collaboration-mode transitions. A
+        # default→plan transition not announced by an injected ``/plan``
+        # marker is a ``/plan <prompt>`` command's turn: arm the prefix
+        # restoration for its user message (see ``_restore_plan_prefix``).
+        # Never a rewrite by itself.
+        tc_mode = _turn_context_collaboration_mode(parsed_json)
+        if tc_mode is not None:
+            self._note_turn_context_mode(session_id, tc_mode, line_num)
+            return None
+
         # Terminal provider error → canonical visible API-error item. Codex
         # only emits the error on its live notification stream, so the agent
         # persists this private ``thread/inject_items`` marker before teardown.
@@ -2292,11 +2428,42 @@ class CodexSessionCompute(BaseSessionCompute):
         # command the user issued. Original kept under ``twiccOriginalContent``.
         injected_command = _injected_command_text(parsed_json)
         if injected_command is not None:
+            if injected_command == "/plan":
+                # A bare ``/plan``'s marker: the default→plan transition on
+                # the next ``turn_context`` is not an inline-prompt command —
+                # see ``_note_turn_context_mode``.
+                self._plan_prefix_state(session_id).marker_seen = True
             parsed_json["twiccOriginalContent"] = parsed_json.get("payload")
             parsed_json["type"] = _TYPE_EVENT_MSG
             parsed_json["payload"] = {
                 "type": _PAYLOAD_USER_MESSAGE,
                 "message": injected_command,
+            }
+            return orjson.dumps(parsed_json).decode("utf-8")
+
+        # ``/plan <prompt>`` display restoration: the command's turn carries
+        # only ``<prompt>`` as its user message (the literal ``/plan`` never
+        # reaches the model), so re-prefix the stored copy — the transcript
+        # then shows what the user actually typed, and the optimistic bubble
+        # converges to the same text.
+        restored = self._restore_plan_prefix(parsed_json, session_id)
+        if restored is not None:
+            return restored
+
+        # Plan-mode final answer → visible assistant message. The turn's
+        # ``<proposed_plan>`` answer is a ``Plan`` item, not an
+        # ``agentMessage``, so no ``event_msg.agent_message`` exists for it
+        # and the plan text would stay buried in a SYSTEM ``response_item``.
+        # Relabel it as the canonical agent_message (original kept under
+        # ``twiccOriginalContent``); the frontend then renders the
+        # ``<proposed_plan>`` block as a dedicated plan panel.
+        plan_text = _proposed_plan_message_text(parsed_json)
+        if plan_text is not None:
+            parsed_json["twiccOriginalContent"] = parsed_json.get("payload")
+            parsed_json["type"] = _TYPE_EVENT_MSG
+            parsed_json["payload"] = {
+                "type": _PAYLOAD_AGENT_MESSAGE,
+                "message": plan_text,
             }
             return orjson.dumps(parsed_json).decode("utf-8")
 
@@ -2333,6 +2500,128 @@ class CodexSessionCompute(BaseSessionCompute):
             return None
         payload["message"] = new_message
         return orjson.dumps(parsed_json).decode("utf-8")
+
+    def _note_turn_context_mode(self, session_id: str, mode: str, line_num: int) -> None:
+        """Update the ``/plan``-prefix scan state from a ``turn_context`` line.
+
+        Arms the prefix restoration when the collaboration mode transitions
+        into ``plan`` with no injected bare-``/plan`` marker since the
+        previous turn — the deterministic signature of a ``/plan <prompt>``
+        command (the bare form injects its marker before the next turn;
+        sticky plan→plan turns are not transitions). Any ``turn_context``
+        also disarms a leftover armed flag from a turn whose user message
+        never landed.
+        """
+        state = self._plan_prefix_state(session_id)
+        last_mode = state.last_mode
+        marker_seen = state.marker_seen
+        if last_mode is None:
+            # Live path on a session this process never scanned: recover the
+            # previous turn's mode (and any pending bare-``/plan`` marker)
+            # from the already-persisted items. Only pay for the lookup when
+            # it can matter, i.e. the incoming turn is in plan mode.
+            if mode == _PLAN_COLLABORATION_MODE:
+                last_mode, db_marker = self._lookup_prev_plan_context(
+                    session_id, line_num,
+                )
+                marker_seen = marker_seen or db_marker
+            else:
+                last_mode = mode  # value unused: a non-plan turn never arms
+        state.armed = (
+            mode == _PLAN_COLLABORATION_MODE
+            and last_mode != _PLAN_COLLABORATION_MODE
+            and not marker_seen
+        )
+        state.last_mode = mode
+        state.marker_seen = False
+
+    def _restore_plan_prefix(self, parsed_json: dict, session_id: str) -> str | None:
+        """Re-prefix a ``/plan <prompt>`` turn's user message, if armed.
+
+        Fires at most once per armed transition, on the turn's first native
+        ``event_msg.user_message`` — the inline prompt, written at turn
+        start right after the arming ``turn_context`` (steered messages come
+        later and find the state disarmed). The rewrite tags the line with
+        ``twiccPlanCommand``: a later batch re-compute of already-rewritten
+        content replays the arming identically from the file, and the flag
+        stops a second prefix. Internal ``<twicc-resume>`` instructions are
+        skipped without consuming the armed state.
+        """
+        state = self._plan_prefix_states.get(session_id)
+        if state is None or not state.armed:
+            return None
+        if parsed_json.get("type") != _TYPE_EVENT_MSG:
+            return None
+        payload = _payload(parsed_json)
+        if payload is None or payload.get("type") != _PAYLOAD_USER_MESSAGE:
+            return None
+        if _is_internal_resume_message(parsed_json):
+            return None
+        message = payload.get("message")
+        if not isinstance(message, str):
+            return None
+        state.armed = False
+        if parsed_json.get("twiccPlanCommand"):
+            return None
+        parsed_json["twiccPlanCommand"] = True
+        payload["message"] = f"/plan {message}" if message else "/plan"
+        return orjson.dumps(parsed_json).decode("utf-8")
+
+    def _lookup_prev_plan_context(
+        self, session_id: str, current_line_num: int,
+    ) -> tuple[str, bool]:
+        """Return (previous turn's collaboration mode, pending bare-``/plan`` marker).
+
+        Live-path seeding for :meth:`_note_turn_context_mode`, mirroring
+        :meth:`_lookup_prev_total_tokens`: walk the already-persisted items
+        below ``current_line_num`` for the latest ``turn_context`` (mode
+        defaults to ``"default"`` when the session has none — a first turn
+        entering plan mode IS a transition), then check whether an injected
+        ``/plan`` marker landed after it (a bare ``/plan`` sent to a cold
+        session, whose wake turn this is). Both scans stop at the first
+        hit, so a healthy session costs at most a couple of row reads.
+        """
+        prev_mode = "default"
+        prev_tc_line = 0
+        candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__lt=current_line_num,
+            content__contains='"type":"turn_context"',
+        ).order_by('-line_num')
+        for candidate in candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            mode = _turn_context_collaboration_mode(parsed)
+            if mode is None:
+                continue
+            prev_mode = mode
+            prev_tc_line = candidate.line_num
+            break
+        marker_candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__gt=prev_tc_line,
+            line_num__lt=current_line_num,
+            # The relabelled marker serialises its payload as
+            # ``{"type":"user_message","message":"/plan"}`` — the closing
+            # brace keeps a prefixed inline prompt ("/plan foo") from
+            # matching; candidates are still parse-verified below.
+            content__contains='"message":"/plan"}',
+        ).order_by('-line_num')
+        for candidate in marker_candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            if parsed.get("type") != _TYPE_EVENT_MSG:
+                continue
+            payload = _payload(parsed)
+            if payload is None or payload.get("type") != _PAYLOAD_USER_MESSAGE:
+                continue
+            if payload.get("message") == "/plan":
+                return prev_mode, True
+        return prev_mode, False
 
     def extract_tasks_payload(self, parsed_json: dict) -> dict | None:
         """Latest plan state on a Codex ``update_plan`` line, in the common shape.

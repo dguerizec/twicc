@@ -7,20 +7,26 @@ import { useCodexStore } from './store'
 
 // TwiCC-handled hardcoded commands for Codex, invoked with ``/``. Unlike
 // Claude Code's built-ins (interpreted by the CLI once the raw text reaches
-// it), these are captured and executed entirely on the backend — the Codex
-// CLI gives ``/`` no native meaning. Display-only here: this list feeds the
-// ``/`` autocomplete; the backend owns capture (``agent/hardcoded_commands.py``)
-// and execution (``CodexAgent``). ``$`` stays reserved for skills.
+// it), these are captured and executed entirely on the backend — TwiCC drives
+// Codex through the App Server, which has no slash-command surface (that
+// layer belongs to the interactive Codex TUI, which never runs here), so
+// TwiCC implements the client-side command behavior itself. Display-only
+// here: this list feeds the ``/`` autocomplete; the backend owns capture
+// (``agent/hardcoded_commands.py``) and execution (``CodexAgent``). ``$``
+// stays reserved for skills.
 //
 // ``is_builtin`` is the frontend-only picker sentinel (renders ``(built-in)``);
 // no matching ``Command`` row exists, same as Claude Code. ``compact`` takes
 // no argument on Codex (``argument_hint: null``) — the SDK ``thread_compact``
 // accepts only the thread id. ``goal`` sets/clears the thread's Codex goal via
 // the ``thread/goal/*`` app-server RPCs: ``/goal <objective>`` to set, ``/goal
-// clear`` to remove it.
+// clear`` to remove it. ``plan`` switches the thread into Codex's Plan
+// collaboration mode (enter-only — it never toggles back to Default); an
+// optional prompt runs as a normal turn right after the switch.
 const BUILTIN_COMMANDS = [
     { name: 'compact', plugin_name: null, is_builtin: true, is_global: true, description: 'Compact the conversation context into a summary', argument_hint: null },
     { name: 'goal', plugin_name: null, is_builtin: true, is_global: true, description: "Set the session's goal (the objective Codex works toward), or 'clear' to remove it", argument_hint: '<objective> | clear' },
+    { name: 'plan', plugin_name: null, is_builtin: true, is_global: true, description: 'Enter Plan mode — Codex designs an implementation plan before touching code', argument_hint: '[prompt]' },
 ]
 
 // Per-file ceiling for Codex uploads (5 MB). Aligned with the Claude

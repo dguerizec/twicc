@@ -111,5 +111,10 @@ const images = computed(() => {
         :line-num="lineNum"
     />
     <UserMessage v-else-if="kind === 'user_message'" :text="text" :images="images" />
-    <AssistantMessage v-else-if="kind === 'assistant_message'" :text="text" />
+    <AssistantMessage
+        v-else-if="kind === 'assistant_message'"
+        :text="text"
+        :session-id="sessionId"
+        :line-num="lineNum"
+    />
 </template>

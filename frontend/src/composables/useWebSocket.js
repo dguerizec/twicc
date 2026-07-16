@@ -1233,6 +1233,14 @@ export function useWebSocket() {
                 store.clearOptimisticMessage(msg.session_id)
                 break
             }
+            case 'plan_command_done': {
+                // Codex applied a bare /plan (Plan collaboration mode switch)
+                // via thread/settings/update. The durable "/plan" transcript
+                // marker is only best-effort injected, so like /goal the
+                // optimistic bubble is retired explicitly here.
+                store.clearOptimisticMessage(msg.session_id)
+                break
+            }
             case 'process_tools': {
                 // Active-tool list for the WorkingAssistantMessage status line.
                 const ps = store.processStates[msg.session_id]

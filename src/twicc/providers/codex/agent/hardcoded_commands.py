@@ -1,8 +1,9 @@
 """Hardcoded slash commands for Codex sessions.
 
 Unlike Claude Code — whose ``/compact``, ``/init``, … are interpreted
-natively by the CLI once the raw text reaches it — the Codex CLI has no
-slash-command vocabulary of its own (it reserves ``$`` for skills). So TwiCC
+natively by the CLI once the raw text reaches it — TwiCC drives Codex through
+the App Server, which has no slash-command surface (the interactive Codex TUI
+does have one nowadays, but that client-side layer never runs here). So TwiCC
 captures a small set of ``/`` commands itself: the manager parses them off the
 outgoing user text and routes them to a direct SDK action instead of letting
 them become a normal turn. Capture happens at BOTH manager entry points, so a
@@ -54,7 +55,12 @@ class HardcodedCommand(NamedTuple):
 # - ``goal`` → set/clear the thread's goal via the ``thread/goal/{get,set,clear}``
 #   app-server RPCs. It DOES use ``args``: ``/goal clear`` clears, any other
 #   non-empty text is the objective to set, a bare ``/goal`` is a usage error.
-KNOWN_COMMANDS: frozenset[str] = frozenset({"compact", "goal"})
+# - ``plan`` → switch the thread into Codex's Plan collaboration mode via
+#   ``thread/settings/update`` (enter-only: a second ``/plan`` is a no-op, it
+#   never toggles back to Default). ``args`` is optional: when present it is
+#   sent as a normal turn right after the mode switch, mirroring the official
+#   clients' ``/plan <prompt>`` form.
+KNOWN_COMMANDS: frozenset[str] = frozenset({"compact", "goal", "plan"})
 
 
 def parse_hardcoded_command(text: str) -> HardcodedCommand | None:
@@ -68,9 +74,10 @@ def parse_hardcoded_command(text: str) -> HardcodedCommand | None:
     at all — return ``None`` so the caller treats the text as an ordinary
     message.
 
-    Collision-free for Codex: the CLI gives ``/`` no native meaning (it
-    reserves ``$`` for skills), so intercepting these names steals nothing a
-    user could legitimately want to send to the model.
+    Collision-free for Codex: the App Server gives ``/`` no meaning (slash
+    commands are a client-side layer of the interactive TUI, which never runs
+    here; ``$`` stays reserved for skills), so intercepting these names steals
+    nothing a user could legitimately want to send to the model.
     """
     if not text:
         return None

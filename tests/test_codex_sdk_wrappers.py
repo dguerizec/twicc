@@ -6,12 +6,16 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
 from openai_codex import TextInput
 from openai_codex.generated.v2_all import (
     ApprovalsReviewer,
     AskForApproval,
+    CollaborationMode,
+    ModeKind,
     SandboxMode,
     SandboxPolicy,
+    Settings,
     WorkspaceWriteSandboxPolicy,
 )
 
@@ -159,3 +163,56 @@ def test_thread_settings_update_uses_native_rpc() -> None:
             },
         },
     )
+
+
+def test_thread_settings_update_collaboration_mode_payload() -> None:
+    """The Plan-mode payload keeps ``developer_instructions`` as explicit null.
+
+    ``settings.developer_instructions: null`` means "use Codex's built-in
+    instructions for this collaboration mode" — an ``exclude_none`` dump would
+    drop the key and change the protocol meaning. Same for
+    ``reasoning_effort: null`` (the mode preset / config decides).
+    """
+    collaboration_mode = CollaborationMode(
+        mode=ModeKind.plan,
+        settings=Settings(
+            model="gpt-5.6",
+            reasoning_effort=None,
+            developer_instructions=None,
+        ),
+    )
+
+    async def scenario() -> TwiccAsyncCodex:
+        codex = _mock_codex()
+        thread = TwiccAsyncThread(codex, "thread-id")
+        await thread.update_settings_with_policy(
+            collaboration_mode=collaboration_mode,
+        )
+        return codex
+
+    codex = asyncio.run(scenario())
+    call = codex._client.request.await_args
+    assert call.args[:2] == (
+        "thread/settings/update",
+        {
+            "threadId": "thread-id",
+            "collaborationMode": {
+                "mode": "plan",
+                "settings": {
+                    "model": "gpt-5.6",
+                    "reasoning_effort": None,
+                    "developer_instructions": None,
+                },
+            },
+        },
+    )
+
+
+def test_thread_settings_update_requires_a_setting() -> None:
+    async def scenario() -> None:
+        codex = _mock_codex()
+        thread = TwiccAsyncThread(codex, "thread-id")
+        with pytest.raises(ValueError):
+            await thread.update_settings_with_policy()
+
+    asyncio.run(scenario())
