@@ -1,7 +1,7 @@
 ---
 name: twicc-update-workspace
-description: Update an existing TwiCC workspace — rename, change color, add/remove projects, add/remove auto-add patterns, set its browser URL, archive/unarchive. Use when you or the user want to tweak a workspace.
-argument-hint: <workspace_id> [--name X] [--color X|--unset-color] [--add-project project]... [--remove-project project]... [--add-pattern P]... [--remove-pattern P]... [--browser-url X|--unset-browser-url] [--archive|--unarchive]
+description: Update an existing TwiCC workspace — rename, change color, add/remove projects, add/remove auto-add patterns, manage its saved browser URLs, archive/unarchive. Use when you or the user want to tweak a workspace.
+argument-hint: <workspace_id> [--name X] [--color X|--unset-color] [--add-project project]... [--remove-project project]... [--add-pattern P]... [--remove-pattern P]... [--add-browser-url X [--browser-url-label L] [--set-default]] [--remove-browser-url X] [--set-default-browser-url X] [--browser-url X] [--unset-browser-url] [--archive|--unarchive]
 ---
 
 # TwiCC Update Workspace
@@ -47,8 +47,13 @@ All patch flags are optional but at least one is required. Reordering of project
 - `--remove-project PROJECT` (repeatable) — Remove a project. Same path-or-id resolution. Idempotent; no error if the project isn't in the workspace or doesn't exist.
 - `--add-pattern PATTERN` (repeatable) — Add an auto-add pattern (`*` wildcard). Idempotent.
 - `--remove-pattern PATTERN` (repeatable) — Remove a pattern. Idempotent.
-- `--browser-url URL` — Default URL the session Browser tab opens for projects of this workspace (http(s) only; a project's own Browser URL takes precedence). Mutually exclusive with `--unset-browser-url`.
-- `--unset-browser-url` — Clear the workspace's Browser-pane URL. Mutually exclusive with `--browser-url`.
+- `--add-browser-url URL` — Add a URL to the workspace's saved Browser-tab URLs (http(s) only; a project's own saved URLs take precedence; idempotent). The first saved URL becomes the default (Home target).
+- `--browser-url-label LABEL` — Optional label for the added URL (shown in the Browser pane's menus). Only with `--add-browser-url` / `--browser-url`.
+- `--set-default` — Flag the added URL as the default. Only with `--add-browser-url`.
+- `--remove-browser-url URL` — Remove a saved URL (idempotent).
+- `--set-default-browser-url URL` — Flag an already-saved URL as the default; fails if not saved.
+- `--browser-url URL` — Shorthand for `--add-browser-url URL --set-default`.
+- `--unset-browser-url` — Clear ALL the workspace's saved URLs. Mutually exclusive with the other browser-URL flags.
 - `--archive` — Mark as archived. Mutually exclusive with `--unarchive`.
 - `--unarchive` — Mark as not archived. Mutually exclusive with `--archive`.
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
@@ -57,7 +62,7 @@ All patch flags are optional but at least one is required. Reordering of project
 
 ### Local (exit 1)
 
-- `conflicting_flags` — `--color` + `--unset-color`, `--browser-url` + `--unset-browser-url`, or `--archive` + `--unarchive` together.
+- `conflicting_flags` — `--color` + `--unset-color`, `--archive` + `--unarchive`, `--browser-url` + `--add-browser-url`, or `--unset-browser-url` with another browser-URL flag.
 - `no_op` — no patch flag passed.
 - `workspace_not_found`
 - `invalid_name` — name empty after trim, or exceeds 20 characters.
@@ -65,7 +70,8 @@ All patch flags are optional but at least one is required. Reordering of project
 - `invalid_color`
 - `invalid_pattern` — an `--add-pattern` value is empty after trim.
 - `project_not_found` — an `--add-project` value doesn't resolve to an existing project.
-- `invalid_value` — empty or non-http(s) `--browser-url` (use `--unset-browser-url` to clear).
+- `invalid_value` — an empty or non-http(s) browser-URL flag.
+- `url_not_found` — `--set-default-browser-url` on a URL that is not saved (server-side, exit 3).
 
 ### Server (exit 3)
 
@@ -103,6 +109,9 @@ $TWICC update-workspace backend --remove-project /home/twidi/dev/old-api --add-p
 $TWICC update-workspace scratch --add-pattern '/home/twidi/scratch/*' --archive
 $TWICC update-workspace scratch --unarchive --color '#4a90d9'
 $TWICC update-workspace backend --browser-url http://localhost:3000
+$TWICC update-workspace backend --add-browser-url http://localhost:6006 --browser-url-label Storybook
+$TWICC update-workspace backend --set-default-browser-url http://localhost:6006
+$TWICC update-workspace backend --remove-browser-url http://localhost:6006
 $TWICC update-workspace backend --unset-browser-url
 $TWICC update-workspace backend --name 'BE'
 # → {"status":"updated","workspace_id":"backend","request_uuid":"..."}

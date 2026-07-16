@@ -33,6 +33,7 @@ from asgiref.sync import sync_to_async
 from twicc.workspaces import (
     WorkspaceMutationError,
     WorkspaceMutationResult,
+    clean_browser_url_ops,
     create_workspace_atomic,
     delete_workspace_atomic,
     normalize_browser_url,
@@ -125,6 +126,8 @@ async def create_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
     if not isinstance(archived, bool):
         return _invalid_payload_result("archived", "archived must be a boolean.")
 
+    # Single URL at creation time (it becomes the default entry); more URLs
+    # are added through ``update-workspace``.
     browser_url = payload.get("browser_url")
     if browser_url is not None and not isinstance(browser_url, str):
         return _invalid_payload_result("browser_url", "browser_url must be a string or null.")
@@ -132,6 +135,7 @@ async def create_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
     url_errors = validate_browser_url(browser_url, field="--browser-url")
     if url_errors:
         return WorkspaceMutationResult(False, None, None, url_errors)
+    browser_urls = [{"url": browser_url, "default": True}] if browser_url else []
 
     project_errors = await _check_projects_exist(project_ids, field="--add-project")
     if project_errors:
@@ -143,7 +147,7 @@ async def create_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
         project_ids=project_ids,
         auto_project_patterns=patterns,
         archived=archived,
-        browser_url=browser_url,
+        browser_urls=browser_urls,
     )
 
 
@@ -163,8 +167,13 @@ async def update_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
             "add_patterns": [str, ...],
             "remove_patterns": [str, ...],
             "archived": bool,                      # optional
-            "browser_url": str | null,             # optional (use unset_browser_url to clear)
-            "unset_browser_url": bool,             # optional
+            # Saved Browser-pane URL ops (combinable; applied clear → remove →
+            # add → set-default) — same shape as the project update payload:
+            "add_browser_url": {"url": str, "label": str | null,
+                                "set_default": bool} | null,
+            "remove_browser_url": str | null,      # optional, idempotent
+            "set_default_browser_url": str | null, # optional, must be listed
+            "clear_browser_urls": bool,            # optional, drop every entry
         }
 
     The CLI ensures at least one patch field is present (``no_op`` is
@@ -207,26 +216,9 @@ async def update_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
     if archived is not None and not isinstance(archived, bool):
         return _invalid_payload_result("archived", "archived must be a boolean.")
 
-    browser_url = payload.get("browser_url")
-    unset_browser_url = payload.get("unset_browser_url", False)
-    if not isinstance(unset_browser_url, bool):
-        return _invalid_payload_result("unset_browser_url", "unset_browser_url must be a boolean.")
-    if browser_url is not None:
-        if not isinstance(browser_url, str):
-            return _invalid_payload_result("browser_url", "browser_url must be a string or null.")
-        if unset_browser_url:
-            return WorkspaceMutationResult(False, workspace_id, None, [
-                WorkspaceMutationError("--browser-url", "conflicting_flags",
-                                       "--browser-url and --unset-browser-url cannot be used together."),
-            ])
-        # Trimmed, empty means clear, http(s) only — matches the UI dialogs.
-        browser_url = normalize_browser_url(browser_url)
-        if browser_url is None:
-            unset_browser_url = True
-        else:
-            url_errors = validate_browser_url(browser_url, field="--browser-url")
-            if url_errors:
-                return WorkspaceMutationResult(False, workspace_id, None, url_errors)
+    browser_ops, op_errors = clean_browser_url_ops(payload)
+    if op_errors:
+        return WorkspaceMutationResult(False, workspace_id, None, op_errors)
 
     project_errors = await _check_projects_exist(add_projects, field="--add-project")
     if project_errors:
@@ -242,8 +234,7 @@ async def update_workspace_from_payload(payload: dict) -> WorkspaceMutationResul
         add_patterns=add_patterns,
         remove_patterns=remove_patterns,
         archived=archived,
-        browser_url=browser_url,
-        unset_browser_url=unset_browser_url,
+        **browser_ops,
     )
 
 

@@ -43,7 +43,13 @@ from twicc.providers.sessions_watcher import mark_session_search_version_current
 from twicc.providers.state import ProviderDisabledError, ensure_provider_running
 from twicc.providers.helpers import get_provider_helpers, get_provider_helpers_registry
 from twicc.terminal import kill_all_tmux_terminals
-from twicc.workspaces import add_project_to_workspaces, normalize_browser_url, read_workspaces, validate_browser_url
+from twicc.workspaces import (
+    add_project_to_workspaces,
+    normalize_browser_url,
+    normalize_browser_url_entries,
+    read_workspaces,
+    validate_browser_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -618,18 +624,18 @@ async def project_detail(request, project_id):
                 return JsonResponse({"error": "default_layout_id must be a string or null"}, status=400)
             project.default_layout_id = layout_id or None
             update_fields.append("default_layout_id")
-        if "default_browser_url" in data:
-            # http(s) only — the Browser pane must never be pointed at
-            # javascript:/file:/data: targets. Empty/None = inherit.
-            browser_url = data["default_browser_url"]
-            if browser_url is not None and not isinstance(browser_url, str):
-                return JsonResponse({"error": "default_browser_url must be a string or null"}, status=400)
-            browser_url = normalize_browser_url(browser_url)
-            url_errors = validate_browser_url(browser_url, field="default_browser_url")
-            if url_errors:
-                return JsonResponse({"error": url_errors[0].message}, status=400)
-            project.default_browser_url = browser_url
-            update_fields.append("default_browser_url")
+        if "browser_urls" in data:
+            # Full-list replacement of the saved Browser-pane URLs. http(s)
+            # only — the pane must never be pointed at javascript:/file:/data:
+            # targets. [] or null = nothing saved (inherit).
+            entries, entry_errors = normalize_browser_url_entries(
+                data["browser_urls"] if data["browser_urls"] is not None else [],
+                field="browser_urls",
+            )
+            if entry_errors:
+                return JsonResponse({"error": entry_errors[0].message}, status=400)
+            project.browser_urls = entries
+            update_fields.append("browser_urls")
         await run_under_db_write_lock(
             lambda: project.asave(update_fields=update_fields)
         )

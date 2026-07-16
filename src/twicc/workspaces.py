@@ -91,9 +91,13 @@ def read_workspaces() -> dict:
     """
     path = get_workspaces_path()
     try:
-        return orjson.loads(path.read_bytes())
+        data = orjson.loads(path.read_bytes())
     except (FileNotFoundError, orjson.JSONDecodeError):
         return {}
+    for ws in data.get("workspaces", []):
+        if isinstance(ws, dict):
+            migrate_workspace_browser_urls(ws)
+    return data
 
 
 def match_pattern(directory: str, pattern: str) -> bool:
@@ -180,6 +184,233 @@ def validate_browser_url(url: str | None, *, field: str = "browser_url") -> list
         return [WorkspaceMutationError(field, "invalid_value",
                                        f"{field} must be 2000 characters or less.")]
     return []
+
+
+MAX_BROWSER_URL_LABEL_LENGTH = 100
+
+
+def normalize_browser_url_entries(
+    value,
+    *,
+    field: str = "browser_urls",
+) -> tuple[list[dict] | None, list[WorkspaceMutationError]]:
+    """Validate + canonicalize a full saved-browser-URLs list.
+
+    The shared shape for ``Project.browser_urls`` and a workspace's
+    ``browserUrls``: a list of ``{"url": str, "label"?: str, "default"?: true}``
+    entries — URLs unique within the list, at most one entry flagged
+    ``default``. Returns ``(canonical_list, [])`` on success or
+    ``(None, errors)``; canonical entries are sparse (``label`` omitted when
+    empty, ``default`` omitted when false).
+    """
+    if not isinstance(value, list):
+        return None, [WorkspaceMutationError(field, "invalid_value",
+                                             f"{field} must be a list of entries.")]
+    canonical: list[dict] = []
+    seen_urls: set[str] = set()
+    defaults = 0
+    for i, entry in enumerate(value):
+        where = f"{field}[{i}]"
+        if not isinstance(entry, dict):
+            return None, [WorkspaceMutationError(field, "invalid_value",
+                                                 f"{where} must be an object.")]
+        url = entry.get("url")
+        if not isinstance(url, str):
+            return None, [WorkspaceMutationError(field, "invalid_value",
+                                                 f"{where}.url must be a string.")]
+        url = normalize_browser_url(url)
+        if url is None:
+            return None, [WorkspaceMutationError(field, "invalid_value",
+                                                 f"{where}.url cannot be empty.")]
+        url_errors = validate_browser_url(url, field=f"{where}.url")
+        if url_errors:
+            return None, url_errors
+        if url in seen_urls:
+            return None, [WorkspaceMutationError(field, "duplicate_url",
+                                                 f"{field} lists {url!r} more than once.")]
+        seen_urls.add(url)
+
+        label = entry.get("label")
+        if label is not None and not isinstance(label, str):
+            return None, [WorkspaceMutationError(field, "invalid_value",
+                                                 f"{where}.label must be a string or null.")]
+        label = (label or "").strip() or None
+        if label is not None and len(label) > MAX_BROWSER_URL_LABEL_LENGTH:
+            return None, [WorkspaceMutationError(
+                field, "invalid_value",
+                f"{where}.label must be ≤ {MAX_BROWSER_URL_LABEL_LENGTH} characters "
+                f"(got {len(label)}).")]
+
+        default = entry.get("default", False)
+        if not isinstance(default, bool):
+            return None, [WorkspaceMutationError(field, "invalid_value",
+                                                 f"{where}.default must be a boolean.")]
+        if default:
+            defaults += 1
+            if defaults > 1:
+                return None, [WorkspaceMutationError(field, "multiple_defaults",
+                                                     f"{field} flags more than one entry as default.")]
+
+        item: dict = {"url": url}
+        if label is not None:
+            item["label"] = label
+        if default:
+            item["default"] = True
+        canonical.append(item)
+    return canonical, []
+
+
+def add_browser_url_entry(
+    entries: list[dict],
+    url: str,
+    *,
+    label: str | None = None,
+    set_default: bool = False,
+) -> list[dict]:
+    """Return a new canonical list with ``url`` added (or updated in place).
+
+    ``entries`` is assumed canonical and ``url`` already normalized/validated.
+    An already-listed URL is not duplicated: its label is updated when one is
+    given, and ``set_default`` moves the default flag to it. The first URL of
+    an empty list always becomes the default. Idempotent.
+    """
+    updated = [dict(e) for e in entries]
+    make_default = set_default or not updated
+    existing = next((e for e in updated if e.get("url") == url), None)
+    if existing is None:
+        existing = {"url": url}
+        updated.append(existing)
+    if label is not None and label.strip():
+        existing["label"] = label.strip()
+    if make_default:
+        for e in updated:
+            e.pop("default", None)
+        existing["default"] = True
+    return updated
+
+
+def remove_browser_url_entry(entries: list[dict], url: str) -> list[dict]:
+    """Return a new list without ``url`` (idempotent — absent URL is a no-op).
+
+    The default flag is not re-assigned when the default entry is removed:
+    consumers fall back to the first entry when none is flagged.
+    """
+    return [dict(e) for e in entries if e.get("url") != url]
+
+
+def set_default_browser_url_entry(entries: list[dict], url: str) -> tuple[list[dict], bool]:
+    """Return ``(new_list, found)`` with the default flag moved to ``url``."""
+    updated = [dict(e) for e in entries]
+    target = next((e for e in updated if e.get("url") == url), None)
+    if target is None:
+        return updated, False
+    for e in updated:
+        e.pop("default", None)
+    target["default"] = True
+    return updated, True
+
+
+def clean_browser_url_ops(payload: dict) -> tuple[dict, list[WorkspaceMutationError]]:
+    """Validate the saved-browser-URL op fields of an update payload.
+
+    Shared by the project and workspace ``update`` drop-file glues. Reads
+    ``add_browser_url`` (``{"url", "label"?, "set_default"?}``),
+    ``remove_browser_url``, ``set_default_browser_url`` and
+    ``clear_browser_urls`` from ``payload`` and returns ``(ops, errors)`` —
+    ``ops`` maps the same four names to normalized values ready for the
+    atomic ops (all-None/False when absent).
+    """
+    ops = {
+        "add_browser_url": None,
+        "remove_browser_url": None,
+        "set_default_browser_url": None,
+        "clear_browser_urls": False,
+    }
+    errors: list[WorkspaceMutationError] = []
+
+    clear = payload.get("clear_browser_urls", False)
+    if not isinstance(clear, bool):
+        errors.append(WorkspaceMutationError("clear_browser_urls", "invalid_payload",
+                                             "clear_browser_urls must be a boolean."))
+    else:
+        ops["clear_browser_urls"] = clear
+
+    def _clean_url(field: str, flag: str) -> str | None:
+        raw = payload.get(field)
+        if raw is None:
+            return None
+        if not isinstance(raw, str):
+            errors.append(WorkspaceMutationError(field, "invalid_payload",
+                                                 f"{field} must be a string or null."))
+            return None
+        url = normalize_browser_url(raw)
+        if url is None:
+            errors.append(WorkspaceMutationError(flag, "invalid_value",
+                                                 f"{flag} cannot be empty."))
+            return None
+        errors.extend(validate_browser_url(url, field=flag))
+        return url
+
+    remove_url = _clean_url("remove_browser_url", "--remove-browser-url")
+    if remove_url is not None:
+        ops["remove_browser_url"] = remove_url
+
+    set_default_url = _clean_url("set_default_browser_url", "--set-default-browser-url")
+    if set_default_url is not None:
+        ops["set_default_browser_url"] = set_default_url
+
+    add = payload.get("add_browser_url")
+    if add is not None:
+        if not isinstance(add, dict):
+            errors.append(WorkspaceMutationError("add_browser_url", "invalid_payload",
+                                                 "add_browser_url must be an object or null."))
+        else:
+            url = add.get("url")
+            if not isinstance(url, str):
+                errors.append(WorkspaceMutationError("add_browser_url", "invalid_payload",
+                                                     "add_browser_url.url must be a string."))
+            else:
+                url = normalize_browser_url(url)
+                if url is None:
+                    errors.append(WorkspaceMutationError("--add-browser-url", "invalid_value",
+                                                         "--add-browser-url cannot be empty."))
+                else:
+                    errors.extend(validate_browser_url(url, field="--add-browser-url"))
+            label = add.get("label")
+            if label is not None and not isinstance(label, str):
+                errors.append(WorkspaceMutationError("add_browser_url", "invalid_payload",
+                                                     "add_browser_url.label must be a string or null."))
+            else:
+                label = (label or "").strip() or None
+                if label is not None and len(label) > MAX_BROWSER_URL_LABEL_LENGTH:
+                    errors.append(WorkspaceMutationError(
+                        "--browser-url-label", "invalid_value",
+                        f"--browser-url-label must be ≤ {MAX_BROWSER_URL_LABEL_LENGTH} "
+                        f"characters (got {len(label)})."))
+            set_default = add.get("set_default", False)
+            if not isinstance(set_default, bool):
+                errors.append(WorkspaceMutationError("add_browser_url", "invalid_payload",
+                                                     "add_browser_url.set_default must be a boolean."))
+            if not errors:
+                ops["add_browser_url"] = {"url": url, "label": label, "set_default": set_default}
+
+    return ops, errors
+
+
+def migrate_workspace_browser_urls(ws: dict) -> bool:
+    """In-place legacy ``browserUrl`` (single string) → ``browserUrls`` (entry list).
+
+    Returns True when the workspace dict was modified. Runs on every read
+    (:func:`read_workspaces`) and inside the atomic ops before they touch the
+    list, so pre-migration files keep working without a one-shot rewrite.
+    """
+    if "browserUrl" not in ws:
+        return False
+    legacy = ws.pop("browserUrl")
+    if "browserUrls" not in ws:
+        url = normalize_browser_url(legacy) if isinstance(legacy, str) else None
+        ws["browserUrls"] = [{"url": url, "default": True}] if url else []
+    return True
 
 
 def validate_pattern(pattern: str, *, field: str = "pattern") -> list[WorkspaceMutationError]:
@@ -317,9 +548,12 @@ async def create_workspace_atomic(
     project_ids: list[str] | None = None,
     auto_project_patterns: list[str] | None = None,
     archived: bool = False,
-    browser_url: str | None = None,
+    browser_urls: list[dict] | None = None,
 ) -> WorkspaceMutationResult:
     """Atomically create a new workspace. Returns the new workspace dict.
+
+    ``browser_urls`` is assumed already canonicalized through
+    :func:`normalize_browser_url_entries`.
 
     The full create flow runs under the cross-process ``locked_json_file``
     lock so the name uniqueness check and the slug collision check see the
@@ -372,7 +606,7 @@ async def create_workspace_atomic(
                 "projectIds": deduped_projects,
                 "color": color if color else None,
                 "autoProjectPatterns": deduped_patterns,
-                "browserUrl": browser_url if browser_url else None,
+                "browserUrls": list(browser_urls or []),
             }
             workspaces.append(ws)
             txn.write()
@@ -399,17 +633,27 @@ async def update_workspace_atomic(
     add_patterns: list[str] | None = None,
     remove_patterns: list[str] | None = None,
     archived: bool | None = None,
-    browser_url: str | None = None,
-    unset_browser_url: bool = False,
+    add_browser_url: dict | None = None,
+    remove_browser_url: str | None = None,
+    set_default_browser_url: str | None = None,
+    clear_browser_urls: bool = False,
 ) -> WorkspaceMutationResult:
     """Atomically apply a patch to an existing workspace.
 
     A ``None`` (or empty list) for any keyword leaves the corresponding
     field untouched. ``unset_color=True`` and ``color=<value>`` are
-    mutually exclusive (same for ``unset_browser_url`` / ``browser_url``) —
-    the caller must enforce that constraint before calling (this function
-    trusts its arguments and would silently let the unset win).
-    ``browser_url`` is assumed already validated as a trimmed http(s) URL.
+    mutually exclusive — the caller must enforce that constraint before
+    calling (this function trusts its arguments and would silently let the
+    unset win).
+
+    Saved browser URLs are patched through ops on the ``browserUrls`` entry
+    list, applied in order remove → add → set-default:
+
+    - ``add_browser_url``: ``{"url": str, "label": str|None, "set_default": bool}``
+      with the URL already normalized/validated (idempotent on a listed URL).
+    - ``remove_browser_url`` / ``clear_browser_urls``: idempotent removals.
+    - ``set_default_browser_url``: fails with ``url_not_found`` when the URL
+      is not in the list.
 
     Add/remove on project_ids and patterns are idempotent (silently skip
     duplicates / absentees), matching the auto-add helper's semantics.
@@ -452,10 +696,31 @@ async def update_workspace_atomic(
                 ws["color"] = color
             if archived is not None:
                 ws["archived"] = bool(archived)
-            if unset_browser_url:
-                ws["browserUrl"] = None
-            elif browser_url is not None:
-                ws["browserUrl"] = browser_url
+
+            if clear_browser_urls or remove_browser_url or add_browser_url or set_default_browser_url:
+                migrate_workspace_browser_urls(ws)
+                entries = list(ws.get("browserUrls") or [])
+                if clear_browser_urls:
+                    entries = []
+                if remove_browser_url:
+                    entries = remove_browser_url_entry(entries, remove_browser_url)
+                if add_browser_url:
+                    entries = add_browser_url_entry(
+                        entries,
+                        add_browser_url["url"],
+                        label=add_browser_url.get("label"),
+                        set_default=bool(add_browser_url.get("set_default")),
+                    )
+                if set_default_browser_url:
+                    entries, found = set_default_browser_url_entry(entries, set_default_browser_url)
+                    if not found:
+                        return WorkspaceMutationResult(False, workspace_id, None, [
+                            WorkspaceMutationError(
+                                "--set-default-browser-url", "url_not_found",
+                                f"URL {set_default_browser_url!r} is not in the workspace's "
+                                "saved browser URLs."),
+                        ])
+                ws["browserUrls"] = entries
 
             if add_projects or remove_projects:
                 current_projects = list(ws.get("projectIds", []))

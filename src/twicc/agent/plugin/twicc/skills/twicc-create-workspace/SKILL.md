@@ -41,7 +41,7 @@ $TWICC create-workspace '<NAME>' [OPTIONS]
 - `--color VALUE` — CSS hex color (`#rgb`, `#rrggbb`, or `#rrggbbaa`).
 - `--add-project PROJECT` (repeatable) — Add a project. Either a directory path or a project ID (**drop the leading dash** on ids — the CLI re-adds it). The project must already exist in TwiCC. Duplicates are silently deduplicated.
 - `--add-pattern PATTERN` (repeatable) — Add an auto-add pattern (`*` wildcard). Newly detected projects whose directory matches are added to the workspace automatically.
-- `--browser-url URL` — Default URL the session Browser tab opens for projects of this workspace (http(s) only; a project's own Browser URL takes precedence).
+- `--browser-url URL` — Initial saved URL for the session Browser tab of this workspace's projects (http(s) only; a project's own saved URLs take precedence). Becomes the default (Home target); add more with `update-workspace --add-browser-url`.
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
 
 ## Errors

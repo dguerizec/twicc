@@ -1,14 +1,14 @@
 ---
 name: twicc-update-project
-description: Update an existing TwiCC project — rename, change color, archive/unarchive, set its default provider, worktree directory or browser URL, or edit per-provider agent-settings defaults. The directory is immutable; projects are archived, never deleted.
-argument-hint: <project> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive] [--default-provider X|--unset-default-provider] [--worktree-directory X|--unset-worktree-directory] [--default-browser-url X|--unset-default-browser-url] | <project> settings --provider P [field flags]
+description: Update an existing TwiCC project — rename, change color, archive/unarchive, set its default provider, worktree directory or saved browser URLs, or edit per-provider agent-settings defaults. The directory is immutable; projects are archived, never deleted.
+argument-hint: <project> [--name X|--unset-name] [--color X|--unset-color] [--archive|--unarchive] [--default-provider X|--unset-default-provider] [--worktree-directory X|--unset-worktree-directory] [--add-browser-url X [--browser-url-label L] [--set-default]] [--remove-browser-url X] [--set-default-browser-url X] [--default-browser-url X] [--unset-default-browser-url] | <project> settings --provider P [field flags]
 ---
 
 # TwiCC Update Project
 
 Patch an existing project. Two forms:
 
-- **Flat patch** — `name`, `color`, `archived`, `default_provider`, `worktree_directory`, `default_browser_url` are mutable; all flags applied atomically. The directory (and therefore the id) is immutable. There is no delete: use `--archive` to hide a project from default listings instead.
+- **Flat patch** — `name`, `color`, `archived`, `default_provider`, `worktree_directory`, and the saved `browser_urls` are mutable; all flags applied atomically. The directory (and therefore the id) is immutable. There is no delete: use `--archive` to hide a project from default listings instead.
 - **`settings` sub-command** — edit one provider's bundle inside the project's `default_agent_settings` (the defaults that seed NEW sessions created in this project; never affects existing sessions).
 
 ## When to use
@@ -54,8 +54,13 @@ All patch flags are optional but at least one is required. They cannot be combin
 - `--unset-default-provider` — Back to inherit (parent chain, then the global default). Mutually exclusive with `--default-provider`.
 - `--worktree-directory PATH` — Absolute base directory under which new git worktrees of this project are created from the UI (free-form, not required to live under the git root). Mutually exclusive with `--unset-worktree-directory`.
 - `--unset-worktree-directory` — Back to the global default (composed against the git root). Mutually exclusive with `--worktree-directory`.
-- `--default-browser-url URL` — Default URL the session Browser tab opens for this project (http(s) only, e.g. the dev server). Inherited by sub-projects and git worktrees. Mutually exclusive with `--unset-default-browser-url`.
-- `--unset-default-browser-url` — Back to inherit (parent chain, then a containing workspace's browser URL). Mutually exclusive with `--default-browser-url`.
+- `--add-browser-url URL` — Add a URL to the project's saved Browser-tab URLs (http(s) only, e.g. the dev server; idempotent). The first saved URL becomes the default (Home target).
+- `--browser-url-label LABEL` — Optional label for the added URL (shown in the Browser pane's menus). Only with `--add-browser-url` / `--default-browser-url`.
+- `--set-default` — Flag the added URL as the default. Only with `--add-browser-url`.
+- `--remove-browser-url URL` — Remove a saved URL (idempotent).
+- `--set-default-browser-url URL` — Flag an already-saved URL as the default; fails if not saved.
+- `--default-browser-url URL` — Shorthand for `--add-browser-url URL --set-default`. When the project saves no URL at all, the Browser tab inherits (parent chain, then a containing workspace's saved URLs).
+- `--unset-default-browser-url` — Clear ALL saved URLs (back to inherit). Mutually exclusive with the other browser-URL flags.
 - `--timeout SECONDS` — Seconds to wait for the server's response (default 30).
 
 ## Usage — agent settings defaults
@@ -93,7 +98,8 @@ Fields the provider doesn't support are silently ignored (`{"status":"noop"}` if
 - `duplicate_name`
 - `invalid_color`
 - `invalid_provider` — unknown `--default-provider` value.
-- `invalid_value` — empty `--worktree-directory`, or empty/non-http(s) `--default-browser-url` (use the matching `--unset-*` flag to clear).
+- `invalid_value` — empty `--worktree-directory`, or an empty/non-http(s) browser-URL flag.
+- `url_not_found` — `--set-default-browser-url` on a URL that is not saved (server-side, exit 3).
 - `unknown_provider` / `invalid_choice` / `unknown_unset_field` / `unset_conflict` / `invalid_format` — settings sub-command validation.
 
 ### Server (exit 3)
@@ -136,6 +142,9 @@ $TWICC update-project . --unset-default-provider
 $TWICC update-project . --worktree-directory /home/me/dev/myproj/.worktrees
 $TWICC update-project . --unset-worktree-directory
 $TWICC update-project . --default-browser-url http://localhost:3000
+$TWICC update-project . --add-browser-url http://localhost:6006 --browser-url-label Storybook
+$TWICC update-project . --set-default-browser-url http://localhost:6006
+$TWICC update-project . --remove-browser-url http://localhost:6006
 $TWICC update-project . --unset-default-browser-url
 
 # Agent settings defaults (seed NEW sessions only)

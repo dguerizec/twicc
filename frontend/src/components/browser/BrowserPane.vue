@@ -19,7 +19,7 @@
 // in the app-level FrameHost and is NOT reloaded by session switches (KeepAlive)
 // or dock moves — only an explicit remount (frameKey bump on hard navigation /
 // refresh in fallback mode) re-creates it.
-import { computed, inject, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { hostMessage, isCompanionMessage } from '../../browser-companion/protocol'
 import { isOpen as mediaPreviewOpen } from '../../composables/useMediaPreview'
 import { useDataStore } from '../../stores/data'
@@ -28,6 +28,12 @@ import { useWorkspacesStore } from '../../stores/workspaces'
 import { apiFetch } from '../../utils/api'
 import { resolveProjectBrowserUrl } from '../../utils/browserDefaults'
 import { normalizeBrowserUrl } from '../../utils/browserUrl'
+import {
+    addBrowserUrlEntry,
+    defaultBrowserUrlEntry,
+    removeBrowserUrlEntry,
+    setDefaultBrowserUrlEntry,
+} from '../../utils/browserUrlEntries'
 import { debounce } from '../../utils/debounce'
 import { showHelp } from '../help/showHelp'
 import PersistentFrame from '../frames/PersistentFrame.vue'
@@ -66,14 +72,14 @@ const workspacesStore = useWorkspacesStore()
 const instanceId = useId()
 
 // ── Default URL: project chain first, then the first non-archived workspace
-// containing the project (worktree-aware) that carries a browserUrl.
+// containing the project (worktree-aware) that carries saved URLs.
 const projectDefaultUrl = computed(() => resolveProjectBrowserUrl(props.projectId, store.projects))
 const workspaceDefaultUrl = computed(() => {
     if (!props.projectId) return null
     const ws = workspacesStore.workspaces.find(
-        (w) => !w.archived && w.browserUrl && workspacesStore.workspaceContainsProject(w.id, props.projectId)
+        (w) => !w.archived && w.browserUrls?.length && workspacesStore.workspaceContainsProject(w.id, props.projectId)
     )
-    return ws?.browserUrl || null
+    return defaultBrowserUrlEntry(ws?.browserUrls)?.url || null
 })
 const defaultUrl = computed(() => projectDefaultUrl.value || workspaceDefaultUrl.value)
 
@@ -683,7 +689,7 @@ const viewportWidth = ref(375)
 const viewportHeight = ref(667)
 const viewportStageRef = ref(null)
 
-// ── Save-URL menu -------------------------------------------------------------
+// ── Save-URL dialog -----------------------------------------------------------
 const project = computed(() => store.getProject(props.projectId))
 const mainRepoProject = computed(() =>
     project.value?.worktree_of ? store.getProject(project.value.worktree_of) : null
@@ -696,63 +702,173 @@ const memberWorkspaces = computed(() =>
 const canSave = computed(() => !!currentUrl.value && !!project.value)
 const saveError = ref('')
 
-async function saveToProject(projectId) {
+// The levels that can hold saved URLs, each with its current entry list —
+// the worktree/project itself, its main repo (worktree case), and each
+// member workspace. Feeds both the save dialog's target picker and the
+// Home dropdown below.
+const saveLevels = computed(() => {
+    const levels = []
+    if (project.value) {
+        levels.push({ key: 'project', entries: project.value.browser_urls || [] })
+    }
+    if (mainRepoProject.value) {
+        levels.push({ key: 'main-repo', entries: mainRepoProject.value.browser_urls || [] })
+    }
+    for (const ws of memberWorkspaces.value) {
+        levels.push({ key: `ws:${ws.id}`, entries: ws.browserUrls || [], ws })
+    }
+    return levels
+})
+
+async function putProjectBrowserUrls(projectId, entries) {
+    const response = await apiFetch(`/api/projects/${projectId}/`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ browser_urls: entries }),
+    })
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || `Failed to save (${response.status})`)
+    }
+    store.updateProject(await response.json())
+}
+
+// Persist a level's new entry list: PUT for the project levels, whole-blob
+// store update for a workspace.
+async function applyLevelEntries(levelKey, entries) {
+    if (levelKey === 'project') {
+        await putProjectBrowserUrls(props.projectId, entries)
+    } else if (levelKey === 'main-repo') {
+        await putProjectBrowserUrls(project.value.worktree_of, entries)
+    } else if (levelKey.startsWith('ws:')) {
+        workspacesStore.updateWorkspace(levelKey.slice(3), { browserUrls: entries })
+    }
+}
+
+// True when the URL currently shown is already saved at ANY level (worktree
+// project, main repo, or a member workspace) — tints the bookmark button.
+const isCurrentUrlSaved = computed(() =>
+    !!currentUrl.value &&
+    saveLevels.value.some((level) => level.entries.some((e) => e.url === currentUrl.value))
+)
+
+const saveDialogRef = ref(null)
+const saveButtonRef = ref(null)
+const saveLabelInputRef = ref(null)
+const saveFormId = `browser-save-form-${instanceId}`
+const saveLabel = ref('')
+const saveTarget = ref('project')
+const saveMakeDefault = ref(false)
+
+function openSaveDialog() {
+    if (!canSave.value) return
+    saveError.value = ''
+    saveLabel.value = ''
+    saveTarget.value = 'project'
+    saveMakeDefault.value = false
+    if (saveDialogRef.value) saveDialogRef.value.open = true
+}
+
+// wa-button doesn't expose `form` as a property — set the attribute so the
+// footer submit button drives the form inside the dialog body.
+function onSaveDialogShow(event) {
+    if (event.target !== saveDialogRef.value) return
+    nextTick(() => saveButtonRef.value?.setAttribute('form', saveFormId))
+}
+
+function onSaveDialogAfterShow(event) {
+    if (event.target !== saveDialogRef.value) return
+    saveLabelInputRef.value?.focus()
+}
+
+function closeSaveDialog() {
+    if (saveDialogRef.value) saveDialogRef.value.open = false
+}
+
+async function submitSave() {
+    const level = saveLevels.value.find((l) => l.key === saveTarget.value)
+    if (!level || !currentUrl.value) return
+    saveError.value = ''
     try {
-        const response = await apiFetch(`/api/projects/${projectId}/`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ default_browser_url: currentUrl.value }),
-        })
-        if (!response.ok) {
-            const data = await response.json().catch(() => ({}))
-            throw new Error(data.error || `Failed to save (${response.status})`)
-        }
-        store.updateProject(await response.json())
+        await applyLevelEntries(
+            level.key,
+            addBrowserUrlEntry(level.entries, currentUrl.value, {
+                label: saveLabel.value,
+                setDefault: saveMakeDefault.value,
+            })
+        )
+        if (saveDialogRef.value) saveDialogRef.value.open = false
     } catch (e) {
         saveError.value = e.message || 'Failed to save URL'
     }
 }
 
-function onSaveSelect(event) {
-    const value = event.detail?.item?.value
-    if (!value || !currentUrl.value) return
-    saveError.value = ''
-    if (value === 'project') {
-        saveToProject(props.projectId)
-    } else if (value === 'main-repo') {
-        saveToProject(project.value.worktree_of)
-    } else if (value.startsWith('ws:')) {
-        workspacesStore.updateWorkspace(value.slice(3), { browserUrl: currentUrl.value })
-    }
-}
-
-// ── Home options: the saved default URLs across the levels that carry one —
-// the worktree/project itself, its main repo (worktree case), and each member
-// workspace. Deduped by URL (levels often share one), so the count reflects
-// DISTINCT destinations: one → the Home button just navigates to it; several →
-// a dropdown lets the user pick. Priority order (project → main repo →
-// workspace) keeps the badge of the first level that defines a given URL.
+// ── Home options: every saved URL across the levels above, deduped by URL
+// (levels often share one), so the count reflects DISTINCT destinations:
+// one → the Home button just navigates to it; several → a dropdown lets the
+// user pick. Priority order (project → main repo → workspace) keeps the badge
+// of the first level that saves a given URL. Each option carries its level so
+// the per-entry actions (remove, set as Home default) patch the right list.
 const homeOptions = computed(() => {
     const opts = []
     const seen = new Set()
-    const add = (key, url, ws) => {
-        if (!url || seen.has(url)) return
-        seen.add(url)
-        opts.push({ key, url, ws })
+    for (const level of saveLevels.value) {
+        const def = defaultBrowserUrlEntry(level.entries)
+        for (const entry of level.entries) {
+            if (!entry?.url || seen.has(entry.url)) continue
+            seen.add(entry.url)
+            opts.push({
+                key: `${level.key}|${entry.url}`,
+                levelKey: level.key,
+                url: entry.url,
+                label: entry.label || null,
+                ws: level.ws || null,
+                isLevelDefault: def?.url === entry.url,
+            })
+        }
     }
-    add('project', project.value?.default_browser_url)
-    add('main-repo', mainRepoProject.value?.default_browser_url)
-    for (const ws of memberWorkspaces.value) add(`ws:${ws.id}`, ws.browserUrl, ws)
     return opts
 })
 
-// The URL the plain Home button navigates to: the first configured level, or
-// the resolved default (covers path-ancestor inheritance not listed above).
-const primaryHomeUrl = computed(() => homeOptions.value[0]?.url || defaultUrl.value)
+// The URL the plain Home button navigates to: the resolved default (project
+// chain — flagged entry first — then workspaces), or the first saved option.
+const primaryHomeUrl = computed(() => defaultUrl.value || homeOptions.value[0]?.url)
+
+// Set by the per-entry action buttons so the click that triggered them never
+// doubles as a wa-select navigation (belt and suspenders next to @click.stop).
+let suppressNextHomeSelect = false
 
 function onHomeSelect(event) {
+    if (suppressNextHomeSelect) {
+        suppressNextHomeSelect = false
+        return
+    }
     const url = event.detail?.item?.value
     if (url) navigate(url)
+}
+
+async function removeSavedUrl(opt) {
+    suppressNextHomeSelect = true
+    const level = saveLevels.value.find((l) => l.key === opt.levelKey)
+    if (!level) return
+    saveError.value = ''
+    try {
+        await applyLevelEntries(level.key, removeBrowserUrlEntry(level.entries, opt.url))
+    } catch (e) {
+        saveError.value = e.message || 'Failed to remove URL'
+    }
+}
+
+async function makeDefaultSavedUrl(opt) {
+    suppressNextHomeSelect = true
+    const level = saveLevels.value.find((l) => l.key === opt.levelKey)
+    if (!level) return
+    saveError.value = ''
+    try {
+        await applyLevelEntries(level.key, setDefaultBrowserUrlEntry(level.entries, opt.url))
+    } catch (e) {
+        saveError.value = e.message || 'Failed to set the default URL'
+    }
 }
 </script>
 
@@ -792,14 +908,42 @@ function onHomeSelect(event) {
                     <wa-dropdown-item disabled class="save-menu-header">Open a saved URL…</wa-dropdown-item>
                     <wa-dropdown-item v-for="opt in homeOptions" :key="opt.key" :value="opt.url">
                         <div class="home-menu-item">
-                            <WorktreeBadge v-if="opt.key === 'project' && mainRepoProject" :project-id="props.projectId" />
-                            <ProjectBadge v-else-if="opt.key === 'project'" :project-id="props.projectId" />
-                            <ProjectBadge v-else-if="opt.key === 'main-repo'" :project-id="mainRepoProject.id" />
+                            <WorktreeBadge v-if="opt.levelKey === 'project' && mainRepoProject" :project-id="props.projectId" />
+                            <ProjectBadge v-else-if="opt.levelKey === 'project'" :project-id="props.projectId" />
+                            <ProjectBadge v-else-if="opt.levelKey === 'main-repo'" :project-id="mainRepoProject.id" />
                             <span v-else class="save-menu-ws">
                                 <wa-icon name="layer-group" :style="opt.ws.color ? { color: opt.ws.color } : null"></wa-icon>
                                 {{ opt.ws.name }}
                             </span>
-                            <span class="home-menu-url">{{ opt.url }}</span>
+                            <span class="home-menu-text">
+                                <span v-if="opt.label" class="home-menu-label">{{ opt.label }}</span>
+                                <span class="home-menu-url">{{ opt.url }}</span>
+                            </span>
+                            <span class="home-menu-actions">
+                                <wa-icon
+                                    v-if="opt.isLevelDefault"
+                                    name="star"
+                                    class="home-menu-default-star"
+                                    title="Home default for this level"
+                                ></wa-icon>
+                                <button
+                                    v-else
+                                    type="button"
+                                    class="home-menu-action"
+                                    title="Make it the Home default"
+                                    @click.stop="makeDefaultSavedUrl(opt)"
+                                >
+                                    <wa-icon name="star"></wa-icon>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="home-menu-action home-menu-action--danger"
+                                    title="Remove this saved URL"
+                                    @click.stop="removeSavedUrl(opt)"
+                                >
+                                    <wa-icon name="trash"></wa-icon>
+                                </button>
+                            </span>
                         </div>
                     </wa-dropdown-item>
                 </wa-dropdown>
@@ -833,57 +977,22 @@ function onHomeSelect(event) {
                  where there is no page yet; only the address bar and its nav
                  buttons remain. -->
             <div v-if="currentUrl" class="browser-toolbar-right">
-                <!-- Save current URL as a project / workspace default. WA custom
-                     events are stopped from bubbling (a nested dropdown's wa-show /
-                     wa-hide would otherwise reach same-named ancestor handlers). -->
-                <wa-dropdown
-                    placement="bottom-end"
-                    @click.stop
-                    @wa-select.stop="onSaveSelect"
-                    @wa-show.stop
-                    @wa-hide.stop
-                    @wa-after-show.stop
-                    @wa-after-hide.stop
+                <!-- Save current URL into a level's saved-URLs list — opens a
+                     mini dialog (target level, optional label, default flag). -->
+                <wa-button
+                    :id="`browser-save-${instanceId}`"
+                    appearance="plain"
+                    size="small"
+                    class="browser-btn reduced-height save-toggle"
+                    :class="{ saved: isCurrentUrlSaved }"
+                    :disabled="!canSave"
+                    @click="openSaveDialog"
                 >
-                    <wa-button :id="`browser-save-${instanceId}`" slot="trigger" appearance="plain" size="small" class="browser-btn reduced-height" :disabled="!canSave">
-                        <wa-icon name="bookmark"></wa-icon>
-                    </wa-button>
-                    <wa-dropdown-item disabled class="save-menu-header">Save current URL as default for…</wa-dropdown-item>
-                    <!-- Level markers mirror the badges used everywhere else: the
-                         current project shows as a WorktreeBadge (parent · branch ·
-                         folder) when it is a worktree, else a plain ProjectBadge;
-                         its main repository (worktree case) is a ProjectBadge; each
-                         member workspace keeps the layer-group badge. -->
-                    <wa-dropdown-item value="project" :disabled="project?.default_browser_url === currentUrl">
-                        <WorktreeBadge v-if="mainRepoProject" :project-id="props.projectId" />
-                        <ProjectBadge v-else :project-id="props.projectId" />
-                        <span v-if="project?.default_browser_url === currentUrl" class="save-menu-saved">saved</span>
-                    </wa-dropdown-item>
-                    <wa-dropdown-item
-                        v-if="mainRepoProject"
-                        value="main-repo"
-                        :disabled="mainRepoProject.default_browser_url === currentUrl"
-                    >
-                        <ProjectBadge :project-id="mainRepoProject.id" />
-                        <span v-if="mainRepoProject.default_browser_url === currentUrl" class="save-menu-saved">saved</span>
-                    </wa-dropdown-item>
-                    <template v-if="memberWorkspaces.length">
-                        <wa-divider></wa-divider>
-                        <wa-dropdown-item
-                            v-for="ws in memberWorkspaces"
-                            :key="ws.id"
-                            :value="`ws:${ws.id}`"
-                            :disabled="ws.browserUrl === currentUrl"
-                        >
-                            <span class="save-menu-ws">
-                                <wa-icon name="layer-group" :style="ws.color ? { color: ws.color } : null"></wa-icon>
-                                {{ ws.name }}
-                            </span>
-                            <span v-if="ws.browserUrl === currentUrl" class="save-menu-saved">saved</span>
-                        </wa-dropdown-item>
-                    </template>
-                </wa-dropdown>
-                <AppTooltip :for="`browser-save-${instanceId}`">Save this URL as a default…</AppTooltip>
+                    <wa-icon name="bookmark"></wa-icon>
+                </wa-button>
+                <AppTooltip :for="`browser-save-${instanceId}`">
+                    {{ isCurrentUrlSaved ? 'URL saved — edit…' : 'Save this URL…' }}
+                </AppTooltip>
 
                 <wa-button :id="`browser-external-${instanceId}`" appearance="plain" size="small" class="browser-btn reduced-height" :disabled="!currentUrl" @click="openExternal">
                     <wa-icon name="arrow-up-right-from-square"></wa-icon>
@@ -1095,8 +1204,8 @@ function onHomeSelect(event) {
                     <wa-icon name="globe" class="browser-empty-icon"></wa-icon>
                     <p>Enter a URL above to preview your project — e.g. your dev server.</p>
                     <p class="browser-empty-hint">
-                        Once a page is loaded, the toolbar lets you save it as the
-                        default for this project or one of its workspaces.
+                        Once a page is loaded, the toolbar lets you save its URL
+                        for this project or one of its workspaces.
                     </p>
                     <wa-callout variant="neutral" size="small" class="browser-empty-callout">
                         <wa-icon slot="icon" name="circle-info"></wa-icon>
@@ -1109,6 +1218,62 @@ function onHomeSelect(event) {
                 </div>
             </template>
         </ViewportStage>
+
+        <!-- Save-URL mini dialog: pick the level, optionally name the entry,
+             optionally flag it as the level's Home default. Show/after-show
+             handlers are target-guarded (nested wa-* children bubble the same
+             custom event names). -->
+        <wa-dialog
+            ref="saveDialogRef"
+            label="Save this URL"
+            class="browser-save-dialog"
+            @wa-show="onSaveDialogShow"
+            @wa-after-show="onSaveDialogAfterShow"
+        >
+            <form :id="saveFormId" class="save-dialog-form" @submit.prevent="submitSave">
+                <div class="save-dialog-url">{{ currentUrl }}</div>
+                <wa-input
+                    ref="saveLabelInputRef"
+                    label="Label (optional)"
+                    size="small"
+                    autocomplete="off"
+                    maxlength="100"
+                    placeholder="e.g. Storybook, Front dev…"
+                    :value="saveLabel"
+                    @input="saveLabel = $event.target.value"
+                ></wa-input>
+                <div class="save-dialog-levels">
+                    <span class="save-dialog-levels-title">Save for…</span>
+                    <label v-for="level in saveLevels" :key="level.key" class="save-dialog-level">
+                        <input
+                            type="radio"
+                            name="save-target"
+                            :value="level.key"
+                            :checked="saveTarget === level.key"
+                            @change="saveTarget = level.key"
+                        />
+                        <WorktreeBadge v-if="level.key === 'project' && mainRepoProject" :project-id="props.projectId" />
+                        <ProjectBadge v-else-if="level.key === 'project'" :project-id="props.projectId" />
+                        <ProjectBadge v-else-if="level.key === 'main-repo'" :project-id="mainRepoProject.id" />
+                        <span v-else class="save-menu-ws">
+                            <wa-icon name="layer-group" :style="level.ws.color ? { color: level.ws.color } : null"></wa-icon>
+                            {{ level.ws.name }}
+                        </span>
+                        <span v-if="level.entries.some((e) => e.url === currentUrl)" class="save-menu-saved">saved</span>
+                    </label>
+                </div>
+                <wa-checkbox
+                    size="small"
+                    :checked="saveMakeDefault"
+                    @change="saveMakeDefault = $event.target.checked"
+                >Make it the Home default</wa-checkbox>
+                <wa-callout v-if="saveError" variant="danger" size="small">{{ saveError }}</wa-callout>
+            </form>
+            <div slot="footer" class="save-dialog-footer">
+                <wa-button variant="neutral" appearance="outlined" size="small" @click="closeSaveDialog">Cancel</wa-button>
+                <wa-button ref="saveButtonRef" variant="brand" size="small" type="submit">Save</wa-button>
+            </div>
+        </wa-dialog>
     </div>
 </template>
 
@@ -1211,7 +1376,8 @@ function onHomeSelect(event) {
 /* Select-area / responsive toggles: brand colour while the mode is active,
    normal otherwise (mirrors the connected-companion plug colour). */
 .select-toggle.active wa-icon,
-.responsive-toggle.active wa-icon {
+.responsive-toggle.active wa-icon,
+.save-toggle.saved wa-icon {
     color: var(--wa-color-brand-fill-loud);
 }
 
@@ -1264,18 +1430,72 @@ function onHomeSelect(event) {
     color: var(--wa-color-text-quiet);
 }
 
-/* Home menu: each level's badge stacked over its saved URL. */
+/* Home menu: each level's badge stacked over its saved URL (label + URL),
+   with the per-entry actions (default star, remove) pinned to the right. */
 .home-menu-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: var(--wa-space-s);
+    row-gap: var(--wa-space-3xs);
+    min-width: 0;
+}
+
+.home-menu-item > :first-child {
+    grid-column: 1;
+}
+
+.home-menu-text {
+    grid-column: 1;
     display: flex;
     flex-direction: column;
-    gap: var(--wa-space-3xs);
+    gap: 0;
     min-width: 0;
+}
+
+.home-menu-label {
+    font-size: var(--wa-font-size-xs);
 }
 
 .home-menu-url {
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
     overflow-wrap: anywhere;
+}
+
+.home-menu-actions {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-2xs);
+}
+
+/* Native buttons: WA's native.css gives them form-control height — reset. */
+.home-menu-action {
+    display: inline-flex;
+    align-items: center;
+    height: auto;
+    padding: var(--wa-space-3xs);
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: var(--wa-color-text-quiet);
+    font-size: var(--wa-font-size-xs);
+}
+
+.home-menu-action:hover {
+    color: var(--wa-color-text-normal);
+}
+
+.home-menu-action--danger:hover {
+    color: var(--wa-color-danger-fill-loud);
+}
+
+.home-menu-default-star {
+    padding: var(--wa-space-3xs);
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-warning-fill-loud);
 }
 
 /* Workspace level marker: layer-group badge + name inline, so it lines up with
@@ -1333,5 +1553,49 @@ function onHomeSelect(event) {
     color: var(--wa-color-brand-fill-loud);
     text-decoration: underline;
     cursor: pointer;
+}
+/* ── Save-URL mini dialog ─────────────────────────────────────────────── */
+.browser-save-dialog {
+    --width: min(420px, calc(100vw - 2rem));
+}
+
+.save-dialog-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-m);
+}
+
+.save-dialog-url {
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-text-quiet);
+    overflow-wrap: anywhere;
+}
+
+.save-dialog-levels {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
+}
+
+.save-dialog-levels-title {
+    font-size: var(--wa-font-size-s);
+}
+
+.save-dialog-level {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    cursor: pointer;
+}
+
+.save-dialog-level input[type='radio'] {
+    margin: 0;
+    accent-color: var(--wa-color-brand-fill-loud);
+}
+
+.save-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--wa-space-xs);
 }
 </style>

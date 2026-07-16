@@ -26,7 +26,12 @@ from twicc.core.models import Project, Session, SessionType
 from twicc.core.serializers import serialize_project
 from twicc.git import resolve_git_from_path, resolve_worktree_main_repo
 from twicc.paths import path_to_project_id
-from twicc.workspaces import auto_add_project_to_workspaces
+from twicc.workspaces import (
+    add_browser_url_entry,
+    auto_add_project_to_workspaces,
+    remove_browser_url_entry,
+    set_default_browser_url_entry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -663,20 +668,30 @@ async def update_project_atomic(
     unset_default_provider: bool = False,
     worktree_directory: str | None = None,
     unset_worktree_directory: bool = False,
-    default_browser_url: str | None = None,
-    unset_default_browser_url: bool = False,
+    add_browser_url: dict | None = None,
+    remove_browser_url: str | None = None,
+    set_default_browser_url: str | None = None,
+    clear_browser_urls: bool = False,
 ) -> ProjectMutationResult:
     """Atomically apply a patch to an existing project.
 
     Mutually-exclusive flags (``new_name`` vs ``unset_name``, ``color`` vs
     ``unset_color``, ``default_provider`` vs ``unset_default_provider``,
-    ``worktree_directory`` vs ``unset_worktree_directory``,
-    ``default_browser_url`` vs ``unset_default_browser_url``) must be enforced
+    ``worktree_directory`` vs ``unset_worktree_directory``) must be enforced
     by the caller before invocation — this function trusts its inputs (the
     ``unset`` wins if both are set). ``default_provider`` is assumed already
     validated as a registered provider value; ``worktree_directory`` already
-    trimmed and non-empty; ``default_browser_url`` already validated as a
-    trimmed, non-empty http(s) URL.
+    trimmed and non-empty.
+
+    Saved browser URLs are patched through ops on the ``browser_urls`` entry
+    list, applied in order remove → add → set-default (same semantics as the
+    workspace ops in :mod:`twicc.workspaces`):
+
+    - ``add_browser_url``: ``{"url": str, "label": str|None, "set_default": bool}``
+      with the URL already normalized/validated (idempotent on a listed URL).
+    - ``remove_browser_url`` / ``clear_browser_urls``: idempotent removals.
+    - ``set_default_browser_url``: fails with ``url_not_found`` when the URL
+      is not in the list.
 
     Runs under :func:`run_under_db_write_lock` and broadcasts
     ``project_updated`` out of the lock on success. On
@@ -741,14 +756,31 @@ async def update_project_atomic(
                     project.worktree_directory = worktree_directory
                     update_fields.append("worktree_directory")
 
-            if unset_default_browser_url:
-                if project.default_browser_url is not None:
-                    project.default_browser_url = None
-                    update_fields.append("default_browser_url")
-            elif default_browser_url is not None:
-                if project.default_browser_url != default_browser_url:
-                    project.default_browser_url = default_browser_url
-                    update_fields.append("default_browser_url")
+            if clear_browser_urls or remove_browser_url or add_browser_url or set_default_browser_url:
+                entries = list(project.browser_urls or [])
+                if clear_browser_urls:
+                    entries = []
+                if remove_browser_url:
+                    entries = remove_browser_url_entry(entries, remove_browser_url)
+                if add_browser_url:
+                    entries = add_browser_url_entry(
+                        entries,
+                        add_browser_url["url"],
+                        label=add_browser_url.get("label"),
+                        set_default=bool(add_browser_url.get("set_default")),
+                    )
+                if set_default_browser_url:
+                    entries, found = set_default_browser_url_entry(entries, set_default_browser_url)
+                    if not found:
+                        return ProjectMutationResult(False, project_id, None, [
+                            ProjectMutationError(
+                                "--set-default-browser-url", "url_not_found",
+                                f"URL {set_default_browser_url!r} is not in the project's "
+                                "saved browser URLs."),
+                        ])
+                if entries != (project.browser_urls or []):
+                    project.browser_urls = entries
+                    update_fields.append("browser_urls")
 
             if not update_fields:
                 # No-op write: the row already matches the patch. Treat as

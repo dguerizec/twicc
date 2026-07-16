@@ -69,9 +69,10 @@ def create_workspace_cmd(
         None,
         "--browser-url",
         help=(
-            "Default URL the session Browser pane opens for projects of this "
-            "workspace (http(s) only; a project's own Browser URL takes "
-            "precedence)."
+            "Initial saved URL for the session Browser pane of this "
+            "workspace's projects (http(s) only; a project's own saved URLs "
+            "take precedence). Becomes the default (Home target); add more "
+            "URLs later with `update-workspace --add-browser-url`."
         ),
     ),
     timeout: int = typer.Option(

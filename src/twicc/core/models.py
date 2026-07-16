@@ -143,13 +143,16 @@ class Project(models.Model):
     # Resolved at session creation only — a later change never touches an
     # existing session. See docs/plans/2026-06-19-layout-persistence-impl-plan.md.
     default_layout_id = models.CharField(max_length=64, null=True, blank=True, default=None)
-    # Per-project default URL for the session Browser pane (an unsandboxed
-    # iframe showing e.g. the project's dev server). NULL = inherit: the pane
-    # walks the worktree/path chain, then falls back to the first containing
-    # workspace's browserUrl (workspaces.json). Resolved LIVE on the frontend
-    # every time the pane opens — unlike the agent-settings bundle it is never
-    # materialized onto sessions. http(s) only, enforced at the PUT endpoint.
-    default_browser_url = models.CharField(max_length=2000, null=True, blank=True, default=None)
+    # Per-project saved URLs for the session Browser pane (an unsandboxed
+    # iframe showing e.g. the project's dev server): a list of
+    # {url, label?, default?} entries — URLs unique, at most one flagged
+    # default (the Home target; consumers fall back to the first entry).
+    # [] = inherit: the pane walks the worktree/path chain, then falls back to
+    # the first containing workspace's browserUrls (workspaces.json). Resolved
+    # LIVE on the frontend every time the pane opens — unlike the
+    # agent-settings bundle it is never materialized onto sessions. http(s)
+    # only, shape enforced by workspaces.normalize_browser_url_entries.
+    browser_urls = models.JSONField(default=list, blank=True)
     # ---- Worktree creation ------------------------------------------
     # Absolute base directory under which new git worktrees of this project
     # are created from the UI. Free-form and intentionally unconstrained: a

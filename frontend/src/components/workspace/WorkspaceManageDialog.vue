@@ -9,7 +9,7 @@ import ProjectBadge from '../project/ProjectBadge.vue'
 import ProjectSelectOptions from '../project/ProjectSelectOptions.vue'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import { matchPattern } from '../../utils/workspacePatterns'
-import { normalizeBrowserUrl } from '../../utils/browserUrl'
+import BrowserUrlListEditor from '../browser/BrowserUrlListEditor.vue'
 
 const workspacesStore = useWorkspacesStore()
 const settingsStore = useSettingsStore()
@@ -20,6 +20,7 @@ const dataStore = useDataStore()
 const dialogRef = ref(null)
 const saveButtonRef = ref(null)
 const nameInputRef = ref(null)
+const browserUrlsEditorRef = ref(null)
 
 const instanceId = useId()
 const formId = `manage-workspaces-form-${instanceId}`
@@ -40,7 +41,7 @@ const formData = ref({
     archived: false,
     projectIds: [],    // local copy, manipulated freely until save
     autoProjectPatterns: [],
-    browserUrl: '',
+    browserUrls: [],   // saved Browser-pane URL entries ({url, label?, default?})
 })
 
 // -- Pattern input state -----------------------------------------------------
@@ -118,7 +119,7 @@ function openAddForm() {
         archived: false,
         projectIds: [],
         autoProjectPatterns: [],
-        browserUrl: '',
+        browserUrls: [],
     }
     patternInput.value = ''
     scanFeedback.value = ''
@@ -136,7 +137,7 @@ function openEditForm(workspace) {
         archived: workspace.archived,
         projectIds: [...workspace.projectIds],
         autoProjectPatterns: [...(workspace.autoProjectPatterns || [])],
-        browserUrl: workspace.browserUrl || '',
+        browserUrls: (workspace.browserUrls || []).map(e => ({ ...e })),
     }
     patternInput.value = ''
     scanFeedback.value = ''
@@ -269,14 +270,11 @@ function handleSave() {
         return
     }
 
-    let browserUrl = null
-    const rawBrowserUrl = formData.value.browserUrl.trim()
-    if (rawBrowserUrl) {
-        browserUrl = normalizeBrowserUrl(rawBrowserUrl)
-        if (!browserUrl) {
-            errorMessage.value = 'Browser URL must be a valid http(s) URL.'
-            return
-        }
+    const { entries: browserUrls, error: browserUrlsError } =
+        browserUrlsEditorRef.value?.getEntries() || { entries: [] }
+    if (browserUrlsError) {
+        errorMessage.value = browserUrlsError
+        return
     }
 
     const payload = {
@@ -285,7 +283,7 @@ function handleSave() {
         projectIds: [...formData.value.projectIds],
         archived: formData.value.archived,
         autoProjectPatterns: [...formData.value.autoProjectPatterns],
-        browserUrl,
+        browserUrls,
     }
 
     if (formData.value.id) {
@@ -666,18 +664,17 @@ defineExpose({ open, close, openForWorkspace, openNew })
 
             <wa-divider></wa-divider>
 
-            <!-- Browser pane default URL -->
+            <!-- Browser pane saved URLs -->
             <div class="form-group">
-                <label class="form-label">Browser URL</label>
+                <label class="form-label">Browser URLs</label>
                 <p class="form-help-text">
-                    Default URL opened by the session Browser tab for projects of this
-                    workspace. A project's own Browser URL takes precedence.
+                    URLs saved for the session Browser tab of this workspace's
+                    projects; the selected one is the Home default. A project's
+                    own saved URLs take precedence.
                 </p>
-                <wa-input
-                    :value="formData.browserUrl"
-                    @input="formData.browserUrl = $event.target.value"
-                    placeholder="e.g. http://localhost:3000"
-                    size="small"
+                <BrowserUrlListEditor
+                    ref="browserUrlsEditorRef"
+                    :entries="formData.browserUrls"
                 />
             </div>
 

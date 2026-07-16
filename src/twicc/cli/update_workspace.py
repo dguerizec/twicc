@@ -9,8 +9,10 @@ so the live TwiCC server applies the patch via
 Flags are combinable: every operation specified is applied in the same
 atomic write. At least one effective patch must be supplied (no flag at
 all → ``no_op`` error). ``--color`` and ``--unset-color`` are mutually
-exclusive; so are ``--browser-url`` and ``--unset-browser-url``, and
-``--archive`` and ``--unarchive``.
+exclusive; so are ``--archive`` and ``--unarchive``. ``--unset-browser-url``
+(clear ALL saved URLs) does not combine with the other browser-URL flags,
+and ``--browser-url`` is a shorthand for ``--add-browser-url`` +
+``--set-default``.
 
 Add/remove on projects and patterns are idempotent (silently skip
 already-present additions and already-absent removals), matching the
@@ -90,21 +92,63 @@ def update_workspace_cmd(
             "multiple patterns."
         ),
     ),
+    add_browser_url: str | None = typer.Option(
+        None,
+        "--add-browser-url",
+        help=(
+            "Add a URL to the workspace's saved Browser-pane URLs (http(s) "
+            "only; a project's own saved URLs take precedence). Idempotent "
+            "on an already-saved URL. The first saved URL becomes the "
+            "default (Home target); combine with `--set-default` to flag "
+            "this one, `--browser-url-label` to name it."
+        ),
+    ),
+    browser_url_label: str | None = typer.Option(
+        None,
+        "--browser-url-label",
+        help=(
+            "Optional label for the URL passed to `--add-browser-url` / "
+            "`--browser-url` (shown in the Browser pane's menus)."
+        ),
+    ),
+    set_default: bool = typer.Option(
+        False,
+        "--set-default",
+        help=(
+            "Flag the URL passed to `--add-browser-url` as the workspace's "
+            "default (Home target)."
+        ),
+    ),
+    remove_browser_url: str | None = typer.Option(
+        None,
+        "--remove-browser-url",
+        help=(
+            "Remove a URL from the workspace's saved Browser-pane URLs "
+            "(idempotent — an absent URL is a no-op)."
+        ),
+    ),
+    set_default_browser_url: str | None = typer.Option(
+        None,
+        "--set-default-browser-url",
+        help=(
+            "Flag an already-saved URL as the workspace's default (Home "
+            "target). Fails if the URL is not in the saved list."
+        ),
+    ),
     browser_url: str | None = typer.Option(
         None,
         "--browser-url",
         help=(
-            "Default URL the session Browser pane opens for projects of this "
-            "workspace (http(s) only; a project's own Browser URL takes "
-            "precedence). Mutually exclusive with `--unset-browser-url`."
+            "Shorthand for `--add-browser-url URL --set-default`: save the "
+            "URL (if not already saved) and make it the workspace's default."
         ),
     ),
     unset_browser_url: bool = typer.Option(
         False,
         "--unset-browser-url",
         help=(
-            "Clear the workspace's Browser-pane URL. Mutually exclusive "
-            "with `--browser-url`."
+            "Clear ALL the workspace's saved Browser-pane URLs. Mutually "
+            "exclusive with the other browser-URL flags."
         ),
     ),
     archive: bool = typer.Option(
@@ -156,6 +200,7 @@ def update_workspace_cmd(
     from twicc.cli._output import emit_error
     from twicc.core.models import Project
     from twicc.workspaces import (
+        MAX_BROWSER_URL_LABEL_LENGTH,
         read_workspaces,
         validate_browser_url,
         validate_color,
@@ -173,9 +218,25 @@ def update_workspace_cmd(
     if color is not None and unset_color:
         errors.append(ValidationError("--color", "conflicting_flags",
                                        "--color and --unset-color cannot be used together."))
-    if browser_url is not None and unset_browser_url:
+    if browser_url is not None and add_browser_url is not None:
         errors.append(ValidationError("--browser-url", "conflicting_flags",
-                                       "--browser-url and --unset-browser-url cannot be used together."))
+                                       "--browser-url and --add-browser-url cannot be used together "
+                                       "(the former is a shorthand for the latter plus --set-default)."))
+    if unset_browser_url and any((
+        add_browser_url is not None, browser_url_label is not None, set_default,
+        remove_browser_url is not None, set_default_browser_url is not None,
+        browser_url is not None,
+    )):
+        errors.append(ValidationError("--unset-browser-url", "conflicting_flags",
+                                       "--unset-browser-url cannot be combined with the other "
+                                       "browser-URL flags."))
+    if (browser_url_label is not None or set_default) and (
+        add_browser_url is None and browser_url is None
+    ):
+        errors.append(ValidationError("--browser-url-label" if browser_url_label is not None else "--set-default",
+                                       "missing_flag",
+                                       "--browser-url-label and --set-default only apply to "
+                                       "--add-browser-url / --browser-url."))
     if archive and unarchive:
         errors.append(ValidationError("--archive", "conflicting_flags",
                                        "--archive and --unarchive cannot be used together."))
@@ -189,6 +250,9 @@ def update_workspace_cmd(
         or bool(remove_projects)
         or bool(add_patterns)
         or bool(remove_patterns)
+        or add_browser_url is not None
+        or remove_browser_url is not None
+        or set_default_browser_url is not None
         or browser_url is not None
         or unset_browser_url
         or archive
@@ -198,8 +262,10 @@ def update_workspace_cmd(
         errors.append(ValidationError("update-workspace", "no_op",
                                        "Nothing to update — pass at least one --name / --color / "
                                        "--unset-color / --add-project / --remove-project / "
-                                       "--add-pattern / --remove-pattern / --browser-url / "
-                                       "--unset-browser-url / --archive / --unarchive."))
+                                       "--add-pattern / --remove-pattern / --add-browser-url / "
+                                       "--remove-browser-url / --set-default-browser-url / "
+                                       "--browser-url / --unset-browser-url / --archive / "
+                                       "--unarchive."))
 
     if errors:
         emit_validation_errors(errors)
@@ -232,16 +298,29 @@ def update_workspace_cmd(
         for e in validate_pattern(p, field="--add-pattern"):
             errors.append(ValidationError(e.field, e.code, e.message))
 
-    if browser_url is not None:
-        trimmed_url = browser_url.strip()
+    for flag, value in (
+        ("--add-browser-url", add_browser_url),
+        ("--remove-browser-url", remove_browser_url),
+        ("--set-default-browser-url", set_default_browser_url),
+        ("--browser-url", browser_url),
+    ):
+        if value is None:
+            continue
+        trimmed_url = value.strip()
         if not trimmed_url:
-            errors.append(ValidationError(
-                "--browser-url", "invalid_value",
-                "--browser-url cannot be empty; use --unset-browser-url to clear it.",
-            ))
+            errors.append(ValidationError(flag, "invalid_value", f"{flag} cannot be empty."))
         else:
-            for e in validate_browser_url(trimmed_url, field="--browser-url"):
+            for e in validate_browser_url(trimmed_url, field=flag):
                 errors.append(ValidationError(e.field, e.code, e.message))
+
+    if browser_url_label is not None:
+        trimmed_label = browser_url_label.strip()
+        if len(trimmed_label) > MAX_BROWSER_URL_LABEL_LENGTH:
+            errors.append(ValidationError(
+                "--browser-url-label", "invalid_value",
+                f"--browser-url-label must be ≤ {MAX_BROWSER_URL_LABEL_LENGTH} "
+                f"characters (got {len(trimmed_label)}).",
+            ))
 
     # Project existence — only check the additions; silent removals don't
     # need DB validation (they're idempotent against missing ids).
@@ -276,9 +355,23 @@ def update_workspace_cmd(
         "add_patterns": list(add_patterns),
         "remove_patterns": list(remove_patterns),
         "archived": archived_value,
-        "browser_url": browser_url.strip() if browser_url is not None else None,
-        "unset_browser_url": unset_browser_url,
     }
+
+    # Browser-URL ops: --browser-url is a shorthand for --add-browser-url +
+    # --set-default; --unset-browser-url clears the whole list.
+    add_url = browser_url if browser_url is not None else add_browser_url
+    if add_url is not None:
+        payload["add_browser_url"] = {
+            "url": add_url.strip(),
+            "label": (browser_url_label or "").strip() or None,
+            "set_default": set_default or browser_url is not None,
+        }
+    if remove_browser_url is not None:
+        payload["remove_browser_url"] = remove_browser_url.strip()
+    if set_default_browser_url is not None:
+        payload["set_default_browser_url"] = set_default_browser_url.strip()
+    if unset_browser_url:
+        payload["clear_browser_urls"] = True
 
     sub = transport.submit(payload, kind="workspace:update")
     outcome = transport.wait(sub, timeout_seconds=timeout)
