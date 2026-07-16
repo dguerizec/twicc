@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Claude Agent SDK** — Upgrade from 0.2.118 to 0.2.120 (bundled Claude Code CLI: 2.1.209 → 2.1.211)
+- **Codex runtime** — Update from v0.144.4 to v0.144.5.
 
 ### Fixed
 
