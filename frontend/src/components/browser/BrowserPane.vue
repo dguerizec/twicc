@@ -1515,12 +1515,20 @@ async function makeDefaultSavedUrl(opt) {
     height: 100%;
 }
 
+/* `safe center` + overflow, not a plain center: the placeholder's content is
+   ~250px of incompressible text, and the body shrinks to nothing when the pane
+   is short (mobile with the on-screen keyboard open). A plain `center` spills
+   the excess symmetrically — including UPWARD, over the toolbar, since the
+   placeholder paints after it — and the pane's own overflow clip can't catch
+   that. `safe` falls back to start-alignment once it no longer fits, so the
+   overflow goes one way and stays reachable by scroll. */
 .browser-empty {
     flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: safe center;
+    overflow-y: auto;
     gap: var(--wa-space-s);
     color: var(--wa-color-text-quiet);
     text-align: center;
