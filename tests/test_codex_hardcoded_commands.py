@@ -151,12 +151,102 @@ def test_bare_plan_marker_injection_is_best_effort(monkeypatch: pytest.MonkeyPat
 def test_plan_without_resolved_model_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     agent = _make_agent(monkeypatch, sdk_model=None)
 
-    with pytest.raises(RuntimeError, match="no model resolved"):
+    with pytest.raises(RuntimeError, match="model resolved"):
         asyncio.run(agent.run_plan_command(""))
 
     agent._thread.update_settings_with_policy.assert_not_awaited()
     assert agent.state == AgentState.USER_TURN
     assert _emitted_events(agent) == ["plan_command_done"]
+
+
+# ----------------------------------------------------------------------
+# Post-plan "Implement this plan?" prompt
+# ----------------------------------------------------------------------
+
+
+def _plan_completed_event(session_id: str = "session-id") -> SimpleNamespace:
+    return SimpleNamespace(
+        method="item/completed",
+        payload=SimpleNamespace(
+            thread_id=session_id,
+            item=SimpleNamespace(root=SimpleNamespace(type="plan", id="turn-1-plan")),
+        ),
+    )
+
+
+def test_plan_item_completed_arms_the_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _make_agent(monkeypatch)
+    assert agent._plan_item_this_turn is False
+
+    asyncio.run(agent._handle_stream_event(_plan_completed_event()))
+
+    assert agent._plan_item_this_turn is True
+
+
+def test_plan_prompt_stay_settles_in_plan_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _make_agent(monkeypatch)
+    agent._await_pending_request = AsyncMock(return_value={"decision": "stay"})
+    agent._run_turn = AsyncMock()
+
+    asyncio.run(agent._prompt_plan_implementation())
+
+    request = agent._await_pending_request.await_args.args[0]
+    assert request.tool_name == "planImplementation"
+    assert request.request_type == "ask_user_question"
+    assert agent.state == AgentState.USER_TURN
+    agent._run_turn.assert_not_awaited()
+    agent._thread.update_settings_with_policy.assert_not_awaited()
+
+
+def test_plan_prompt_implement_switches_default_and_runs_the_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = _make_agent(monkeypatch)
+    agent._await_pending_request = AsyncMock(return_value={"decision": "implement"})
+    agent._run_turn = AsyncMock()
+
+    asyncio.run(agent._prompt_plan_implementation())
+
+    agent._thread.update_settings_with_policy.assert_awaited_once_with(
+        collaboration_mode=CollaborationMode(
+            mode=ModeKind.default,
+            settings=Settings(
+                model="gpt-5.6",
+                reasoning_effort=None,
+                developer_instructions=None,
+            ),
+        ),
+    )
+    agent._run_turn.assert_awaited_once_with("Implement the plan.", None)
+
+
+def test_plan_prompt_mode_switch_failure_settles_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The implement turn must never run while still in Plan mode (mutations
+    # are blocked there): a failed switch settles idle instead.
+    agent = _make_agent(monkeypatch)
+    agent._await_pending_request = AsyncMock(return_value={"decision": "implement"})
+    agent._run_turn = AsyncMock()
+    agent._thread.update_settings_with_policy.side_effect = Exception("boom")
+
+    asyncio.run(agent._prompt_plan_implementation())
+
+    assert agent.state == AgentState.USER_TURN
+    agent._run_turn.assert_not_awaited()
+
+
+def test_plan_implementation_ws_response_validation() -> None:
+    from twicc.providers.codex.ws import CodexWSHandler
+
+    # Bypass __init__ (needs a live consumer); the validators only touch
+    # class-level constants.
+    handler = object.__new__(CodexWSHandler)
+    build = CodexWSHandler._build_codex_response
+    assert build(handler, "planImplementation", {"decision": "implement"}) == {"decision": "implement"}
+    assert build(handler, "planImplementation", {"decision": "stay"}) == {"decision": "stay"}
+    assert build(handler, "planImplementation", {"decision": "accept"}) is None
+    assert CodexWSHandler._safe_default_for(handler, "planImplementation") == {"decision": "stay"}
 
 
 # ----------------------------------------------------------------------

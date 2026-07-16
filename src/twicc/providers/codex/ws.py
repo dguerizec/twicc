@@ -205,6 +205,19 @@ class CodexWSHandler:
             )
             return None
 
+        if tool_name == "planImplementation":
+            # TwiCC-owned post-plan prompt (no SDK wire behind it — the agent
+            # interprets the decision itself, see
+            # ``CodexAgent._prompt_plan_implementation``).
+            if isinstance(decision, str) and decision in {"implement", "stay"}:
+                return {"decision": decision}
+            logger.error(
+                "codex planImplementation: invalid decision=%r "
+                "(expected 'implement' or 'stay')",
+                decision,
+            )
+            return None
+
         logger.error(
             "codex:pending_request_response: unknown tool_name=%r in %r",
             tool_name, content,
@@ -376,4 +389,7 @@ class CodexWSHandler:
             return {"action": "cancel", "content": None, "_meta": None}
         if tool_name == "toolRequestUserInput":
             return {"answers": {}}
+        if tool_name == "planImplementation":
+            # A validation failure is not a "go implement" — stay in Plan mode.
+            return {"decision": "stay"}
         return {"decision": "decline"}

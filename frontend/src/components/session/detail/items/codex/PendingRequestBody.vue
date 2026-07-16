@@ -7,6 +7,7 @@ import { useDataStore } from '../../../../../stores/data'
 import { fileIconFor } from '../../../../../providers/utils/path'
 import { canStealFocus } from '../../../../../utils/focusGuard'
 import McpToolCallApprovalBody from './McpToolCallApprovalBody.vue'
+import PlanImplementationBody from './PlanImplementationBody.vue'
 import RequestUserInputBody from './RequestUserInputBody.vue'
 import ElicitationFormBody from '../shared/ElicitationFormBody.vue'
 import ElicitationUrlBody from '../shared/ElicitationUrlBody.vue'
@@ -53,8 +54,8 @@ watch(() => props.pendingRequest?.request_id, focusApproveButton)
 
 // Codex tool_name — legacy kinds ('commandExecution' | 'fileChange' |
 // 'permissions') rendered inline below, and the routing key for the
-// self-contained bodies ('autoReviewDenial' | 'mcpToolCall' | 'toolRequestUserInput' |
-// 'elicitationForm' | 'elicitationUrl').
+// self-contained bodies ('autoReviewDenial' | 'mcpToolCall' | 'planImplementation' |
+// 'toolRequestUserInput' | 'elicitationForm' | 'elicitationUrl').
 const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
 
 // tool_names rendered by a self-contained sub-component that owns its whole
@@ -63,6 +64,7 @@ const toolName = computed(() => props.pendingRequest.tool_name || 'unknown')
 const SELF_CONTAINED_BODIES = {
     autoReviewDenial: AutoReviewDenialBody,
     mcpToolCall: McpToolCallApprovalBody,
+    planImplementation: PlanImplementationBody,
     toolRequestUserInput: RequestUserInputBody,
     elicitationForm: ElicitationFormBody,
     elicitationUrl: ElicitationUrlBody,

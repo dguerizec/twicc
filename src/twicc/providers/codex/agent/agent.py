@@ -21,6 +21,7 @@ import concurrent.futures
 import logging
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -99,6 +100,11 @@ COMPACTION_SAFETY_TIMEOUT_S = 300
 # representation of the user's click, or open a continuation turn if the
 # original turn finished while the approval card was waiting.
 _AUTO_REVIEW_RETRY_PROMPT = "Retry the exact action I just approved."
+
+# Fixed user message sent when the user accepts the post-plan "implement"
+# prompt — the exact text the official Codex TUI submits for "Yes, implement
+# this plan" (codex-rs/tui/src/chatwidget/plan_implementation.rs).
+_PLAN_IMPLEMENTATION_MESSAGE = "Implement the plan."
 
 _GUARDIAN_ACTION_TYPES_TO_CORE = {
     "command": "command",
@@ -324,6 +330,13 @@ class CodexAgent(BaseAgent):
         # (a continuation's duration is unbounded); a missed signal just leaves
         # the prior stuck-ASSISTANT_TURN behaviour, never worse.
         self._goal_continuation_active: bool = False
+        # Plan-item tracking. Codex delivers a Plan collaboration-mode final
+        # answer as a ``plan`` turn item; seeing its ``item/completed`` on the
+        # stream sets this flag, and ``_run_turn`` consumes it at turn end to
+        # raise the "Implement this plan?" pending request (mirroring the
+        # official TUI's ``saw_plan_item_this_turn`` trigger). Reset at every
+        # turn start.
+        self._plan_item_this_turn: bool = False
         # ``reasoning`` items can fan out into several summary parts (each
         # with its own ``summaryIndex``). The SDK fires one
         # ``summaryPartAdded`` per part but a single ``item/completed`` for
@@ -632,6 +645,9 @@ class CodexAgent(BaseAgent):
         # from here ``_run_turn`` owns the state, so drop the flag (the watcher
         # signal must not flip us out of this turn).
         self._goal_continuation_active = False
+        # Each turn decides anew whether it delivered a plan (see
+        # ``_prompt_plan_implementation``).
+        self._plan_item_this_turn = False
         # ``Thread.turn`` expects an ``Input`` (TextInput/ImageInput/...) — only
         # ``Thread.run`` accepts a bare str via internal normalization. We don't
         # use ``run`` because it consumes the turn stream and hides the
@@ -739,6 +755,15 @@ class CodexAgent(BaseAgent):
                 self.session_id,
             )
             await self._run_turn(_AUTO_REVIEW_RETRY_PROMPT, None)
+            return
+
+        if self._plan_item_this_turn:
+            # The turn delivered a Plan-mode final answer: ask what to do next
+            # instead of settling idle. The prompt owns the state from here
+            # (ASSISTANT_TURN while pending, then either the implement
+            # continuation turn or USER_TURN).
+            self._plan_item_this_turn = False
+            await self._prompt_plan_implementation()
             return
 
         # Turn completed normally → ready for the next user input.
@@ -1049,6 +1074,36 @@ class CodexAgent(BaseAgent):
     # ``/plan`` — switch the thread into Plan collaboration mode
     # ------------------------------------------------------------------
 
+    def _build_collaboration_mode(self, mode: ModeKind) -> CollaborationMode:
+        """Build the wire collaboration-mode object for this session.
+
+        ``settings.model`` is required by the wire shape — use the session's
+        resolved SDK model, the same value every ``_run_turn`` re-passes as a
+        per-turn override anyway. ``reasoning_effort`` deliberately stays
+        ``null`` so Codex's own mode preset / config decides (the ordinary
+        turn effort is NOT the Plan-mode effort), and
+        ``developer_instructions: null`` means "use the built-in mode
+        instructions".
+
+        Raises ``RuntimeError`` when no model resolves: the bundle reaching a
+        live agent is resolved to concrete defaults, so that is settings
+        drift, not a user-reachable path — but the wire object cannot omit
+        ``model``.
+        """
+        sdk_model = get_provider_helpers(Provider.CODEX).resolve_sdk_model(
+            self.agent_settings.selected_model,
+        )
+        if not sdk_model:
+            raise RuntimeError("No model resolved for this session")
+        return CollaborationMode(
+            mode=mode,
+            settings=CollaborationModeSettings(
+                model=sdk_model,
+                reasoning_effort=None,
+                developer_instructions=None,
+            ),
+        )
+
     async def run_plan_command(self, args: str) -> None:
         """Apply a user ``/plan`` command captured by the manager.
 
@@ -1073,36 +1128,16 @@ class CodexAgent(BaseAgent):
           The turn writes the real ``user_message`` line itself (which also
           retires the optimistic bubble), so no marker is injected.
 
-        Payload choices (see the 2026-07-16 hand-off): ``settings.model`` is
-        required by the wire shape — use the session's resolved SDK model, the
-        same value every ``_run_turn`` re-passes as a per-turn override anyway.
-        ``reasoning_effort`` deliberately stays ``null`` so Codex's own Plan
-        preset / ``plan_mode_reasoning_effort`` config decides — the ordinary
-        turn effort is NOT the Plan-mode effort. ``developer_instructions:
-        null`` means "use the built-in Plan instructions".
+        Payload choices (see the 2026-07-16 hand-off) live in
+        :meth:`_build_collaboration_mode`.
 
         On failure the agent settles back to ``USER_TURN`` (never left stuck
         in STARTING/ASSISTANT_TURN from a cold wake) and the error surfaces as
         a ``RuntimeError`` for a clean, retry-able frame.
         """
         try:
-            sdk_model = get_provider_helpers(Provider.CODEX).resolve_sdk_model(
-                self.agent_settings.selected_model,
-            )
-            if not sdk_model:
-                # The bundle reaching a live agent is resolved to concrete
-                # defaults, so this is settings drift, not a user-reachable
-                # path — but the wire object cannot omit ``model``.
-                raise RuntimeError("Cannot run /plan: no model resolved for this session")
             await self._thread.update_settings_with_policy(
-                collaboration_mode=CollaborationMode(
-                    mode=ModeKind.plan,
-                    settings=CollaborationModeSettings(
-                        model=sdk_model,
-                        reasoning_effort=None,
-                        developer_instructions=None,
-                    ),
-                ),
+                collaboration_mode=self._build_collaboration_mode(ModeKind.plan),
             )
         except Exception as e:
             logger.warning(
@@ -1142,6 +1177,75 @@ class CodexAgent(BaseAgent):
                 self.session_id, exc_info=True,
             )
         await self._settle_after_command(AgentState.USER_TURN, "plan_command_done")
+
+    async def _prompt_plan_implementation(self) -> None:
+        """Post-plan prompt: ask whether to implement the plan just delivered.
+
+        Mirrors the official TUI (``plan_implementation.rs`` +
+        ``turn_runtime.rs`` ``maybe_prompt_plan_implementation``): when a turn
+        produced a ``plan`` item, ask before settling idle. Runs through the
+        standard :class:`PendingRequest` plumbing, so the surface behaves
+        exactly like an approval — the agent stays in ASSISTANT_TURN, the
+        composer is gated, the answering button shows the sending state, and
+        Stop cancels the wait like any other pending request.
+
+        Decisions (validated by the WS layer, ``_build_codex_response``):
+
+        - ``implement`` → switch the thread's collaboration mode back to
+          Default (the session's own settings stay untouched — model and
+          permission mode remain whatever the user picked), then run the
+          TUI's fixed "Implement the plan." message as a normal turn.
+        - ``stay`` (also the safe default) → settle to ``USER_TURN``; Plan
+          mode stays active for further planning.
+
+        First increment: no "clear context and implement" (fresh-session)
+        option — deliberately deferred.
+        """
+        request = PendingRequest(
+            request_id=f"planImplementation-{uuid.uuid4()}",
+            request_type="ask_user_question",
+            tool_name="planImplementation",
+            tool_input={},
+            created_at=time.time(),
+        )
+        logger.info(
+            "Codex plan prompt: asking whether to implement the plan for session %s",
+            self.session_id,
+        )
+        response = await self._await_pending_request(request)
+
+        decision = response.get("decision") if isinstance(response, dict) else None
+        if decision == "implement":
+            try:
+                await self._thread.update_settings_with_policy(
+                    collaboration_mode=self._build_collaboration_mode(ModeKind.default),
+                )
+            except Exception:
+                # Do NOT run the implement turn while still in Plan mode —
+                # mutating actions are blocked there, the turn would just
+                # produce another plan. Settle idle; the user can retry.
+                logger.warning(
+                    "Codex plan prompt: failed to switch session %s back to "
+                    "Default mode — not starting the implement turn",
+                    self.session_id, exc_info=True,
+                )
+                self._set_state(AgentState.USER_TURN)
+                self.last_activity = time.time()
+                await self._notify_state_change()
+                return
+            logger.info(
+                "Codex plan prompt: session %s back to Default mode — "
+                "starting the implement turn",
+                self.session_id,
+            )
+            await self._run_turn(_PLAN_IMPLEMENTATION_MESSAGE, None)
+            return
+
+        # ``stay`` (or a malformed response resolved to the safe default):
+        # remain in Plan mode, hand control back to the user.
+        self._set_state(AgentState.USER_TURN)
+        self.last_activity = time.time()
+        await self._notify_state_change()
 
     async def soft_interrupt(self) -> bool:
         """Interrupt the current turn but keep the thread alive (→ USER_TURN).
@@ -1756,6 +1860,15 @@ class CodexAgent(BaseAgent):
             item_id_for_cleanup = getattr(inner, "id", None)
             if item_id_for_cleanup:
                 self._items_by_id.pop(item_id_for_cleanup, None)
+
+            if item_type == "plan":
+                # A Plan collaboration-mode turn just delivered its final
+                # answer (streamed via ``item/plan/delta``, persisted as the
+                # ``<proposed_plan>`` response_item the compute relabels).
+                # Arm the post-turn "Implement this plan?" prompt — consumed
+                # by ``_run_turn`` once the turn completes.
+                self._plan_item_this_turn = True
+                return
 
             if item_type == "agentMessage":
                 item_id = inner.id
