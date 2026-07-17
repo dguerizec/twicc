@@ -168,11 +168,15 @@ def _build_usage_snapshot_fields(raw: dict) -> dict:
         fields["extra_usage_monthly_limit"] = extra.get("monthly_limit")
         fields["extra_usage_used_credits"] = extra.get("used_credits")
         fields["extra_usage_utilization"] = extra.get("utilization")
+        fields["extra_usage_currency"] = extra.get("currency")
+        fields["extra_usage_decimal_places"] = extra.get("decimal_places")
     else:
         fields["extra_usage_is_enabled"] = False
         fields["extra_usage_monthly_limit"] = None
         fields["extra_usage_used_credits"] = None
         fields["extra_usage_utilization"] = None
+        fields["extra_usage_currency"] = None
+        fields["extra_usage_decimal_places"] = None
 
     return fields
 

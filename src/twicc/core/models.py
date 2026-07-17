@@ -1226,11 +1226,18 @@ class UsageSnapshot(models.Model):
     # - Codex (ChatGPT) only reports a remaining balance with no enclosing
     #   limit, so ``remaining_credits`` is set and the three Anthropic-shape
     #   fields stay null. The UI renders an absolute "X credits" counter.
+    #
+    # ``currency`` + ``decimal_places`` turn the credit figures into money:
+    # ``monthly_limit`` / ``used_credits`` are minor units, scaled down by
+    # ``10 ** decimal_places``. Both null (Codex, and Anthropic snapshots taken
+    # before the API carried them) means the figures stay bare credit counts.
     extra_usage_is_enabled = models.BooleanField(default=False)
     extra_usage_monthly_limit = models.IntegerField(null=True, blank=True)
     extra_usage_used_credits = models.FloatField(null=True, blank=True)
     extra_usage_utilization = models.FloatField(null=True, blank=True)
     extra_usage_remaining_credits = models.FloatField(null=True, blank=True)
+    extra_usage_currency = models.CharField(max_length=8, null=True, blank=True)
+    extra_usage_decimal_places = models.IntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ["-fetched_at"]

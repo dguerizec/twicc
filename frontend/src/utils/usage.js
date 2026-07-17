@@ -71,6 +71,27 @@ export function formatBurnChip(quota) {
 }
 
 /**
+ * Render an extra-usage credit figure as a bare money amount.
+ *
+ * ``value`` is in minor units and ``decimalPlaces`` is the exponent the
+ * provider reported alongside the currency, so 4419 / 2 gives "44.19".
+ * Trailing zeros are dropped: 8000 / 2 gives "80". Returns null when either
+ * side is missing — the snapshot then carries no money shape and the caller
+ * falls back to bare credit counts.
+ *
+ * Python mirror: ``format_extra_usage_amount`` in ``src/twicc/usage.py``.
+ *
+ * @param {number|null|undefined} value - Figure in minor units
+ * @param {number|null|undefined} decimalPlaces - Currency exponent
+ * @returns {string|null}
+ */
+export function formatExtraUsageAmount(value, decimalPlaces) {
+    if (value == null || decimalPlaces == null || decimalPlaces < 0) return null
+    const amount = value / 10 ** decimalPlaces
+    return amount.toLocaleString(navigator.language, { maximumFractionDigits: decimalPlaces })
+}
+
+/**
  * Window durations in milliseconds.
  */
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
@@ -425,6 +446,8 @@ export function computeUsageData(raw) {
         //   utilization (percent ring). remainingCredits is null.
         // - Remaining-only (Codex): only remainingCredits is set
         //   (absolute counter), the three Anthropic-style fields are null.
+        // currency + decimalPlaces turn monthlyLimit / usedCredits into
+        // money (they are minor units); both null means bare credit counts.
         // recentlyActive flags consumption in the last ~hour and is used
         // by the sidebar gate to keep the panel visible even when the
         // 5h / 7d quotas aren't saturated (e.g. fast mode burning credits
@@ -435,6 +458,8 @@ export function computeUsageData(raw) {
             usedCredits: raw.extra_usage_used_credits,
             utilization: raw.extra_usage_utilization,
             remainingCredits: raw.extra_usage_remaining_credits,
+            currency: raw.extra_usage_currency ?? null,
+            decimalPlaces: raw.extra_usage_decimal_places ?? null,
             recentlyActive: computeExtraUsageRecentlyActive(raw, refs.extra_usage_one_hour),
         },
 

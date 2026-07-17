@@ -25,6 +25,7 @@ from twicc import presence
 from twicc.agent.states import AgentInfo, AgentState
 from twicc.providers.helpers import get_provider_helpers
 from twicc.synced_settings import read_synced_settings
+from twicc.usage import format_extra_usage_amount
 
 logger = logging.getLogger(__name__)
 
@@ -202,17 +203,28 @@ def _build_extra_usage_body(snapshot, label: str, base_url: str | None) -> str:
     Same lead sentence used by the in-app toast and the browser notification.
     The credit figure has two display modes, like the sidebar ring:
     Anthropic-style providers report used/limit credits (``utilization`` set),
-    Codex-style providers report only a remaining balance. Unlike the
-    process-state push there is no session to deep-link to, so when a public
-    base URL is configured we append it raw (nothing after it).
+    Codex-style providers report only a remaining balance. When the snapshot
+    carries a currency, the used/limit figures are money rather than credits.
+    Unlike the process-state push there is no session to deep-link to, so when
+    a public base URL is configured we append it raw (nothing after it).
     """
     body = f"{label} is currently drawing from your extra usage credit, billed on top of your plan."
     if snapshot.extra_usage_utilization is not None:
-        used = snapshot.extra_usage_used_credits or 0
-        if snapshot.extra_usage_monthly_limit is not None:
-            body += f"\n{used} of {snapshot.extra_usage_monthly_limit} credits used."
+        decimals = snapshot.extra_usage_decimal_places
+        currency = snapshot.extra_usage_currency
+        used_amount = format_extra_usage_amount(snapshot.extra_usage_used_credits or 0, decimals)
+        limit_amount = format_extra_usage_amount(snapshot.extra_usage_monthly_limit, decimals)
+        if currency and used_amount is not None:
+            unit = currency
+            used, limit = used_amount, limit_amount
         else:
-            body += f"\n{used} credits used."
+            unit = "credits"
+            used = snapshot.extra_usage_used_credits or 0
+            limit = snapshot.extra_usage_monthly_limit
+        if limit is not None:
+            body += f"\n{used} of {limit} {unit} used."
+        else:
+            body += f"\n{used} {unit} used."
     elif snapshot.extra_usage_remaining_credits is not None:
         body += f"\n{round(snapshot.extra_usage_remaining_credits)} credits remaining."
     if base_url:

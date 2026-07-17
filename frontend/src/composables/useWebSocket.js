@@ -8,7 +8,7 @@ import { useSharesStore } from '../stores/shares'
 import { useAuthStore } from '../stores/auth'
 import { useReconciliation } from './useReconciliation'
 import { toast } from './useToast'
-import { computeUsageData } from '../utils/usage'
+import { computeUsageData, formatExtraUsageAmount } from '../utils/usage'
 import { useSettingsStore } from '../stores/settings'
 import { getProviderHelpers, getProviderLabel, getProviderIcon, getProviderIconColor, getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification, isPageActive } from '../utils/notificationSounds'
@@ -830,7 +830,8 @@ function handleUpdateAvailable(msg) {
  *
  * Two display modes, like the sidebar ring: Anthropic-style providers report
  * used/limit credits (``utilization`` set), Codex-style providers report only a
- * remaining balance. Reads the snake_case fields the backend sends.
+ * remaining balance. When the event carries a currency, the used/limit figures
+ * are money rather than credits. Reads the snake_case fields the backend sends.
  *
  * @param {object|null|undefined} extra - The event's ``extra_usage`` block.
  * @returns {string} A short credit-detail line, or '' when no figure is available.
@@ -838,10 +839,17 @@ function handleUpdateAvailable(msg) {
 function formatExtraUsageStartedDetail(extra) {
     if (!extra) return ''
     if (extra.utilization != null) {
-        const used = extra.used_credits ?? 0
-        return extra.monthly_limit != null
-            ? `${used} of ${extra.monthly_limit} credits used.`
-            : `${used} credits used.`
+        const usedAmount = extra.currency
+            ? formatExtraUsageAmount(extra.used_credits ?? 0, extra.decimal_places)
+            : null
+        const unit = usedAmount != null ? extra.currency : 'credits'
+        const used = usedAmount ?? (extra.used_credits ?? 0)
+        const limit = usedAmount != null
+            ? formatExtraUsageAmount(extra.monthly_limit, extra.decimal_places)
+            : extra.monthly_limit
+        return limit != null
+            ? `${used} of ${limit} ${unit} used.`
+            : `${used} ${unit} used.`
     }
     if (extra.remaining_credits != null) {
         return `${Math.round(extra.remaining_credits)} credits remaining.`

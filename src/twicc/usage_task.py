@@ -437,6 +437,8 @@ def _extra_usage_event_payload(snapshot: UsageSnapshot) -> dict:
         "used_credits": snapshot.extra_usage_used_credits,
         "monthly_limit": snapshot.extra_usage_monthly_limit,
         "remaining_credits": snapshot.extra_usage_remaining_credits,
+        "currency": snapshot.extra_usage_currency,
+        "decimal_places": snapshot.extra_usage_decimal_places,
     }
 
 

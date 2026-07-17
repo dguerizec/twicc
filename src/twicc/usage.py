@@ -347,6 +347,24 @@ def compute_recent_burn_rates(snapshot: UsageSnapshot, references: dict | None) 
     }
 
 
+def format_extra_usage_amount(value: float | int | None, decimal_places: int | None) -> str | None:
+    """Render an extra-usage credit figure as a bare money amount.
+
+    ``value`` is in minor units and ``decimal_places`` is the exponent the
+    provider reported alongside the currency, so ``4419`` / ``2`` gives
+    ``"44.19"``. Trailing zeros are dropped: ``8000`` / ``2`` gives ``"80"``.
+    Returns ``None`` when either side is missing — the snapshot then carries no
+    money shape and the caller falls back to bare credit counts.
+
+    JS mirror: ``formatExtraUsageAmount`` in ``frontend/src/utils/usage.js``.
+    """
+    if value is None or decimal_places is None or decimal_places < 0:
+        return None
+    amount = Decimal(str(value)) / (Decimal(10) ** decimal_places)
+    text = f"{amount:.{decimal_places}f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 def validate_usage_dump_path(file_path: str) -> tuple[bool, str]:
     """Validate that a dump file path is usable (parent directory exists and is writable).
 

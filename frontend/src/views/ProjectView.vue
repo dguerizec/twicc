@@ -46,7 +46,7 @@ import ShareDialog from '../components/share/ShareDialog.vue'
 import ShareTargetDialog from '../components/share/ShareTargetDialog.vue'
 import { getSessionGrantsForBookmark } from '../artifact-broker/host'
 import BulkArchiveConfirmDialog from '../components/sidebar/BulkArchiveConfirmDialog.vue'
-import { getUsageRingColor, formatRecentDelta, formatBurnChip } from '../utils/usage'
+import { getUsageRingColor, formatRecentDelta, formatBurnChip, formatExtraUsageAmount } from '../utils/usage'
 import { buildProjectTree, flattenProjectTree } from '../utils/projectTree'
 import { projectPathTitle } from '../utils/projectName'
 import { sessionRouteLocation } from '../utils/sessionRoute'
@@ -287,6 +287,34 @@ const quotaExtraUsageRingValue = computed(() => {
     const extra = quotaExtraUsage.value
     if (!extra || extra.utilization == null) return 0
     return Math.min(extra.utilization, 100)
+})
+
+// Money figures for the extra-usage block, when the provider reports a currency
+// alongside the credit counts (Anthropic does, Codex doesn't yet). Null keeps
+// every call site on the legacy bare-credits rendering.
+const quotaExtraUsageMoney = computed(() => {
+    const extra = quotaExtraUsage.value
+    if (!extra || !extra.currency) return null
+    const used = formatExtraUsageAmount(extra.usedCredits ?? 0, extra.decimalPlaces)
+    if (used == null) return null
+    return {
+        used,
+        limit: formatExtraUsageAmount(extra.monthlyLimit, extra.decimalPlaces),
+        currency: extra.currency,
+    }
+})
+
+// Chip at the end of the extra-usage bar: the spent amount over its monthly
+// limit ("44.19 EUR / 80") when money figures are available, else the raw
+// percentage.
+const quotaExtraUsageChipText = computed(() => {
+    const extra = quotaExtraUsage.value
+    if (!extra || extra.utilization == null) return null
+    const money = quotaExtraUsageMoney.value
+    if (!money) return `${Math.round(extra.utilization)}%`
+    return money.limit != null
+        ? `${money.used} ${money.currency} / ${money.limit}`
+        : `${money.used} ${money.currency}`
 })
 
 function resetsAtToDate(resetsAt) {
@@ -2443,7 +2471,7 @@ function updateSidebarClosedClass(closed) {
                                 <span class="usage-balance-dot" :style="{ background: quotaExtraUsageRingColor }"></span>{{ Math.round(quotaExtraUsage.remainingCredits).toLocaleString() }} credits
                             </span>
                         </div>
-                        <span v-if="quotaExtraUsage.utilization != null" class="usage-burn-chip usage-burn-chip-neutral">{{ Math.round(quotaExtraUsage.utilization) }}%</span>
+                        <span v-if="quotaExtraUsageChipText" class="usage-burn-chip usage-burn-chip-neutral">{{ quotaExtraUsageChipText }}</span>
                         <div class="usage-quota-info">
                             <span class="usage-quota-label">Extra</span>
                             <span v-if="quotaExtraUsage.utilization != null" class="usage-quota-reset">
@@ -2455,8 +2483,15 @@ function updateSidebarClosedClass(closed) {
                     <AppTooltip v-if="quotaExtraUsage" for="quota-extra-usage" hoist force :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
                         <div class="quota-tooltip">
                             <template v-if="quotaExtraUsage.utilization != null">
-                                <div class="quota-tooltip-row"><span class="quota-tooltip-label">Used</span><span>{{ quotaExtraUsage.usedCredits ?? 0 }} credits</span></div>
-                                <div class="quota-tooltip-row"><span class="quota-tooltip-label">Monthly limit</span><span>{{ quotaExtraUsage.monthlyLimit ?? '?' }} credits</span></div>
+                                <template v-if="quotaExtraUsageMoney">
+                                    <div class="quota-tooltip-row"><span class="quota-tooltip-label">Used</span><span>{{ quotaExtraUsageMoney.used }} {{ quotaExtraUsageMoney.currency }}</span></div>
+                                    <div class="quota-tooltip-row"><span class="quota-tooltip-label">Monthly limit</span><span><template v-if="quotaExtraUsageMoney.limit != null">{{ quotaExtraUsageMoney.limit }} {{ quotaExtraUsageMoney.currency }}</template><template v-else>?</template></span></div>
+                                    <div class="quota-tooltip-row"><span class="quota-tooltip-label">Usage</span><span>{{ quotaExtraUsage.utilization.toFixed(1) }}%</span></div>
+                                </template>
+                                <template v-else>
+                                    <div class="quota-tooltip-row"><span class="quota-tooltip-label">Used</span><span>{{ quotaExtraUsage.usedCredits ?? 0 }} credits</span></div>
+                                    <div class="quota-tooltip-row"><span class="quota-tooltip-label">Monthly limit</span><span>{{ quotaExtraUsage.monthlyLimit ?? '?' }} credits</span></div>
+                                </template>
                             </template>
                             <template v-else-if="quotaExtraUsage.remainingCredits != null">
                                 <div class="quota-tooltip-row"><span class="quota-tooltip-label">Remaining</span><span>{{ Math.round(quotaExtraUsage.remainingCredits) }} credits</span></div>
