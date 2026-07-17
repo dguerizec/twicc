@@ -26,6 +26,7 @@ from twicc.core.models import Project, Session, SessionType
 from twicc.core.serializers import serialize_project
 from twicc.git import resolve_git_from_path, resolve_worktree_main_repo
 from twicc.paths import path_to_project_id
+from twicc.project_color import color_for_project
 from twicc.workspaces import (
     add_browser_url_entry,
     auto_add_project_to_workspaces,
@@ -437,6 +438,13 @@ async def register_project(
                 # correct ``project_updated`` broadcast, leaving the worktree
                 # unmarked in the live UI until a reload.
                 project.worktree_of_id = detected_parent_id
+        # Auto-color runs after worktree detection so a worktree is never
+        # colored (it inherits its main repo's color). Mirror the assigned
+        # color onto the instance for the caller's serialization (e.g. the
+        # POST /api/projects/ 201 response).
+        new_color = await ensure_project_color(project.id, project.directory)
+        if new_color:
+            project.color = new_color
 
     return project, created
 
@@ -518,6 +526,46 @@ async def ensure_worktree_link(project_id: str, directory: str) -> str | None:
     if not main_repo:
         return None
     return await link_worktree_to_repo(project_id, os.path.realpath(main_repo))
+
+
+def _ensure_project_color_sync(project_id: str, directory: str | None) -> str | None:
+    """Assign a stable auto-generated color to a project that lacks one (sync).
+
+    No-op (returns ``None``) when the project already has a color, is a git
+    worktree (``worktree_of`` set → it inherits its main repository's color), is
+    absent, or has neither a name nor a directory to derive a label from.
+    Otherwise computes the color from the project name (or its final directory
+    segment) and persists it with a ``color IS NULL`` guarded UPDATE so a
+    concurrent write is never clobbered. Returns the color only when this call
+    is the one that wrote it, so the async wrapper broadcasts exactly once.
+    """
+    row = (
+        Project.objects.filter(id=project_id)
+        .values("name", "color", "worktree_of_id", "directory")
+        .first()
+    )
+    if row is None or row["color"] or row["worktree_of_id"]:
+        return None
+    color = color_for_project(row["name"], directory or row["directory"])
+    if color is None:
+        return None
+    updated = Project.objects.filter(id=project_id, color__isnull=True).update(color=color)
+    return color if updated else None
+
+
+async def ensure_project_color(project_id: str, directory: str | None) -> str | None:
+    """Give *project_id* an auto-generated color when it has none.
+
+    Idempotent and safe to call from every project-creation choke point (right
+    after :func:`ensure_worktree_link`, so the worktree status is already known).
+    Broadcasts ``project_updated`` when — and only when — a color was written, so
+    the freshly created project (announced by ``project_added`` before it had a
+    color) lights up live. Returns the color it assigned, else ``None``.
+    """
+    color = await sync_to_async(_ensure_project_color_sync)(project_id, directory)
+    if color is not None:
+        await _broadcast_project_updated(project_id)
+    return color
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Project colors** — Projects now get an automatic color based on their name; change it anytime.
+
 ### Changed
 
 - **Claude extra usage** — The usage widget and the extra-usage alerts now show your spending as an amount against your monthly limit (e.g. 44.19 EUR / 80) instead of a percentage.

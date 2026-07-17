@@ -2043,8 +2043,9 @@ async def _process_compute_message(msg: dict) -> None:
         await auto_add_project_to_workspaces(project_id, project_directory)
         # Link to its main repo if this project is a git worktree (local
         # import: twicc.projects ↔ db_writer is a cycle at module load).
-        from twicc.projects import ensure_worktree_link
+        from twicc.projects import ensure_project_color, ensure_worktree_link
         await ensure_worktree_link(project_id, project_directory)
+        await ensure_project_color(project_id, project_directory)
 
     session_id = msg["session_id"]
     if state.display_session_ids is None or session_id in state.display_session_ids:
@@ -2277,8 +2278,11 @@ async def _process_thread_message(msg) -> None:
                     await auto_add_project_to_workspaces(project.id, project.directory)
                     # Link to its main repo if this project is a git worktree
                     # (local import: twicc.projects ↔ db_writer cycle).
-                    from twicc.projects import ensure_worktree_link
+                    from twicc.projects import ensure_project_color, ensure_worktree_link
                     await ensure_worktree_link(project.id, project.directory)
+                    new_color = await ensure_project_color(project.id, project.directory)
+                    if new_color:
+                        project.color = new_color
             else:
                 # _apply_create_session_payload skipped an orphan subagent
                 # (parent row absent). A deliberate skip, not an apply error —
