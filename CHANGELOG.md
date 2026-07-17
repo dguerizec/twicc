@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Claude extra usage** — The usage widget and the extra-usage alerts now show your spending as an amount against your monthly limit (e.g. 44.19 EUR / 80) instead of a percentage.
+- **Artifacts list** — The menu on each artifact now also offers Edit, Open in session and Remove.
 
 ### Fixed
 

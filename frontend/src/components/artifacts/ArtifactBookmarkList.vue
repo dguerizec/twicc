@@ -21,12 +21,14 @@ import { useSettingsStore } from '../../stores/settings'
 import { computeArtifactBookmarkList } from '../../utils/sidebarArtifactBookmarks'
 import { matchQuery } from '../../utils/textFilter'
 import { artifactBookmarkRouteLocation, artifactTypeIcon } from '../../utils/artifactBookmark'
+import { buildFilesRouteParams } from '../../utils/granularRoutes'
 import { formatDate } from '../../utils/date'
 import { dateBucketSeparator } from '../../utils/datePresets'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import WorktreeBadge from '../project/WorktreeBadge.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
+import ArtifactBookmarkDialog from './ArtifactBookmarkDialog.vue'
 import ArtifactsHelpButton from './ArtifactsHelpButton.vue'
 import SidebarListSeparator from '../sidebar/SidebarListSeparator.vue'
 
@@ -150,15 +152,85 @@ function handleClick(event, b) {
     onSelect(b)
 }
 
-// Row Share action — only when a share host is configured. Routes through the
+// ═══════════════════════════════════════════════════════════════════════════
+// Row actions — the same four the ArtifactsBrowserView header offers, so a
+// bookmark can be managed without opening it first.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Share is gated on a configured share host, and routes through the
 // globally-mounted artifact ShareDialog (ProjectView) via the shared window
-// event, so the list never mounts a dialog per row.
+// event, so the list never mounts a share dialog per row.
 const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+function openShare(b) {
+    window.dispatchEvent(new CustomEvent('twicc:open-share-dialog', {
+        detail: { bookmarkId: b.id, allowedHosts: b.allowed_hosts || {}, title: b.name || '' },
+    }))
+}
+
+// Edit reuses the create/edit dialog, mounted ONCE for the whole list and
+// retargeted at the row being edited (its props are per-bookmark), rather than
+// one instance per row.
+const editDialogRef = ref(null)
+const editBookmark = ref(null)
+async function openEdit(b) {
+    editBookmark.value = b
+    await nextTick()
+    editDialogRef.value?.open(b)
+}
+
+// Mirrors ArtifactsBrowserView: derive the route family from the route name so
+// navigation stays within the current (project / all-projects) mode.
+const isAllProjectsMode = computed(() => route.name?.startsWith('projects-'))
+const queryWithWorkspace = () => (route.query.workspace ? { workspace: route.query.workspace } : {})
+
+/** Leave the artifact pane empty — only when the removed row was the open one. */
+function backToList() {
+    if (isAllProjectsMode.value) {
+        router.push({ name: 'projects-artifacts', query: queryWithWorkspace() })
+    } else {
+        router.push({ name: 'project-artifacts', params: { projectId: route.params.projectId } })
+    }
+}
+
+// Open the source session's Artifacts tab with this file revealed.
+// buildFilesRouteParams applies encodePath internally, so the RAW relative_path
+// is passed.
+function openInSession(b) {
+    const params = buildFilesRouteParams({ rootKey: 'artifacts', filePath: b.relative_path })
+    const name = isAllProjectsMode.value ? 'projects-session-artifacts' : 'session-artifacts'
+    router.push({
+        name,
+        params: { projectId: b.project_id, sessionId: b.session_id, ...params },
+        query: queryWithWorkspace(),
+    })
+}
+
+async function removeBookmark(b) {
+    const wasActive = isActive(b)
+    try {
+        await dataStore.deleteArtifactBookmark(b.id)
+    } catch {
+        // Even on failure, the bookmark is gone server-side or the store will
+        // resync via WS — the row leaves the list either way.
+    }
+    if (wasActive) backToList()
+}
+
+/** The dialog removed the bookmark it was opened on. */
+function onRemovedFromDialog() {
+    if (editBookmark.value && isActive(editBookmark.value)) backToList()
+}
+
 function handleMenuSelect(event, b) {
-    if (event.detail.item.value === 'share') {
-        window.dispatchEvent(new CustomEvent('twicc:open-share-dialog', {
-            detail: { bookmarkId: b.id, allowedHosts: b.allowed_hosts || {}, title: b.name || '' },
-        }))
+    const action = event.detail.item.value
+    if (action === 'edit') {
+        openEdit(b)
+    } else if (action === 'share') {
+        openShare(b)
+    } else if (action === 'open-session') {
+        openInSession(b)
+    } else if (action === 'remove') {
+        removeBookmark(b)
     }
 }
 
@@ -370,10 +442,10 @@ defineExpose({ handleKeyNavigation })
                     </span>
                 </div>
             </wa-button>
-            <!-- Row actions menu (outside the button to avoid nesting). Only a
-                 Share action for now, gated on a configured share host. -->
+            <!-- Row actions menu (outside the button to avoid nesting), mirroring
+                 the ArtifactsBrowserView header. Share is gated on a configured
+                 share host. -->
             <wa-dropdown
-                v-if="sharingEnabled"
                 class="bookmark-menu"
                 placement="bottom-end"
                 @wa-select="(e) => handleMenuSelect(e, b)"
@@ -388,15 +460,38 @@ defineExpose({ handleKeyNavigation })
                 >
                     <wa-icon name="ellipsis-v" label="Artifact actions"></wa-icon>
                 </wa-button>
-                <wa-dropdown-item value="share">
+                <wa-dropdown-item value="edit">
+                    <wa-icon slot="icon" name="pencil"></wa-icon>
+                    Edit…
+                </wa-dropdown-item>
+                <wa-dropdown-item v-if="sharingEnabled" value="share">
                     <wa-icon slot="icon" name="share-nodes"></wa-icon>
                     Share…
                 </wa-dropdown-item>
+                <wa-dropdown-item value="open-session">
+                    <wa-icon slot="icon" name="house"></wa-icon>
+                    Open in session
+                </wa-dropdown-item>
+                <wa-divider></wa-divider>
+                <wa-dropdown-item value="remove" variant="danger">
+                    <wa-icon slot="icon" name="trash"></wa-icon>
+                    Remove bookmark
+                </wa-dropdown-item>
             </wa-dropdown>
-            <AppTooltip v-if="sharingEnabled" :for="`bookmark-menu-trigger-${b.id}`">Share artifact</AppTooltip>
+            <AppTooltip :for="`bookmark-menu-trigger-${b.id}`">Artifact actions</AppTooltip>
             </div>
             </template>
         </div>
+
+        <!-- Edit dialog, retargeted at the row being edited (one instance for the
+             whole list). -->
+        <ArtifactBookmarkDialog
+            v-if="editBookmark"
+            ref="editDialogRef"
+            :session-id="editBookmark.session_id"
+            :relative-path="editBookmark.relative_path"
+            @removed="onRemovedFromDialog"
+        />
     </div>
 </template>
 
@@ -523,6 +618,10 @@ defineExpose({ handleKeyNavigation })
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
+    /* Visual space for the actions menu overlaying the row's top-right corner,
+       so a long name ellipsizes before it rather than running underneath
+       (matches SessionListItem). */
+    margin-right: 1.5rem;
 }
 
 .bookmark-meta {
