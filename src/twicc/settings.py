@@ -311,7 +311,7 @@ LOGGING = {
 # Bump the relevant constant when the corresponding provider's parsing/compute
 # rules change to trigger recomputation. ``None`` declares "no compute pipeline
 # yet" — sessions of that provider are reported up-to-date as-is.
-CLAUDE_CODE_COMPUTE_VERSION = 107  # 107: repair agent links wrongly flipped to background by SendMessage-continuation notifications (106 = plan_paths from subagent writes too, 105 = Session.plan_paths backfill, 104 = async-by-default agents + task-notification rerouting repair)
+CLAUDE_CODE_COMPUTE_VERSION = 108  # 108: dedup task tool_use replay against compaction-duplicated JSONL lines + repair corrupted twiccTasksData snapshots (107 = repair agent links wrongly flipped to background by SendMessage-continuation notifications, 106 = plan_paths from subagent writes too, 105 = Session.plan_paths backfill)
 CODEX_COMPUTE_VERSION = 44  # 44: /plan support — injected marker relabelled, inline-prompt user message re-prefixed "/plan " on plan-mode transition, proposed_plan response_item relabelled as a visible agent_message (43: injected terminal provider errors become durable API_ERROR items, 42: code-mode update_plan calls refresh Session.tasks)
 
 # Search index version

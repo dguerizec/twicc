@@ -542,6 +542,35 @@ def _iter_task_tool_use_blocks(parsed_json: dict):
             yield block
 
 
+# Fields spliced into task tool_use blocks by _enrich_task_tool_uses.
+_TASK_ENRICHMENT_KEYS = ('twiccTaskData', 'twiccTasksData', 'twiccTasksTotal')
+
+
+class _SessionTaskState:
+    """Per-session in-memory task-replay state (see ``_enrich_task_tool_uses``).
+
+    * ``tasks`` — insertion-ordered ``task_id -> task dict`` (order of
+      creation, mirrored into every ``twiccTasksData`` snapshot).
+    * ``seen_tool_use_ids`` — ids of every task tool_use block already
+      encountered for the session. Compaction re-appends the retained
+      history lines verbatim to the JSONL (same ``uuid``, same tool_use
+      ``id``), so a task block whose id was already seen is a duplicate of
+      an earlier line and must never advance the state — replaying it would
+      re-create every task (the "list shown N times" bug).
+    * ``duplicates_seen`` — latched True at the first duplicate. Snapshots
+      stored on blocks enriched *after* a duplicate polluted the state are
+      corrupted; once the flag is set, already-enriched blocks are
+      re-derived from their tool input instead of being kept immutable.
+    """
+
+    __slots__ = ('tasks', 'seen_tool_use_ids', 'duplicates_seen')
+
+    def __init__(self) -> None:
+        self.tasks: dict[str, dict] = {}
+        self.seen_tool_use_ids: set[str] = set()
+        self.duplicates_seen = False
+
+
 # Legacy task tracking: older Claude Code sessions use the ``TodoWrite`` tool
 # (a full-list replacement) rather than the incremental ``Task*`` tools. Only
 # the frontend renders it; the backend keeps no state for it.
@@ -631,7 +660,8 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     Per-instance state held by this class:
       * ``_monitor_task_to_tool_use_id`` — per-session map for the Monitor
         tool aggregation (see :meth:`begin_session_compute`).
-      * ``_session_task_states`` — per-session in-memory task state used by
+      * ``_session_task_states`` — per-session in-memory task state
+        (:class:`_SessionTaskState`) used by
         :meth:`_enrich_task_tool_uses` to snapshot the task list at every
         task tool_use. Reconstructed lazily on first touch (see
         :meth:`_rebuild_state_if_missing`). Pruned per session in batch via
@@ -649,11 +679,10 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     def __init__(self) -> None:
         super().__init__()
         self._monitor_task_to_tool_use_id: dict[str, dict[str, str]] = {}
-        # Per-process in-memory task state, indexed by session_id.
-        # Inner dict: insertion-ordered task_id_str -> task_dict.
-        # Reconstructed lazily on the first transform_inline that needs
-        # it (see _rebuild_state_if_missing).
-        self._session_task_states: dict[str, dict[str, dict]] = {}
+        # Per-process in-memory task state, indexed by session_id (see
+        # _SessionTaskState). Reconstructed lazily on the first
+        # transform_inline that needs it (see _rebuild_state_if_missing).
+        self._session_task_states: dict[str, _SessionTaskState] = {}
 
     def begin_session_compute(self, session_id: str) -> None:
         self._monitor_task_to_tool_use_id[session_id] = {}
@@ -743,13 +772,13 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
     # In-memory task state machinery
     # ------------------------------------------------------------------
 
-    def _next_task_id(self, state: dict[str, dict]) -> str:
+    def _next_task_id(self, tasks: dict[str, dict]) -> str:
         """Sequential id allocator. First id is '1', then max(ids)+1."""
-        if not state:
+        if not tasks:
             return "1"
-        return str(max(int(k) for k in state) + 1)
+        return str(max(int(k) for k in tasks) + 1)
 
-    def _apply_task_create(self, state: dict[str, dict], tool_input: dict) -> dict | None:
+    def _apply_task_create(self, tasks: dict[str, dict], tool_input: dict) -> dict | None:
         """Add a new task to state. Returns the new task dict, or None
         when the input is malformed (missing subject).
 
@@ -763,7 +792,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         subject = tool_input.get('subject')
         if not isinstance(subject, str) or not subject:
             return None
-        new_id = self._next_task_id(state)
+        new_id = self._next_task_id(tasks)
         # Merge all input fields as-is, then default status to 'pending'
         # and set our authoritative id. Any incoming 'id'/'taskId' is
         # dropped (TaskCreate input shouldn't carry them; defensive).
@@ -772,10 +801,10 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             'status': 'pending',
             'id': new_id,
         }
-        state[new_id] = task
+        tasks[new_id] = task
         return task
 
-    def _apply_task_update(self, state: dict[str, dict], tool_input: dict) -> dict | None:
+    def _apply_task_update(self, tasks: dict[str, dict], tool_input: dict) -> dict | None:
         """Merge update fields into the existing task. Returns the updated
         task dict, or None when taskId is missing or unknown.
 
@@ -788,7 +817,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         task_id = tool_input.get('taskId')
         if not isinstance(task_id, str) or not task_id:
             return None
-        existing = state.get(task_id)
+        existing = tasks.get(task_id)
         if existing is None:
             return None
         for k, v in tool_input.items():
@@ -797,7 +826,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             existing[k] = v
         return existing
 
-    def _rebuild_state_if_missing(self, session_id: str, current_line_num: int) -> dict[str, dict]:
+    def _rebuild_state_if_missing(self, session_id: str, current_line_num: int) -> _SessionTaskState:
         """Ensure self._session_task_states[session_id] is populated
         consistently with the session's items already persisted in DB
         up to (but not including) current_line_num.
@@ -807,15 +836,19 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
           2. Initialise empty state.
           3. Find the latest SessionItem (line_num < current_line_num)
              whose content contains 'twiccTasksData'. Use that snapshot
-             to seed the state.
-          4. Replay TaskCreate / TaskUpdate items between that snapshot
-             (exclusive) and current_line_num (exclusive).
+             to seed the task dict.
+          4. Walk every task tool_use item from the beginning of the
+             session, registering each block's tool_use id in
+             ``seen_tool_use_ids`` (so compaction-duplicated lines are
+             recognised — see :class:`_SessionTaskState`). TaskCreate /
+             TaskUpdate blocks after the snapshot (and not duplicated)
+             also advance the task dict.
         """
         state = self._session_task_states.get(session_id)
         if state is not None:
             return state
 
-        state = {}
+        state = _SessionTaskState()
         self._session_task_states[session_id] = state
 
         # Pre-filter on the literal substring 'twiccTasksData' to avoid
@@ -848,24 +881,28 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
                         continue
                     task_id = task.get('id')
                     if isinstance(task_id, str):
-                        state[task_id] = dict(task)
+                        state.tasks[task_id] = dict(task)
                 replay_after_line = snapshot_item.line_num
 
         # Same idea here: pre-filter on the literal tool_use name
         # substring. _iter_task_tool_use_blocks discriminates further
         # (block.type == 'tool_use' and block.name in _TASK_TOOL_NAMES),
         # so false positives from tool_results / user_messages mentioning
-        # those strings are safely dropped.
+        # those strings are safely dropped. The walk starts at line 1 (not
+        # after the snapshot): pre-snapshot blocks register their tool_use
+        # ids in ``seen_tool_use_ids`` without touching the task dict, so
+        # a compaction-duplicated line landing later is recognised.
         replay_items = (
             SessionItem.objects
             .filter(
                 session_id=session_id,
-                line_num__gt=replay_after_line,
                 line_num__lt=current_line_num,
             )
             .filter(
                 Q(content__contains='"name":"TaskCreate"')
                 | Q(content__contains='"name":"TaskUpdate"')
+                | Q(content__contains='"name":"TaskGet"')
+                | Q(content__contains='"name":"TaskList"')
             )
             .order_by('line_num')
         )
@@ -875,12 +912,20 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             except orjson.JSONDecodeError:
                 continue
             for block in _iter_task_tool_use_blocks(parsed):
+                block_id = block.get('id')
+                if isinstance(block_id, str) and block_id:
+                    if block_id in state.seen_tool_use_ids:
+                        state.duplicates_seen = True
+                        continue
+                    state.seen_tool_use_ids.add(block_id)
+                if item.line_num <= replay_after_line:
+                    continue
                 name = block.get('name')
                 tool_input = block.get('input') or {}
                 if name == 'TaskCreate':
-                    self._apply_task_create(state, tool_input)
+                    self._apply_task_create(state.tasks, tool_input)
                 elif name == 'TaskUpdate':
-                    self._apply_task_update(state, tool_input)
+                    self._apply_task_update(state.tasks, tool_input)
 
         return state
 
@@ -889,11 +934,21 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
 
         For each tool_use of name TaskCreate / TaskUpdate / TaskGet /
         TaskList in ``content``:
+          * If the block's tool_use id was already seen for this session,
+            the line is a compaction duplicate (compaction re-appends the
+            retained history verbatim): the state is NOT advanced and any
+            stored enrichment is stripped (a duplicate enriched before this
+            dedup existed carries a corrupted snapshot).
           * If the block already carries ``twiccTasksData`` (TaskList path)
-            or ``twiccTaskData`` only (legacy disk-based by-id), the block
-            is left untouched (immutability). On the ``twiccTasksData``
-            path, the in-memory state is reset from the snapshot so
-            subsequent blocks remain consistent.
+            and no duplicate was seen so far, the block is left untouched
+            (immutability) and the in-memory state is reset from the
+            snapshot so subsequent blocks remain consistent. Once a
+            duplicate was seen, stored snapshots are no longer trusted:
+            the enrichment is dropped and re-derived from the tool input
+            (deterministic replay — identical on healthy blocks).
+          * Blocks carrying ``twiccTaskData`` only (legacy disk-based
+            by-id) stay immutable: the disk store could resolve tasks
+            never created in this transcript, which a replay cannot.
           * Otherwise, the in-memory state is advanced and the block is
             enriched with ``twiccTaskData`` (when applicable),
             ``twiccTasksData`` (always), and ``twiccTasksTotal`` (only
@@ -902,7 +957,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         Returns True if any block was mutated.
         """
         mutated = False
-        state: dict[str, dict] | None = None
+        state: _SessionTaskState | None = None
 
         for block in content:
             if not isinstance(block, dict) or block.get('type') != 'tool_use':
@@ -911,48 +966,68 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             if name not in _TASK_TOOL_NAMES:
                 continue
 
-            # --- Immutability paths ---
-            if 'twiccTasksData' in block:
-                if state is None:
-                    state = self._rebuild_state_if_missing(session_id, line_num)
-                snapshot = block.get('twiccTasksData')
-                if isinstance(snapshot, list):
-                    state.clear()
-                    for task in snapshot:
-                        if not isinstance(task, dict):
-                            continue
-                        task_id = task.get('id')
-                        if isinstance(task_id, str):
-                            state[task_id] = dict(task)
-                continue
+            if state is None:
+                state = self._rebuild_state_if_missing(session_id, line_num)
 
-            if 'twiccTaskData' in block:
+            block_id = block.get('id')
+            has_block_id = isinstance(block_id, str) and bool(block_id)
+
+            # --- Compaction-duplicate path ---
+            if has_block_id and block_id in state.seen_tool_use_ids:
+                state.duplicates_seen = True
+                for key in _TASK_ENRICHMENT_KEYS:
+                    if key in block:
+                        del block[key]
+                        mutated = True
+                continue
+            if has_block_id:
+                state.seen_tool_use_ids.add(block_id)
+
+            # --- Immutability paths ---
+            if 'twiccTaskData' in block and 'twiccTasksData' not in block:
                 # Legacy by-id block enriched with twiccTaskData only (no
                 # twiccTasksData). Immutable, but we have no full snapshot
                 # to restore state from. Skip; rely on the next snapshot
                 # or reconstruction to recover state.
                 continue
 
-            # --- Advance path ---
-            if state is None:
-                state = self._rebuild_state_if_missing(session_id, line_num)
+            if 'twiccTasksData' in block:
+                if not state.duplicates_seen:
+                    snapshot = block.get('twiccTasksData')
+                    if isinstance(snapshot, list):
+                        state.tasks.clear()
+                        for task in snapshot:
+                            if not isinstance(task, dict):
+                                continue
+                            task_id = task.get('id')
+                            if isinstance(task_id, str):
+                                state.tasks[task_id] = dict(task)
+                    continue
+                # A duplicate polluted the state before this block was
+                # enriched: its stored snapshot is corrupted. Drop the
+                # enrichment and fall through to re-derive it from the
+                # tool input against the deduplicated replay state.
+                for key in _TASK_ENRICHMENT_KEYS:
+                    block.pop(key, None)
+                mutated = True
 
+            # --- Advance path ---
             tool_input = block.get('input') or {}
 
             if name == 'TaskCreate':
-                task = self._apply_task_create(state, tool_input)
+                task = self._apply_task_create(state.tasks, tool_input)
                 if task is None:
                     continue
                 block['twiccTaskData'] = dict(task)
             elif name == 'TaskUpdate':
-                task = self._apply_task_update(state, tool_input)
+                task = self._apply_task_update(state.tasks, tool_input)
                 if task is None:
                     continue
                 block['twiccTaskData'] = dict(task)
             elif name == 'TaskGet':
                 task_id = tool_input.get('taskId')
-                if isinstance(task_id, str) and task_id in state:
-                    block['twiccTaskData'] = dict(state[task_id])
+                if isinstance(task_id, str) and task_id in state.tasks:
+                    block['twiccTaskData'] = dict(state.tasks[task_id])
                 # If taskId unknown, no twiccTaskData written. We still
                 # attach the list snapshot + total below.
 
@@ -961,10 +1036,10 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             # twiccTaskData above (or skipped via 'continue' on bad input);
             # TaskList simply falls through here — no state advance, just
             # the list snapshot attached below.
-            block['twiccTasksData'] = [dict(t) for t in state.values()]
+            block['twiccTasksData'] = [dict(t) for t in state.tasks.values()]
 
             if name in _TASK_LOOKUP_BY_ID_TOOLS:
-                block['twiccTasksTotal'] = len(state)
+                block['twiccTasksTotal'] = len(state.tasks)
 
             mutated = True
 
