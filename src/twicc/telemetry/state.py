@@ -29,6 +29,7 @@ _DEFAULT_STATE = {
     "days": {},
     "last_payload": None,
     "last_sent_at": None,
+    "was_active": None,
 }
 
 
@@ -87,6 +88,31 @@ def mark_sent(sent_through: str, payload: dict) -> None:
         txn.data["last_sent_at"] = datetime.now(timezone.utc).isoformat()
         txn.data["days"] = {d: v for d, v in txn.data["days"].items() if d > sent_through}
         txn.write()
+
+
+def note_active_transition(active: bool) -> None:
+    """Persist the observed enabled state; off->on advances the marker to today.
+
+    "Off" must mean "no data about that period": while telemetry is disabled
+    the marker stops advancing, so without this a later re-enable would
+    retroactively send DB-derived day blocks for the whole disabled window.
+    Advancing the marker on the transition drops those days for good (their
+    accumulators too — today's partial entry is kept, it belongs to the
+    re-enabled period). A missing stored state (first observation, or installs
+    predating this field) records the state without advancing, which preserves
+    the offline catch-up: enabled-all-along instances keep their old marker.
+    """
+    with state_txn() as txn:
+        was_active = txn.data.get("was_active")
+        if active and was_active is False:
+            today = utc_today().isoformat()
+            if txn.data["last_sent_date"] < today:
+                txn.data["last_sent_date"] = today
+            txn.data["days"] = {d: v for d, v in txn.data["days"].items() if d >= today}
+            txn.write()
+        if was_active != active:
+            txn.data["was_active"] = active
+            txn.write()
 
 
 def _prune(data: dict) -> None:

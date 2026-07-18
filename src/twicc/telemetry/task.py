@@ -43,7 +43,13 @@ def is_telemetry_active() -> bool:
 
 def tick_once() -> None:
     """Sync: one accumulator sample. Called in a thread."""
-    if not is_telemetry_active():
+    from twicc.telemetry.state import note_active_transition
+
+    active = is_telemetry_active()
+    # Track the enabled state on every tick so an off->on transition advances
+    # the last-sent marker: days elapsed while disabled are never sent.
+    note_active_transition(active)
+    if not active:
         return
     from twicc.agent.states import AgentState
     from twicc.core.models import ProcessRun
@@ -75,9 +81,6 @@ async def send_cycle() -> None:
     except Exception as exc:
         logger.debug("Telemetry send failed (will retry next cycle): %s", exc)
         return
-    if response.status_code >= 300:
-        logger.debug("Telemetry send got unexpected status %s (will retry)", response.status_code)
-        return
     from twicc.telemetry.state import mark_sent
     sent_through = payload["days"][-1]["date"]
     await asyncio.to_thread(mark_sent, sent_through, payload)
@@ -86,6 +89,11 @@ async def send_cycle() -> None:
 async def start_telemetry_task(stop_event: asyncio.Event) -> None:
     if not settings.TELEMETRY_ENABLED:
         logger.info("Telemetry disabled (TWICC_NO_TELEMETRY)")
+        # Record the disabled state so a later start without the kill switch
+        # counts as an off->on transition (the disabled window is never sent).
+        from twicc.telemetry.state import note_active_transition
+
+        await asyncio.to_thread(note_active_transition, False)
         return
     logger.info("Telemetry task started")
     ticks_since_send = TELEMETRY_SEND_INTERVAL  # send on first loop entry

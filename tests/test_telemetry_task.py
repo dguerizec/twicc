@@ -307,7 +307,9 @@ class TestStartTelemetryTaskLoop:
 
         asyncio.run(_run())
 
-    def test_early_return_when_env_disabled(self, monkeypatch):
+    def test_early_return_when_env_disabled(self, temp_state, monkeypatch):
+        # temp_state: the kill-switched early return records was_active=False
+        # in the state file, which must not be the real one.
         monkeypatch.setattr(task.settings, "TELEMETRY_ENABLED", False)
 
         tick_calls: list[int] = []

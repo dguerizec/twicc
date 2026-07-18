@@ -51,6 +51,42 @@ def test_mark_sent_advances_marker_and_prunes_sent_days(data_dir):
     assert st["last_sent_at"] is not None
 
 
+def test_off_on_transition_advances_marker_and_drops_disabled_days(data_dir):
+    state.ensure_state()
+    today = state.utc_today().isoformat()
+    with state.state_txn() as txn:
+        txn.data["last_sent_date"] = "2026-07-10"
+        txn.data["days"] = {
+            "2026-07-11": {"presence_minutes": 5, "peak_agents": 1},
+            today: {"presence_minutes": 2, "peak_agents": 1},
+        }
+        txn.write()
+
+    # First observation ever: records the state, never advances.
+    state.note_active_transition(True)
+    assert state.ensure_state()["last_sent_date"] == "2026-07-10"
+
+    # Off then on: the disabled window must never be sent.
+    state.note_active_transition(False)
+    state.note_active_transition(True)
+    st = state.ensure_state()
+    assert st["last_sent_date"] == today
+    # Pre-transition days dropped; today's partial accumulator kept.
+    assert list(st["days"]) == [today]
+
+
+def test_continuous_on_never_advances_marker(data_dir):
+    # Offline catch-up must survive: enabled all along, the old marker stays
+    # so the elapsed days are sent normally.
+    state.ensure_state()
+    with state.state_txn() as txn:
+        txn.data["last_sent_date"] = "2026-07-10"
+        txn.write()
+    state.note_active_transition(True)
+    state.note_active_transition(True)
+    assert state.ensure_state()["last_sent_date"] == "2026-07-10"
+
+
 def test_prune_keeps_newest_max_day_entries(data_dir):
     state.ensure_state()
     with state.state_txn() as txn:
