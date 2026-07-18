@@ -32,7 +32,13 @@ def is_telemetry_active() -> bool:
     if not settings.TELEMETRY_ENABLED:
         return False
     from twicc.synced_settings import read_synced_settings
-    return bool(read_synced_settings().get("telemetryEnabled", True))
+
+    # Default-on: only an explicit False disables. A present ``null`` (the
+    # frontend syncs a null placeholder for unset synced keys) must read as
+    # enabled, matching the frontend getter ``telemetryEnabled !== false`` --
+    # otherwise a synced null would silently disable telemetry despite the
+    # default-on intent.
+    return read_synced_settings().get("telemetryEnabled") is not False
 
 
 def tick_once() -> None:

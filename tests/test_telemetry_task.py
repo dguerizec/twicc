@@ -51,6 +51,14 @@ class TestIsTelemetryActive:
         # telemetryEnabled (True) applies, so telemetry is active.
         assert task.is_telemetry_active() is True
 
+    def test_true_when_synced_setting_is_null(self, temp_settings, monkeypatch):
+        # The frontend syncs a `null` placeholder for unset synced keys; a
+        # present null must read as enabled (default-on), matching the frontend
+        # getter `telemetryEnabled !== false` -- never silently disabled.
+        monkeypatch.setattr(task.settings, "TELEMETRY_ENABLED", True)
+        ss.write_synced_settings({**ss.read_synced_settings(), "telemetryEnabled": None})
+        assert task.is_telemetry_active() is True
+
 
 class TestSendCycle:
     def test_no_pending_payload_no_post_attempted(self, monkeypatch):
