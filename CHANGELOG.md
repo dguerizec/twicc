@@ -4,10 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As a small deviation, each release opens with a one-line **Summary** recapping its highlights, and some entries include illustrative screenshots in nested sub-lists.
 
-## [Unreleased]
+## [1.92.5] - 2026-07-18
+
+### Summary
+
+- **v1.92.5: Codex Fast mode & anonymous telemetry** — Run supported Codex models up to 1.5× faster, plus opt-out anonymous usage statistics and reliability fixes.
 
 ### Added
 
+- **Anonymous telemetry** — TwiCC now sends anonymous usage counters — never content, messages or names — to help its author understand how the project is used. Enabled by default, disabled in one click from the settings; a [transparency page](https://twicc-telemetry.twidi.com/) details every field, and the exact data sent is viewable in the app.
 - **Codex Fast mode** — Run supported Codex models up to 1.5× faster when speed matters.
 
 ### Changed
