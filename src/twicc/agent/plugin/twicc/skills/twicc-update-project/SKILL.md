@@ -80,7 +80,7 @@ Edits one provider's bundle in `default_agent_settings`. Patch semantics: only t
 - `--permission-mode-if-untrusted VALUE` — Default permission mode used when the project resolves **untrusted** (or unknown trust). Restricted to the provider's untrusted-allowed modes; aliases `min`/`safe` (most locked), `max` (most permissive untrusted-allowed).
 - `--thinking/--no-thinking` — Claude Code only.
 - `--claude-in-chrome/--no-claude-in-chrome` — Claude Code only.
-- `--fast-mode/--no-fast-mode` — Claude Code Opus models only.
+- `--fast-mode/--no-fast-mode` — Supported Claude Code and Codex models; increases credit usage.
 - `--context-max VALUE` — Default context window (`200k`, `1m`, or aliases `min`/`max`).
 - `--unset FIELD` — Remove a field from the bundle (back to inherit). Repeatable. Tokens: `model`, `effort`, `permission-mode`, `permission-mode-if-untrusted`, `thinking`, `claude-in-chrome`, `fast-mode`, `context-max`.
 - `--timeout SECONDS` — default 30.

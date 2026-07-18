@@ -90,7 +90,7 @@ Same flags as `update-session settings` (skill: `twicc-update-session`): `--pres
 
 Resolution is **per session against its own provider**, which makes a mixed-provider batch trivial. Provider-agnostic aliases resolve to each provider's concrete value — `--model max`, `--effort max`, `--permission-mode open`, `--context-max max` (and `min`, `strict`, `auto`, ...; see `twicc-create-session` for the full list) each land on the right value per session. A flag a session's provider doesn't support (e.g. `--thinking` on Codex) is silently ignored for that session — no error. A genuinely invalid value on a supported field (e.g. `--model opus` on a Codex session) yields a per-id `validation_error` (`invalid_choice` / `invalid_format` / `invalid_preset`) while the other sessions proceed.
 
-Startup settings (`effort`, `thinking`, `claude-in-chrome`, `fast-mode`, `question-widget` on Claude Code) are applied on the next restart: each live agent is stopped (at the end of its current assistant turn if working), so the next message it receives starts it with the new settings. No agent is interrupted mid-turn.
+Claude Code startup settings (`effort`, `thinking`, `claude-in-chrome`, `fast-mode`, `question-widget`) are applied on the next restart; Codex Fast mode applies on its next turn. No agent is interrupted mid-turn.
 
 ## Errors
 

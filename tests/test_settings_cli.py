@@ -171,12 +171,12 @@ def _empty_provider_flags(**overrides):
 
 
 @pytest.mark.django_db
-def test_provider_patch_codex_rejects_fast(temp_settings):
+def test_provider_patch_codex_accepts_fast(temp_settings):
     from twicc.cli.settings.provider import build_provider_patch
 
     patch, errors = build_provider_patch("codex", _empty_provider_flags(fast=True))
-    assert patch == {}
-    assert any(e.field == "--fast" and e.code == "unsupported_field" for e in errors)
+    assert patch == {"codexDefaultFastMode": True}
+    assert errors == []
 
 
 @pytest.mark.django_db

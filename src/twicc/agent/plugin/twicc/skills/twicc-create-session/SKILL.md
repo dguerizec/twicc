@@ -66,7 +66,7 @@ All optional. A field you omit (and the preset doesn't set) takes the target pro
 - `--permission-mode VALUE` — Claude Code: `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`. Codex: `read_only`, `strict`, `auto`, `autonomous`, `auto_review`, `yolo`.
 - `--thinking / --no-thinking` — Claude Code only.
 - `--claude-in-chrome / --no-claude-in-chrome` — Claude Code only (Allows to manipulate browser tabs, take screenshots, etc.).
-- `--fast-mode / --no-fast-mode` — Claude Code only (Opus only; billed against extra credits).
+- `--fast-mode / --no-fast-mode` — Supported Claude Code and Codex models; increases credit usage.
 - `--context-max VALUE` — Claude Code: `200k` or `1m` (silently capped to 200k on unsupported models). Codex: `272k` or `372k` (fixed by the model — 272k up to GPT-5.5, 372k for the 5.6 tiers; silently pinned to the model's window).
 - `--question-widget / --no-question-widget` — Claude Code only. See below.
 

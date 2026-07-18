@@ -19,7 +19,11 @@ from openai_codex.generated.v2_all import (
     WorkspaceWriteSandboxPolicy,
 )
 
-from twicc.providers.codex.sdk_wrappers import TwiccAsyncCodex, TwiccAsyncThread
+from twicc.providers.codex.sdk_wrappers import (
+    TwiccAsyncCodex,
+    TwiccAsyncThread,
+    service_tier_from_fast_mode,
+)
 
 
 def _mock_codex() -> TwiccAsyncCodex:
@@ -48,6 +52,26 @@ def test_thread_start_forwards_auto_review() -> None:
     assert params.approvals_reviewer is ApprovalsReviewer.auto_review
 
 
+def test_fast_mode_service_tier_mapping() -> None:
+    assert service_tier_from_fast_mode(True) == "priority"
+    assert service_tier_from_fast_mode(False) == "default"
+    assert service_tier_from_fast_mode(None) is None
+
+
+def test_thread_start_forwards_service_tier() -> None:
+    async def scenario() -> TwiccAsyncCodex:
+        codex = _mock_codex()
+        codex._client.thread_start.return_value = SimpleNamespace(
+            thread=SimpleNamespace(id="thread-id"),
+        )
+        await codex.thread_start_with_policy(service_tier="priority")
+        return codex
+
+    codex = asyncio.run(scenario())
+    params = codex._client.thread_start.await_args.args[0]
+    assert params.service_tier == "priority"
+
+
 def test_thread_resume_forwards_user_reviewer() -> None:
     async def scenario() -> TwiccAsyncCodex:
         codex = _mock_codex()
@@ -66,6 +90,20 @@ def test_thread_resume_forwards_user_reviewer() -> None:
     codex = asyncio.run(scenario())
     params = codex._client.thread_resume.await_args.args[1]
     assert params.approvals_reviewer is ApprovalsReviewer.user
+
+
+def test_thread_resume_forwards_standard_service_tier() -> None:
+    async def scenario() -> TwiccAsyncCodex:
+        codex = _mock_codex()
+        codex._client.thread_resume.return_value = SimpleNamespace(
+            thread=SimpleNamespace(id="thread-id"),
+        )
+        await codex.thread_resume_with_policy("thread-id", service_tier="default")
+        return codex
+
+    codex = asyncio.run(scenario())
+    params = codex._client.thread_resume.await_args.args[1]
+    assert params.service_tier == "default"
 
 
 def test_thread_set_name_does_not_resume_rollout() -> None:
@@ -100,6 +138,21 @@ def test_turn_forwards_auto_review() -> None:
     codex = asyncio.run(scenario())
     params = codex._client.turn_start.await_args.kwargs["params"]
     assert params.approvals_reviewer is ApprovalsReviewer.auto_review
+
+
+def test_turn_forwards_fast_service_tier() -> None:
+    async def scenario() -> TwiccAsyncCodex:
+        codex = _mock_codex()
+        codex._client.turn_start.return_value = SimpleNamespace(
+            turn=SimpleNamespace(id="turn-id"),
+        )
+        thread = TwiccAsyncThread(codex, "thread-id")
+        await thread.turn_with_policy([TextInput("test")], service_tier="priority")
+        return codex
+
+    codex = asyncio.run(scenario())
+    params = codex._client.turn_start.await_args.kwargs["params"]
+    assert params.service_tier == "priority"
 
 
 def test_approve_guardian_denied_action_uses_native_rpc() -> None:
@@ -162,6 +215,21 @@ def test_thread_settings_update_uses_native_rpc() -> None:
                 ],
             },
         },
+    )
+
+
+def test_thread_settings_update_service_tier_uses_native_rpc() -> None:
+    async def scenario() -> TwiccAsyncCodex:
+        codex = _mock_codex()
+        thread = TwiccAsyncThread(codex, "thread-id")
+        await thread.update_settings_with_policy(service_tier="priority")
+        return codex
+
+    codex = asyncio.run(scenario())
+    call = codex._client.request.await_args
+    assert call.args[:2] == (
+        "thread/settings/update",
+        {"threadId": "thread-id", "serviceTier": "priority"},
     )
 
 

@@ -49,6 +49,17 @@ from openai_codex.generated.v2_all import (
 from pydantic import BaseModel, ConfigDict
 
 
+CODEX_FAST_SERVICE_TIER = "priority"
+CODEX_STANDARD_SERVICE_TIER = "default"
+
+
+def service_tier_from_fast_mode(fast_mode: bool | None) -> str | None:
+    """Translate TwiCC's provider-neutral Fast switch to Codex's service tier."""
+    if fast_mode is None:
+        return None
+    return CODEX_FAST_SERVICE_TIER if fast_mode else CODEX_STANDARD_SERVICE_TIER
+
+
 class _ThreadGoalEnvelope(BaseModel):
     """``thread/goal/{get,set}`` response — the thread's goal, or ``None``."""
 
@@ -87,6 +98,7 @@ class TwiccAsyncThread(AsyncThread):
         sandbox_policy: SandboxPolicy | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
+        service_tier: str | None = None,
     ) -> AsyncTurnHandle:
         """Start a turn with fine-grained approval/sandbox overrides.
 
@@ -105,6 +117,7 @@ class TwiccAsyncThread(AsyncThread):
             effort=effort,
             model=model,
             sandbox_policy=sandbox_policy,
+            service_tier=service_tier,
         )
         turn = await self._codex._client.turn_start(
             self.id, wire_input, params=params,
@@ -151,12 +164,13 @@ class TwiccAsyncThread(AsyncThread):
         *,
         sandbox_policy: SandboxPolicy | None = None,
         collaboration_mode: CollaborationMode | None = None,
+        service_tier: str | None = None,
     ) -> None:
         """Update this loaded thread's next-turn settings without resuming it.
 
         The app-server's ``thread/settings/update`` RPC changes the loaded
         thread in place, without starting a turn or adding transcript items.
-        Two next-turn settings go through it today; each is sent only when
+        Three next-turn settings go through it today; each is sent only when
         passed, so callers stay independent:
 
         - ``sandbox_policy`` — a new Codex thread gets its canonical id only
@@ -171,8 +185,10 @@ class TwiccAsyncThread(AsyncThread):
           explicit JSON ``null`` on the wire — dropping the key would change
           the protocol meaning. Same for ``reasoning_effort: null`` (let the
           mode preset / config decide).
+        - ``service_tier`` — switch Standard/Fast routing for subsequent turns
+          and Codex-owned continuations without creating a transcript item.
         """
-        if sandbox_policy is None and collaboration_mode is None:
+        if sandbox_policy is None and collaboration_mode is None and service_tier is None:
             raise ValueError("update_settings_with_policy: nothing to update")
         params: dict[str, Any] = {"threadId": self.id}
         if sandbox_policy is not None:
@@ -186,6 +202,8 @@ class TwiccAsyncThread(AsyncThread):
                 exclude_none=False,
                 mode="json",
             )
+        if service_tier is not None:
+            params["serviceTier"] = service_tier
         await self._codex._ensure_initialized()
         await self._codex._client.request(
             "thread/settings/update",
@@ -288,6 +306,7 @@ class TwiccAsyncCodex(AsyncCodex):
         model: str | None = None,
         ephemeral: bool | None = None,
         developer_instructions: str | None = None,
+        service_tier: str | None = None,
     ) -> TwiccAsyncThread:
         """Start a new thread with fine-grained approval/sandbox.
 
@@ -306,6 +325,7 @@ class TwiccAsyncCodex(AsyncCodex):
             ephemeral=ephemeral,
             model=model,
             sandbox=sandbox,
+            service_tier=service_tier,
         )
         started = await self._client.thread_start(params)
         return TwiccAsyncThread(self, started.thread.id)
@@ -320,6 +340,7 @@ class TwiccAsyncCodex(AsyncCodex):
         cwd: str | None = None,
         config: dict[str, Any] | None = None,
         model: str | None = None,
+        service_tier: str | None = None,
     ) -> TwiccAsyncThread:
         """Resume an existing thread with fine-grained approval/sandbox.
 
@@ -335,6 +356,7 @@ class TwiccAsyncCodex(AsyncCodex):
             cwd=cwd,
             model=model,
             sandbox=sandbox,
+            service_tier=service_tier,
         )
         resumed = await self._client.thread_resume(thread_id, params)
         return TwiccAsyncThread(self, resumed.thread.id)

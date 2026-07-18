@@ -596,7 +596,7 @@ class Session(models.Model):
     # provider's ``AGENT_SETTINGS_CATEGORIES`` / ``AGENT_SETTINGS_FIELDS_MAPPING``,
     # and let the others ignore it.
     claude_in_chrome = models.BooleanField(null=True, default=None)
-    # Whether Claude Code's fast mode is enabled for this session. NULL = use
+    # Whether the provider's fast mode is enabled for this session. NULL = use
     # global default, explicit value = forced for this session. Only valid on
     # supported Opus models; the helpers clamp it to ``False`` for any other
     # model. Claude Code-specific like ``claude_in_chrome``; see the comment

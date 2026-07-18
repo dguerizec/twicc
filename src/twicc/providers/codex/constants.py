@@ -25,6 +25,7 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
     "codexDefaultEffort": "medium",
     "codexDefaultPermissionMode": "read_only",
     "codexDefaultUntrustedPermissionMode": "read_only",
+    "codexDefaultFastMode": False,
     # Matches ``codexDefaultModel``'s window (gpt-terra → 372K). Mostly inert:
     # the window is a per-model property and ``enforce_agent_settings_consistency``
     # re-pins it against whichever model actually runs.
@@ -46,6 +47,7 @@ AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
         "effort",
         "permission_mode",
         "context_max",
+        "fast_mode",
     ],
     AgentSettingCategory.STARTUP: [],
 }
@@ -69,6 +71,7 @@ AGENT_SETTINGS_FIELDS_MAPPING: dict[str, str] = {
     "effort": "codexDefaultEffort",
     "permission_mode": "codexDefaultPermissionMode",
     "context_max": "codexDefaultContextMax",
+    "fast_mode": "codexDefaultFastMode",
 }
 
 
@@ -85,6 +88,9 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
         "autonomous": "Writes in the project; rejects requests to step outside.",
         "auto_review": "Writes in the project; automatically reviews requests to step outside.",
         "yolo": "No restrictions.",
+    },
+    "fast_mode": {
+        True: "1.5x faster generation; uses credits at 2.5x on GPT-5.6/5.5 and 2x on GPT-5.4.",
     },
 }
 
@@ -137,6 +143,11 @@ class CodexModelExtra(NamedTuple):
     Sol and Terra expose both, Luna exposes ``max`` only, and every pre-5.6
     model exposes neither. Mirrors ``claude_code.constants.ClaudeCodeModelExtra``.
 
+    ``supports_fast`` mirrors the model catalog's ``serviceTiers`` list: the
+    five frontier models expose the ``priority`` tier, while GPT-5.4 mini does
+    not. Keeping it in the registry lets every settings surface use the same
+    model gate without guessing from a model name.
+
     ``context_window`` is the model's nominal INPUT window when run inside
     Codex — a fixed property of the model, not a user choice (unlike Claude's
     1M opt-in). It is well below the API-advertised window: Codex reserves
@@ -150,6 +161,7 @@ class CodexModelExtra(NamedTuple):
     """
     supports_effort_max: bool
     supports_effort_ultra: bool
+    supports_fast: bool
     context_window: int
 
 
@@ -187,7 +199,10 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         weight=130,
         provider_extra=CodexModelExtra(
-            supports_effort_max=True, supports_effort_ultra=True, context_window=372_000,
+            supports_effort_max=True,
+            supports_effort_ultra=True,
+            supports_fast=True,
+            context_window=372_000,
         ),
     ),
     ModelVersion(
@@ -199,7 +214,10 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         weight=120,
         provider_extra=CodexModelExtra(
-            supports_effort_max=True, supports_effort_ultra=True, context_window=372_000,
+            supports_effort_max=True,
+            supports_effort_ultra=True,
+            supports_fast=True,
+            context_window=372_000,
         ),
     ),
     ModelVersion(
@@ -211,7 +229,10 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         weight=110,
         provider_extra=CodexModelExtra(
-            supports_effort_max=True, supports_effort_ultra=False, context_window=372_000,
+            supports_effort_max=True,
+            supports_effort_ultra=False,
+            supports_fast=True,
+            context_window=372_000,
         ),
     ),
     ModelVersion(
@@ -223,7 +244,10 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         weight=100,
         provider_extra=CodexModelExtra(
-            supports_effort_max=False, supports_effort_ultra=False, context_window=272_000,
+            supports_effort_max=False,
+            supports_effort_ultra=False,
+            supports_fast=True,
+            context_window=272_000,
         ),
     ),
     ModelVersion(
@@ -235,7 +259,10 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=False,
         weight=90,
         provider_extra=CodexModelExtra(
-            supports_effort_max=False, supports_effort_ultra=False, context_window=272_000,
+            supports_effort_max=False,
+            supports_effort_ultra=False,
+            supports_fast=True,
+            context_window=272_000,
         ),
     ),
     ModelVersion(
@@ -247,7 +274,10 @@ MODEL_VERSIONS: list[ModelVersion] = [
         latest=True,
         weight=50,
         provider_extra=CodexModelExtra(
-            supports_effort_max=False, supports_effort_ultra=False, context_window=272_000,
+            supports_effort_max=False,
+            supports_effort_ultra=False,
+            supports_fast=False,
+            context_window=272_000,
         ),
     ),
 ]

@@ -155,8 +155,8 @@ def update_project_settings_cmd(
         None,
         "--fast-mode/--no-fast-mode",
         help=(
-            "Claude Code Opus models only. Default for fast mode (higher "
-            "token throughput, billed against extra usage credits). Omit to "
+            "Default for fast mode on supported Claude Code or Codex models "
+            "(higher throughput and credit usage). Omit to "
             "leave the bundle's current value unchanged."
         ),
     ),

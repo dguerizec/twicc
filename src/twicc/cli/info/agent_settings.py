@@ -21,8 +21,8 @@ def build(provider: str | None, include_disabled: bool = False) -> dict[str, dic
       for latest entries).
     - ``description``: a short human-readable explanation when the
       provider declares one (currently for every ``permission_mode``
-      value across providers, plus ``fast_mode=true`` for Claude
-      Code); absent otherwise.
+      value across providers, plus ``fast_mode=true`` where supported); absent
+      otherwise.
 
     The ``model`` block lists every accepted ``--model`` value, each with a
     ``latest`` flag (the current flagship of its family); ``info models`` carries

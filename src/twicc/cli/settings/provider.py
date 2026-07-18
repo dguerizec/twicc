@@ -341,7 +341,7 @@ def provider_main(
     ),
     fast: bool | None = typer.Option(
         None, "--fast/--no-fast",
-        help="Claude Code Opus only. Default for fast mode.",
+        help="Default for fast mode on supported Claude Code or Codex models.",
     ),
     chrome: bool | None = typer.Option(
         None, "--chrome/--no-chrome",

@@ -46,6 +46,7 @@ const FIELD_TO_DEFAULT_STORE_BINDING = {
     permission_mode: { getter: 'defaultPermissionMode', setter: 'setDefaultPermissionMode' },
     permission_mode_if_untrusted: { getter: 'defaultUntrustedPermissionMode', setter: 'setDefaultUntrustedPermissionMode' },
     context_max:     { getter: 'defaultContextMax',     setter: 'setDefaultContextMax' },
+    fast_mode:       { getter: 'defaultFastMode',       setter: 'setDefaultFastMode' },
 }
 
 // Map of synced setting keys (the wire/storage names) → store action that
@@ -57,6 +58,7 @@ const SYNCED_SETTING_KEYS_TO_STORE = {
     codexDefaultPermissionMode: { setter: 'setDefaultPermissionMode', getter: 'defaultPermissionMode' },
     codexDefaultUntrustedPermissionMode: { setter: 'setDefaultUntrustedPermissionMode', getter: 'defaultUntrustedPermissionMode' },
     codexDefaultContextMax:     { setter: 'setDefaultContextMax',     getter: 'defaultContextMax' },
+    codexDefaultFastMode:       { setter: 'setDefaultFastMode',       getter: 'defaultFastMode' },
     codexUsageReadFileEnabled:  { setter: 'setUsageReadFileEnabled',  getter: 'usageReadFileEnabled' },
     codexUsageReadFilePath:     { setter: 'setUsageReadFilePath',     getter: 'usageReadFilePath' },
     codexUsageDumpFileEnabled:  { setter: 'setUsageDumpFileEnabled',  getter: 'usageDumpFileEnabled' },
@@ -152,6 +154,15 @@ const AGENT_SETTINGS_CHOICES = {
         // model×effort matrix; the ``EFFORT.ULTRA`` value and its demotion logic
         // below stay in place. Re-enable by restoring this row.
         // { value: EFFORT.ULTRA,  label: 'Ultra',  display_label: 'Ultra effort' },
+    ],
+    fast_mode: [
+        {
+            value: true,
+            label: 'Enabled',
+            display_label: 'Fast mode',
+            description: '1.5x faster generation; uses credits at 2.5x on GPT-5.6/5.5 and 2x on GPT-5.4.',
+        },
+        { value: false, label: 'Disabled', display_label: 'No fast mode' },
     ],
     // Not a user choice: the window is fixed by the model (272K pre-5.6,
     // 372K for the GPT-5.6 tiers) — the non-matching option is disabled and
@@ -271,7 +282,19 @@ export class CodexHelpers extends BaseProviderHelpers {
     setDefaultValue(field, value) {
         const binding = FIELD_TO_DEFAULT_STORE_BINDING[field]
         if (!binding) return
-        useCodexStore()[binding.setter](value)
+        const store = useCodexStore()
+        store[binding.setter](value)
+        if (field === 'selected_model') {
+            const adjusted = this.enforceAgentSettingsConsistency({
+                selectedModel: store.defaultModel,
+                contextMax: store.defaultContextMax,
+                effort: store.defaultEffort,
+                fastMode: store.defaultFastMode,
+            })
+            if (adjusted.contextMax !== store.defaultContextMax) store.setDefaultContextMax(adjusted.contextMax)
+            if (adjusted.effort !== store.defaultEffort) store.setDefaultEffort(adjusted.effort)
+            if (adjusted.fastMode !== store.defaultFastMode) store.setDefaultFastMode(adjusted.fastMode)
+        }
     }
 
     getSyncedSettingsKeys() {
@@ -390,6 +413,11 @@ export class CodexHelpers extends BaseProviderHelpers {
         return entry ? !!entry.provider_extra?.supports_effort_ultra : false
     }
 
+    modelSupportsFast(selectedModel) {
+        const entry = this._resolveRegistryEntry(selectedModel)
+        return entry ? !!entry.provider_extra?.supports_fast : false
+    }
+
     /**
      * The model's fixed Codex input window (272K pre-5.6, 372K for the
      * GPT-5.6 tiers), from the registry's ``provider_extra.context_window``.
@@ -406,8 +434,9 @@ export class CodexHelpers extends BaseProviderHelpers {
     /**
      * Pipeline mirroring the backend ``CodexHelpers.enforce_agent_settings_consistency``:
      * substitute a retired model (``super``), demote ``ultra`` → ``max`` →
-     * ``xhigh`` against the resolved model, then pin ``contextMax`` to the
-     * model's fixed window (not a user choice on Codex — both directions).
+     * ``xhigh`` against the resolved model, disable unsupported Fast mode,
+     * then pin ``contextMax`` to the model's fixed window (not a user choice
+     * on Codex — both directions).
      * Called by ``useSessionAgentSettings`` whenever the model or effort
      * changes, so the popover selection follows the model immediately instead
      * of waiting for the backend to correct it.
@@ -423,6 +452,10 @@ export class CodexHelpers extends BaseProviderHelpers {
             result.effort = EFFORT.X_HIGH
         }
 
+        if (result.fastMode && !this.modelSupportsFast(model)) {
+            result.fastMode = false
+        }
+
         const windowSize = this.modelContextWindow(model)
         if (result.contextMax != null && windowSize && result.contextMax !== windowSize) {
             result.contextMax = windowSize
@@ -436,11 +469,19 @@ export class CodexHelpers extends BaseProviderHelpers {
             if (choiceValue === EFFORT.MAX) return !this.modelSupportsEffortMax(context?.effectiveModel)
             if (choiceValue === EFFORT.ULTRA) return !this.modelSupportsEffortUltra(context?.effectiveModel)
         }
+        if (field === 'fast_mode' && choiceValue === true) {
+            return !this.modelSupportsFast(context?.effectiveModel)
+        }
         if (field === 'context_max') {
             const windowSize = this.modelContextWindow(context?.effectiveModel)
             if (windowSize) return choiceValue !== windowSize
         }
         return false
+    }
+
+    isFieldDisabled(field, context) {
+        if (field === 'fast_mode') return !this.modelSupportsFast(context?.effectiveModel)
+        return super.isFieldDisabled(field, context)
     }
 
     getChoiceDisabledReason(field, choiceValue, context) {
@@ -454,11 +495,30 @@ export class CodexHelpers extends BaseProviderHelpers {
     }
 
     getFieldHelpText(field, context) {
+        if (field === 'fast_mode') {
+            if (!this.modelSupportsFast(context?.effectiveModel)) {
+                return 'Fast mode is not available for this model.'
+            }
+            return null
+        }
         if (field === 'context_max') {
             return super.getFieldHelpText(field, context)
                 ?? 'Fixed by the model: 272K up to GPT 5.5, 372K for the 5.6 tiers.'
         }
         return super.getFieldHelpText(field, context)
+    }
+
+    getFieldNotice(field, context) {
+        if (field === 'fast_mode') {
+            const on = (context?.selectedValue ?? context?.defaultValue) === true
+            const enabled = AGENT_SETTINGS_CHOICES.fast_mode.find(c => c.value === true)
+            return {
+                icon: on ? 'triangle-exclamation' : 'circle-exclamation',
+                variant: on ? 'warning' : 'brand',
+                text: enabled?.description ?? '',
+            }
+        }
+        return super.getFieldNotice(field, context)
     }
 
     // ─── Usage quota tracking ────────────────────────────────────────────

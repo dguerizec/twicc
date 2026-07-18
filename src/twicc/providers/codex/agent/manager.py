@@ -1,9 +1,9 @@
 """
 Codex agent manager: tracks active Codex agents and creates new ones.
 
-Minimal v1: no general live settings or subagents. The sole bootstrap-time
-exception uses Codex's experimental ``thread/settings/update`` RPC to attach
-canonical scratch/artifact roots after ``thread/start`` returns the thread id.
+Codex settings are applied as per-turn overrides; Fast mode additionally uses
+``thread/settings/update`` so Codex-owned continuations inherit its service tier.
+The same RPC attaches canonical scratch/artifact roots after ``thread/start``.
 Images are forwarded to the Codex SDK as ``ImageInput`` data URLs; documents
 (PDF / TXT) have no Codex protocol equivalent and are silently dropped with a
 warning. Approvals are routed through ``CodexAgent``'s sync ↔ async bridge
@@ -31,7 +31,7 @@ from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
 from ..bin import make_codex_config
 from ..permission_modes import resolve_codex_policy, resolve_codex_turn_overrides
-from ..sdk_wrappers import TwiccAsyncCodex
+from ..sdk_wrappers import TwiccAsyncCodex, service_tier_from_fast_mode
 from .agent import CodexAgent
 from .hardcoded_commands import HardcodedCommand, parse_hardcoded_command
 from .sdk_logger import attach_stderr_logging
@@ -49,9 +49,9 @@ class CodexAgentManager(BaseAgentManager):
     """Manages all active Codex agents.
 
     Mirrors the public surface of :class:`ClaudeCodeAgentManager` (the
-    methods ``asgi._handle_send_message`` calls into) but stays much
-    simpler because Codex offers no live setting controls and no
-    subagent concept in this v1.
+    methods ``asgi._handle_send_message`` calls into), applying supported
+    live settings to the next turn and persisting Fast mode on the thread for
+    Codex-owned continuations.
 
     Typical usage::
 
@@ -253,30 +253,29 @@ class CodexAgentManager(BaseAgentManager):
 
                 elif agent.state == AgentState.USER_TURN:
                     if not text and not images:
-                        # Settings-only update with no text/images to send: nothing
-                        # triggers a new turn, so the agent_settings bundle on the
-                        # ``CodexAgent`` won't be re-read by ``_run_turn`` until the
-                        # user actually sends something. We could mirror the new
-                        # settings onto the agent here, but a stale bundle is harmless
-                        # as long as the next ``send_to_session`` refreshes it
-                        # (which it does).
+                        # Settings-only update with no turn to open. Refresh the
+                        # bundle now; ``apply_agent_settings`` also persists a
+                        # changed Fast tier for Codex-owned continuations.
+                        await agent.apply_agent_settings(settings)
                         return False
                     # Refresh the bundle on the live agent so the upcoming turn picks
                     # up any field changed since creation. ``CodexAgent._run_turn``
-                    # reads ``effort``, ``permission_mode`` and ``selected_model`` off
+                    # reads ``effort``, ``permission_mode``, ``selected_model`` and
+                    # ``fast_mode`` off
                     # ``agent_settings`` on every ``thread.turn`` call, so changing
                     # the picker mid-session takes effect on the NEXT turn (this one).
                     old_settings = agent.agent_settings
                     logger.debug(
                         "Codex live settings update: session=%s "
                         "permission_mode=%r->%r effort=%r->%r "
-                        "selected_model=%r->%r",
+                        "selected_model=%r->%r fast_mode=%r->%r",
                         session_id,
                         old_settings.permission_mode, settings.permission_mode,
                         old_settings.effort, settings.effort,
                         old_settings.selected_model, settings.selected_model,
+                        old_settings.fast_mode, settings.fast_mode,
                     )
-                    agent.agent_settings = settings
+                    await agent.apply_agent_settings(settings)
                     return await agent.send(text, images=images)
 
                 elif agent.state == AgentState.ASSISTANT_TURN:
@@ -284,7 +283,7 @@ class CodexAgentManager(BaseAgentManager):
                         # Settings-only update during an active turn. Refresh
                         # the bundle so the NEXT turn picks up the new picker
                         # values; nothing to steer.
-                        agent.agent_settings = settings
+                        await agent.apply_agent_settings(settings)
                         return False
                     # Steer: refresh the bundle (the active turn keeps the
                     # policy it was started with — ``turn/steer`` has no
@@ -296,13 +295,14 @@ class CodexAgentManager(BaseAgentManager):
                     logger.debug(
                         "Codex live settings update during active turn (steer): "
                         "session=%s permission_mode=%r->%r effort=%r->%r "
-                        "selected_model=%r->%r",
+                        "selected_model=%r->%r fast_mode=%r->%r",
                         session_id,
                         old_settings.permission_mode, settings.permission_mode,
                         old_settings.effort, settings.effort,
                         old_settings.selected_model, settings.selected_model,
+                        old_settings.fast_mode, settings.fast_mode,
                     )
-                    agent.agent_settings = settings
+                    await agent.apply_agent_settings(settings)
                     return await agent.send(text, images=images)
 
                 else:
@@ -364,6 +364,7 @@ class CodexAgentManager(BaseAgentManager):
                 raise RuntimeError(
                     f"Cannot run /{command.name} while the assistant is working",
                 )
+            await agent.apply_agent_settings(settings)
             await agent.run_hardcoded_command(command)
             return
 
@@ -533,11 +534,10 @@ class CodexAgentManager(BaseAgentManager):
         operations that step outside the workspace; users opt into
         ``"yolo"`` to recover the pre-existing unrestricted bypass.
 
-        The agent_settings bundle is stored on the agent for
-        :attr:`BaseAgent.agent_settings` contract compliance but otherwise
-        ignored: the model is read from ``settings.selected_model`` and
-        resolved through the helpers; the rest of the live/idle/startup
-        categories carry no hot-applicable values in this v1.
+        The agent settings seed the thread and stay on the agent so each turn
+        can apply the latest model, effort, permission mode, and service tier.
+        Fast mode is also persisted through ``thread/settings/update`` for
+        Codex-owned continuations that do not pass through TwiCC's turn path.
         """
         config = await make_codex_config(cwd=cwd)
         codex = TwiccAsyncCodex(config=config)
@@ -581,6 +581,7 @@ class CodexAgentManager(BaseAgentManager):
             untrusted, clamped_mode = await sync_to_async(_resolve_trust_clamp)()
             if clamped_mode != settings.permission_mode:
                 settings = settings._replace(permission_mode=clamped_mode)
+            service_tier = service_tier_from_fast_mode(settings.fast_mode)
 
             # Translate the user's preset (Session.permission_mode) into
             # the SDK policy. Unset / unknown modes fall on
@@ -643,6 +644,7 @@ class CodexAgentManager(BaseAgentManager):
                     approval_policy=approval_policy,
                     approvals_reviewer=approvals_reviewer,
                     config=thread_config,
+                    service_tier=service_tier,
                 )
             else:
                 # Resolve the user's selected_model alias (e.g. "gpt",
@@ -673,6 +675,7 @@ class CodexAgentManager(BaseAgentManager):
                     approvals_reviewer=approvals_reviewer,
                     config=thread_config,
                     developer_instructions=developer_instructions,
+                    service_tier=service_tier,
                 )
 
                 # The canonical id only exists after thread/start, while the

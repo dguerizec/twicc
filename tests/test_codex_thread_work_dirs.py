@@ -115,6 +115,24 @@ def test_new_thread_updates_canonical_work_dirs_without_resume(monkeypatch) -> N
     assert agent.seeded_pending_id == "draft-id"
 
 
+def test_new_fast_thread_forwards_priority_service_tier(monkeypatch) -> None:
+    codex, _ = _install_factory_fakes(monkeypatch, [])
+
+    async def scenario():
+        manager = CodexAgentManager()
+        return await manager._create_agent(
+            "draft-id",
+            "project-id",
+            "/project",
+            resume=False,
+            settings=AgentSettings(permission_mode="yolo", fast_mode=True),
+        )
+
+    asyncio.run(scenario())
+
+    assert codex.start_calls[0]["service_tier"] == "priority"
+
+
 def test_new_yolo_thread_does_not_resume_before_first_turn(monkeypatch) -> None:
     roots = ["/data/artifacts/canonical-id", "/data/scratch/canonical-id"]
     codex, resolved = _install_factory_fakes(monkeypatch, roots)
@@ -163,6 +181,24 @@ def test_existing_thread_gets_work_dirs_in_first_resume(monkeypatch) -> None:
     assert "network_proxy" not in resume["config"]["features"]
     assert agent.kwargs["work_dirs"] == roots
     assert agent.context_reset is True
+
+
+def test_resumed_standard_thread_forwards_default_service_tier(monkeypatch) -> None:
+    codex, _ = _install_factory_fakes(monkeypatch, [])
+
+    async def scenario():
+        manager = CodexAgentManager()
+        return await manager._create_agent(
+            "thread-id",
+            "project-id",
+            "/project",
+            resume=True,
+            settings=AgentSettings(permission_mode="yolo", fast_mode=False),
+        )
+
+    asyncio.run(scenario())
+
+    assert codex.resume_calls[0][1]["service_tier"] == "default"
 
 
 def test_work_dir_config_preserves_existing_workspace_settings() -> None:

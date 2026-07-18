@@ -79,6 +79,7 @@ AGENT_SETTINGS_CHOICES: dict[str, list] = {
     # this catalogue is model-agnostic, the constraints narrow it per model.
     "effort": ["low", "medium", "high", "xhigh", "max", "ultra"],
     "permission_mode": ["read_only", "strict", "auto", "autonomous", "auto_review", "yolo"],
+    "fast_mode": [True, False],
     # One entry per distinct ``CodexModelExtra.context_window`` value. Unlike
     # Claude's 200K/1M these are not a user choice: the window is pinned to
     # the model by ``enforce_agent_settings_consistency`` (272K pre-5.6, 372K
@@ -159,6 +160,7 @@ class CodexHelpers(BaseProviderHelpers):
     CONSTRAINT_FLAG_MAPPING: ClassVar[dict[tuple[str, Any], str]] = {
         ("effort", "ultra"): "supports_effort_ultra",
         ("effort", "max"):   "supports_effort_max",
+        ("fast_mode", True):   "supports_fast",
     }
 
     # Per-family default prices (USD per million tokens) — fallback when no
@@ -438,6 +440,13 @@ class CodexHelpers(BaseProviderHelpers):
             mv = self._resolve_to_default_model_version()
         return bool(mv and mv.provider_extra and mv.provider_extra.supports_effort_ultra)
 
+    def selected_model_supports_fast(self, selected_model: str | None) -> bool:
+        """Return ``True`` if the model (or default fallback) exposes Codex Fast mode."""
+        mv = self.find_model(selected_model) if selected_model else None
+        if mv is None:
+            mv = self._resolve_to_default_model_version()
+        return bool(mv and mv.provider_extra and mv.provider_extra.supports_fast)
+
     def selected_model_context_window(self, selected_model: str | None) -> int | None:
         """Return the model's Codex input window (or the default fallback's).
 
@@ -491,7 +500,9 @@ class CodexHelpers(BaseProviderHelpers):
            cascade stops there. Luna is what makes the two steps distinct: it
            takes ``max`` but not ``ultra``, so ``ultra`` lands on ``max`` rather
            than falling all the way down.
-        3. Pins ``context_max`` to the (post-substitution) model's fixed
+        3. Clears ``fast_mode`` when the model does not expose the Priority
+           service tier (currently GPT-5.4 mini).
+        4. Pins ``context_max`` to the (post-substitution) model's fixed
            window (272K pre-5.6, 372K for the GPT-5.6 tiers). Unlike Claude's
            1M cap this is bidirectional — the window is not a user choice, so
            any stored value that diverges (stale row, cross-model preset) is
@@ -503,6 +514,7 @@ class CodexHelpers(BaseProviderHelpers):
 
         model = settings.selected_model
         effort = settings.effort
+        fast_mode = settings.fast_mode
         context_max = settings.context_max
 
         if effort == "ultra" and not self.selected_model_supports_effort_ultra(model):
@@ -510,14 +522,21 @@ class CodexHelpers(BaseProviderHelpers):
         if effort == "max" and not self.selected_model_supports_effort_max(model):
             effort = "xhigh"
 
+        if fast_mode and not self.selected_model_supports_fast(model):
+            fast_mode = False
+
         if context_max is not None:
             window = self.selected_model_context_window(model)
             if window is not None:
                 context_max = window
 
-        if effort == settings.effort and context_max == settings.context_max:
+        if (
+            effort == settings.effort
+            and fast_mode == settings.fast_mode
+            and context_max == settings.context_max
+        ):
             return settings
-        return settings._replace(effort=effort, context_max=context_max)
+        return settings._replace(effort=effort, fast_mode=fast_mode, context_max=context_max)
 
     def enforce_synced_settings_consistency(self, synced: dict, changes: dict) -> None:
         """Re-clamp ``codexDefaultEffort`` / ``codexDefaultContextMax`` against ``codexDefaultModel``.
@@ -529,7 +548,9 @@ class CodexHelpers(BaseProviderHelpers):
         every new session silently corrects. Only writes back keys the client
         actually sent, per the base contract.
         """
-        if not {"codexDefaultModel", "codexDefaultEffort", "codexDefaultContextMax"} & changes.keys():
+        if not {
+            "codexDefaultModel", "codexDefaultEffort", "codexDefaultFastMode", "codexDefaultContextMax",
+        } & changes.keys():
             return
         candidate = AgentSettings(
             selected_model=synced.get(
@@ -538,6 +559,9 @@ class CodexHelpers(BaseProviderHelpers):
             effort=synced.get(
                 "codexDefaultEffort", self.SYNCED_SETTINGS_DEFAULTS["codexDefaultEffort"],
             ),
+            fast_mode=synced.get(
+                "codexDefaultFastMode", self.SYNCED_SETTINGS_DEFAULTS["codexDefaultFastMode"],
+            ),
             context_max=synced.get(
                 "codexDefaultContextMax", self.SYNCED_SETTINGS_DEFAULTS["codexDefaultContextMax"],
             ),
@@ -545,6 +569,8 @@ class CodexHelpers(BaseProviderHelpers):
         adjusted = self.enforce_agent_settings_consistency(candidate)
         if "codexDefaultEffort" in changes and adjusted.effort != candidate.effort:
             synced["codexDefaultEffort"] = adjusted.effort
+        if "codexDefaultFastMode" in changes and adjusted.fast_mode != candidate.fast_mode:
+            synced["codexDefaultFastMode"] = adjusted.fast_mode
         if "codexDefaultContextMax" in changes and adjusted.context_max != candidate.context_max:
             synced["codexDefaultContextMax"] = adjusted.context_max
 

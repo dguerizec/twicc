@@ -58,7 +58,7 @@ Agent settings flags (all optional; use `$TWICC info models agent-settings prese
 - `--permission-mode VALUE` — Claude Code: `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`. Codex: `read_only`, `strict`, `auto`, `autonomous`, `auto_review`, `yolo`.
 - `--thinking / --no-thinking` — Claude Code only.
 - `--claude-in-chrome / --no-claude-in-chrome` — Claude Code only (Allows to manipulate browser tabs, take screenshots, etc.).
-- `--fast-mode / --no-fast-mode` — Claude Code only (Opus only).
+- `--fast-mode / --no-fast-mode` — Supported Claude Code and Codex models; increases credit usage.
 - `--context-max VALUE` — Claude Code: `200k` or `1m`. Codex: `272k` or `372k` (fixed by the model; silently pinned to its window).
 - `--question-widget / --no-question-widget` — Claude Code only (Decide to allow or not UI interactive widget for questions, to be answered by the user).
 - `--unset TOKEN` (repeatable) — reset a field to NULL. Accepted tokens: `model`, `effort`, `permission-mode`, `thinking`, `claude-in-chrome`, `fast-mode`, `context-max`, `question-widget` (a token the session's provider doesn't support is silently ignored).
@@ -77,7 +77,7 @@ A flag the session's provider doesn't support (e.g. `--thinking` on Codex) is si
 
 **How settings reach a live process:** if a session currently has a process attached (a running agent), changes are propagated immediately per field category:
 - *Live* (`permission_mode` on Claude Code) — applied immediately.
-- *Idle* (`model`, `context_max` on Claude Code; `model`, `effort`, `permission_mode`, `context_max` on Codex) — applied on next `user_turn`.
+- *Idle* (`model`, `context_max` on Claude Code; `model`, `effort`, `permission_mode`, `context_max`, `fast_mode` on Codex) — applied on next `user_turn`.
 - *Startup* (`effort`, `thinking`, `claude_in_chrome`, `fast_mode`, `question_widget` on Claude Code) — applied on the next restart: the agent is stopped (immediately if at `user_turn`, or at the end of its current `assistant_turn` if working), so the next message you send restarts it with the new settings. If currently `awaiting_user_input`, the pending dialog is lost.
 
 ### `title`

@@ -109,6 +109,7 @@ export const useCodexStore = defineStore('codex', () => {
     // untrusted-allowed set (trust design §13.1).
     const defaultUntrustedPermissionMode = ref(null)
     const defaultContextMax = ref(null)
+    const defaultFastMode = ref(null)
 
     function setDefaultModel(value) {
         if (typeof value === 'string' && value.length > 0) defaultModel.value = value
@@ -124,6 +125,9 @@ export const useCodexStore = defineStore('codex', () => {
     }
     function setDefaultContextMax(value) {
         if (Object.values(CONTEXT_MAX).includes(value)) defaultContextMax.value = value
+    }
+    function setDefaultFastMode(value) {
+        if (typeof value === 'boolean') defaultFastMode.value = value
     }
 
     // ─── Agent settings categories (live/idle/startup) ───────────────────
@@ -175,11 +179,13 @@ export const useCodexStore = defineStore('codex', () => {
         defaultPermissionMode,
         defaultUntrustedPermissionMode,
         defaultContextMax,
+        defaultFastMode,
         setDefaultModel,
         setDefaultEffort,
         setDefaultPermissionMode,
         setDefaultUntrustedPermissionMode,
         setDefaultContextMax,
+        setDefaultFastMode,
         agentSettingsCategories,
         setAgentSettingsCategories,
         modelRegistry,

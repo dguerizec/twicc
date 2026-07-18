@@ -130,8 +130,8 @@ def create_session_cmd(
         None,
         "--fast-mode/--no-fast-mode",
         help=(
-            "Claude Code Opus models only. Enable fast mode (higher token throughput, "
-            "billed against extra usage credits). Omit to keep the preset's value "
+            "Enable fast mode on supported Claude Code or Codex models (higher token "
+            "throughput and credit usage). Omit to keep the preset's value "
             "(or the default from settings)."
             + default_suffix(_HELP_CTX,"fast_mode")
         ),
