@@ -457,6 +457,12 @@ export const useDataStore = defineStore('data', {
         // open. The changelog auto-open waits for this to clear so the two dialogs
         // never stack on launch — the announcement takes priority.
         hybridAnnouncementActive: false,
+        // Same purpose as hybridAnnouncementActive, but for the telemetry notice
+        // (App.vue). Kept as its own flag rather than folded into the hybrid one —
+        // the two can be pending independently (e.g. hybrid holds the floor first,
+        // then releases into a still-pending telemetry notice) and a shared name
+        // would read as hybrid-specific everywhere else it's referenced.
+        telemetryNoticeActive: false,
         latestVersion: null,            // { version, releaseUrl } or null, from update_available message
 
         // Local UI state (separate from server data to avoid being overwritten)
@@ -1335,6 +1341,9 @@ export const useDataStore = defineStore('data', {
         },
         setHybridAnnouncementActive(active) {
             this.hybridAnnouncementActive = active
+        },
+        setTelemetryNoticeActive(active) {
+            this.telemetryNoticeActive = active
         },
         setLatestVersion(version, releaseUrl) {
             this.latestVersion = { version, releaseUrl }

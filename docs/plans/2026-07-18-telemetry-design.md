@@ -40,7 +40,7 @@ One JSON document per POST, with a versioned schema (`schema: 1`). Two parts:
 
 All derived from existing models at send time unless noted:
 
-- **Volumetry:** sessions created per provider × model family × effort × permission_mode (counts on `Session`) — reported as three independent per-dimension breakdowns (per model family, per effort, per permission_mode), not the full cross-product, to keep payloads small; user messages sent; subagent sessions; workflow runs (`Workflow`); active crons (`SessionCron`).
+- **Volumetry:** sessions created per provider × model family × effort × permission_mode (counts on `Session`) — reported as three independent per-dimension breakdowns (per model family, per effort, per permission_mode), not the full cross-product, to keep payloads small; user messages sent; subagent sessions; workflow runs (`Workflow`); crons created that day (`SessionCron.created_at` range count — the day-attributable reading actually implemented, in place of "active crons").
 - **Regularity:** implicit — the sequence of day blocks itself gives active vs. inactive days per instance.
 - **Intensity:** `presence_bucket` — minutes of human presence that day, bucketed (`0`, `<30`, `30-120`, `120-360`, `360+`). Presence is ephemeral in-memory (`src/twicc/presence.py`), so this is the one metric that needs an accumulator: a 60 s ticker checks `is_user_present()` and increments today's counter in the telemetry state file (§5.3).
 - **Scale:** peak concurrent live agents that day (max simultaneous `ProcessRun`s — sampled by the same ticker, stored alongside presence minutes).
@@ -81,7 +81,7 @@ Pure read-only ORM aggregation over `Session`, `DailyActivity`, `Share`, `Artifa
 
 ## 6. Opt-out
 
-- `telemetry: {"enabled": true}` in synced settings (`src/twicc/synced_settings.py` defaults), toggled from the **bottom of the Global section** of `SettingsPopover.vue`.
+- `telemetryEnabled: true` in synced settings (`src/twicc/synced_settings.py` defaults) — flat camelCase per the synced-settings convention; the nested `telemetry: {"enabled": ...}` sketch above was normalized at implementation. Toggled from the **bottom of the Global section** of `SettingsPopover.vue`. A companion flat key, `telemetryNoticeSeen`, tracks whether the first-launch notice (§6 below) has been acknowledged.
 - Env kill switch `TWICC_NO_TELEMETRY=1` (same family as `TWICC_NO_MCP`): overrides the setting, task never starts.
 - **First-launch notice:** on the first backend start where telemetry is active and no notice has been acknowledged (flag in the state file), the frontend shows a dismissible notice — "TwiCC collects anonymous usage statistics — see what is sent or disable it in Settings" — linking straight to the toggle. Sending is not blocked on acknowledgement, but the first cycle only fires 24 h of data later by construction (only *complete* days are sent), so a user who disables on first sight leaks nothing.
 

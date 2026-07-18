@@ -20,6 +20,7 @@ import SessionSwitcher from './components/app/SessionSwitcher.vue'
 import StopProcessConfirmDialog from './components/app/StopProcessConfirmDialog.vue'
 import ProviderActivationDialog from './components/app/ProviderActivationDialog.vue'
 import HybridAnnouncementDialog from './components/app/HybridAnnouncementDialog.vue'
+import TelemetryNoticeDialog from './components/app/TelemetryNoticeDialog.vue'
 import HelpDialog from './components/help/HelpDialog.vue'
 import GlobalMediaPreview from './components/media/GlobalMediaPreview.vue'
 import ProjectTrustDialog from './components/project/ProjectTrustDialog.vue'
@@ -652,6 +653,7 @@ const toastTheme = computed(() => {
          haven't seen the explainer yet (self-gates on the synced flag). Gated by
          the hybrid feature flag — never mounts while hybrid mode is disabled. -->
     <HybridAnnouncementDialog v-if="isAppReady && settingsStore.isClaudeHybridEnabled" />
+    <TelemetryNoticeDialog v-if="isAppReady" />
 
     <!-- Version mismatch: non-dismissible reload dialog -->
     <wa-dialog :open="versionMismatchDetected || undefined" without-header @wa-hide.prevent>
