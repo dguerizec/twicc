@@ -354,6 +354,10 @@ SESSION_DIRS_CLEANUP_ENABLED = os.environ.get("TWICC_NO_SESSION_DIRS_CLEANUP", "
 # shared per-user with the main instance, which owns the reaping.
 TMUX_CLEANUP_ENABLED = os.environ.get("TWICC_NO_TMUX_CLEANUP", "").strip().lower() not in ("1", "true", "yes")
 
+# Anonymous telemetry (design docs/plans/2026-07-18-telemetry-design.md).
+# Env kill switch; the synced setting telemetryEnabled is checked at runtime.
+TELEMETRY_ENABLED = os.environ.get("TWICC_NO_TELEMETRY", "").strip().lower() not in ("1", "true", "yes")
+
 # Auto-enable every registered provider at first boot
 # Set TWICC_AUTO_ENABLE_PROVIDERS=1 to bypass the initial provider activation
 # dialog: at backend startup, if ``disabledProviders`` is absent from

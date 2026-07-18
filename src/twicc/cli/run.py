@@ -91,6 +91,7 @@ from twicc.tmux_cleanup_task import start_tmux_cleanup_task  # noqa: E402
 from twicc.auth.tokens import start_last_used_flush_task  # noqa: E402
 from twicc.share.view_tracking import start_share_view_flush_task  # noqa: E402
 from twicc.artifacts.denial_tracking import start_denial_flush_task  # noqa: E402
+from twicc.telemetry import start_telemetry_task  # noqa: E402
 from twicc.search import SearchIndexLockedError, init_search_index, shutdown_search_index  # noqa: E402
 from twicc.search_indexing_task import (  # noqa: E402
     get_active_indexing_tasks,
@@ -282,6 +283,7 @@ async def run_server(port: int):
     last_used_flush_task = asyncio.create_task(start_last_used_flush_task(shutdown_event))
     share_view_flush_task = asyncio.create_task(start_share_view_flush_task(shutdown_event))
     denial_flush_task = asyncio.create_task(start_denial_flush_task(shutdown_event))
+    telemetry_task = asyncio.create_task(start_telemetry_task(shutdown_event))
     version_check_task = asyncio.create_task(start_version_check_task())
 
     # One-shot trust backfill: settle every not-yet-imported project's trust
@@ -384,6 +386,9 @@ async def run_server(port: int):
 
         logger.info("Stopping artifact denial flush task...")
         await _cancel_task(denial_flush_task, "Artifact denial flush task")
+
+        logger.info("Stopping telemetry task...")
+        await _cancel_task(telemetry_task, "Telemetry task")
 
         logger.info("Stopping version check task...")
         stop_version_check_task()
