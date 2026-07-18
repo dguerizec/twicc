@@ -1,0 +1,199 @@
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+
+import orjson
+import pytest
+
+from twicc.core.models import (
+    ArtifactBookmark,
+    DailyActivity,
+    PinMode,
+    Project,
+    Session,
+    SessionCron,
+    SessionType,
+    Share,
+    Workflow,
+)
+from twicc.telemetry import snapshot
+
+DAY = date(2026, 7, 10)
+
+
+def _at(hour: int) -> datetime:
+    return datetime(DAY.year, DAY.month, DAY.day, hour, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def project(transactional_db):
+    return Project.objects.create(id="-tmp-telemetry", directory="/tmp/telemetry-snapshot-test")
+
+
+def _make_session(project, session_id, **overrides):
+    defaults = dict(
+        id=session_id,
+        project=project,
+        provider="claude_code",
+        file_path=f"{session_id}.jsonl",
+        type=SessionType.SESSION,
+        created_at=_at(9),
+    )
+    defaults.update(overrides)
+    return Session.objects.create(**defaults)
+
+
+def test_build_day_block(project):
+    s1 = _make_session(
+        project, "s1", provider="claude_code", selected_model="opus",
+        effort="high", permission_mode="bypassPermissions",
+    )
+    _make_session(
+        project, "s2", provider="claude_code", selected_model="opus",
+        effort="high", permission_mode="bypassPermissions", spawned_by=s1,
+    )
+    _make_session(
+        project, "s3", provider="codex", selected_model="gpt-terra",
+        effort="high", permission_mode="yolo",
+    )
+    _make_session(project, "sub1", type=SessionType.SUBAGENT)
+
+    DailyActivity.objects.create(project=None, provider="claude_code", date=DAY, user_message_count=7, cost=Decimal("5.5"))
+    DailyActivity.objects.create(project=None, provider="codex", date=DAY, user_message_count=3, cost=Decimal("7.0"))
+
+    # created_at/updated_at are auto_now_add/auto_now: any value passed at
+    # creation is overridden by Django at save() time, so backdate to DAY
+    # with a bare update() after the row exists.
+    share = Share.objects.create(kind="session", token="t" * 32, session=s1)
+    Share.objects.filter(pk=share.pk).update(created_at=_at(9))
+    bookmark = ArtifactBookmark.objects.create(
+        session=s1, project=project, relative_path="demo/index.html", name="Demo", scope=PinMode.PROJECT,
+    )
+    ArtifactBookmark.objects.filter(pk=bookmark.pk).update(created_at=_at(9))
+
+    block = snapshot.build_day_block(DAY, {"presence_minutes": 45, "peak_agents": 3})
+
+    assert block["date"] == DAY.isoformat()
+    assert block["sessions_by_model"] == {"claude_code": {"opus": 2}, "codex": {"gpt-terra": 1}}
+    assert block["sessions_by_effort"] == {"high": 3}
+    assert block["sessions_by_permission_mode"] == {"bypassPermissions": 2, "yolo": 1}
+    assert block["messages_sent"] == 10
+    assert block["subagents"] == 1
+    assert block["sessions_spawned"] == 1
+    assert block["shares_created"] == 1
+    assert block["bookmarks_created"] == 1
+    assert block["cost_bucket"] == "10-50"
+    assert block["presence_bucket"] == "30-120"
+    assert block["peak_agents"] == 3
+
+
+def test_build_day_block_counts_workflow_runs_and_crons_created(project):
+    session = _make_session(project, "wf-session")
+    Workflow.objects.create(session=session, run_id="wf_test_1", raw_json="{}")
+    Workflow.objects.filter(run_id="wf_test_1").update(updated_at=_at(9))
+    SessionCron.objects.create(
+        provider="claude_code", cron_id="cron-1", session_id=session.id,
+        cron_expr="* * * * *", recurring=False, prompt="do it",
+        created_at=_at(9), next_fire=_at(10),
+    )
+
+    block = snapshot.build_day_block(DAY, {})
+
+    assert block["workflow_runs"] == 1
+    assert block["crons_created"] == 1
+
+
+def test_build_day_block_defaults_missing_day_state_to_zero(project):
+    block = snapshot.build_day_block(DAY, {})
+    assert block["presence_bucket"] == "0"
+    assert block["peak_agents"] == 0
+    assert block["cost_bucket"] == "0"
+    assert block["messages_sent"] == 0
+
+
+def test_bucket_edges():
+    assert snapshot.bucket(0, snapshot.COUNT_BUCKETS) == "0"
+    assert snapshot.bucket(1, snapshot.COUNT_BUCKETS) == "1"
+    assert snapshot.bucket(2, snapshot.COUNT_BUCKETS) == "2-5"
+    assert snapshot.bucket(5, snapshot.COUNT_BUCKETS) == "2-5"
+    assert snapshot.bucket(6, snapshot.COUNT_BUCKETS) == "6-20"
+    assert snapshot.bucket(20, snapshot.COUNT_BUCKETS) == "6-20"
+    assert snapshot.bucket(21, snapshot.COUNT_BUCKETS) == "21+"
+
+    assert snapshot.bucket(Decimal("0"), snapshot.COST_BUCKETS) == "0"
+    assert snapshot.bucket(Decimal("0.5"), snapshot.COST_BUCKETS) == "<1"
+    assert snapshot.bucket(Decimal("1"), snapshot.COST_BUCKETS) == "1-10"
+    assert snapshot.bucket(Decimal("10"), snapshot.COST_BUCKETS) == "10-50"
+    assert snapshot.bucket(Decimal("50"), snapshot.COST_BUCKETS) == "50+"
+
+    assert snapshot.bucket(0, snapshot.PRESENCE_BUCKETS) == "0"
+    assert snapshot.bucket(29, snapshot.PRESENCE_BUCKETS) == "<30"
+    assert snapshot.bucket(30, snapshot.PRESENCE_BUCKETS) == "30-120"
+    assert snapshot.bucket(120, snapshot.PRESENCE_BUCKETS) == "120-360"
+    assert snapshot.bucket(360, snapshot.PRESENCE_BUCKETS) == "360+"
+
+
+def test_instance_block_contains_no_forbidden_fields(project):
+    block = snapshot.build_instance_block()
+    serialized = orjson.dumps(block).decode()
+
+    import socket
+
+    assert socket.gethostname() not in serialized
+    assert project.directory not in serialized
+    assert "/tmp/telemetry-snapshot-test" not in serialized
+
+
+def test_day_block_contains_no_forbidden_fields(project):
+    # A bogus/unresolvable selected_model must collapse to "unknown" — the raw
+    # string is a per-session identifier and must never reach the payload,
+    # which is exactly what would happen if it leaked as a dict key (§3.3).
+    bogus_model = "definitely-not-a-real-model-id-xyz789"
+    _make_session(project, "bogus-model-session", selected_model=bogus_model)
+
+    block = snapshot.build_day_block(DAY, {})
+    serialized = orjson.dumps(block).decode()
+
+    import socket
+
+    assert bogus_model not in serialized
+    assert block["sessions_by_model"] == {"claude_code": {"unknown": 1}}
+    assert socket.gethostname() not in serialized
+    assert project.directory not in serialized
+    assert "/tmp/telemetry-snapshot-test" not in serialized
+
+
+def test_build_payload_returns_none_without_complete_unsent_day(project):
+    today = snapshot.datetime.now(timezone.utc).date()
+    state = {
+        "instance_id": "abc-123",
+        "last_sent_date": today.isoformat(),
+        "days": {},
+    }
+    assert snapshot.build_payload(state) is None
+
+
+def test_build_payload_covers_complete_days_after_last_sent(project):
+    today = snapshot.datetime.now(timezone.utc).date()
+    complete_day = today - timedelta(days=1)  # yesterday: the most recent complete UTC day
+    last_sent = complete_day - timedelta(days=1)
+
+    _make_session(
+        project, "payload-session",
+        created_at=datetime(complete_day.year, complete_day.month, complete_day.day, 9, tzinfo=timezone.utc),
+        selected_model="opus", effort="high", permission_mode="bypassPermissions",
+    )
+
+    state = {
+        "instance_id": "abc-123",
+        "last_sent_date": last_sent.isoformat(),
+        "days": {complete_day.isoformat(): {"presence_minutes": 10, "peak_agents": 1}},
+    }
+    payload = snapshot.build_payload(state)
+
+    assert payload is not None
+    assert payload["schema"] == snapshot.SCHEMA_VERSION
+    assert payload["instance_id"] == "abc-123"
+    assert payload["days"][-1]["date"] == complete_day.isoformat()
+    assert payload["days"][-1]["sessions_by_model"] == {"claude_code": {"opus": 1}}
+    # "today" itself is never a complete day.
+    assert today.isoformat() not in [d["date"] for d in payload["days"]]
