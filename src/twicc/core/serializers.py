@@ -7,6 +7,7 @@ safe to call from async contexts without sync_to_async wrapping, as long as
 the model instance was already fetched from the database.
 """
 
+from twicc.project_icons import project_own_icon_url, project_repo_icon_url
 from twicc.providers.helpers import AGENT_SETTINGS_HIDDEN_FROM_FRONTEND, AgentSettings, get_provider_helpers
 
 
@@ -48,6 +49,19 @@ def serialize_project(project):
         # Absolute base directory for new git worktrees of this project (None =
         # inherit the global worktreeDirectoryTemplate expanded against the project).
         "worktree_directory": project.worktree_directory,
+        # Project icon — two independent bricks; the EFFECTIVE icon is resolved
+        # CLIENT-SIDE by walking the project chain so a manual override cascades
+        # to descendants (utils/projectIcon.js), keeping this serializer
+        # query-free. ``icon`` is the per-project state ("inherit"/"none"/token);
+        # ``icon_override_url`` is this project's OWN manual icon (or null);
+        # ``repo_icon_url`` is the auto-discovered repo icon for its anchor (the
+        # socle, shared by the repo). See docs/plans/2026-07-17-project-icons-design.md.
+        "icon": project.icon,
+        "icon_override_url": project_own_icon_url(project),
+        "repo_icon_url": project_repo_icon_url(project),
+        # The git root feeding ``repo_icon_url`` when it differs from ``git_root``
+        # (worktree main repo / umbrella).
+        "icon_anchor": project.icon_anchor,
     }
 
 

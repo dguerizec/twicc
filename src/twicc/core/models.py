@@ -163,6 +163,27 @@ class Project(models.Model):
     # and the CLI (`update-project --worktree-directory`); worktree creation
     # itself remains web-UI only.
     worktree_directory = models.CharField(max_length=500, null=True, blank=True)
+    # ---- Project icon (optional; falls back to the color dot) -------
+    # A project may show an icon image instead of the generated color dot.
+    # The icon belongs to a git REPOSITORY (keyed by git root on disk, see
+    # twicc.project_icons), shared by every project under that root; a single
+    # project may override. This column is the per-project state, a closed set:
+    #   "inherit" (default) -> follow the repo icon of the anchor git root
+    #   "none"              -> user refuses an icon here (color dot)
+    #   "<token>"           -> per-project override; the stored filename under
+    #                          the project's proj-<hash> bucket
+    # ``null`` is deliberately unused: a non-null "inherit" default means an
+    # unset row inherits naturally (existing rows after migration, new
+    # subprojects). Auto-discovery NEVER writes this column — only explicit
+    # user action does. See docs/plans/2026-07-17-project-icons-design.md.
+    icon = models.CharField(max_length=100, default="inherit")
+    # The git root whose repo icon this project inherits, WHEN it differs from
+    # this project's own ``git_root``. NULL -> use ``git_root``. Set at
+    # discovery for: a worktree (-> its main repository's git root, so it shares
+    # the main repo's icon like it shares its color) and an "umbrella" project
+    # whose own dir is above the git root (git lives one/two levels down, found
+    # by a bounded downward scan). ``git_root`` itself is never touched.
+    icon_anchor = models.CharField(max_length=500, null=True, blank=True)
 
     class Meta:
         ordering = ["-mtime"]

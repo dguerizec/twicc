@@ -12,11 +12,14 @@ import BrowserUrlListEditor from '../browser/BrowserUrlListEditor.vue'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import { expandWorktreeTemplate } from '../../utils/worktreePath'
 import { resolveProjectTrust } from '../../utils/trust'
+import { resolveProjectIconUrl } from '../../utils/projectIcon'
 import ProjectAgentDefaultsSection from './ProjectAgentDefaultsSection.vue'
 import TabBar from '../ui/TabBar.vue'
 import HelpIconButton from '../help/HelpIconButton.vue'
+import AppTooltip from '../ui/AppTooltip.vue'
 import ProjectBadge from './ProjectBadge.vue'
 import WorktreeBadge from './WorktreeBadge.vue'
+import ProjectMark from './ProjectMark.vue'
 
 const props = defineProps({
     project: {
@@ -83,6 +86,7 @@ const isCreateMode = computed(() => !props.project)
 // Unique form ID per instance to avoid conflicts when multiple dialog instances coexist in the DOM
 const instanceId = useId()
 const formId = `project-dialog-form-${instanceId}`
+const iconHelpId = `project-icon-help-${instanceId}`
 
 // -- Live header badge --------------------------------------------------------
 // Edit mode shows a live preview of the project's badge next to the title,
@@ -298,6 +302,12 @@ function open() {
     errorMessage.value = ''
     directoryNotFound.value = false
     mainTab.value = 'general'
+    // Discard any staged icon change / scan state from a previous open.
+    pendingIcon.value = null
+    iconError.value = ''
+    scanDone.value = false
+    scanCandidates.value = []
+    scanError.value = ''
     if (isCreateMode.value) {
         localDirectory.value = ''
         localName.value = ''
@@ -400,6 +410,154 @@ function useGlobalWorktreeDir() {
 function onColorChange(event) {
     localColor.value = event.target.value
 }
+
+// ---- Project icon ------------------------------------------------------
+// Icon changes are STAGED locally and committed only on Save (like name/color),
+// and discarded if the dialog closes without saving. `pendingIcon`:
+//   null                   -> no change
+//   { type: 'set', image } -> a new icon (data URI), from upload or scan
+//   { type: 'none' }       -> switch to the color dot
+//   { type: 'inherit' }    -> follow the inherited icon
+const iconFileInputRef = ref(null)
+const iconError = ref('')
+const pendingIcon = ref(null)
+
+// Effective staged state: 'inherit' | 'none' | 'override'.
+const stagedIcon = computed(() => {
+    if (pendingIcon.value) {
+        return pendingIcon.value.type === 'set' ? 'override' : pendingIcon.value.type
+    }
+    const v = props.project?.icon || 'inherit'
+    return v === 'inherit' ? 'inherit' : v === 'none' ? 'none' : 'override'
+})
+
+// Preview reflects the STAGED change (or the current effective icon).
+const iconPreviewUrl = computed(() => {
+    if (pendingIcon.value?.type === 'set') return pendingIcon.value.image
+    if (pendingIcon.value?.type === 'none') return null
+    if (pendingIcon.value?.type === 'inherit') {
+        // What it would inherit: resolve as if this project had no override.
+        const p = props.project
+        if (!p) return null
+        const patched = { ...store.projects, [p.id]: { ...p, icon: 'inherit', icon_override_url: null } }
+        return resolveProjectIconUrl(p.id, patched)
+    }
+    return props.project ? (store.resolvedProjectIcons[props.project.id] || null) : null
+})
+
+// Scanning needs a git tree: available when the project resolves to a git root
+// (own git_root, or an icon_anchor for a worktree / umbrella project).
+const repoAnchorAvailable = computed(
+    () => !isCreateMode.value && !!(props.project?.icon_anchor || props.project?.git_root)
+)
+const iconIsOverridden = computed(() => stagedIcon.value !== 'inherit')
+const iconShowsColor = computed(() => stagedIcon.value === 'none')
+
+function pickIconFile() {
+    iconError.value = ''
+    iconFileInputRef.value?.click()
+}
+
+function onIconFileChange(event) {
+    const file = event.target?.files?.[0]
+    if (event.target) event.target.value = '' // allow re-picking the same file
+    if (!file) return
+    if (file.size > 5 * 1024 * 1024) {
+        iconError.value = 'Image too large (max 5 MB).'
+        return
+    }
+    const reader = new FileReader()
+    reader.onload = () => { pendingIcon.value = { type: 'set', image: reader.result }; iconError.value = '' }
+    reader.onerror = () => { iconError.value = 'Could not read the file.' }
+    reader.readAsDataURL(file)
+}
+
+// Stage a state change (applied on Save, not immediately).
+function stageIcon(type) {
+    iconError.value = ''
+    pendingIcon.value = { type } // 'none' | 'inherit'
+}
+
+// Commit the staged icon change to the backend. Called from handleSave.
+// Returns true on success (or when there is nothing to commit).
+async function commitPendingIcon() {
+    if (!pendingIcon.value || !props.project) return true
+    const body = pendingIcon.value.type === 'set'
+        ? { action: 'set', image: pendingIcon.value.image }
+        : { action: pendingIcon.value.type }
+    let response
+    try {
+        response = await apiFetch(`/api/projects/${props.project.id}/icon/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        })
+    } catch (error) {
+        iconError.value = 'Network error while saving the icon.'
+        return false
+    }
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        iconError.value = data.error || 'Icon update failed.'
+        return false
+    }
+    store.updateProject(await response.json())
+    pendingIcon.value = null
+    return true
+}
+
+// Scan the repository for icon candidates (read-only) and let the user pick one.
+const scanBusy = ref(false)
+const scanDone = ref(false)
+const scanError = ref('')
+const scanCandidates = ref([])
+
+async function scanIcons() {
+    if (!props.project) return
+    scanBusy.value = true
+    scanError.value = ''
+    scanCandidates.value = []
+    let response
+    try {
+        response = await apiFetch(`/api/projects/${props.project.id}/icon/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'scan' }),
+        })
+    } catch (error) {
+        scanError.value = 'Network error. Please try again.'
+        scanBusy.value = false
+        return
+    }
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        scanError.value = data.error || 'Scan failed.'
+        scanBusy.value = false
+        return
+    }
+    const data = await response.json()
+    scanCandidates.value = data.candidates || []
+    scanDone.value = true
+    scanBusy.value = false
+}
+
+function pickScannedIcon(candidate) {
+    // Stage the chosen candidate (its preview is already the normalized image).
+    pendingIcon.value = { type: 'set', image: candidate.image }
+    iconError.value = ''
+    scanCandidates.value = []
+    scanDone.value = false
+}
+
+// Clear the icon/scan transient state when the dialog switches project (the
+// main reset watcher above is immediate and runs before these refs exist).
+watch(() => props.project, () => {
+    pendingIcon.value = null
+    scanDone.value = false
+    scanCandidates.value = []
+    scanError.value = ''
+    iconError.value = ''
+})
 
 /**
  * Submit the create-project request, optionally asking the backend to create the directory.
@@ -607,6 +765,14 @@ async function handleSave() {
 
         await saveTrustIfChanged()
 
+        // Commit the staged icon change (if any). On failure, keep the dialog
+        // open so the user sees the error and can retry.
+        const iconOk = await commitPendingIcon()
+        if (!iconOk) {
+            isSaving.value = false
+            return
+        }
+
         emit('saved', updatedProject)
         isSaving.value = false
         close()
@@ -706,6 +872,68 @@ defineExpose({
                                     @change="onColorChange"
                                 ></wa-color-picker>
                             </div>
+                        </div>
+
+                        <!-- Project icon (edit mode) — optional; falls back to the color dot -->
+                        <div v-if="!isCreateMode" class="form-group icon-group">
+                            <label class="form-label">Icon <span class="form-label-optional">(optional)</span></label>
+                            <div class="icon-editor-row">
+                                <ProjectMark
+                                    class="icon-editor-preview"
+                                    :icon-url="iconPreviewUrl"
+                                    :color="localColor || props.project?.color || null"
+                                />
+                                <input
+                                    ref="iconFileInputRef"
+                                    type="file"
+                                    accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                                    class="icon-file-input"
+                                    @change="onIconFileChange"
+                                />
+                                <wa-button size="small" type="button" @click="pickIconFile">
+                                    <wa-icon slot="start" name="image"></wa-icon> Set icon…
+                                </wa-button>
+                            </div>
+                            <div class="icon-editor-links" :class="{ 'is-busy': scanBusy }">
+                                <a v-if="repoAnchorAvailable" href="#" class="icon-link" @click.prevent="scanIcons">Scan repository…</a>
+                                <a v-if="iconIsOverridden" href="#" class="icon-link" @click.prevent="stageIcon('inherit')">Follow inherited icon</a>
+                                <a v-if="!iconShowsColor" href="#" class="icon-link" @click.prevent="stageIcon('none')">Use color instead</a>
+                                <wa-icon
+                                    :id="iconHelpId"
+                                    name="circle-question"
+                                    class="icon-help-trigger"
+                                    tabindex="0"
+                                    role="button"
+                                    label="About project icons"
+                                ></wa-icon>
+                                <AppTooltip :for="iconHelpId" trigger="click" force>
+                                    A favicon or logo found in the git repository is used automatically. Set your own
+                                    icon for this project — it applies to its sub-projects too, unless they set their
+                                    own. “Scan repository…” lists every icon found so you can pick one; “Follow
+                                    inherited icon” drops this project's own icon and inherits again; “Use color
+                                    instead” shows the color dot.
+                                </AppTooltip>
+                            </div>
+                            <div v-if="scanDone" class="icon-scan-results">
+                                <template v-if="scanCandidates.length">
+                                    <div class="icon-scan-caption">Pick one for this project:</div>
+                                    <div class="icon-scan-list">
+                                        <button
+                                            v-for="c in scanCandidates"
+                                            :key="c.rel_path"
+                                            type="button"
+                                            class="icon-scan-item"
+                                            @click="pickScannedIcon(c)"
+                                        >
+                                            <img class="icon-scan-thumb" :src="c.image" alt="" />
+                                            <span class="icon-scan-path">{{ c.rel_path }}</span>
+                                        </button>
+                                    </div>
+                                </template>
+                                <div v-else class="icon-scan-empty">No icons found in this repository.</div>
+                            </div>
+                            <wa-callout v-if="scanError" variant="danger" size="small" class="icon-error">{{ scanError }}</wa-callout>
+                            <wa-callout v-if="iconError" variant="danger" size="small" class="icon-error">{{ iconError }}</wa-callout>
                         </div>
 
                         <wa-divider></wa-divider>
@@ -1048,6 +1276,134 @@ defineExpose({
 .form-hint {
     font-size: var(--wa-font-size-xs);
     color: var(--wa-color-text-quiet);
+}
+
+.form-label-optional {
+    font-weight: var(--wa-font-weight-normal);
+    color: var(--wa-color-text-quiet);
+}
+
+.icon-editor-row {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-m);
+}
+
+.icon-editor-preview {
+    --project-mark-size: 2.5rem;
+    flex: 0 0 auto;
+}
+
+.icon-file-input {
+    display: none;
+}
+
+/* Secondary actions rendered as text links on their own line. */
+.icon-editor-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--wa-space-m);
+    margin-top: var(--wa-space-xs);
+}
+
+.icon-editor-links.is-busy {
+    pointer-events: none;
+    opacity: 0.5;
+}
+
+.icon-link {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-brand-text);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.icon-link:hover {
+    text-decoration: underline;
+}
+
+.icon-help-trigger {
+    color: var(--wa-color-text-quiet);
+    cursor: pointer;
+    font-size: var(--wa-font-size-m);
+    align-self: center;
+}
+
+.icon-help-trigger:hover {
+    color: var(--wa-color-text-normal);
+}
+
+.icon-error {
+    margin-top: var(--wa-space-xs);
+}
+
+.icon-scan-results {
+    margin-top: var(--wa-space-s);
+}
+
+.icon-scan-caption {
+    font-size: var(--wa-font-size-xs);
+    color: var(--wa-color-text-quiet);
+    margin-bottom: var(--wa-space-xs);
+}
+
+.icon-scan-empty {
+    font-size: var(--wa-font-size-s);
+    color: var(--wa-color-text-quiet);
+}
+
+/* Vertical list — each row shows the thumbnail and the FULL relative path. */
+.icon-scan-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-2xs);
+}
+
+.icon-scan-item {
+    /* Reset WebAwesome's native.css form-control sizing on a bare <button>.
+       Rendered like the link actions: no background/border, left-aligned. */
+    appearance: none;
+    -webkit-appearance: none;
+    height: auto;
+    min-height: 0;
+    line-height: normal;
+    font: inherit;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--wa-space-s);
+    width: 100%;
+    padding: var(--wa-space-2xs) var(--wa-space-s);  /* left padding = the requested indent */
+    border: none;
+    background: none;
+    cursor: pointer;
+    text-align: left;
+    /* Set on the button so it wins over the native <button> default text color. */
+    color: var(--wa-color-brand-text);
+}
+
+.icon-scan-item:hover:not(:disabled) .icon-scan-path {
+    text-decoration: underline;
+}
+
+.icon-scan-item:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.icon-scan-thumb {
+    flex: 0 0 auto;
+    width: 1.75rem;
+    height: 1.75rem;
+    object-fit: contain;
+}
+
+.icon-scan-path {
+    font-size: var(--wa-font-size-s);
+    color: inherit;
+    word-break: break-all;
+    min-width: 0;
 }
 
 .trust-intro {

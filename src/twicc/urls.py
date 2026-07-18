@@ -53,6 +53,7 @@ urlpatterns = [
     path("_twicc/browser-companion.js", views.browser_companion_script),
     path("api/projects/", views.project_list),
     path("api/projects/<str:project_id>/", views.project_detail),
+    path("api/projects/<str:project_id>/icon/", views.project_icon_manage),
     path("api/projects/<str:project_id>/trust/resolve/", views.project_trust_resolve),
     path("api/projects/<str:project_id>/trust/decide/", views.project_trust_decide),
     path("api/projects/<str:project_id>/branches/", views.project_branches),
@@ -137,6 +138,10 @@ urlpatterns = [
         "artifacts/<str:session_id>/<str:artifact_file_name>",
         views.session_artifact,
     ),
+    # Project-icon serving. Like ``artifacts/`` it is a media endpoint (not
+    # ``/api/``, not a project path), must precede the SPA catch-all, and is
+    # auth-gated by ``PasswordAuthMiddleware``'s protected non-API list.
+    path("project-icons/<str:bucket>/<str:file_name>", views.project_icon),
     # Owner-side share management (design §11). Under /api/ → password-gated.
     path("api/shares/", share_owner_views.shares_list),
     path("api/shares/<str:share_id>/", share_owner_views.share_detail),
@@ -179,5 +184,5 @@ urlpatterns = [
     # excluded so those URLs surface as 404 instead of serving the SPA HTML.
     # Static files (/static/) are served by BlackNoise at the ASGI level,
     # before reaching Django's URL routing (see asgi.py).
-    re_path(r"^(?!api/|rpc/|static/|ws/|artifacts/|share/|_twicc/).*$", views.spa_index),
+    re_path(r"^(?!api/|rpc/|static/|ws/|artifacts/|project-icons/|share/|_twicc/).*$", views.spa_index),
 ]

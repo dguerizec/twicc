@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Project icons** — Projects can show an icon instead of the color dot: a favicon or logo found in the repository is picked up automatically, or set your own.
 - **Project colors** — Projects now get an automatic color based on their name; change it anytime.
 
 ### Changed

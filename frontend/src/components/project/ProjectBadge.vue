@@ -1,8 +1,10 @@
 <script setup>
 // ProjectBadge.vue - Displays a project color dot and display name
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
 import { useDataStore } from '../../stores/data'
 import { projectPathTitle } from '../../utils/projectName'
+import { useProjectMark } from '../../composables/useProjectMark'
+import ProjectMark from './ProjectMark.vue'
 
 const props = defineProps({
     projectId: {
@@ -59,9 +61,9 @@ const nameTitle = computed(() => {
     const path = projectPathTitle(project.value)
     return path && path !== displayName.value ? path : null
 })
-const color = computed(() => {
-    const own = props.colorOverride !== null ? props.colorOverride : project.value?.color
-    return own || props.fallbackColor || null
+const { iconUrl, dotColor } = useProjectMark(toRef(props, 'projectId'), {
+    colorOverride: toRef(props, 'colorOverride'),
+    fallbackColor: toRef(props, 'fallbackColor'),
 })
 // Whether to flag this project as untrusted (effective trust ≠ trusted, i.e.
 // explicitly untrusted OR unknown). Resolved from the store's cached set.
@@ -70,10 +72,7 @@ const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
 
 <template>
     <span class="project-badge" :style="gap ? { '--badge-gap': gap } : null">
-        <span
-            class="project-badge-dot"
-            :style="color ? { '--dot-color': color } : null"
-        ></span>
+        <ProjectMark :icon-url="iconUrl" :color="dotColor" />
         <span class="project-badge-name" :title="nameTitle">{{ displayName }}</span>
         <wa-icon
             v-if="untrusted"
@@ -91,17 +90,6 @@ const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
     align-items: center;
     gap: var(--badge-gap, var(--wa-space-xs));
     min-width: 0;
-}
-
-.project-badge-dot {
-    width: var(--wa-space-s);
-    height: var(--wa-space-s);
-    border-radius: 50%;
-    flex-shrink: 0;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-border-quiet));
 }
 
 .project-badge-name {

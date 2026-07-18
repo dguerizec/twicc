@@ -6,6 +6,7 @@ import { useMessageSnippetsStore } from '../../stores/messageSnippets'
 import { useDataStore } from '../../stores/data'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import ProjectBadge from '../project/ProjectBadge.vue'
+import ProjectMark from '../project/ProjectMark.vue'
 import { buildProjectTree, flattenProjectTree } from '../../utils/projectTree'
 import { splitProjectsByPriority } from '../../utils/projectSort'
 import { PLACEHOLDERS, extractPlaceholders } from '../../utils/snippetPlaceholders'
@@ -146,6 +147,14 @@ const selectedScopeProjectColor = computed(() => {
     const pid = scope.slice('project:'.length)
     const project = dataStore.getProject(pid)
     return project?.color || null
+})
+
+/** Icon URL of the currently selected project scope (else null → color dot). */
+const selectedScopeProjectIconUrl = computed(() => {
+    if (!formData.value) return null
+    const scope = formData.value.scope
+    if (scope === 'global' || scope.startsWith('workspace:')) return null
+    return dataStore.resolvedProjectIcons[scope.slice('project:'.length)] || null
 })
 
 /** Whether the current scope is a workspace, and its color. */
@@ -505,12 +514,12 @@ defineExpose({ open, close })
                         name="layer-group"
                         :style="selectedScopeWorkspaceColor ? { color: selectedScopeWorkspaceColor } : null"
                     ></wa-icon>
-                    <span
+                    <ProjectMark
                         v-else-if="formData.scope !== 'global'"
                         slot="start"
-                        class="selected-project-dot"
-                        :style="selectedScopeProjectColor ? { '--dot-color': selectedScopeProjectColor } : null"
-                    ></span>
+                        :icon-url="selectedScopeProjectIconUrl"
+                        :color="selectedScopeProjectColor"
+                    />
                     <wa-option value="global">All projects</wa-option>
 
                     <!-- Workspaces -->
@@ -871,17 +880,6 @@ defineExpose({ open, close })
 /* ── Scope select ─────────────────────────────────────────────────── */
 .scope-select {
     min-width: 160px;
-}
-
-.selected-project-dot {
-    width: 0.75em;
-    height: 0.75em;
-    border-radius: 50%;
-    flex-shrink: 0;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-surface-border));
 }
 
 .tree-folder-label {

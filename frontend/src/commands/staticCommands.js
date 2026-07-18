@@ -19,6 +19,7 @@ import { sessionRouteLocation } from '../utils/sessionRoute'
 import { computeSidebarSessionBlocks } from '../utils/sidebarSessions'
 import { isSessionUnread } from '../utils/sessions'
 import { worktreeLabel } from '../utils/worktree'
+import { resolveProjectIconUrl } from '../utils/projectIcon'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { ARTIFACT_ICON } from '../utils/artifactBookmark'
 import { AGENT_SETTING_ICONS } from '../utils/agentSettingIcons'
@@ -318,6 +319,8 @@ function buildSessionNavItems({
             session: {
                 projectId: s.project_id,
                 projectColor: project?.color ?? parentColor ?? null,
+                // Effective icon resolved via the project inheritance chain.
+                projectIconUrl: resolveProjectIconUrl(s.project_id, data.projects),
                 isWorktree,
                 pinned: s.pinned || null,
                 processState,
@@ -433,6 +436,7 @@ export function initStaticCommands(router) {
             action,
             project: {
                 color: p.color ?? null,
+                icon_url: resolveProjectIconUrl(p.id, data.projects),
                 untrusted: data.untrustedProjectIds.has(p.id),
                 processState: activity?.processState ?? null,
                 hasUnread: activity?.hasUnread ?? false,
@@ -455,6 +459,7 @@ export function initStaticCommands(router) {
             action,
             project: {
                 color: wt.color ?? parent?.color ?? null,
+                icon_url: resolveProjectIconUrl(wt.id, data.projects),
                 untrusted: data.untrustedProjectIds.has(wt.id),
                 processState: activity?.processState ?? null,
                 hasUnread: activity?.hasUnread ?? false,
@@ -990,7 +995,7 @@ export function initStaticCommands(router) {
                         prefix: 'New Session in',
                         label: worktreeLabel(p) || data.getProjectDisplayName(p.id),
                         path: p.directory ?? null,
-                        project: { color: p.color ?? parent?.color ?? null, untrusted: data.untrustedProjectIds.has(p.id) },
+                        project: { color: p.color ?? parent?.color ?? null, icon_url: resolveProjectIconUrl(p.id, data.projects), untrusted: data.untrustedProjectIds.has(p.id) },
                         worktree: { parentName: parent ? data.getProjectDisplayName(parent.id) : '' },
                     }
                 }
@@ -998,7 +1003,7 @@ export function initStaticCommands(router) {
                     prefix: 'New Session in',
                     label: data.getProjectDisplayName(p.id),
                     path: p.directory ?? null,
-                    project: { color: p.color ?? null, untrusted: data.untrustedProjectIds.has(p.id) },
+                    project: { color: p.color ?? null, icon_url: resolveProjectIconUrl(p.id, data.projects), untrusted: data.untrustedProjectIds.has(p.id) },
                 }
             },
             action: async () => {

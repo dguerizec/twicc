@@ -19,6 +19,7 @@ import { ref, computed, watch, nextTick, shallowRef } from 'vue'
 import { useCommandRegistry } from '../../composables/useCommandRegistry'
 import { fuzzyMatch } from '../../utils/fuzzyMatch'
 import ProcessIndicator from '../ui/ProcessIndicator.vue'
+import ProjectMark from '../project/ProjectMark.vue'
 import PermissionModeIcon from '../ui/PermissionModeIcon.vue'
 import SettingFlagIcon from '../ui/SettingFlagIcon.vue'
 
@@ -424,7 +425,7 @@ defineExpose({ open, close })
                                     <span v-if="t" class="command-text-col">
                                         <span class="command-label command-target-line">
                                             <span v-if="t.prefix" class="command-target-prefix">{{ t.prefix }}</span>
-                                            <span class="palette-project-dot" :style="t.project?.color ? { '--dot-color': t.project.color } : null"></span>
+                                            <ProjectMark :icon-url="t.project?.icon_url || null" :color="t.project?.color || null" />
                                             <template v-if="t.worktree?.parentName">
                                                 <span class="command-wt-parent">{{ t.worktree.parentName }}</span>
                                                 <wa-icon name="code-branch" auto-width class="command-wt-sep"></wa-icon>
@@ -474,7 +475,7 @@ defineExpose({ open, close })
                                 <span v-if="t" class="command-text-col">
                                     <span class="command-label command-target-line">
                                         <span v-if="t.prefix" class="command-target-prefix">{{ t.prefix }}</span>
-                                        <span class="palette-project-dot" :style="t.project?.color ? { '--dot-color': t.project.color } : null"></span>
+                                        <ProjectMark :icon-url="t.project?.icon_url || null" :color="t.project?.color || null" />
                                         <template v-if="t.worktree?.parentName">
                                             <span class="command-wt-parent">{{ t.worktree.parentName }}</span>
                                             <wa-icon name="code-branch" auto-width class="command-wt-sep"></wa-icon>
@@ -512,10 +513,10 @@ defineExpose({ open, close })
                             <!-- Session row: project color dot + pin icon on the left (mirrors sidebar);
                                  a code-branch marker is added when the session lives in a git worktree. -->
                             <template v-if="item.session">
-                                <span
-                                    class="palette-project-dot"
-                                    :style="item.session.projectColor ? { '--dot-color': item.session.projectColor } : null"
-                                ></span>
+                                <ProjectMark
+                                    :icon-url="item.session.projectIconUrl || null"
+                                    :color="item.session.projectColor || null"
+                                />
                                 <wa-icon
                                     v-if="item.session.pinned"
                                     name="thumbtack"
@@ -537,10 +538,10 @@ defineExpose({ open, close })
                             </template>
                             <!-- Project row: colored dot mirroring the sidebar -->
                             <template v-else-if="item.project">
-                                <span
-                                    class="palette-project-dot"
-                                    :style="item.project.color ? { '--dot-color': item.project.color } : null"
-                                ></span>
+                                <ProjectMark
+                                    :icon-url="item.project.icon_url || null"
+                                    :color="item.project.color || null"
+                                />
                             </template>
                             <!-- Regular sub-item: active check wins; otherwise the value's
                                  own icon (permission glyph, on/off flag, custom src, FA name)
@@ -891,16 +892,6 @@ wa-divider {
 }
 
 /* Session row: colored project dot on the left (inline with the label). */
-.palette-project-dot {
-    width: var(--wa-space-s);
-    height: var(--wa-space-s);
-    border-radius: 50%;
-    flex-shrink: 0;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-border-quiet));
-}
 
 /* Session row: pin thumbtack, same color/rotation as the sidebar. */
 .palette-pin-icon {

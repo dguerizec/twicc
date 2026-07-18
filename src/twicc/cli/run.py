@@ -290,6 +290,12 @@ async def run_server(port: int):
     # a short-lived Codex app-server for the config projection.
     from twicc.core.services.trust import backfill_unimported_trust
     trust_backfill_task = asyncio.create_task(backfill_unimported_trust())
+    # One-shot project-icon discovery sweep (the "initial sync" of icons): every
+    # project's anchor + repo favicon/logo, applied silently and broadcast live.
+    # Runs in the server loop (not blocking boot) — icons appearing a moment
+    # after startup is fine. Cheap after the first run (manifests short-circuit).
+    from twicc.project_icons import discover_all_project_icons
+    icon_discovery_task = asyncio.create_task(discover_all_project_icons())
     # Dev-only: re-scan the tips dir every 10 s and broadcast on change.
     # The task short-circuits to a no-op outside TWICC_DEBUG so this is a
     # zero-cost coroutine in production.
@@ -385,6 +391,7 @@ async def run_server(port: int):
 
         # One-shot; usually already finished — cancel covers an early shutdown.
         await _cancel_task(trust_backfill_task, "Trust backfill task")
+        await _cancel_task(icon_discovery_task, "Project icon discovery task")
 
         # Tips watcher exits cleanly when shutdown_event fires (set above),
         # but we still cancel it explicitly to cover the no-op TWICC_DEBUG=

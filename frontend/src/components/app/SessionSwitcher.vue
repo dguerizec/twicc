@@ -19,6 +19,7 @@ import { useDataStore } from '../../stores/data'
 import { isSessionUnread } from '../../utils/sessions'
 import { getProviderIcon } from '../../providers'
 import ProcessIndicator from '../ui/ProcessIndicator.vue'
+import ProjectMark from '../project/ProjectMark.vue'
 import { useSessionSwitcher } from '../../composables/useSessionSwitcher'
 
 const route = useRoute()
@@ -64,6 +65,7 @@ const rows = computed(() =>
             path,
             index,
             dotColor: projectDotColor(session),
+            iconUrl: store.resolvedProjectIcons[session.project_id] || null,
             providerIcon: getProviderIcon(session.provider),
             name: displayName(session),
             state,
@@ -104,10 +106,7 @@ watch([cursor, visible], async () => {
                         @mouseenter="pointTo(row.index)"
                         @click="commitTo(row.index)"
                     >
-                        <span
-                            class="switcher-dot"
-                            :style="row.dotColor ? { '--dot-color': row.dotColor } : null"
-                        ></span>
+                        <ProjectMark :icon-url="row.iconUrl" :color="row.dotColor" class="switcher-mark" />
                         <wa-icon
                             v-if="row.providerIcon"
                             auto-width
@@ -226,15 +225,8 @@ watch([cursor, visible], async () => {
     color: var(--wa-color-brand-on-quiet);
 }
 
-.switcher-dot {
+.switcher-mark {
     flex: 0 0 auto;
-    width: var(--wa-space-s);
-    height: var(--wa-space-s);
-    border-radius: 50%;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-border-quiet));
 }
 
 .switcher-provider {

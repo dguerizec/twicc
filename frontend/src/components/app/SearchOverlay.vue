@@ -24,6 +24,7 @@ import { pendingSessionSearch } from '../../utils/pendingSearch'
 import { sessionRouteLocation } from '../../utils/sessionRoute'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from '../project/ProjectBadge.vue'
+import ProjectMark from '../project/ProjectMark.vue'
 import ProjectSelectOptions from '../project/ProjectSelectOptions.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 
@@ -221,6 +222,11 @@ const selectedProjectColor = computed(() => {
     if (!filters.projectId || isWorkspaceFilter.value) return null
     const project = store.getProject(filters.projectId)
     return project?.color || null
+})
+
+const selectedProjectIconUrl = computed(() => {
+    if (!filters.projectId || isWorkspaceFilter.value) return null
+    return store.resolvedProjectIcons[filters.projectId] || null
 })
 
 const selectedWorkspaceColor = computed(() => {
@@ -524,12 +530,13 @@ defineExpose({ open })
                         with-clear
                         class="filter-select"
                     >
-                        <span
+                        <ProjectMark
                             v-if="filters.projectId && !isWorkspaceFilter"
                             slot="start"
-                            class="selected-project-dot"
-                            :style="selectedProjectColor ? { '--dot-color': selectedProjectColor } : null"
-                        ></span>
+                            style="--project-mark-icon-size: var(--wa-space-m); --project-mark-size: 0.75em"
+                            :icon-url="selectedProjectIconUrl"
+                            :color="selectedProjectColor"
+                        />
                         <wa-icon
                             v-if="isWorkspaceFilter"
                             slot="start"
@@ -765,16 +772,6 @@ defineExpose({ open })
     border-radius: 100%;
 }
 
-.selected-project-dot {
-    width: 0.75em;
-    height: 0.75em;
-    border-radius: 50%;
-    flex-shrink: 0;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-border-quiet));
-}
 
 .workspace-option {
     display: flex;

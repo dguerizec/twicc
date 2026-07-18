@@ -23,6 +23,7 @@ import { stopSessionProcess } from '../../../composables/useStopSessionProcess'
 import { useDragHover } from '../../../composables/useDragHover'
 import ProjectBadge from '../../project/ProjectBadge.vue'
 import WorktreeBadge from '../../project/WorktreeBadge.vue'
+import ProjectMark from '../../project/ProjectMark.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import ProcessDuration from '../../ui/ProcessDuration.vue'
 import CostDisplay from '../../ui/CostDisplay.vue'
@@ -439,12 +440,12 @@ function handleMenuSelect(event) {
         >
             <div class="session-name-row">
                 <!-- Compact mode: inline project color dot (instead of full ProjectBadge line) -->
-                <span
+                <ProjectMark
                     v-if="compactView && effectiveShowProjectName"
                     :id="`compact-project-dot-${session.id}`"
-                    class="compact-project-dot"
-                    :style="projectDotColor ? { '--dot-color': projectDotColor } : null"
-                ></span>
+                    :icon-url="store.resolvedProjectIcons[session.project_id] || null"
+                    :color="projectDotColor"
+                />
                 <AppTooltip v-if="compactView && effectiveShowProjectName" :for="`compact-project-dot-${session.id}`">
                     <WorktreeBadge v-if="isProjectWorktree" :project-id="session.project_id" :dot="false" />
                     <template v-else>{{ projectPathTitle(store.getProject(session.project_id)) || store.getProjectDisplayName(session.project_id) }}</template>
@@ -738,17 +739,6 @@ function handleMenuSelect(event) {
     margin-right: 1.5rem;
 }
 
-/* Compact mode: inline project color dot */
-.compact-project-dot {
-    width: var(--wa-space-s);
-    height: var(--wa-space-s);
-    border-radius: 50%;
-    flex-shrink: 0;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-border-quiet));
-}
 
 /* Compact mode: inline code comments indicator */
 .compact-comments-indicator {

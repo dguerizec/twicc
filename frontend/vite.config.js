@@ -64,6 +64,7 @@ export default defineConfig(({ command }) => ({
             '/api': `http://localhost:${backendPort}`,
             '/rpc': `http://localhost:${backendPort}`,
             '/artifacts': `http://localhost:${backendPort}`,
+            '/project-icons': `http://localhost:${backendPort}`,
             // The broker shim, injected into backend-served artifact iframes.
             '/_twicc': `http://localhost:${backendPort}`,
             '/ws': { target: `ws://localhost:${backendPort}`, ws: true }

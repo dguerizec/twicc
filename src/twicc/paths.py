@@ -178,6 +178,19 @@ def get_share_snapshot_dir(share_id: str) -> Path:
     return get_shares_dir() / share_id
 
 
+def get_project_icons_dir() -> Path:
+    """Return the project-icons root directory (``<data_dir>/project-icons/``).
+
+    Holds copied+normalized project icon images, keyed by an opaque hash
+    bucket (``repo-<hash>`` for a git repository's shared icon, ``proj-<hash>``
+    for a per-project override). Each bucket carries the image file(s) plus,
+    for repo buckets, a ``manifest.json`` recording the icon lifecycle
+    (auto/manual/cleared). See docs/plans/2026-07-17-project-icons-design.md.
+    Populated on demand by ``twicc.project_icons``; not pre-created here.
+    """
+    return get_data_dir() / "project-icons"
+
+
 def get_scratch_dir() -> Path:
     """Return the scratch root directory (``<data_dir>/scratch/``).
 

@@ -9,6 +9,7 @@ import { getProviderHelpers, getProviderStore } from '../providers'
 import { getSessionCutoffMs, isSessionUnread } from '../utils/sessions'
 import { resolveProjectDefaultProvider, resolveProjectAgentDefaults } from '../utils/projectAgentDefaults'
 import { resolveProjectLayoutId } from '../utils/layoutDefaults'
+import { resolveProjectIconUrl } from '../utils/projectIcon'
 import { resolveProjectTrust } from '../utils/trust'
 import { useSettingsStore } from './settings'
 import { useLayoutsStore } from './layouts'
@@ -757,6 +758,17 @@ export const useDataStore = defineStore('data', {
             return ids
         },
         getProject: (state) => (id) => state.projects[id],
+        // Effective icon URL per project id, resolved by walking the inheritance
+        // chain (utils/projectIcon.js) so a manual override cascades to
+        // descendants. Memoized as a map — recomputed only when `projects`
+        // changes — so per-render lookups (session lists, palette, …) are O(1).
+        resolvedProjectIcons: (state) => {
+            const out = {}
+            for (const id in state.projects) {
+                out[id] = resolveProjectIconUrl(id, state.projects)
+            }
+            return out
+        },
         // Set of project ids whose *effective* trust is NOT trusted — i.e.
         // explicitly untrusted (`trust === false`) OR unknown (no own decision
         // and nothing resolvable up the chain). Drives the untrusted-project

@@ -445,6 +445,12 @@ async def register_project(
         new_color = await ensure_project_color(project.id, project.directory)
         if new_color:
             project.color = new_color
+        # Project icon: resolve the anchor (worktree main repo / umbrella /
+        # own git root) and auto-discover the repo's favicon/logo. Runs after
+        # worktree detection + color so the anchor and inheritance are settled.
+        # Never touches Project.icon; broadcasts project_updated on discovery.
+        from twicc.project_icons import ensure_project_icon
+        await ensure_project_icon(project)
 
     return project, created
 

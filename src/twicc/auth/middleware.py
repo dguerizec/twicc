@@ -46,6 +46,7 @@ PUBLIC_PATHS = (
 # sensitive content) and lets the frontend redirect to login.
 PROTECTED_NON_API_PREFIXES: tuple[str, ...] = (
     "/artifacts/",
+    "/project-icons/",
 )
 
 

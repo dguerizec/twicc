@@ -27,6 +27,7 @@ import { dateBucketSeparator } from '../../utils/datePresets'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from '../project/ProjectBadge.vue'
 import WorktreeBadge from '../project/WorktreeBadge.vue'
+import ProjectMark from '../project/ProjectMark.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ArtifactBookmarkDialog from './ArtifactBookmarkDialog.vue'
 import ArtifactsHelpButton from './ArtifactsHelpButton.vue'
@@ -95,6 +96,11 @@ function dotColor(b) {
     if (!p) return null
     if (p.worktree_of) return p.color || dataStore.getProject(p.worktree_of)?.color || null
     return p.color || null
+}
+
+/** Icon URL for the bookmark's project (server-resolved), else null → color dot. */
+function iconUrl(b) {
+    return dataStore.resolvedProjectIcons[b.project_id] || null
 }
 
 // Last-update time — rendered exactly like the session list (clock icon +
@@ -411,12 +417,12 @@ defineExpose({ handleKeyNavigation })
             >
                 <div class="bookmark-name-row">
                     <!-- Compact: inline project color dot (worktree inherits its parent's color) -->
-                    <span
+                    <ProjectMark
                         v-if="compactView"
                         :id="`bookmark-dot-${b.id}`"
-                        class="bookmark-dot"
-                        :style="dotColor(b) ? { '--dot-color': dotColor(b) } : null"
-                    ></span>
+                        :icon-url="iconUrl(b)"
+                        :color="dotColor(b)"
+                    />
                     <AppTooltip v-if="compactView" :for="`bookmark-dot-${b.id}`">
                         <WorktreeBadge v-if="isWorktree(b)" :project-id="b.project_id" :dot="false" />
                         <ProjectBadge v-else :project-id="b.project_id" />
@@ -594,16 +600,6 @@ defineExpose({ handleKeyNavigation })
 }
 
 /* Compact-mode project color dot (mirrors SessionListItem's compact dot). */
-.bookmark-dot {
-    width: var(--wa-space-s);
-    height: var(--wa-space-s);
-    border-radius: 50%;
-    flex-shrink: 0;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-border-quiet));
-}
 
 .bookmark-type {
     flex-shrink: 0;

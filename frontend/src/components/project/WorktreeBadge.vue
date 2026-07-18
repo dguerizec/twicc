@@ -12,11 +12,13 @@
 // badge). The leading dot can be suppressed (`:dot="false"`) when the caller
 // already draws its own (e.g. the selector trigger). When `parentLink` is set,
 // the main repo name becomes a link to that project's home.
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { worktreeLabel } from '../../utils/worktree'
 import { projectPathTitle } from '../../utils/projectName'
+import { useProjectMark } from '../../composables/useProjectMark'
+import ProjectMark from './ProjectMark.vue'
 
 const props = defineProps({
     projectId: { type: String, required: true },
@@ -58,9 +60,8 @@ const folderTitle = computed(() => {
     const path = projectPathTitle(project.value)
     return path && path !== folder.value ? path : null
 })
-const color = computed(() => {
-    const own = props.colorOverride !== null ? props.colorOverride : project.value?.color
-    return own || parent.value?.color || null
+const { iconUrl, dotColor } = useProjectMark(toRef(props, 'projectId'), {
+    colorOverride: toRef(props, 'colorOverride'),
 })
 // Flag the worktree as untrusted (effective trust ≠ trusted). The resolver
 // already inherits the main repo's trust through `worktree_of`.
@@ -69,11 +70,7 @@ const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
 
 <template>
     <span class="worktree-badge" :style="gap ? { '--badge-gap': gap } : null">
-        <span
-            v-if="dot"
-            class="worktree-badge-dot"
-            :style="color ? { '--dot-color': color } : null"
-        ></span>
+        <ProjectMark v-if="dot" :icon-url="iconUrl" :color="dotColor" />
         <template v-if="parentName">
             <RouterLink
                 v-if="parentLink && parentRoute"
@@ -102,17 +99,6 @@ const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
     align-items: center;
     gap: var(--badge-gap, var(--wa-space-xs));
     min-width: 0;
-}
-
-.worktree-badge-dot {
-    width: var(--wa-space-s);
-    height: var(--wa-space-s);
-    border-radius: 50%;
-    flex-shrink: 0;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-border-quiet));
 }
 
 .worktree-badge-sep {

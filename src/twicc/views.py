@@ -684,6 +684,97 @@ async def project_detail(request, project_id):
     return JsonResponse(serialize_project(project))
 
 
+_ICON_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _decode_image_data_uri(spec) -> tuple[str, bytes] | None:
+    """Return ``(mime, raw_bytes)`` from a ``data:`` image URI, or ``None``."""
+    import base64
+    import binascii
+
+    if not isinstance(spec, str) or not spec.startswith("data:"):
+        return None
+    rest = spec[len("data:"):]
+    header, sep, b64 = rest.partition(",")
+    if not sep:
+        return None
+    params = header.split(";")
+    mime = params[0].strip() or "application/octet-stream"
+    if not any(p.strip().lower() == "base64" for p in params[1:]):
+        return None
+    try:
+        raw = base64.b64decode("".join(b64.split()), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return (mime, raw) if raw else None
+
+
+async def project_icon_manage(request, project_id):
+    """POST /api/projects/<id>/icon/ — set/clear THIS project's icon, or scan.
+
+    An icon is a per-project value that cascades to descendants by inheritance
+    (resolved client-side), so there is no repo-level or "apply to all" action —
+    setting a project's icon is enough. JSON body, action-dispatched:
+
+    - ``{"action":"set","image":"<data-uri>"}`` — this project's own icon
+      (cascades to inheriting descendants);
+    - ``{"action":"none"}`` / ``{"action":"inherit"}`` — this project shows the
+      color dot / follows the inherited icon again;
+    - ``{"action":"scan"}`` — read-only: return the icon candidates found in the
+      repo (each a normalized data-URI preview) for the user to pick from.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    try:
+        project = await Project.objects.aget(id=project_id)
+    except Project.DoesNotExist:
+        raise Http404("Project not found")
+    try:
+        data = orjson.loads(request.body)
+    except orjson.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    from twicc import project_icons as pi
+
+    action = data.get("action")
+
+    if action == "scan":
+        anchor = project.icon_anchor or project.git_root
+        if not anchor:
+            return JsonResponse({"error": "Project is not in a git repository"}, status=400)
+        candidates = await sync_to_async(pi.scan_repo_icons)(anchor)
+        return JsonResponse({"candidates": candidates})
+
+    if action == "set":
+        decoded = _decode_image_data_uri(data.get("image"))
+        if decoded is None:
+            return JsonResponse({"error": "Invalid or missing image"}, status=400)
+        mime, raw = decoded
+        if len(raw) > _ICON_UPLOAD_MAX_BYTES:
+            return JsonResponse({"error": "Image too large (max 5 MB)"}, status=400)
+        ext = ".svg" if mime == "image/svg+xml" else ".png"
+        token = await run_under_db_write_lock(
+            lambda: sync_to_async(pi.set_project_icon_override_sync)(project_id, raw, ext)
+        )
+        if token is None:
+            return JsonResponse({"error": "Unsupported or corrupt image"}, status=400)
+    elif action in ("none", "inherit"):
+        await run_under_db_write_lock(
+            lambda: sync_to_async(pi.set_project_icon_state_sync)(project_id, action)
+        )
+    else:
+        return JsonResponse({"error": "Unknown action"}, status=400)
+
+    # Broadcast only the edited project; inheriting descendants re-resolve
+    # reactively client-side from this update.
+    from twicc.projects import _broadcast_project_updated
+
+    await _broadcast_project_updated(project_id)
+
+    project = await Project.objects.aget(id=project_id)
+    return JsonResponse(serialize_project(project))
+
+
 async def project_trust_resolve(request, project_id):
     """POST /api/projects/<id>/trust/resolve/ — resolve the project's effective trust.
 
@@ -3361,6 +3452,44 @@ async def session_artifact(request, session_id, artifact_file_name):
     # ``as_attachment=False`` keeps the image inline so the browser renders
     # it directly inside the SPA (e.g. inside Markdown image tags).
     return FileResponse(fp, content_type=content_type, as_attachment=False)
+
+
+# Project-icon buckets are opaque hashes: ``repo-<16 hex>`` (a repository's
+# shared icon) or ``proj-<16 hex>`` (a per-project override). See
+# twicc.project_icons and docs/plans/2026-07-17-project-icons-design.md.
+_ICON_BUCKET_RE = re.compile(r"^(?:repo|proj)-[0-9a-f]{16}$")
+
+
+async def project_icon(request, bucket, file_name):
+    """Serve a project icon image.
+
+    Mounted at ``/project-icons/<bucket>/<file_name>``. Like ``session_artifact``
+    it serves media (not JSON) and is auth-gated by ``PasswordAuthMiddleware``
+    via its protected non-API path list — served through Django, not BlackNoise,
+    so the auth gate applies. Files live at
+    ``<data_dir>/project-icons/<bucket>/<file_name>``. Same security envelope as
+    artifacts: opaque bucket shape, extension+filename allowlist, and
+    symlink/traversal confinement (:func:`safe_open_artifact`)."""
+    from django.http import FileResponse
+
+    from twicc.paths import get_project_icons_dir
+
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    if not _ICON_BUCKET_RE.match(bucket):
+        raise Http404("Project icon not found")
+    content_type = _classify_artifact_filename(file_name)
+    if content_type is None:
+        raise Http404("Project icon not found")
+
+    bucket_dir = get_project_icons_dir() / bucket
+    fp = await asyncio.to_thread(safe_open_artifact, bucket_dir, file_name)
+    if fp is None:
+        raise Http404("Project icon not found")
+
+    response = FileResponse(fp, content_type=content_type, as_attachment=False)
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 async def external_notifications_test(request):

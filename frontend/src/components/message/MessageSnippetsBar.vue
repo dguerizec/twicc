@@ -6,6 +6,7 @@ import { useDataStore } from '../../stores/data'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
 import AppTooltip from '../ui/AppTooltip.vue'
+import ProjectMark from '../project/ProjectMark.vue'
 
 defineProps({
     /** Pre-enriched snippets (with _disabled / _disabledReason from parent). */
@@ -63,8 +64,9 @@ function snippetScopeInfo(snippet) {
     const scope = snippet._scope
     if (!scope) return null
     if (scope.startsWith('project:')) {
-        const project = dataStore.getProject(scope.slice(8))
-        return { type: 'project', color: project?.color || null }
+        const projectId = scope.slice(8)
+        const project = dataStore.getProject(projectId)
+        return { type: 'project', color: project?.color || null, projectId }
     }
     if (scope.startsWith('workspace:')) {
         const ws = workspacesStore.getWorkspaceById(scope.slice(10))
@@ -134,10 +136,11 @@ function handleSnippetClick(snippet) {
                     @click="handleSnippetClick(snippet)"
                 >
                     <template v-if="snippetScopeInfo(snippet)?.type === 'project'">
-                        <span
-                            class="snippet-scope-dot"
-                            :style="snippetScopeInfo(snippet).color ? { '--dot-color': snippetScopeInfo(snippet).color } : null"
-                        ></span>
+                        <ProjectMark
+                            class="snippet-scope-mark"
+                            :icon-url="dataStore.resolvedProjectIcons[snippetScopeInfo(snippet).projectId] || null"
+                            :color="snippetScopeInfo(snippet).color"
+                        />
                     </template>
                     <template v-else-if="snippetScopeInfo(snippet)?.type === 'workspace'">
                         <wa-icon
@@ -288,15 +291,10 @@ button {
 }
 
 /* ── Scope indicators ────────────────────────────────────────────── */
-.snippet-scope-dot {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
+.snippet-scope-mark {
+    --project-mark-size: 0.85em;
+    --project-mark-icon-size: var(--wa-space-m);
     flex-shrink: 0;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-border-quiet));
 }
 
 .snippet-scope-icon {
