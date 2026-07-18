@@ -1,0 +1,20 @@
+name = "twicc-telemetry"
+main = "src/worker.js"
+compatibility_date = "2026-07-01"
+
+# Transparency page: files in ./public are served automatically for matching
+# GET requests; everything else falls through to the worker code.
+[assets]
+directory = "./public"
+
+# Custom domain — wrangler creates the DNS record + certificate on deploy
+# (the twidi.com zone is already on this Cloudflare account).
+routes = [
+  { pattern = "twicc-telemetry.twidi.com", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "twicc-telemetry"
+database_id = "REPLACE_AFTER_D1_CREATE"   # filled in Task 6 (first deploy)
+migrations_dir = "migrations"

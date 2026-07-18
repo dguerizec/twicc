@@ -1,0 +1,17 @@
+{
+  "name": "twicc-telemetry-collector",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "tail": "wrangler tail",
+    "db:migrate:remote": "wrangler d1 migrations apply twicc-telemetry --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.6",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.112.0"
+  }
+}
