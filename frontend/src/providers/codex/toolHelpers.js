@@ -26,6 +26,7 @@ import { capitalize } from '../utils/format'
 import { formatRelativePath, fileIconFor, resolveAbsolutePath } from '../utils/path'
 import { parseCommand } from './parseCommand'
 import { parseCodeModeOutput, parseCodeModeScript } from './parseCodeModeScript'
+import { describeWebRun, resolveCodeModeCall } from './codeModeDisplay'
 import { parseApplyPatchEnvelope } from './parsePatch'
 import { getTodoDescription } from '../../utils/todoList'
 import { formatToolNameForHeader } from '../../utils/toolNames'
@@ -35,6 +36,7 @@ import GrepSummary from '../../components/session/detail/items/summary/GrepSumma
 import MultiFileSummary from '../../components/session/detail/items/summary/MultiFileSummary.vue'
 import TodoSummary from '../../components/session/detail/items/summary/TodoSummary.vue'
 import WebFetchSummary from '../../components/session/detail/items/summary/WebFetchSummary.vue'
+import WebRunSummary from '../../components/session/detail/items/summary/WebRunSummary.vue'
 import WebSearchSummary from '../../components/session/detail/items/summary/WebSearchSummary.vue'
 import GoalUpdateSummary from '../../components/session/detail/items/summary/GoalUpdateSummary.vue'
 import ExecResultContent from '../../components/session/detail/items/codex/ExecResultContent.vue'
@@ -168,9 +170,10 @@ const MCP_TOOL_NAME_PREFIX = 'mcp__'
 // ``tools.apply_patch("...")``, …) — the rollout never persists the
 // nested calls, only the script. ``parseCodeModeScript`` statically
 // recovers them so a script wrapping a single resolvable call renders
-// like the direct call would (shell heuristics / patch diff); anything
-// else degrades to the generic "Run code" card enriched with the
-// detected call list. The companion ``wait`` function_call (resumes a
+// like the direct call would (shell heuristics, patch diff, Todo, web,
+// image, MCP); anything else degrades to the generic "Run code" card
+// enriched with the detected call list. The companion ``wait``
+// function_call (resumes a
 // still-running cell) never reaches these helpers: the backend buckets
 // it as SYSTEM and rebinds its output chunks to the owning ``exec``
 // call, so they surface here through ``aggregateCodeModeOutput`` like
@@ -179,54 +182,6 @@ const MCP_TOOL_NAME_PREFIX = 'mcp__'
 // shell command, so it must never enter ``extractCommandPayload`` et
 // al. Design: ``docs/plans/2026-07-10-codex-code-mode-display-design.md``.
 const CODE_MODE_EXEC_TOOL_NAME = 'exec'
-
-/**
- * Tier-1 detection for a code-mode script: return the single resolved
- * nested call when the script wraps exactly one and we know how to give
- * it a dedicated rendering (``exec_command`` with a string ``cmd``,
- * ``apply_patch`` with a string envelope, ``view_image`` with an object,
- * ``mcp__*`` with an object — or no — argument). Returns ``null`` for
- * everything else — multi-call scripts, unresolved arguments, other nested
- * tools — which then flow through the tier-2/3 generic paths.
- *
- * ``input`` is the tool card's input wrapper: ``{ input: <JS source> }``
- * as set by ``ToolUse.vue`` for ``custom_tool_call`` (a bare string is
- * tolerated for symmetry with the apply_patch helpers).
- */
-function resolveCodeModeCall(input) {
-    const source = typeof input === 'string' ? input : input?.input
-    if (typeof source !== 'string' || !source) return null
-    const { calls } = parseCodeModeScript(source)
-    if (calls.length !== 1 || !calls[0].resolved) return null
-    const call = calls[0]
-    if (call.name === 'exec_command') {
-        const arg = call.arg
-        if (arg && typeof arg === 'object' && !Array.isArray(arg)
-            && typeof arg.cmd === 'string' && arg.cmd) return call
-        return null
-    }
-    if (call.name === 'apply_patch') {
-        if (typeof call.arg === 'string' && call.arg) return call
-        return null
-    }
-    if (call.name === VIEW_IMAGE_TOOL_NAME) {
-        const arg = call.arg
-        if (
-            arg && typeof arg === 'object' && !Array.isArray(arg)
-            && typeof arg.path === 'string' && arg.path
-        ) return call
-        return null
-    }
-    if (call.name.startsWith(MCP_TOOL_NAME_PREFIX)) {
-        // MCP arguments are an object (``{}`` for none); a zero-arg call
-        // resolves to ``arg: null``. Anything else (array, scalar) is
-        // not a shape the MCP rendering knows — degrade to tier 2.
-        const arg = call.arg
-        if (arg === null || (arg && typeof arg === 'object' && !Array.isArray(arg))) return call
-        return null
-    }
-    return null
-}
 
 /**
  * Tier-2 summary text for a code-mode script: the detected nested tool
@@ -1217,6 +1172,13 @@ export class CodexToolHelpers extends BaseToolHelpers {
             }
             if (nested?.name === 'apply_patch') return 'Edit'
             if (nested?.name === VIEW_IMAGE_TOOL_NAME) return 'Image'
+            if (nested?.name === 'update_plan') return 'Todo'
+            if (nested?.name === 'web__run') {
+                const web = describeWebRun(nested.arg)
+                if (web?.kind === 'search') return 'Web search'
+                if (web?.kind === 'fetch') return 'Web fetch'
+                return 'Web'
+            }
             if (nested?.name?.startsWith(MCP_TOOL_NAME_PREFIX)) {
                 // Same words a direct MCP call would show: direct calls
                 // have no headerLabel, so the shell formats the raw
@@ -1260,6 +1222,36 @@ export class CodexToolHelpers extends BaseToolHelpers {
             }
             if (nested?.name === VIEW_IMAGE_TOOL_NAME) {
                 return this.getSummaryRendering(VIEW_IMAGE_TOOL_NAME, nested.arg, baseDir, options)
+            }
+            if (nested?.name === 'update_plan') {
+                return this.getSummaryRendering('update_plan', nested.arg, baseDir, options)
+            }
+            if (nested?.name === 'web__run') {
+                const web = describeWebRun(nested.arg)
+                if (!web || web.summaryItems.length === 0) return null
+                if (web.kind === 'search') {
+                    return {
+                        component: WebSearchSummary,
+                        props: {
+                            query: web.summaryItems.length === 1
+                                ? web.summaryItems[0]
+                                : web.summaryItems,
+                        },
+                    }
+                }
+                if (
+                    web.kind === 'fetch' && web.summaryItems.length === 1
+                    && /^https?:\/\/[^\s·]+$/i.test(web.summaryItems[0])
+                ) {
+                    return {
+                        component: WebFetchSummary,
+                        props: { url: web.summaryItems[0] },
+                    }
+                }
+                return {
+                    component: WebRunSummary,
+                    props: { items: web.summaryItems },
+                }
             }
             // Tier-1 MCP: a direct MCP call shows no summary (the
             // formatted name is already the header) — mirror that.
@@ -1477,6 +1469,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
             }
             if (nested?.name === VIEW_IMAGE_TOOL_NAME) {
                 return this.getInputRendering(VIEW_IMAGE_TOOL_NAME, nested.arg, ctx)
+            }
+            if (nested?.name === 'update_plan') {
+                return this.getInputRendering('update_plan', nested.arg, ctx)
             }
             return null
         }
@@ -1753,11 +1748,11 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // the MCP call's arguments, so the exec overrides (``cmd`` →
         // bash block, ``input`` → JS block) must not capture same-named
         // MCP argument keys.
-        if (
-            name === CODE_MODE_EXEC_TOOL_NAME
-            && resolveCodeModeCall(input)?.name?.startsWith(MCP_TOOL_NAME_PREFIX)
-        ) {
-            return {}
+        if (name === CODE_MODE_EXEC_TOOL_NAME) {
+            const nestedName = resolveCodeModeCall(input)?.name
+            if (nestedName?.startsWith(MCP_TOOL_NAME_PREFIX) || nestedName === 'web__run') {
+                return {}
+            }
         }
         return INPUT_OVERRIDES[name] ?? {}
     }
@@ -1782,6 +1777,12 @@ export class CodexToolHelpers extends BaseToolHelpers {
             // Tier-1 view_image: replace the JavaScript wrapper with the
             // semantic tool arguments, matching the direct tool card.
             if (nested?.name === VIEW_IMAGE_TOOL_NAME) return nested.arg
+            // Tier-1 update_plan: TodoContent owns the complete input body.
+            if (nested?.name === 'update_plan') return null
+            // Tier-1 web__run: show the semantic web arguments instead of
+            // the JavaScript transport wrapper. The response still renders
+            // through the normal code-mode result aggregation path.
+            if (nested?.name === 'web__run') return nested.arg
             // Tier-1 MCP: show the call's arguments object like a direct
             // MCP call does (nothing when the call takes none — the full
             // JS source stays reachable through the raw toggle).

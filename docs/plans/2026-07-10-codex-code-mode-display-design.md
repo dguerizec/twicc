@@ -123,6 +123,8 @@ Failure of any step degrades to tier 2/3, never throws. The extractor is pure an
 
 - `exec_command` — arg object with `cmd` (string), optional `workdir`. `cmd` feeds the existing shell heuristics.
 - `apply_patch` — arg is the patch envelope string (v4a `*** Begin Patch` grammar), feeds the existing patch parsing.
+- `update_plan` — arg object feeds the existing Todo summary and detail renderers; the backend independently recovers the same call for `Session.tasks`.
+- `web__run` — arg object is classified as search-only, navigation-only, or compound/hosted-data and rendered as Web search, Web fetch, or Web while preserving the returned content.
 - `mcp__*` — recognized and listed in summaries (tier 2); dedicated MCP rendering for tier 1 is optional polish, not required initially.
 - `write_stdin` — a single resolved wrapper with an integer `session_id` is invisible and rebound to the owning `exec_command`, including a transitive `wait` when the wrapper itself outlives its code cell.
 - everything else (`view_image`, unresolved/multi-tool `write_stdin` scripts, …) — listed by name only.
@@ -196,6 +198,8 @@ All `name === 'exec'` branches call the extractor once (memoized per item, same 
 
 - **tier 1, `exec_command`**: header label via `parseCommand(arg.cmd)` exactly like `exec_command` today; `getSummaryRendering` shows the summarized command; `getInputRendering` shows the command (bash block) with the JS source available as a collapsed/secondary block; result rendering uses the code-mode output parsing (§7.2). `arg.workdir` shown like `cwd` is today.
 - **tier 1, `apply_patch`**: header "Edit"; `getInputRendering` routes to `ApplyPatchContent` with the extracted patch string (it already accepts the raw envelope via `props.input` / `parseApplyPatchEnvelope`); summary path mirrors the direct `apply_patch` custom_tool_call.
+- **tier 1, `update_plan`**: header "Todo"; summary and detail delegate to the native `update_plan` path (`TodoSummary` / `TodoContent`), which also suppresses the redundant success result.
+- **tier 1, `web__run`**: search-only and navigation-only calls render as "Web search" / "Web fetch" with query or target summaries; compound and hosted-data calls render as neutral "Web". The nested arguments replace the JavaScript body while the code-mode output remains available as the result.
 - **tier 2**: header "Run code"; summary line lists detected calls (`exec_command ×2, apply_patch`); body = JS code block (current `INPUT_OVERRIDES.exec`) preceded by the resolved calls rendered individually when available.
 - **tier 3**: current behavior unchanged.
 
