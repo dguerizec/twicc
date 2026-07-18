@@ -73,9 +73,21 @@ def test_build_day_block(project):
     block = snapshot.build_day_block(DAY, {"presence_minutes": 45, "peak_agents": 3})
 
     assert block["date"] == DAY.isoformat()
-    assert block["sessions_by_model"] == {"claude_code": {"opus": 2}, "codex": {"gpt-terra": 1}}
-    assert block["sessions_by_effort"] == {"high": 3}
-    assert block["sessions_by_permission_mode"] == {"bypassPermissions": 2, "yolo": 1}
+    # Nested provider -> family -> version -> effort counts; resolve the
+    # current latest version from the registry so the test survives new
+    # model releases.
+    from twicc.providers.helpers import get_provider_helpers
+
+    opus = get_provider_helpers("claude_code").find_model("opus")
+    terra = get_provider_helpers("codex").find_model("gpt-terra")
+    assert block["sessions_by_model_effort"] == {
+        "claude_code": {"opus": {opus.version: {"high": 2}}},
+        "codex": {"gpt-terra": {terra.version: {"high": 1}}},
+    }
+    assert block["sessions_by_permission_mode"] == {
+        "claude_code": {"bypassPermissions": 2},
+        "codex": {"yolo": 1},
+    }
     assert block["messages_sent"] == 10
     assert block["subagents"] == 1
     assert block["sessions_spawned"] == 1
@@ -156,10 +168,21 @@ def test_day_block_contains_no_forbidden_fields(project):
     import socket
 
     assert bogus_model not in serialized
-    assert block["sessions_by_model"] == {"claude_code": {"unknown": 1}}
+    assert block["sessions_by_model_effort"] == {"claude_code": {"unknown": {"unknown": {"unknown": 1}}}}
     assert socket.gethostname() not in serialized
     assert project.directory not in serialized
     assert "/tmp/telemetry-snapshot-test" not in serialized
+
+
+def test_model_family_falls_back_to_raw_sdk_model_id(project):
+    # Sessions not created through TwiCC (external CLI runs, benchmarks) have
+    # no agent-settings bundle (selected_model NULL) but carry the raw SDK
+    # model id in Session.model — the family must resolve from it.
+    _make_session(project, "external-session", selected_model=None, model="claude-opus-4-8")
+
+    block = snapshot.build_day_block(DAY, {})
+
+    assert block["sessions_by_model_effort"] == {"claude_code": {"opus": {"4.8": {"unknown": 1}}}}
 
 
 def test_build_payload_returns_none_without_complete_unsent_day(project):
@@ -194,6 +217,11 @@ def test_build_payload_covers_complete_days_after_last_sent(project):
     assert payload["schema"] == snapshot.SCHEMA_VERSION
     assert payload["instance_id"] == "abc-123"
     assert payload["days"][-1]["date"] == complete_day.isoformat()
-    assert payload["days"][-1]["sessions_by_model"] == {"claude_code": {"opus": 1}}
+    from twicc.providers.helpers import get_provider_helpers
+
+    opus = get_provider_helpers("claude_code").find_model("opus")
+    assert payload["days"][-1]["sessions_by_model_effort"] == {
+        "claude_code": {"opus": {opus.version: {"high": 1}}}
+    }
     # "today" itself is never a complete day.
     assert today.isoformat() not in [d["date"] for d in payload["days"]]

@@ -80,15 +80,38 @@ def bucket(value: int | Decimal, edges: tuple[tuple[int | None, str], ...]) -> s
     return edges[-1][1]
 
 
-def model_family(provider: str, selected_model: str | None) -> str:
-    """Resolve ``selected_model`` to its cross-version family alias (e.g. ``"opus"``)."""
-    if not selected_model:
-        return "unknown"
+def model_family_version(
+    provider: str, selected_model: str | None, raw_model: str | None = None
+) -> tuple[str, str]:
+    """Resolve a session's model to its ``(family, version)`` couple
+    (e.g. ``("opus", "4.8")``) — versions of one family are distinct signals
+    and must never be mixed.
+
+    ``selected_model`` is the agent-settings alias, only present on sessions
+    created through TwiCC. Sessions merely synced from the provider's files
+    (external CLI runs, benchmarks, ...) have it NULL but usually carry
+    ``raw_model`` — ``Session.model``, the last SDK model id seen in the JSONL
+    (e.g. ``"claude-opus-4-8"``). Anything unresolvable collapses to
+    ``("unknown", "unknown")``.
+    """
     try:
-        mv = get_provider_helpers(provider).find_model(selected_model)
+        helpers = get_provider_helpers(provider)
     except Exception:
-        return "unknown"
-    return mv.model if mv else "unknown"
+        return ("unknown", "unknown")
+    for identifier in (selected_model, raw_model):
+        if not identifier:
+            continue
+        try:
+            mv = helpers.find_model(identifier)
+        except Exception:
+            continue
+        if not mv:
+            # find_model resolves alias forms; raw SDK ids need a full-name
+            # match (some provider overrides don't fall back to it themselves).
+            mv = next((c for c in helpers.MODEL_VERSIONS if c.full_name == identifier), None)
+        if mv:
+            return (mv.model, mv.version)
+    return ("unknown", "unknown")
 
 
 def build_instance_block() -> dict:
@@ -110,22 +133,32 @@ def build_day_block(day: date, day_state: dict) -> dict:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
 
-    sessions_by_model: dict[str, dict[str, int]] = {}
-    sessions_by_effort: dict[str, int] = {}
-    sessions_by_permission_mode: dict[str, int] = {}
+    # Nested counts: provider -> model family -> version -> effort -> count.
+    # Each level is a real dimension (no composite string keys to re-parse
+    # downstream — family names contain dashes and versions dots, so a flat
+    # key would be ambiguous), versions of one family are never mixed, and
+    # aggregating at any level is a subtree walk. A missing effort (external
+    # sessions, providers without the field) reads "unknown", mirroring the
+    # ("unknown", "unknown") model fallback.
+    # Permission modes are provider-specific vocabularies (bypassPermissions
+    # vs yolo, ...), so that breakdown is per provider too.
+    sessions_by_model_effort: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
+    sessions_by_permission_mode: dict[str, dict[str, int]] = {}
 
     session_rows = Session.objects.filter(
         type=SessionType.SESSION, created_at__gte=start, created_at__lt=end,
-    ).values_list("provider", "selected_model", "effort", "permission_mode")
+    ).values_list("provider", "selected_model", "model", "effort", "permission_mode")
 
-    for provider, selected_model, effort, permission_mode in session_rows:
-        family = model_family(provider, selected_model)
-        by_family = sessions_by_model.setdefault(provider, {})
-        by_family[family] = by_family.get(family, 0) + 1
-        if effort:
-            sessions_by_effort[effort] = sessions_by_effort.get(effort, 0) + 1
+    for provider, selected_model, raw_model, effort, permission_mode in session_rows:
+        family, version = model_family_version(provider, selected_model, raw_model)
+        efforts = (
+            sessions_by_model_effort.setdefault(provider, {}).setdefault(family, {}).setdefault(version, {})
+        )
+        effort_key = effort or "unknown"
+        efforts[effort_key] = efforts.get(effort_key, 0) + 1
         if permission_mode:
-            sessions_by_permission_mode[permission_mode] = sessions_by_permission_mode.get(permission_mode, 0) + 1
+            modes = sessions_by_permission_mode.setdefault(provider, {})
+            modes[permission_mode] = modes.get(permission_mode, 0) + 1
 
     totals = DailyActivity.objects.filter(project__isnull=True, date=day).aggregate(
         messages=Sum("user_message_count"), cost=Sum("cost"),
@@ -146,8 +179,7 @@ def build_day_block(day: date, day_state: dict) -> dict:
 
     return {
         "date": day.isoformat(),
-        "sessions_by_model": sessions_by_model,
-        "sessions_by_effort": sessions_by_effort,
+        "sessions_by_model_effort": sessions_by_model_effort,
         "sessions_by_permission_mode": sessions_by_permission_mode,
         "messages_sent": messages_sent,
         "subagents": subagents,

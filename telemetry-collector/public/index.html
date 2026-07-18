@@ -67,8 +67,7 @@
       <tr><td><code>remote_access</code></td><td>boolean</td><td>whether the instance is served beyond localhost (a password is configured)</td></tr>
 
       <tr><th colspan="3" scope="colgroup">Daily block (one per complete day)</th></tr>
-      <tr><td>sessions per model family</td><td>counts by provider &times; model family</td><td>volumetry, model adoption</td></tr>
-      <tr><td>sessions per effort</td><td>counts by provider &times; effort</td><td>volumetry, feature usage</td></tr>
+      <tr><td>sessions per model &times; effort</td><td>nested counts: provider &rarr; model family &rarr; version &rarr; effort; unresolvable values read <code>unknown</code></td><td>volumetry, model adoption</td></tr>
       <tr><td>sessions per permission mode</td><td>counts by provider &times; permission mode</td><td>volumetry, feature usage</td></tr>
       <tr><td>user messages sent</td><td>count</td><td>intensity</td></tr>
       <tr><td>subagent sessions</td><td>count</td><td>orchestration adoption</td></tr>
