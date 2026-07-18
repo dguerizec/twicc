@@ -920,8 +920,7 @@ function handleStopAgent() {
         <div slot="summary" class="items-details-summary">
             <div class="items-details-summary-left">
                 <strong v-if="isTask && displayName" class="items-details-summary-name">{{ displayName.name }}<span v-if="displayName.namespace" class="items-details-summary-quiet"> ({{ displayName.namespace }})</span></strong>
-                <strong v-else-if="headerLabel" class="items-details-summary-name">{{ headerLabel }}</strong>
-                <strong v-else class="items-details-summary-name">{{ formatToolNameForHeader(name) }}</strong>
+                <strong v-else class="items-details-summary-name">{{ formatToolNameForHeader(name, headerLabel) }}</strong>
                 <template v-if="summaryRendering">
                     <span class="items-details-summary-separator"> — </span>
                     <component :is="summaryRendering.component" v-bind="summaryRendering.props" />

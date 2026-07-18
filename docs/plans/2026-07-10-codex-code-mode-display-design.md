@@ -200,7 +200,7 @@ All `name === 'exec'` branches call the extractor once (memoized per item, same 
 - **tier 1, `apply_patch`**: header "Edit"; `getInputRendering` routes to `ApplyPatchContent` with the extracted patch string (it already accepts the raw envelope via `props.input` / `parseApplyPatchEnvelope`); summary path mirrors the direct `apply_patch` custom_tool_call.
 - **tier 1, `update_plan`**: header "Todo"; summary and detail delegate to the native `update_plan` path (`TodoSummary` / `TodoContent`), which also suppresses the redundant success result.
 - **tier 1, `web__run`**: search-only and navigation-only calls render as "Web search" / "Web fetch" with query or target summaries; compound and hosted-data calls render as neutral "Web". The nested arguments replace the JavaScript body while the code-mode output remains available as the result.
-- **tier 2**: header "Run code"; summary line lists detected calls (`exec_command ×2, apply_patch`); body = JS code block (current `INPUT_OVERRIDES.exec`) preceded by the resolved calls rendered individually when available.
+- **tier 2**: header "Run code"; summary line lists detected calls using the normal tool-card naming chain (`Shell ×2, Edit, MCP : Chrome devtools : List pages` — provider label first, then the shared MCP/general formatter); body = JS code block (current `INPUT_OVERRIDES.exec`) preceded by the resolved calls rendered individually when available.
 - **tier 3**: current behavior unchanged.
 
 `getHeaderLabel`, `getSummaryRendering`, `getInputRendering`, `getResultRendering`, `transformDisplayResult`, `getExpectedResultCount` each gain the `exec` branch; none of the existing sets (`FUNCTION_CALL_EXEC_TOOLS`, …) change membership.

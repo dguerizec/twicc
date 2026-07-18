@@ -26,7 +26,7 @@ import { capitalize } from '../utils/format'
 import { formatRelativePath, fileIconFor, resolveAbsolutePath } from '../utils/path'
 import { parseCommand } from './parseCommand'
 import { parseCodeModeOutput, parseCodeModeScript } from './parseCodeModeScript'
-import { describeWebRun, resolveCodeModeCall } from './codeModeDisplay'
+import { describeWebRun, resolveCodeModeCall, summarizeCodeModeCalls } from './codeModeDisplay'
 import { parseApplyPatchEnvelope } from './parsePatch'
 import { getTodoDescription } from '../../utils/todoList'
 import { formatToolNameForHeader } from '../../utils/toolNames'
@@ -182,25 +182,6 @@ const MCP_TOOL_NAME_PREFIX = 'mcp__'
 // shell command, so it must never enter ``extractCommandPayload`` et
 // al. Design: ``docs/plans/2026-07-10-codex-code-mode-display-design.md``.
 const CODE_MODE_EXEC_TOOL_NAME = 'exec'
-
-/**
- * Tier-2 summary text for a code-mode script: the detected nested tool
- * names in source order, deduplicated with a count (``exec_command ×2,
- * apply_patch``). Empty string when nothing was detected (tier 3).
- */
-function summarizeCodeModeCalls(input) {
-    const source = typeof input === 'string' ? input : input?.input
-    if (typeof source !== 'string' || !source) return ''
-    const { calls } = parseCodeModeScript(source)
-    if (calls.length === 0) return ''
-    const counts = new Map()
-    for (const call of calls) {
-        counts.set(call.name, (counts.get(call.name) ?? 0) + 1)
-    }
-    return [...counts.entries()]
-        .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
-        .join(', ')
-}
 
 /**
  * Walk the result chain of a code-mode ``exec`` call (its own
@@ -1157,6 +1138,12 @@ export class CodexToolHelpers extends BaseToolHelpers {
         if (name === 'web_search_call') {
             return input?.type === 'search' ? 'Web search' : 'Web fetch'
         }
+        if (name === 'web__run') {
+            const web = describeWebRun(input)
+            if (web?.kind === 'search') return 'Web search'
+            if (web?.kind === 'fetch') return 'Web fetch'
+            return web ? 'Web' : null
+        }
         // ``exec`` is Codex's ``code_mode`` tool — runs a JavaScript
         // snippet as a sandboxed code cell. When the script wraps a
         // single resolvable nested call, label it like the direct call
@@ -1259,7 +1246,10 @@ export class CodexToolHelpers extends BaseToolHelpers {
             // Tier 2: list the detected nested tools so the collapsed
             // card says what the script does. Tier 3 (nothing detected)
             // keeps the bare "Run code" header, no summary.
-            const detected = summarizeCodeModeCalls(input)
+            const detected = summarizeCodeModeCalls(
+                input,
+                (nestedName, nestedInput) => this.getHeaderLabel(nestedName, nestedInput, options),
+            )
             if (!detected) return null
             return {
                 component: DescriptionSummary,

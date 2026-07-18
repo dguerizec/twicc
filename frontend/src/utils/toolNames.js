@@ -20,8 +20,10 @@ function humanizeToolSegment(raw) {
 }
 
 /**
- * Fallback header label for tools that have neither a static
- * ``headerLabel`` nor a Task ``displayName``.
+ * Header label for tools that have neither a Task ``displayName`` nor a
+ * provider-specific label. When ``forcedLabel`` is supplied, it wins exactly
+ * like the tool-card shell's ``headerLabel`` branch; otherwise the shared MCP
+ * and general-name rules below apply.
  *
  * - Fully-qualified / MCP names (containing ``__`` — Claude Code's
  *   ``mcp__server__tool``, Codex's
@@ -37,7 +39,8 @@ function humanizeToolSegment(raw) {
  *   never surfaces raw (snake_case or PascalCase) in the header without a
  *   per-tool ``getHeaderLabel`` entry.
  */
-export function formatToolNameForHeader(rawName) {
+export function formatToolNameForHeader(rawName, forcedLabel = null) {
+    if (typeof forcedLabel === 'string' && forcedLabel) return forcedLabel
     if (typeof rawName !== 'string') return ''
     if (!rawName.includes('__')) {
         return humanizeToolSegment(rawName)

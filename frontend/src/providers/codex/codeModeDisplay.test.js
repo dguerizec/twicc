@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { describeWebRun, resolveCodeModeCall } from './codeModeDisplay.js'
+import { describeWebRun, resolveCodeModeCall, summarizeCodeModeCalls } from './codeModeDisplay.js'
 
 test('resolves a code-mode update_plan call for Todo rendering', () => {
     const input = {
@@ -79,4 +79,19 @@ test('keeps existing shell, patch, image, and MCP resolution intact', () => {
 test('does not resolve multi-call or dynamic wrappers', () => {
     assert.equal(resolveCodeModeCall('await tools.update_plan(makePlan());'), null)
     assert.equal(resolveCodeModeCall('await tools.update_plan({plan:[]}); await tools.web__run({open:[{ref_id:"https://example.com"}]});'), null)
+})
+
+test('formats multi-call summaries through forced, MCP, and general tool-name rules', () => {
+    const input = [
+        'await tools.exec_command({cmd:"pwd"});',
+        'await tools.exec_command({cmd:"ls"});',
+        'await tools.apply_patch("*** Begin Patch\\n*** End Patch");',
+        'await tools.mcp__chrome_devtools__list_pages({});',
+        'await tools.request_user_input({questions:[]});',
+    ].join(' ')
+
+    assert.equal(summarizeCodeModeCalls(input, (name) => ({
+        exec_command: 'Shell',
+        apply_patch: 'Edit',
+    })[name] ?? null), 'Shell ×2, Edit, MCP : Chrome devtools : List pages, Request user input')
 })

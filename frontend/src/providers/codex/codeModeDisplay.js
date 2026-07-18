@@ -1,4 +1,5 @@
 import { parseCodeModeScript } from './parseCodeModeScript.js'
+import { formatToolNameForHeader } from '../../utils/toolNames.js'
 
 const MCP_TOOL_NAME_PREFIX = 'mcp__'
 const VIEW_IMAGE_TOOL_NAME = 'view_image'
@@ -128,4 +129,30 @@ export function resolveCodeModeCall(input) {
         return arg === null || isObject(arg) ? call : null
     }
     return null
+}
+
+/**
+ * Summarize every nested call in a code-mode script using the same naming
+ * chain as a normal tool card: an optional provider label first, then the
+ * shared MCP/general formatter. Equal display names are grouped in source
+ * order and receive a multiplication suffix.
+ */
+export function summarizeCodeModeCalls(input, getHeaderLabel = null) {
+    const source = typeof input === 'string' ? input : input?.input
+    if (typeof source !== 'string' || !source) return ''
+    const { calls } = parseCodeModeScript(source)
+    if (calls.length === 0) return ''
+
+    const counts = new Map()
+    for (const call of calls) {
+        const arg = call.resolved ? call.arg : null
+        const forcedLabel = typeof getHeaderLabel === 'function'
+            ? getHeaderLabel(call.name, arg)
+            : null
+        const displayName = formatToolNameForHeader(call.name, forcedLabel)
+        counts.set(displayName, (counts.get(displayName) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+        .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
+        .join(', ')
 }
