@@ -2,9 +2,10 @@
 // dev server) via a classic <script> tag served at /_twicc/browser-companion.js.
 // When that page is embedded in TwiCC's Browser pane, the companion bridges
 // the cross-origin gap over postMessage: it reports real navigation (URL
-// changes, history capabilities), executes the pane's Back / Forward /
-// Reload / Navigate commands against the page's own history, and runs
-// host-toggled in-page modes (select-area element outline).
+// changes), moves the page to a host-supplied target URL (soft in-document when
+// possible, else a reload — it NEVER traverses the tab's shared session history,
+// so the TwiCC parent can't be dragged along), reloads it, and runs host-toggled
+// in-page modes (select-area element outline).
 //
 // Trust model: the embedder is unknown at load time, so the initial `hello`
 // is payload-free and posted to '*'. The page URL only flows AFTER the host
@@ -31,6 +32,24 @@ function install() {
     let hostOrigin = null
     let stateScheduled = false
 
+    // Current URL, with a bare trailing '#' normalised away: clearing a fragment
+    // (location.hash = '') can leave one behind in some engines, and it must
+    // compare equal to the fragmentless URL for the stack bookkeeping below.
+    function href() {
+        const h = window.location.href
+        return h.endsWith('#') ? h.slice(0, -1) : h
+    }
+
+    // ── Current-document navigation memory. The HOST owns the Back/Forward
+    // history (it lives in the TwiCC parent, which — unlike this frame — is never
+    // reloaded, so it survives full page navigations, MPA and cross-origin
+    // alike). The companion only remembers the URLs reachable WITHOUT a reload
+    // inside the CURRENT document (soft SPA routes), mapped to the page's
+    // history.state so a soft move can restore it. Rebuilt from scratch on every
+    // document load — exactly the set that is soft-reachable right now.
+    const LIVE_DOC_MAX = 100
+    const liveDoc = new Map([[href(), window.history.state]])
+
     function post(message, targetOrigin) {
         try {
             window.parent.postMessage(message, targetOrigin)
@@ -40,14 +59,10 @@ function install() {
     }
 
     function currentState() {
-        // Navigation API (Chromium): accurate traversal state. Elsewhere null
-        // means "unknown" and the host keeps its buttons enabled.
-        const nav = window.navigation
-        return {
-            url: window.location.href,
-            canGoBack: nav ? nav.canGoBack === true : null,
-            canGoForward: nav ? nav.canGoForward === true : null,
-        }
+        // Just the URL. Back/Forward capability is the host's to compute — it
+        // owns the cross-document history; the companion only reports where the
+        // page currently is.
+        return { url: href() }
     }
 
     // Coalesce bursts: a pushState patched below AND the Navigation API both
@@ -61,6 +76,62 @@ function install() {
         })
     }
 
+    // ── Navigating the page WITHOUT traversing the shared session history ─────
+    // A browser keeps ONE session history for the whole tab: every entry is a
+    // snapshot of the top document (TwiCC) AND every frame. window.history.back()
+    // / forward() — whoever calls them — merely step that shared pointer by one,
+    // so from an embedded frame a step can land on an entry that differs only in
+    // the TOP frame and navigate TwiCC itself instead of this page (the
+    // frame-scoped Navigation API back()/forward() fail the same way once a
+    // parent navigation is interleaved). So the companion NEVER traverses.
+    //
+    // Instead it goes to a host-supplied target URL by ADDING a navigation — a
+    // frame-local act that can never move the parent. If the target is reachable
+    // inside the current document (a soft SPA route we have seen), it moves there
+    // softly like the SPA itself would: pushState (or a hash change) plus a
+    // signal to the page's router (a synthetic popstate, or the native
+    // hashchange), no reload. Otherwise the target lives in another document, so
+    // it is a plain location.assign — a reload of that page, exactly as a real
+    // browser Back across documents is. Either way the parent is untouched.
+    function sameExceptHash(a, b) {
+        const ai = a.indexOf('#')
+        const bi = b.indexOf('#')
+        return (ai === -1 ? a : a.slice(0, ai)) === (bi === -1 ? b : b.slice(0, bi))
+    }
+
+    function recordLive() {
+        // Remember the current URL as soft-reachable in this document, capped so
+        // a long-lived SPA can't grow it without bound (evicting the oldest only
+        // downgrades a very old route's Back to a reload).
+        liveDoc.set(href(), window.history.state)
+        if (liveDoc.size > LIVE_DOC_MAX) liveDoc.delete(liveDoc.keys().next().value)
+    }
+
+    function softNavigate(url, state) {
+        try {
+            if (sameExceptHash(url, href())) {
+                // Hash-only change: a hashchange-based router reacts only to a
+                // real hash change (a synthetic popstate would not fire one).
+                const hi = url.indexOf('#')
+                window.location.hash = hi === -1 ? '' : url.slice(hi)
+            } else {
+                window.history.pushState(state ?? null, '', url)
+                window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }))
+            }
+        } catch {
+            // A refused navigation (e.g. a malformed url) — do nothing.
+        }
+        scheduleState()
+    }
+
+    function navigateTo(url) {
+        // The host's Back/Forward resolve to a target URL. Soft if we can reach
+        // it in this document without a reload; a reload of that page otherwise.
+        if (url === href()) return
+        if (liveDoc.has(url)) softNavigate(url, liveDoc.get(url))
+        else window.location.assign(url)
+    }
+
     window.addEventListener('message', (event) => {
         if (event.source !== window.parent || !isHostMessage(event.data)) return
         const message = event.data
@@ -72,10 +143,8 @@ function install() {
             return
         }
         if (message.type !== 'command' || event.origin !== hostOrigin) return
-        if (message.action === 'back') {
-            window.history.back()
-        } else if (message.action === 'forward') {
-            window.history.forward()
+        if (message.action === 'navigate-to' && typeof message.url === 'string' && /^https?:\/\//i.test(message.url)) {
+            navigateTo(message.url)
         } else if (message.action === 'reload') {
             window.location.reload()
         } else if (message.action === 'navigate' && typeof message.url === 'string' && /^https?:\/\//i.test(message.url)) {
@@ -125,17 +194,16 @@ function install() {
         }
     }
 
-    // SPA URL changes. The History API has no event for pushState/replaceState
-    // — patch them; popstate/hashchange cover traversals everywhere, and the
-    // Navigation API adds accurate coverage on Chromium. This is the one
-    // page-owned global we mutate: keep it perfectly transparent — always call
-    // the original, always return its result, and never let our own bookkeeping
-    // throw into the page's navigation call.
+    // SPA URL changes. The History API fires no event for pushState/replaceState
+    // — patch them so a soft in-document route is remembered (and reported). Stay
+    // perfectly transparent: always call the original, always return its result,
+    // never let our bookkeeping throw into the page's navigation call.
     for (const method of ['pushState', 'replaceState']) {
         const original = window.history[method]
         window.history[method] = function (...args) {
             const result = original.apply(this, args)
             try {
+                recordLive()
                 scheduleState()
             } catch {
                 // Instrumentation must never break the page's navigation.
@@ -143,8 +211,17 @@ function install() {
             return result
         }
     }
-    window.addEventListener('popstate', scheduleState)
-    window.addEventListener('hashchange', scheduleState)
+    // popstate / hashchange: the page's URL changed under its own steam (a link,
+    // its router, its own Back button) — or our own soft nav, which lands on a
+    // URL already in liveDoc, so recording it again is a harmless no-op.
+    window.addEventListener('popstate', () => {
+        recordLive()
+        scheduleState()
+    })
+    window.addEventListener('hashchange', () => {
+        recordLive()
+        scheduleState()
+    })
     window.navigation?.addEventListener('currententrychange', scheduleState)
 
     // ── Page error capture: console.error, uncaught exceptions and unhandled

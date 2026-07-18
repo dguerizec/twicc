@@ -110,8 +110,15 @@ const addressFocused = ref(false)
 //   waiting — undetermined: navigation in flight / grace period running
 //   present — handshake done; navigation flows both ways
 const companionStatus = ref('absent')
-const companionCanGoBack = ref(null)   // null = unknown (no Navigation API)
-const companionCanGoForward = ref(null)
+// Companion-mode Back/Forward history. The HOST owns it: it lives here, in the
+// TwiCC parent, so it survives full reloads of the embedded frame — MPA and
+// cross-origin navigations included, unlike anything the companion could keep.
+// Fed by the companion's URL reports; each Back/Forward resolves to a target URL
+// the companion then moves to (soft in-document, or a reload). Independent of
+// the fallback `urlHistory`, and never reset by companion connect/disconnect.
+const navStack = ref([])
+const navIndex = ref(-1)
+const NAV_STACK_MAX = 200
 let companionOrigin = null
 let helloGraceTimer = null
 // True once a companion connected: the fallback stack froze during that
@@ -142,8 +149,6 @@ function onWindowMessage(event) {
         companionOrigin = event.origin
         companionStatus.value = 'present'
         hadCompanion = true
-        companionCanGoBack.value = null
-        companionCanGoForward.value = null
         // A hello means a fresh document — any select-area overlay died with
         // the old one, so the host flag must not claim the mode is still on.
         selectAreaActive.value = false
@@ -161,8 +166,6 @@ function onWindowMessage(event) {
     }
     if (event.origin !== companionOrigin) return
     if (data.type === 'state') {
-        companionCanGoBack.value = typeof data.canGoBack === 'boolean' ? data.canGoBack : null
-        companionCanGoForward.value = typeof data.canGoForward === 'boolean' ? data.canGoForward : null
         // The embedded page is untrusted: only adopt plain http(s) URLs. A
         // hostile page could report a javascript:/data: string that would
         // otherwise reach the UNsandboxed iframe src on a later fallback
@@ -173,12 +176,15 @@ function onWindowMessage(event) {
             typeof data.url === 'string' && /^https?:\/\//i.test(data.url)
                 ? data.url.replace(/^https?/i, (scheme) => scheme.toLowerCase())
                 : null
-        if (url && url !== currentUrl.value) {
-            currentUrl.value = url
-            // Never clobber an in-progress address-bar edit.
-            if (!addressFocused.value) inputUrl.value = url
-            probeResult.value = null // a page just loaded — any diagnosis is stale
-            persistUrlDebounced()
+        if (url) {
+            reconcileNav(url)
+            if (url !== currentUrl.value) {
+                currentUrl.value = url
+                // Never clobber an in-progress address-bar edit.
+                if (!addressFocused.value) inputUrl.value = url
+                probeResult.value = null // a page just loaded — any diagnosis is stale
+                persistUrlDebounced()
+            }
         }
     } else if (data.type === 'select-state') {
         // Capabilities of the currently highlighted element (select-area
@@ -299,13 +305,11 @@ onBeforeUnmount(() => {
 })
 
 const canGoBack = computed(() =>
-    companionStatus.value === 'present'
-        ? companionCanGoBack.value !== false // null (unknown) keeps the button usable
-        : historyIndex.value > 0
+    companionStatus.value === 'present' ? navIndex.value > 0 : historyIndex.value > 0
 )
 const canGoForward = computed(() =>
     companionStatus.value === 'present'
-        ? companionCanGoForward.value !== false
+        ? navIndex.value < navStack.value.length - 1
         : historyIndex.value < urlHistory.value.length - 1
 )
 
@@ -340,6 +344,26 @@ const mixedContentBlocked = computed(
     () => window.location.protocol === 'https:' && currentUrl.value.startsWith('http://')
 )
 
+// Fold a companion-reported URL into the host-owned history. Idempotent on the
+// current entry; a neighbour match is a traversal (move the cursor); a known
+// entry elsewhere is a jump; anything else is a new forward navigation (which
+// truncates the forward entries). It only ever sees URLs, so it treats a soft
+// in-document move and a full document load exactly the same.
+function reconcileNav(url) {
+    const s = navStack.value
+    const i = navIndex.value
+    if (s[i] === url) return
+    if (s[i + 1] === url) return void (navIndex.value = i + 1)
+    if (s[i - 1] === url) return void (navIndex.value = i - 1)
+    const existing = s.indexOf(url)
+    if (existing !== -1) return void (navIndex.value = existing)
+    const next = s.slice(0, i + 1)
+    next.push(url)
+    if (next.length > NAV_STACK_MAX) next.shift()
+    navStack.value = next
+    navIndex.value = next.length - 1
+}
+
 // Fallback-mode hard navigation: point the (re-created) iframe at a URL.
 function showFrame(url) {
     currentUrl.value = url
@@ -348,8 +372,6 @@ function showFrame(url) {
     frameKey.value++
     loading.value = true
     companionStatus.value = 'waiting'
-    companionCanGoBack.value = null
-    companionCanGoForward.value = null
     clearHelloGraceTimer()
     probeResult.value = null // clear a stale diagnosis right away
     probeCurrentUrl()
@@ -360,7 +382,9 @@ function navigate(rawInput) {
     const url = normalizeBrowserUrl(rawInput)
     if (!url) return
     if (companionStatus.value === 'present') {
-        // Navigate in place — preserves the frame's real session history.
+        // Address-bar navigation: load it in the frame (the companion assigns
+        // it). The new page reports its URL back and reconcileNav appends it to
+        // the host history — no shared-history traversal, parent untouched.
         sendToCompanion(hostMessage('command', { action: 'navigate', url }))
         currentUrl.value = url
         inputUrl.value = url
@@ -379,7 +403,13 @@ function navigate(rawInput) {
 
 function goBack() {
     if (companionStatus.value === 'present') {
-        sendToCompanion(hostMessage('command', { action: 'back' }))
+        if (navIndex.value <= 0) return
+        navIndex.value--
+        // The companion moves to the target — softly if it's in the current
+        // document, else a reload. Never a shared-history traversal, so the
+        // TwiCC parent is never dragged along.
+        sendToCompanion(hostMessage('command', { action: 'navigate-to', url: navStack.value[navIndex.value] }))
+        loading.value = true
         return
     }
     if (!canGoBack.value) return
@@ -389,7 +419,10 @@ function goBack() {
 
 function goForward() {
     if (companionStatus.value === 'present') {
-        sendToCompanion(hostMessage('command', { action: 'forward' }))
+        if (navIndex.value >= navStack.value.length - 1) return
+        navIndex.value++
+        sendToCompanion(hostMessage('command', { action: 'navigate-to', url: navStack.value[navIndex.value] }))
+        loading.value = true
         return
     }
     if (!canGoForward.value) return
@@ -439,8 +472,6 @@ function onFrameLoad() {
     helloGraceTimer = setTimeout(() => {
         helloGraceTimer = null
         companionStatus.value = 'absent'
-        companionCanGoBack.value = null
-        companionCanGoForward.value = null
         if (hadCompanion) {
             // The fallback stack froze during the companion session — its
             // entries predate it, and Back would jump to a long-gone page.

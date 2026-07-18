@@ -27,7 +27,7 @@ test('isCompanionMessage accepts its own envelopes and rejects everything else',
 })
 
 test('isHostMessage accepts its own envelopes and rejects everything else', () => {
-    assert.equal(isHostMessage(hostMessage('command', { action: 'back' })), true)
+    assert.equal(isHostMessage(hostMessage('command', { action: 'navigate-to' })), true)
     assert.equal(isHostMessage(companionMessage('hello')), false)
     assert.equal(isHostMessage({}), false)
 })

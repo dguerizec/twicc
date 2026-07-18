@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Codex Fast mode** — Run supported Codex models up to 1.5× faster when speed matters.
 
+### Fixed
+
+- **Browser tab** — Back and Forward now reliably move within the embedded page, on single-page and multi-page sites alike, instead of sometimes navigating TwiCC itself backwards.
+
 ## [1.92.4] - 2026-07-18
 
 ### Summary
