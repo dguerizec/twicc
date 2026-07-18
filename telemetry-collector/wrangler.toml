@@ -2,16 +2,20 @@ name = "twicc-telemetry"
 main = "src/worker.js"
 compatibility_date = "2026-07-01"
 
+# Custom domain — wrangler creates the DNS record + certificate on deploy
+# (the twidi.com zone is already on this Cloudflare account). This top-level
+# key MUST stay above the [assets] table header: in TOML every key after a
+# table header belongs to that table, so placing `routes` below [assets]
+# would bind it as `assets.routes` and wrangler would silently ignore the
+# custom domain (build warning: "Unexpected fields found in assets field").
+routes = [
+  { pattern = "twicc-telemetry.twidi.com", custom_domain = true }
+]
+
 # Transparency page: files in ./public are served automatically for matching
 # GET requests; everything else falls through to the worker code.
 [assets]
 directory = "./public"
-
-# Custom domain — wrangler creates the DNS record + certificate on deploy
-# (the twidi.com zone is already on this Cloudflare account).
-routes = [
-  { pattern = "twicc-telemetry.twidi.com", custom_domain = true }
-]
 
 [[d1_databases]]
 binding = "DB"
