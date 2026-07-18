@@ -44,8 +44,10 @@ npx wrangler d1 create twicc-telemetry
 ```
 
 Paste the returned `database_id` into `wrangler.toml`, replacing the
-`REPLACE_AFTER_D1_CREATE` placeholder. This id is **intentionally committed**
-— D1 database ids are not secrets, so don't "sanitize" it back out.
+`REPLACE_AFTER_D1_CREATE` placeholder, and commit that one-line change
+(`chore(telemetry): pin the production D1 database id`). The id is
+**intentionally committed** — D1 database ids are not secrets, so don't
+"sanitize" it back out.
 
 ```bash
 npm run db:migrate:remote
@@ -115,6 +117,8 @@ npx wrangler d1 execute twicc-telemetry --remote --command \
 npx wrangler d1 execute twicc-telemetry --remote --command \
   "SELECT received_at, json_pretty(body) AS body FROM payloads WHERE instance_id = 'INSTANCE_ID_HERE' ORDER BY received_at DESC LIMIT 1;"
 ```
+
+`json_pretty()` needs SQLite >= 3.46; if D1 ever rejects it, substitute `json(body)`.
 
 For interactive SQL, the D1 database also has a console in the Cloudflare
 dashboard (Workers & Pages -> D1 -> `twicc-telemetry` -> Console).

@@ -14,8 +14,8 @@ export default defineConfig({
   },
   plugins: [
     cloudflareTest(async () => {
-      // fileURLToPath keeps this working on Node 18/20 alike
-      // (import.meta.dirname only exists from Node 20.11).
+      // fileURLToPath instead of import.meta.dirname: no reason to require
+      // a newer Node than wrangler itself does.
       const migrations = await readD1Migrations(fileURLToPath(new URL("migrations/", import.meta.url)));
       return {
         wrangler: { configPath: "./wrangler.toml" },
