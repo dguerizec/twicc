@@ -120,7 +120,7 @@ class TestSendCycle:
 
         assert len(posts) == 1
         url, body = posts[0]
-        assert url == task.get_endpoint()
+        assert url == task.settings.TELEMETRY_ENDPOINT
         assert body == payload
         assert [d["date"] for d in body["days"]] == ["2026-07-10"]
         assert mark_sent_calls == [(("2026-07-10", payload), {})]
@@ -171,7 +171,7 @@ class TestSendCycle:
             status_code = 500
 
             def raise_for_status(self):
-                request = httpx.Request("POST", task.get_endpoint())
+                request = httpx.Request("POST", task.settings.TELEMETRY_ENDPOINT)
                 response = httpx.Response(500, request=request)
                 raise httpx.HTTPStatusError("Server error", request=request, response=response)
 

@@ -358,6 +358,13 @@ TMUX_CLEANUP_ENABLED = os.environ.get("TWICC_NO_TMUX_CLEANUP", "").strip().lower
 # Env kill switch; the synced setting telemetryEnabled is checked at runtime.
 TELEMETRY_ENABLED = os.environ.get("TWICC_NO_TELEMETRY", "").strip().lower() not in ("1", "true", "yes")
 
+# Where telemetry payloads are POSTed. The hardcoded production URL is the
+# authoritative value shipped with the project; the env override exists for
+# dev/E2E only (e.g. a local `wrangler dev` collector).
+TELEMETRY_ENDPOINT = (
+    os.environ.get("TWICC_TELEMETRY_URL", "").strip() or "https://twicc-telemetry.twidi.com/v1/telemetry"
+)
+
 # Auto-enable every registered provider at first boot
 # Set TWICC_AUTO_ENABLE_PROVIDERS=1 to bypass the initial provider activation
 # dialog: at backend startup, if ``disabledProviders`` is absent from

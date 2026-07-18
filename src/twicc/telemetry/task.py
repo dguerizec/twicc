@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
 import httpx
 from django.conf import settings
@@ -20,12 +19,6 @@ logger = logging.getLogger(__name__)
 
 TICK_INTERVAL = 60
 TELEMETRY_SEND_INTERVAL = 24 * 60 * 60
-DEFAULT_ENDPOINT = "https://twicc-telemetry.twidi.com/v1/telemetry"
-
-
-def get_endpoint() -> str:
-    # Override for dev/E2E (e.g. a local `wrangler dev` collector).
-    return os.environ.get("TWICC_TELEMETRY_URL", "").strip() or DEFAULT_ENDPOINT
 
 
 def is_telemetry_active() -> bool:
@@ -76,7 +69,7 @@ async def send_cycle() -> None:
         return
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(get_endpoint(), json=payload)
+            response = await client.post(settings.TELEMETRY_ENDPOINT, json=payload)
             response.raise_for_status()
     except Exception as exc:
         logger.debug("Telemetry send failed (will retry next cycle): %s", exc)
