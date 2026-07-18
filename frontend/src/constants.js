@@ -217,4 +217,7 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     // Start new Claude Code sessions in hybrid mode by default (drafts only;
     // never enforced on existing sessions). Shown in the Claude settings section.
     'claudeHybridDefault',
+    // Anonymous telemetry opt-in/out, and whether the user has seen the
+    // telemetry notice (gates a one-time explainer). Shown in the Global section.
+    'telemetryEnabled', 'telemetryNoticeSeen',
 ])

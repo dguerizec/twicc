@@ -595,6 +595,8 @@ if (!('tmuxConfigPathValidateResolve' in __hmrState)) __hmrState.tmuxConfigPathV
 // Usage *file* (read mode) validation can run concurrently for several
 // providers, so the resolver is keyed by provider rather than singular.
 if (!('usageFileValidateResolvers' in __hmrState)) __hmrState.usageFileValidateResolvers = new Map()
+if (!('telemetryPayloadResolve' in __hmrState)) __hmrState.telemetryPayloadResolve = null
+if (!('telemetryInstanceIdResetResolve' in __hmrState)) __hmrState.telemetryInstanceIdResetResolve = null
 
 /**
  * Validate a usage dump file path (write mode) on the backend.
@@ -643,6 +645,37 @@ export function sendValidateTmuxConfigPath(filePath) {
         if (!sent) {
             __hmrState.tmuxConfigPathValidateResolve = null
             resolve({ valid: false, message: 'Not connected' })
+        }
+    })
+}
+
+/**
+ * Request the last-sent (or a fresh preview, when telemetry has never sent
+ * yet) anonymous telemetry payload from the backend.
+ * @returns {Promise<{payload: Object|null, sent_at: string|null, preview: boolean}>}
+ */
+export function requestTelemetryPayload() {
+    return new Promise((resolve) => {
+        __hmrState.telemetryPayloadResolve = resolve
+        const sent = sendWsMessage({ type: 'get_telemetry_payload' })
+        if (!sent) {
+            __hmrState.telemetryPayloadResolve = null
+            resolve({ payload: null, sent_at: null, preview: false })
+        }
+    })
+}
+
+/**
+ * Ask the backend to reset (regenerate) the anonymous telemetry instance id.
+ * @returns {Promise<{instance_id: string|null}>}
+ */
+export function requestTelemetryInstanceIdReset() {
+    return new Promise((resolve) => {
+        __hmrState.telemetryInstanceIdResetResolve = resolve
+        const sent = sendWsMessage({ type: 'reset_telemetry_instance_id' })
+        if (!sent) {
+            __hmrState.telemetryInstanceIdResetResolve = null
+            resolve({ instance_id: null })
         }
     })
 }
@@ -1397,6 +1430,18 @@ export function useWebSocket() {
                 if (__hmrState.tmuxConfigPathValidateResolve) {
                     __hmrState.tmuxConfigPathValidateResolve({ valid: msg.valid, message: msg.message })
                     __hmrState.tmuxConfigPathValidateResolve = null
+                }
+                break
+            case 'telemetry_payload':
+                if (__hmrState.telemetryPayloadResolve) {
+                    __hmrState.telemetryPayloadResolve({ payload: msg.payload, sent_at: msg.sent_at, preview: msg.preview })
+                    __hmrState.telemetryPayloadResolve = null
+                }
+                break
+            case 'telemetry_instance_id_reset':
+                if (__hmrState.telemetryInstanceIdResetResolve) {
+                    __hmrState.telemetryInstanceIdResetResolve({ instance_id: msg.instance_id })
+                    __hmrState.telemetryInstanceIdResetResolve = null
                 }
                 break
             case 'synced_settings_updated':

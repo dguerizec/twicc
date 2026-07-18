@@ -78,6 +78,10 @@ export const SETTINGS_SCHEMA = {
     claudeHybridExplainerSeen: null,
     // Start new Claude Code sessions in hybrid mode by default (drafts only).
     claudeHybridDefault: null,
+    // Anonymous telemetry opt-in/out (default-on when unset).
+    telemetryEnabled: null,
+    // Whether the user has seen the telemetry notice/explainer.
+    telemetryNoticeSeen: null,
     // --- Not persisted - runtime state ---
     _disabledProvidersPresent: false,
     _devMode: false,
@@ -118,6 +122,8 @@ const SETTINGS_VALIDATORS = {
     autoUnpinOnArchive: (v) => typeof v === 'boolean',
     claudeHybridExplainerSeen: (v) => typeof v === 'boolean',
     claudeHybridDefault: (v) => typeof v === 'boolean',
+    telemetryEnabled: (v) => typeof v === 'boolean',
+    telemetryNoticeSeen: (v) => typeof v === 'boolean',
     worktreeDirectoryTemplate: (v) => typeof v === 'string' && validateWorktreeTemplate(v).valid,
     terminalUseTmux: (v) => typeof v === 'boolean',
     terminalTmuxConfigPath: (v) => typeof v === 'string',
@@ -307,6 +313,10 @@ export const useSettingsStore = defineStore('settings', {
         isClaudeHybridExplainerSeen: (state) => state.claudeHybridExplainerSeen === true,
         // Whether new Claude Code sessions should start in hybrid mode.
         isClaudeHybridDefault: (state) => state.claudeHybridDefault === true,
+        // Default-on when unset (null = not yet loaded, or never explicitly disabled).
+        isTelemetryEnabled: (state) => state.telemetryEnabled !== false,
+        // null (not yet loaded / never set) reads as "not seen".
+        isTelemetryNoticeSeen: (state) => state.telemetryNoticeSeen === true,
         getWorktreeDirectoryTemplate: (state) => state.worktreeDirectoryTemplate,
         isTerminalUseTmux: (state) => state.terminalUseTmux,
         getTerminalTmuxConfigPath: (state) => state.terminalTmuxConfigPath,
@@ -554,6 +564,26 @@ export const useSettingsStore = defineStore('settings', {
         setClaudeHybridDefault(enabled) {
             if (SETTINGS_VALIDATORS.claudeHybridDefault(enabled)) {
                 this.claudeHybridDefault = enabled
+            }
+        },
+
+        /**
+         * Set anonymous telemetry enabled/disabled.
+         * @param {boolean} enabled
+         */
+        setTelemetryEnabled(enabled) {
+            if (SETTINGS_VALIDATORS.telemetryEnabled(enabled)) {
+                this.telemetryEnabled = enabled
+            }
+        },
+
+        /**
+         * Record whether the user has seen the telemetry notice.
+         * @param {boolean} seen
+         */
+        setTelemetryNoticeSeen(seen) {
+            if (SETTINGS_VALIDATORS.telemetryNoticeSeen(seen)) {
+                this.telemetryNoticeSeen = seen
             }
         },
 
@@ -1075,6 +1105,8 @@ export function initSettings() {
             autoUnpinOnArchive: store.autoUnpinOnArchive,
             claudeHybridExplainerSeen: store.claudeHybridExplainerSeen,
             claudeHybridDefault: store.claudeHybridDefault,
+            telemetryEnabled: store.telemetryEnabled,
+            telemetryNoticeSeen: store.telemetryNoticeSeen,
             worktreeDirectoryTemplate: store.worktreeDirectoryTemplate,
             terminalUseTmux: store.terminalUseTmux,
             terminalTmuxConfigPath: store.terminalTmuxConfigPath,

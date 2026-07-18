@@ -23,7 +23,9 @@ import ChangelogDialog from './ChangelogDialog.vue'
 import LayoutManagerDialog from '../session/layout/LayoutManagerDialog.vue'
 import ProviderSettingsSection from './ProviderSettingsSection.vue'
 import ShareManagerDialog from '../share/ShareManagerDialog.vue'
-import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateUsageFile, sendValidateTmuxConfigPath } from '../../composables/useWebSocket'
+import TelemetryPayloadDialog from './TelemetryPayloadDialog.vue'
+import { sendChangelogSeen, sendValidateUsageDumpPath, sendValidateUsageFile, sendValidateTmuxConfigPath, requestTelemetryInstanceIdReset } from '../../composables/useWebSocket'
+import { toast } from '../../composables/useToast'
 import { useProviderActivation } from '../../composables/useProviderActivation'
 import { vPopoverFocusFix } from '../../directives/vPopoverFocusFix'
 
@@ -440,6 +442,8 @@ const fontSize = computed(() => store.getFontSize)
 const colorScheme = computed(() => store.getColorScheme)
 const sessionTimeFormat = computed(() => store.getSessionTimeFormat)
 const showCosts = computed(() => store.areCostsShown)
+const telemetryEnabled = computed(() => store.isTelemetryEnabled)
+const showTelemetryPayload = ref(false)
 const extraUsageOnlyWhenNeeded = computed(() => store.isExtraUsageOnlyWhenNeeded)
 // Same synced setting as the one in the Notifications section — mirrored here
 // so a user browsing the Usage section doesn't miss the feature.
@@ -823,6 +827,25 @@ function onSessionTimeFormatChange(event) {
  */
 function onShowCostsChange(event) {
     store.setShowCosts(event.target.checked)
+}
+
+/**
+ * Toggle anonymous telemetry.
+ */
+function onTelemetryEnabledChange(event) {
+    store.setTelemetryEnabled(event.target.checked)
+}
+
+/**
+ * Ask the backend to regenerate the anonymous telemetry instance id.
+ */
+async function resetTelemetryInstanceId() {
+    const result = await requestTelemetryInstanceIdReset()
+    if (result.instance_id) {
+        toast.success('Telemetry instance ID reset')
+    } else {
+        toast.error('Failed to reset telemetry instance ID')
+    }
 }
 
 /**
@@ -1340,6 +1363,23 @@ function onChangelogClose() {
                             size="small"
                             class="usage-file-validation"
                         >{{ worktreeTemplateError }}</wa-callout>
+                    </div>
+                    <wa-divider></wa-divider>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Anonymous telemetry <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                        <wa-switch
+                            :checked="telemetryEnabled"
+                            @change="onTelemetryEnabledChange"
+                            size="small"
+                        >Enabled</wa-switch>
+                        <span class="setting-group-hint">
+                            Anonymous usage statistics — counters only, never content, messages, titles or paths.
+                            <a href="https://twicc-telemetry.twidi.com/" target="_blank" rel="noopener">What is collected</a>
+                        </span>
+                        <div v-if="telemetryEnabled" class="telemetry-actions">
+                            <wa-button size="small" appearance="outlined" @click="showTelemetryPayload = true">View last payload</wa-button>
+                            <wa-button size="small" appearance="outlined" @click="resetTelemetryInstanceId">Reset instance ID</wa-button>
+                        </div>
                     </div>
                 </section>
 
@@ -1973,6 +2013,7 @@ function onChangelogClose() {
     <ChangelogDialog ref="changelogDialogRef" @close="onChangelogClose" />
     <LayoutManagerDialog ref="layoutManagerDialogRef" />
     <ShareManagerDialog :open="showShareManager" @close="showShareManager = false" />
+    <TelemetryPayloadDialog :open="showTelemetryPayload" @close="showTelemetryPayload = false" />
 </template>
 
 <style scoped>
@@ -2616,6 +2657,14 @@ wa-popover > wa-divider {
     wa-input {
         flex: 1;
     }
+}
+
+/* Row of secondary action buttons under the telemetry toggle (view payload,
+   reset instance id). */
+.telemetry-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--wa-space-2xs);
 }
 
 .usage-mode-explanation .setting-group-hint {
