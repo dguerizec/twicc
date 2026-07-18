@@ -20,5 +20,5 @@ directory = "./public"
 [[d1_databases]]
 binding = "DB"
 database_name = "twicc-telemetry"
-database_id = "REPLACE_AFTER_D1_CREATE"   # filled in Task 6 (first deploy)
+database_id = "26f54fe1-c457-4d97-8af7-15b0b0c5837b"   # D1 id (not a secret; committed on purpose)
 migrations_dir = "migrations"
