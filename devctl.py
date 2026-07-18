@@ -426,6 +426,8 @@ def get_process_config(backend_port: int, frontend_port: int) -> dict:
                 # - Disable the tmux reaper: the ``twicc`` tmux socket is shared per-user with the
                 #   main instance, which owns the reaping (a worktree would otherwise kill the
                 #   main instance's terminal sessions).
+                # - Disable telemetry: dev worktrees are throwaway instances that would each
+                #   register as a distinct install and pollute the collected stats.
                 **({
                     "TWICC_SESSION_COOKIE": f"sessionid_{backend_port}",
                     "TWICC_NO_CRON_RESTART": "1",
@@ -433,6 +435,7 @@ def get_process_config(backend_port: int, frontend_port: int) -> dict:
                     "TWICC_NO_CODEX_PLUGIN": "1",
                     "TWICC_NO_SESSION_DIRS_CLEANUP": "1",
                     "TWICC_NO_TMUX_CLEANUP": "1",
+                    "TWICC_NO_TELEMETRY": "1",
                 } if is_git_worktree() else {}),
             },
         },
