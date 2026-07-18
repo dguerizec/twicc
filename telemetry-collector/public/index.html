@@ -1,1 +1,112 @@
-<!doctype html><title>TwiCC telemetry</title>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TwiCC telemetry</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 16px/1.6 system-ui, sans-serif; max-width: 46rem; margin: 0 auto; padding: 2rem 1rem 4rem; }
+    h1 { font-size: 1.6rem; } h2 { font-size: 1.15rem; margin-top: 2.2rem; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+    th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent); vertical-align: top; }
+    thead th { border-bottom-width: 2px; }
+    code { font-size: 0.88em; }
+    ul { padding-left: 1.3rem; }
+  </style>
+</head>
+<body>
+  <main>
+  <h1>TwiCC anonymous telemetry</h1>
+
+  <p>
+    Self-hosted <a href="https://github.com/twidi/twicc">TwiCC</a> installs send anonymous usage
+    statistics to this endpoint once a day. It is enabled by default, and can be turned off in one
+    click from the app's settings.
+  </p>
+
+  <h2>What is collected</h2>
+
+  <p>
+    One JSON document per day, built from two parts: an instance block sent with every payload, and
+    a daily block for each not-yet-sent complete day (UTC). Every field is a counter, a boolean, an
+    enum, or a bucketed value &mdash; never free text.
+  </p>
+
+  <div style="overflow-x: auto">
+  <table>
+    <thead>
+      <tr><th scope="col">Field</th><th scope="col">Type / buckets</th><th scope="col">Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><th colspan="3" scope="colgroup">Instance block (every payload)</th></tr>
+      <tr><td><code>instance_id</code></td><td>random UUID v4</td><td>counts distinct instances; identifies nothing</td></tr>
+      <tr><td><code>twicc_version</code></td><td>string</td><td>adoption of released versions</td></tr>
+      <tr><td><code>python</code></td><td>major.minor</td><td>runtime support planning</td></tr>
+      <tr><td><code>os</code></td><td><code>linux</code> / <code>darwin</code> / <code>windows</code></td><td>platform support planning</td></tr>
+      <tr><td><code>arch</code></td><td>string</td><td>platform support planning</td></tr>
+      <tr><td><code>providers</code></td><td>enabled provider keys (<code>claude_code</code>, <code>codex</code>)</td><td>provider adoption</td></tr>
+      <tr><td><code>install</code></td><td>enum: <code>pip</code> / <code>pipx</code> / <code>uv-tool</code> / <code>uvx</code> / <code>git-dev</code> / <code>other</code></td><td>packaging/install-method priorities</td></tr>
+      <tr><td><code>projects_bucket</code></td><td><code>0</code>, <code>1</code>, <code>2-5</code>, <code>6-20</code>, <code>21+</code></td><td>scale of use</td></tr>
+      <tr><td><code>workspaces_bucket</code></td><td><code>0</code>, <code>1</code>, <code>2-5</code>, <code>6-20</code>, <code>21+</code></td><td>scale of use</td></tr>
+      <tr><td><code>remote_access</code></td><td>boolean</td><td>whether the instance is served beyond localhost (a password is configured)</td></tr>
+
+      <tr><th colspan="3" scope="colgroup">Daily block (one per complete day)</th></tr>
+      <tr><td>sessions per model family</td><td>counts by provider &times; model family</td><td>volumetry, model adoption</td></tr>
+      <tr><td>sessions per effort</td><td>counts by provider &times; effort</td><td>volumetry, feature usage</td></tr>
+      <tr><td>sessions per permission mode</td><td>counts by provider &times; permission mode</td><td>volumetry, feature usage</td></tr>
+      <tr><td>user messages sent</td><td>count</td><td>intensity</td></tr>
+      <tr><td>subagent sessions</td><td>count</td><td>orchestration adoption</td></tr>
+      <tr><td>workflow runs</td><td>count</td><td>feature adoption</td></tr>
+      <tr><td>active crons</td><td>count</td><td>feature adoption</td></tr>
+      <tr><td><code>presence_bucket</code></td><td>minutes of human presence: <code>0</code>, <code>&lt;30</code>, <code>30-120</code>, <code>120-360</code>, <code>360+</code></td><td>intensity</td></tr>
+      <tr><td>peak concurrent agents</td><td>max simultaneous live processes that day</td><td>scale of use</td></tr>
+      <tr><td><code>cost_bucket</code></td><td><code>0</code>, <code>&lt;1</code>, <code>1-10</code>, <code>10-50</code>, <code>50+</code> USD/day</td><td>scale of use</td></tr>
+      <tr><td>shares created</td><td>count</td><td>feature adoption</td></tr>
+      <tr><td>artifact bookmarks created</td><td>count</td><td>feature adoption</td></tr>
+      <tr><td>sessions spawned by other sessions</td><td>count</td><td>orchestration adoption</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    The feature block is deliberately small and limited to what can be derived from the database
+    without instrumentation or content scans; it may grow or shrink across schema versions.
+  </p>
+
+  <h2>What is never collected</h2>
+
+  <ul>
+    <li>No message or prompt content, no session titles</li>
+    <li>No project names or file paths, no git data</li>
+    <li>No hostnames, usernames, or email addresses</li>
+    <li>No IP addresses &mdash; the client never sends one, and this collector does not log or store any</li>
+    <li>No exact costs or token counts, only buckets</li>
+    <li>No per-session identifiers of any kind &mdash; only aggregate counters</li>
+  </ul>
+
+  <h2>The instance identifier</h2>
+
+  <p>
+    <code>instance_id</code> is a random UUID v4, generated locally the first time telemetry runs. It
+    is derived from nothing about the machine or its owner &mdash; no MAC address, no hostname hash
+    &mdash; so it identifies nothing beyond making distinct instances countable. A "Reset instance ID"
+    action in settings regenerates it at any time, severing any history tied to the old one.
+  </p>
+
+  <h2>How to disable it</h2>
+
+  <p>
+    Turn off the toggle at the bottom of the Global section in TwiCC's settings panel, or set the
+    environment variable <code>TWICC_NO_TELEMETRY=1</code> before starting the backend, which
+    overrides the setting and prevents the task from starting at all.
+  </p>
+
+  <p>
+    Source and full design: <a href="https://github.com/twidi/twicc">github.com/twidi/twicc</a> &mdash;
+    see <code>docs/plans/2026-07-18-telemetry-design.md</code> in the repository for the complete
+    design document.
+  </p>
+  </main>
+</body>
+</html>
