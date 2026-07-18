@@ -57,6 +57,7 @@ def main(project_ids: list[str]) -> None:
 
     from twicc.core.models import Project
     from twicc.core.serializers import serialize_project
+    from twicc.project_icons import load_repo_icon_cache
     from twicc.projects import worktree_children_by_main
     from twicc.workspaces import read_workspaces
 
@@ -88,6 +89,10 @@ def main(project_ids: list[str]) -> None:
     # Reverse of ``worktree_of``: main-repo id -> [worktree child ids] for the
     # requested ids (one query), so each known entry carries its git worktrees.
     worktrees_by_main = worktree_children_by_main(unique_ids)
+
+    # Warm the repo-icon cache once (a short-lived CLI process never ran startup
+    # discovery) so each ``repo_icon_url`` brick is populated rather than ``None``.
+    load_repo_icon_cache()
 
     global _PLACEHOLDER_TEMPLATE
     if _PLACEHOLDER_TEMPLATE is None:

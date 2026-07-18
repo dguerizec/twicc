@@ -17,6 +17,7 @@ def main(
 
     from twicc.core.models import Project
     from twicc.core.serializers import serialize_project
+    from twicc.project_icons import load_repo_icon_cache
     from twicc.projects import worktree_children_by_main
     from twicc.workspaces import read_workspaces
 
@@ -47,6 +48,10 @@ def main(
     # projects on this page (one query). Each main repo's entry then carries
     # the ids of its git worktrees, like ``workspaces`` carries memberships.
     worktrees_by_main = worktree_children_by_main([p.id for p in projects])
+
+    # Warm the repo-icon cache once (a short-lived CLI process never ran startup
+    # discovery) so each ``repo_icon_url`` brick is populated rather than ``None``.
+    load_repo_icon_cache()
 
     data = []
     for p in projects:

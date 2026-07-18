@@ -11,6 +11,7 @@ def main(project_id: str) -> None:
 
     from twicc.core.models import Project
     from twicc.core.serializers import serialize_project
+    from twicc.project_icons import load_repo_icon_cache
     from twicc.projects import worktree_child_ids
     from twicc.workspaces import read_workspaces
 
@@ -19,6 +20,10 @@ def main(project_id: str) -> None:
     except Project.DoesNotExist:
         emit_error(f"Error: project '{project_id}' not found.", code=1)
 
+    # Warm the repo-icon cache (a short-lived CLI process never ran startup
+    # discovery) so ``serialize_project``'s ``repo_icon_url`` brick is populated
+    # rather than always ``None``.
+    load_repo_icon_cache()
     data = serialize_project(project)
     data["workspaces"] = [
         ws["id"]
