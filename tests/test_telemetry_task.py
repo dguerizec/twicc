@@ -47,8 +47,8 @@ class TestIsTelemetryActive:
 
     def test_true_otherwise(self, temp_settings, monkeypatch):
         monkeypatch.setattr(task.settings, "TELEMETRY_ENABLED", True)
-        # No `telemetryEnabled` key at all (Task 5 hasn't added it to defaults
-        # yet) -- the `.get(..., True)` default must apply.
+        # Isolated synced settings with no override -> the default
+        # telemetryEnabled (True) applies, so telemetry is active.
         assert task.is_telemetry_active() is True
 
 
@@ -194,8 +194,10 @@ class TestSendCycle:
 
 @pytest.mark.django_db
 class TestTickOnceGating:
-    def test_tick_once_noop_when_inactive(self, temp_state, monkeypatch):
-        # First tick while active: records a real day entry.
+    def test_tick_once_noop_when_inactive(self, temp_state, temp_settings, monkeypatch):
+        # First tick while active: records a real day entry. temp_settings
+        # isolates the synced settings so is_telemetry_active() sees the default
+        # (telemetryEnabled unset -> True) instead of the real machine's file.
         monkeypatch.setattr(task.settings, "TELEMETRY_ENABLED", True)
         task.tick_once()
 
