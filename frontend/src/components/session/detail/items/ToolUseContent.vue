@@ -597,7 +597,9 @@ const showResultDetailsOnError = computed(() => {
 // Whether this tool's result renders inline (in the card body, in place
 // of the "Result" disclosure) rather than behind a collapsible section.
 // Drives both the template branch and the auto-fetch on card open.
-const rendersResultInline = computed(() => !!toolHelpers.value?.rendersResultInline(props.name))
+const rendersResultInline = computed(() => (
+    !!toolHelpers.value?.rendersResultInline(props.name, props.input)
+))
 
 // Central guard for Result details visibility
 const showResultDetails = computed(() => {

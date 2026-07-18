@@ -127,6 +127,21 @@ class TestParseCodeModeScript:
         result = parse_code_mode_script(source)
         assert result.calls == [("mcp__twicc__sessions", {"limit": 5}, True)]
 
+    def test_view_image_call(self):
+        # Canonical GPT-5.6 wrapper: the image is emitted through the code
+        # cell's ``image(...)`` helper, while ``view_image`` remains the only
+        # nested tool call recovered from the script.
+        source = (
+            'const r = await tools.view_image({path:"/tmp/preview.png",detail:"high"}); '
+            'image(r.image_url,r.detail);'
+        )
+        result = parse_code_mode_script(source)
+        assert result.calls == [(
+            "view_image",
+            {"path": "/tmp/preview.png", "detail": "high"},
+            True,
+        )]
+
     def test_no_calls(self):
         assert parse_code_mode_script('text("hello");').calls == []
 

@@ -184,10 +184,10 @@ const CODE_MODE_EXEC_TOOL_NAME = 'exec'
  * Tier-1 detection for a code-mode script: return the single resolved
  * nested call when the script wraps exactly one and we know how to give
  * it a dedicated rendering (``exec_command`` with a string ``cmd``,
- * ``apply_patch`` with a string envelope, ``mcp__*`` with an object —
- * or no — argument). Returns ``null`` for everything else — multi-call
- * scripts, unresolved arguments, other nested tools — which then flow
- * through the tier-2/3 generic paths.
+ * ``apply_patch`` with a string envelope, ``view_image`` with an object,
+ * ``mcp__*`` with an object — or no — argument). Returns ``null`` for
+ * everything else — multi-call scripts, unresolved arguments, other nested
+ * tools — which then flow through the tier-2/3 generic paths.
  *
  * ``input`` is the tool card's input wrapper: ``{ input: <JS source> }``
  * as set by ``ToolUse.vue`` for ``custom_tool_call`` (a bare string is
@@ -207,6 +207,14 @@ function resolveCodeModeCall(input) {
     }
     if (call.name === 'apply_patch') {
         if (typeof call.arg === 'string' && call.arg) return call
+        return null
+    }
+    if (call.name === VIEW_IMAGE_TOOL_NAME) {
+        const arg = call.arg
+        if (
+            arg && typeof arg === 'object' && !Array.isArray(arg)
+            && typeof arg.path === 'string' && arg.path
+        ) return call
         return null
     }
     if (call.name.startsWith(MCP_TOOL_NAME_PREFIX)) {
@@ -1208,6 +1216,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 return this.getHeaderLabel('exec_command', nested.arg, options) ?? 'Shell'
             }
             if (nested?.name === 'apply_patch') return 'Edit'
+            if (nested?.name === VIEW_IMAGE_TOOL_NAME) return 'Image'
             if (nested?.name?.startsWith(MCP_TOOL_NAME_PREFIX)) {
                 // Same words a direct MCP call would show: direct calls
                 // have no headerLabel, so the shell formats the raw
@@ -1248,6 +1257,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
             }
             if (nested?.name === 'apply_patch') {
                 return this.getSummaryRendering('apply_patch', { input: nested.arg }, baseDir, options)
+            }
+            if (nested?.name === VIEW_IMAGE_TOOL_NAME) {
+                return this.getSummaryRendering(VIEW_IMAGE_TOOL_NAME, nested.arg, baseDir, options)
             }
             // Tier-1 MCP: a direct MCP call shows no summary (the
             // formatted name is already the header) — mirror that.
@@ -1463,6 +1475,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
             if (nested?.name === 'apply_patch') {
                 return this.getInputRendering('apply_patch', { input: nested.arg }, ctx)
             }
+            if (nested?.name === VIEW_IMAGE_TOOL_NAME) {
+                return this.getInputRendering(VIEW_IMAGE_TOOL_NAME, nested.arg, ctx)
+            }
             return null
         }
         if (name === 'apply_patch') {
@@ -1547,6 +1562,14 @@ export class CodexToolHelpers extends BaseToolHelpers {
             const nested = resolveCodeModeCall(input)
             if (nested?.name === 'exec_command') {
                 return this.getResultRendering('exec_command', result, nested.arg, options)
+            }
+            // Tier-1 view_image: the outer custom_tool_call_output carries
+            // the same ``input_image`` segments as the direct tool's
+            // function_call_output. Delegate before the generic code-mode
+            // aggregation path, which only understands text segments and
+            // would otherwise render an empty ExecResultContent.
+            if (nested?.name === VIEW_IMAGE_TOOL_NAME) {
+                return this.getResultRendering(VIEW_IMAGE_TOOL_NAME, result, nested.arg, options)
             }
             // Tier-1 MCP with its rebound end event in the chain:
             // ``transformDisplayResult`` already unwrapped the payload
@@ -1756,6 +1779,9 @@ export class CodexToolHelpers extends BaseToolHelpers {
             // (yield_time_ms, …) and the full JS source stay reachable
             // through the ``</>`` raw toggle.
             if (nested?.name === 'exec_command') return { cmd: nested.arg.cmd }
+            // Tier-1 view_image: replace the JavaScript wrapper with the
+            // semantic tool arguments, matching the direct tool card.
+            if (nested?.name === VIEW_IMAGE_TOOL_NAME) return nested.arg
             // Tier-1 MCP: show the call's arguments object like a direct
             // MCP call does (nothing when the call takes none — the full
             // JS source stays reachable through the raw toggle).
@@ -1803,12 +1829,14 @@ export class CodexToolHelpers extends BaseToolHelpers {
         return Object.keys(out).length > 0 ? out : null
     }
 
-    rendersResultInline(name) {
+    rendersResultInline(name, input) {
         // ``view_image``'s result is the image itself — show it directly in
         // the card body (in place of the "Result" disclosure) and fetch it
         // as soon as the card opens, rather than hiding it behind an extra
         // click. The ``{path, detail}`` input JSON still renders above.
-        return name === VIEW_IMAGE_TOOL_NAME
+        if (name === VIEW_IMAGE_TOOL_NAME) return true
+        return name === CODE_MODE_EXEC_TOOL_NAME
+            && resolveCodeModeCall(input)?.name === VIEW_IMAGE_TOOL_NAME
     }
 
     isFileChangeTool(name) {

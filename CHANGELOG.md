@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Browser tab** — Back and Forward now reliably move within the embedded page, on single-page and multi-page sites alike, instead of sometimes navigating TwiCC itself backwards.
+- **Codex image previews** — `view_image` calls made through GPT-5.6 code mode now show the image inline instead of an empty Run code result.
 
 ## [1.92.4] - 2026-07-18
 

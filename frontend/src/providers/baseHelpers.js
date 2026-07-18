@@ -1477,7 +1477,7 @@ export class BaseToolHelpers {
      * Codex's ``view_image``, whose result is the image itself). The input
      * JSON is unaffected — it still renders above, as usual. Default: false.
      */
-    rendersResultInline(/* name */) {
+    rendersResultInline(/* name, input */) {
         return false
     }
 
