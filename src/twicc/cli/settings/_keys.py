@@ -30,6 +30,8 @@ GENERIC_KEY_DESCRIPTIONS: dict[str, str] = {
     "publicBaseUrl": "Public URL where you reach TwiCC, appended as a deep link to external notifications (empty = no link).",
     "shareBaseUrl": "Dedicated share host — a hostname distinct from this app, pointing at the same port — where read-only /share/ links are served (empty = sharing disabled).",
     "notifyOnExtraUsageStart": "Master switch for the 'extra usage started' alert (in-app + external push).",
+    "telemetryEnabled": "Send anonymous usage statistics (no content, ever).",
+    "telemetryNoticeSeen": "One-time telemetry notice acknowledged.",
 }
 
 

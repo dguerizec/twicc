@@ -116,6 +116,12 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # ``extra_usage_started`` WS event (in-app toast/sound/browser) and Apprise
     # push (twicc.external_notifications.notify_extra_usage_started).
     "notifyOnExtraUsageStart": True,
+    # Anonymous usage telemetry (no content, ever) — see
+    # docs/plans/2026-07-18-telemetry-design.md. `telemetryEnabled` is the
+    # user-facing opt-out; `telemetryNoticeSeen` tracks whether the one-time
+    # notice has been acknowledged (drives whether it is shown again).
+    "telemetryEnabled": True,
+    "telemetryNoticeSeen": False,
 }
 
 # Note: `disabledProviders` (list[str]) is intentionally NOT listed here.
