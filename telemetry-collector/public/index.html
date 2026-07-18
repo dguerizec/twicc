@@ -62,7 +62,7 @@
       <tr><td><code>arch</code></td><td>string</td><td>platform support planning</td></tr>
       <tr><td><code>providers</code></td><td>enabled provider keys (<code>claude_code</code>, <code>codex</code>)</td><td>provider adoption</td></tr>
       <tr><td><code>install</code></td><td>enum: <code>pip</code> / <code>pipx</code> / <code>uv-tool</code> / <code>uvx</code> / <code>git-dev</code> / <code>other</code></td><td>packaging/install-method priorities</td></tr>
-      <tr><td><code>projects_bucket</code></td><td><code>0</code>, <code>1</code>, <code>2-5</code>, <code>6-20</code>, <code>21+</code></td><td>scale of use</td></tr>
+      <tr><td><code>projects_bucket</code></td><td><code>0</code>, <code>1</code>, <code>2-5</code>, <code>6-20</code>, <code>21-50</code>, <code>51-100</code>, <code>101+</code></td><td>scale of use</td></tr>
       <tr><td><code>workspaces_bucket</code></td><td><code>0</code>, <code>1</code>, <code>2-5</code>, <code>6-20</code>, <code>21+</code></td><td>scale of use</td></tr>
       <tr><td><code>remote_access</code></td><td>boolean</td><td>whether the instance is served beyond localhost (a password is configured)</td></tr>
 
@@ -73,9 +73,9 @@
       <tr><td>subagent sessions</td><td>count</td><td>orchestration adoption</td></tr>
       <tr><td>workflow runs</td><td>count</td><td>feature adoption</td></tr>
       <tr><td>active crons</td><td>count</td><td>feature adoption</td></tr>
-      <tr><td><code>presence_bucket</code></td><td>minutes of human presence: <code>0</code>, <code>&lt;30</code>, <code>30-120</code>, <code>120-360</code>, <code>360+</code></td><td>intensity</td></tr>
+      <tr><td><code>presence_bucket</code></td><td>minutes of human presence: <code>0</code>, <code>&lt;30</code>, <code>30-120</code>, <code>120-360</code>, <code>360-720</code>, <code>720+</code></td><td>intensity</td></tr>
       <tr><td>peak concurrent agents</td><td>max simultaneous live processes that day</td><td>scale of use</td></tr>
-      <tr><td><code>cost_bucket</code></td><td><code>0</code>, <code>&lt;1</code>, <code>1-10</code>, <code>10-50</code>, <code>50+</code> USD/day</td><td>scale of use</td></tr>
+      <tr><td><code>cost_bucket</code></td><td><code>0</code>, <code>&lt;1</code>, <code>1-10</code>, <code>10-50</code>, <code>50-100</code>, <code>100-250</code>, <code>250-500</code>, <code>500-1000</code>, <code>1000+</code> USD/day</td><td>scale of use</td></tr>
       <tr><td>shares created</td><td>count</td><td>feature adoption</td></tr>
       <tr><td>artifact bookmarks created</td><td>count</td><td>feature adoption</td></tr>
       <tr><td>sessions spawned by other sessions</td><td>count</td><td>orchestration adoption</td></tr>

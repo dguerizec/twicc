@@ -123,25 +123,37 @@ def test_build_day_block_defaults_missing_day_state_to_zero(project):
 
 
 def test_bucket_edges():
-    assert snapshot.bucket(0, snapshot.COUNT_BUCKETS) == "0"
-    assert snapshot.bucket(1, snapshot.COUNT_BUCKETS) == "1"
-    assert snapshot.bucket(2, snapshot.COUNT_BUCKETS) == "2-5"
-    assert snapshot.bucket(5, snapshot.COUNT_BUCKETS) == "2-5"
-    assert snapshot.bucket(6, snapshot.COUNT_BUCKETS) == "6-20"
-    assert snapshot.bucket(20, snapshot.COUNT_BUCKETS) == "6-20"
-    assert snapshot.bucket(21, snapshot.COUNT_BUCKETS) == "21+"
+    assert snapshot.bucket(0, snapshot.WORKSPACE_BUCKETS) == "0"
+    assert snapshot.bucket(1, snapshot.WORKSPACE_BUCKETS) == "1"
+    assert snapshot.bucket(2, snapshot.WORKSPACE_BUCKETS) == "2-5"
+    assert snapshot.bucket(5, snapshot.WORKSPACE_BUCKETS) == "2-5"
+    assert snapshot.bucket(6, snapshot.WORKSPACE_BUCKETS) == "6-20"
+    assert snapshot.bucket(20, snapshot.WORKSPACE_BUCKETS) == "6-20"
+    assert snapshot.bucket(21, snapshot.WORKSPACE_BUCKETS) == "21+"
+
+    assert snapshot.bucket(20, snapshot.PROJECT_BUCKETS) == "6-20"
+    assert snapshot.bucket(21, snapshot.PROJECT_BUCKETS) == "21-50"
+    assert snapshot.bucket(50, snapshot.PROJECT_BUCKETS) == "21-50"
+    assert snapshot.bucket(51, snapshot.PROJECT_BUCKETS) == "51-100"
+    assert snapshot.bucket(100, snapshot.PROJECT_BUCKETS) == "51-100"
+    assert snapshot.bucket(101, snapshot.PROJECT_BUCKETS) == "101+"
 
     assert snapshot.bucket(Decimal("0"), snapshot.COST_BUCKETS) == "0"
     assert snapshot.bucket(Decimal("0.5"), snapshot.COST_BUCKETS) == "<1"
     assert snapshot.bucket(Decimal("1"), snapshot.COST_BUCKETS) == "1-10"
     assert snapshot.bucket(Decimal("10"), snapshot.COST_BUCKETS) == "10-50"
-    assert snapshot.bucket(Decimal("50"), snapshot.COST_BUCKETS) == "50+"
+    assert snapshot.bucket(Decimal("50"), snapshot.COST_BUCKETS) == "50-100"
+    assert snapshot.bucket(Decimal("100"), snapshot.COST_BUCKETS) == "100-250"
+    assert snapshot.bucket(Decimal("250"), snapshot.COST_BUCKETS) == "250-500"
+    assert snapshot.bucket(Decimal("500"), snapshot.COST_BUCKETS) == "500-1000"
+    assert snapshot.bucket(Decimal("1000"), snapshot.COST_BUCKETS) == "1000+"
 
     assert snapshot.bucket(0, snapshot.PRESENCE_BUCKETS) == "0"
     assert snapshot.bucket(29, snapshot.PRESENCE_BUCKETS) == "<30"
     assert snapshot.bucket(30, snapshot.PRESENCE_BUCKETS) == "30-120"
     assert snapshot.bucket(120, snapshot.PRESENCE_BUCKETS) == "120-360"
-    assert snapshot.bucket(360, snapshot.PRESENCE_BUCKETS) == "360+"
+    assert snapshot.bucket(360, snapshot.PRESENCE_BUCKETS) == "360-720"
+    assert snapshot.bucket(720, snapshot.PRESENCE_BUCKETS) == "720+"
 
 
 def test_instance_block_contains_no_forbidden_fields(project):

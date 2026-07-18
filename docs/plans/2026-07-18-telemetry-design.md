@@ -20,7 +20,7 @@
 | Collector | Minimal self-hosted endpoint: **Cloudflare Worker + D1** (not a third-party analytics service) |
 | Client data model | **Daily snapshot derived from the DB at send time** — no event table, no scattered instrumentation |
 | Announcement | **Visible first-launch notice** after the upgrade, with a direct link to the toggle |
-| Costs/tokens | Included **as buckets** (`0`, `<1`, `1-10`, `10-50`, `50+` USD/day), never exact values |
+| Costs/tokens | Included **as buckets** (`0`, `<1`, `1-10`, `10-50`, `50-100`, `100-250`, `250-500`, `500-1000`, `1000+` USD/day — top tiers extended 2026-07-18), never exact values |
 | Primary metric focus | **Usage level** (volumetry, regularity, intensity, scale); feature booleans kept as a small secondary block |
 
 ## 3. What is measured
@@ -33,7 +33,7 @@ One JSON document per POST, with a versioned schema (`schema: 1`). Two parts:
 - `twicc_version`, `python` (major.minor), `os` (`linux`/`darwin`/`windows`), `arch`
 - `providers` — enabled provider keys (`claude_code`, `codex`)
 - `install` — enum `pip` / `pipx` / `uv-tool` / `uvx` / `git-dev` / `other`, best-effort. Derived from the same signals `_resolve_twicc_launch_prefix()` already uses (`src/twicc/settings.py:125`): `UV_RUN_RECURSION_DEPTH` + `DEV_MODE` → `git-dev`; argv0/`sys.executable` path signatures distinguish uv tool venvs and the uvx cache. pipx detection is **new** path-signature logic (the current resolver has no pipx branch); anything unrecognized → `other`, never a guess.
-- `projects_bucket`, `workspaces_bucket` — bucketed counts (`0`, `1`, `2-5`, `6-20`, `21+`)
+- `projects_bucket` (`0`, `1`, `2-5`, `6-20`, `21-50`, `51-100`, `101+`), `workspaces_bucket` (`0`, `1`, `2-5`, `6-20`, `21+`) — bucketed counts, two distinct scales
 - `remote_access` — boolean: a password is configured (instance served beyond localhost)
 
 ### 3.2 Daily blocks (one per not-yet-sent complete day)
@@ -42,7 +42,7 @@ All derived from existing models at send time unless noted:
 
 - **Volumetry:** sessions created, reported as **nested counts** provider → model family → version → effort (e.g. `{"claude_code": {"opus": {"4.8": {"high": 5}}}}`): each level is a real dimension — no composite string keys to re-parse downstream (family names contain dashes, versions dots), versions of one family are never mixed, and aggregating at any level is a subtree walk (user-decided 2026-07-18, replacing the earlier per-dimension breakdowns) — plus a per-provider permission_mode breakdown (mode vocabularies are provider-specific). The model resolves from the agent-settings alias, falling back to the raw SDK model id (`Session.model`) for sessions not created through TwiCC (external CLI runs, benchmarks); unresolvable → `"unknown"`, and a missing effort reads `"unknown"` in the couple. Also: user messages sent; subagent sessions; workflow runs (`Workflow`); crons created that day (`SessionCron.created_at` range count — the day-attributable reading actually implemented, in place of "active crons").
 - **Regularity:** implicit — the sequence of day blocks itself gives active vs. inactive days per instance.
-- **Intensity:** `presence_bucket` — minutes of human presence that day, bucketed (`0`, `<30`, `30-120`, `120-360`, `360+`). Presence is ephemeral in-memory (`src/twicc/presence.py`), so this is the one metric that needs an accumulator: a 60 s ticker checks `is_user_present()` and increments today's counter in the telemetry state file (§5.3).
+- **Intensity:** `presence_bucket` — minutes of human presence that day, bucketed (`0`, `<30`, `30-120`, `120-360`, `360-720`, `720+`). Presence is ephemeral in-memory (`src/twicc/presence.py`), so this is the one metric that needs an accumulator: a 60 s ticker checks `is_user_present()` and increments today's counter in the telemetry state file (§5.3).
 - **Scale:** peak concurrent live agents that day (max simultaneous `ProcessRun`s — sampled by the same ticker, stored alongside presence minutes).
 - **Cost:** `cost_bucket` per day (from `DailyActivity` aggregates), buckets as decided in §2.
 - **Features (secondary, deliberately small):** booleans/counters that are genuinely free to derive from the DB — shares created (`Share`), artifact bookmarks created (`ArtifactBookmark`), sessions spawned by other sessions (orchestration). Metrics with **no DB trace** — terminal/PTY usage, MCP tool calls (only present inside raw `SessionItem.content`) — are **deferred**: including them would require instrumentation or content scans that §5.2 forbids. This block may shrink or grow across schema versions without renegotiating the design.

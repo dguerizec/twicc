@@ -41,22 +41,36 @@ COST_BUCKETS: tuple[tuple[int | None, str], ...] = (
     (1, "<1"),
     (10, "1-10"),
     (50, "10-50"),
-    (None, "50+"),
+    (100, "50-100"),
+    (250, "100-250"),
+    (500, "250-500"),
+    (1000, "500-1000"),
+    (None, "1000+"),
 )
 # Integer counts: upper bound EXCLUSIVE, so 1 -> "1", 5 -> "2-5", 20 -> "6-20".
-COUNT_BUCKETS: tuple[tuple[int | None, str], ...] = (
+WORKSPACE_BUCKETS: tuple[tuple[int | None, str], ...] = (
     (0, "0"),
     (2, "1"),
     (6, "2-5"),
     (21, "6-20"),
     (None, "21+"),
 )
+PROJECT_BUCKETS: tuple[tuple[int | None, str], ...] = (
+    (0, "0"),
+    (2, "1"),
+    (6, "2-5"),
+    (21, "6-20"),
+    (51, "21-50"),
+    (101, "51-100"),
+    (None, "101+"),
+)
 PRESENCE_BUCKETS: tuple[tuple[int | None, str], ...] = (
     (0, "0"),
     (30, "<30"),
     (120, "30-120"),
     (360, "120-360"),
-    (None, "360+"),
+    (720, "360-720"),
+    (None, "720+"),
 )
 
 
@@ -123,8 +137,8 @@ def build_instance_block() -> dict:
         "arch": platform.machine(),
         "providers": sorted(p.value for p in get_enabled_providers()),
         "install": detect_install_method(),
-        "projects_bucket": bucket(Project.objects.count(), COUNT_BUCKETS),
-        "workspaces_bucket": bucket(len(workspaces), COUNT_BUCKETS),
+        "projects_bucket": bucket(Project.objects.count(), PROJECT_BUCKETS),
+        "workspaces_bucket": bucket(len(workspaces), WORKSPACE_BUCKETS),
         "remote_access": bool(settings.TWICC_PASSWORD_HASH),
     }
 
