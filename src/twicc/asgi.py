@@ -652,6 +652,8 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         - kill_terminal: kill a secondary terminal's tmux session and broadcast
         - validate_usage_dump_path: validate a usage dump file path (write mode) and return result
         - validate_tmux_config_path: validate a tmux config file path and return result
+        - get_telemetry_payload: return the last-sent telemetry payload, or a live preview
+        - reset_telemetry_instance_id: rotate the anonymous telemetry instance id
         - changelog_seen: acknowledge that the user has seen the changelog for a version
         """
         msg_type = content.get("type")
@@ -744,6 +746,12 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         elif msg_type == "validate_tmux_config_path":
             await self._handle_validate_tmux_config_path(content)
+
+        elif msg_type == "get_telemetry_payload":
+            await self._handle_get_telemetry_payload(content)
+
+        elif msg_type == "reset_telemetry_instance_id":
+            await self._handle_reset_telemetry_instance_id(content)
 
         elif msg_type == "changelog_seen":
             await self._handle_changelog_seen(content)
@@ -1524,6 +1532,33 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
 
         valid, message = await sync_to_async(validate_tmux_config_path)(file_path.strip())
         await self.send_json({"type": "tmux_config_path_validated", "valid": valid, "message": message})
+
+    async def _handle_get_telemetry_payload(self, content: dict) -> None:
+        """Reply with the last-sent telemetry payload, or a live preview if none was sent yet."""
+
+        def _read():
+            from twicc.telemetry.snapshot import build_payload
+            from twicc.telemetry.state import ensure_state
+
+            state = ensure_state()
+            if state.get("last_payload") is not None:
+                return state["last_payload"], state.get("last_sent_at"), False
+            return build_payload(state), state.get("last_sent_at"), True
+
+        payload, sent_at, is_preview = await sync_to_async(_read)()
+        await self.send_json({
+            "type": "telemetry_payload",
+            "payload": payload,
+            "sent_at": sent_at,
+            "preview": is_preview,
+        })
+
+    async def _handle_reset_telemetry_instance_id(self, content: dict) -> None:
+        """Rotate the anonymous telemetry instance id and reply with the new one."""
+        from twicc.telemetry.state import reset_instance_id
+
+        new_id = await sync_to_async(reset_instance_id)()
+        await self.send_json({"type": "telemetry_instance_id_reset", "instance_id": new_id})
 
     async def _handle_update_workspaces(self, content: dict) -> None:
         """Handle workspace definitions update from a client."""
