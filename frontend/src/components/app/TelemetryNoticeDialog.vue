@@ -87,6 +87,12 @@ function onAfterHide(event) {
     >
         <p>TwiCC now collects anonymous usage statistics — counters only, never content.</p>
         <p>
+            This helps TwiCC's author understand how the project is used — thank you for leaving it
+            enabled. The telemetry code is
+            <a href="https://github.com/twidi/twicc" target="_blank" rel="noopener noreferrer">open source</a>,
+            so you can verify it does nothing more than advertised.
+        </p>
+        <p>
             See exactly what is sent on the
             <a href="https://twicc-telemetry.twidi.com/" target="_blank" rel="noopener noreferrer">transparency page</a>.
         </p>
