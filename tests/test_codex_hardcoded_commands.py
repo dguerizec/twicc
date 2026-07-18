@@ -12,7 +12,7 @@ import pytest
 from openai_codex.generated.v2_all import CollaborationMode, ModeKind, Settings
 
 from twicc.agent import AgentState
-from twicc.core.enums import Provider
+from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import Project, Session, SessionItem
 from twicc.providers.codex.agent.agent import CodexAgent
 from twicc.providers.codex.agent.hardcoded_commands import (
@@ -20,6 +20,7 @@ from twicc.providers.codex.agent.hardcoded_commands import (
     parse_hardcoded_command,
 )
 from twicc.providers.codex.compute import CodexSessionCompute
+from twicc.providers.codex.sessions_watcher import CodexSessionsWatcher
 from twicc.providers.helpers import AgentSettings
 
 
@@ -468,3 +469,173 @@ def test_live_seed_sticky_plan_is_not_a_transition(plan_compute_session) -> None
     assert compute.transform_inline(
         _user_message("hello"), session_id=session.id, line_num=11,
     ) is None
+
+
+# ----------------------------------------------------------------------
+# Goal continuations: transcript boundaries + completion evidence
+# ----------------------------------------------------------------------
+
+
+def _thread_goal_updated(status: str, objective: str = "Count to five") -> dict:
+    return _codex_line("event_msg", {
+        "type": "thread_goal_updated",
+        "goal": {
+            "threadId": _COMPUTE_SESSION,
+            "objective": objective,
+            "status": status,
+        },
+    })
+
+
+def _goal_context(objective: str = "Count to five") -> dict:
+    return _codex_line("response_item", {
+        "type": "message",
+        "role": "user",
+        "content": [{
+            "type": "input_text",
+            "text": (
+                '<codex_internal_context source="goal">\n'
+                f"<objective>\n{objective}\n</objective>\n"
+                "</codex_internal_context>"
+            ),
+        }],
+    })
+
+
+def _old_visible_goal_context(objective: str = "Count to five") -> dict:
+    native = _goal_context(objective)
+    return {
+        "timestamp": native["timestamp"],
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": f"/goal {objective}"},
+        "twiccOriginalContent": native["payload"],
+    }
+
+
+def _goal_tool_result(status: str = "complete") -> dict:
+    result = {
+        "goal": {
+            "threadId": _COMPUTE_SESSION,
+            "objective": "Count to five",
+            "status": status,
+            "tokensUsed": 123,
+        },
+        "remainingTokens": None,
+        "completionBudgetReport": "Goal achieved.",
+    }
+    return _codex_line("response_item", {
+        "type": "custom_tool_call_output",
+        "call_id": "call-goal",
+        "output": [
+            {"type": "input_text", "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"},
+            {"type": "input_text", "text": orjson.dumps(result).decode()},
+        ],
+    })
+
+
+def test_only_first_context_after_goal_activation_is_a_user_message() -> None:
+    compute = _batch_compute()
+    lines = [
+        _thread_goal_updated("active"),
+        _goal_context(),
+        _goal_context(),
+        _goal_context(),
+    ]
+    results = _transform_all(compute, lines)
+
+    first = orjson.loads(results[1])
+    assert first["payload"] == {"type": "user_message", "message": "/goal Count to five"}
+    assert compute.compute_item_kind(first) == ItemKind.USER_MESSAGE
+    assert results[2:] == [None, None]
+    assert all(compute.compute_item_kind(line) == ItemKind.SYSTEM for line in lines[2:])
+
+
+def test_recompute_demotes_previously_rewritten_goal_continuations() -> None:
+    compute = _batch_compute()
+    lines = [
+        _thread_goal_updated("active"),
+        _old_visible_goal_context(),
+        _old_visible_goal_context(),
+    ]
+    results = _transform_all(compute, lines)
+
+    assert results[1] is None  # the true command boundary stays visible
+    demoted = orjson.loads(results[2])
+    assert demoted["type"] == "response_item"
+    assert "twiccOriginalContent" not in demoted
+    assert compute.compute_item_kind(demoted) == ItemKind.SYSTEM
+
+
+def test_goal_objective_update_arms_another_visible_boundary() -> None:
+    compute = _batch_compute()
+    lines = [
+        _thread_goal_updated("active", "First objective"),
+        _goal_context("First objective"),
+        _goal_context("First objective"),
+        _thread_goal_updated("active", "Revised objective"),
+        _goal_context("Revised objective"),
+    ]
+    results = _transform_all(compute, lines)
+
+    assert orjson.loads(results[1])["payload"]["message"] == "/goal First objective"
+    assert results[2] is None
+    assert orjson.loads(results[4])["payload"]["message"] == "/goal Revised objective"
+
+
+def test_live_seed_hides_a_continuation_after_backend_restart(plan_compute_session) -> None:
+    session = plan_compute_session
+    _persist_line(session, 1, _thread_goal_updated("active"))
+    _persist_line(session, 2, _old_visible_goal_context())
+    compute = CodexSessionCompute()
+
+    duplicate = _old_visible_goal_context()
+    result = compute.transform_inline(duplicate, session_id=session.id, line_num=10)
+
+    assert orjson.loads(result)["type"] == "response_item"
+
+
+def test_structured_goal_tool_result_completes_lifecycle_and_continuation() -> None:
+    compute = _batch_compute()
+    result = _goal_tool_result("complete")
+
+    event = compute.extract_goal_event(result)
+
+    assert event is not None
+    assert event.state == "completed"
+    assert event.raw_state == "complete"
+    assert compute.is_goal_continuation_stopped(result) is True
+
+
+def test_active_goal_tool_result_does_not_stop_continuation() -> None:
+    compute = _batch_compute()
+    result = _goal_tool_result("active")
+
+    assert compute.is_goal_continuation_stopped(result) is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_goal_tool_result_notifies_the_live_continuation(plan_compute_session) -> None:
+    session = plan_compute_session
+    _persist_line(session, 1, _goal_tool_result("complete"))
+    manager = SimpleNamespace(notify_goal_continuation_stopped=AsyncMock())
+
+    asyncio.run(CodexSessionsWatcher()._check_goal_continuation_end(
+        manager, session.id, [1],
+    ))
+
+    manager.notify_goal_continuation_stopped.assert_awaited_once_with(session.id)
+
+
+def test_goal_stop_notification_returns_parked_agent_to_user_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = _make_agent(monkeypatch)
+    agent._goal_continuation_active = True
+    agent._set_state(AgentState.ASSISTANT_TURN)
+    agent._notify_state_change = AsyncMock()
+
+    asyncio.run(agent.notify_goal_continuation_stopped())
+
+    assert agent.state == AgentState.USER_TURN
+    assert agent.in_goal_continuation() is False
+    agent._notify_state_change.assert_awaited_once()

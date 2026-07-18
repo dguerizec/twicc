@@ -407,7 +407,7 @@ class CodexAgentManager(BaseAgentManager):
     async def notify_goal_continuation_stopped(self, session_id: str) -> None:
         """Relay "the goal continuation ended" from the watcher to a live agent.
 
-        Fired when a ``thread_goal_updated`` with a non-``active`` status lands.
+        Fired when persisted goal evidence with a non-``active`` status lands.
         Neutral relay — the agent decides, via its ``_goal_continuation_active``
         flag, whether this concludes a ``/goal`` it armed (act: end the
         synthetic ASSISTANT_TURN) or is unrelated (ignore). No live agent →

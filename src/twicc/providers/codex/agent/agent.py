@@ -963,10 +963,9 @@ class CodexAgent(BaseAgent):
           makes Codex autonomously run a "continuation" turn to pursue it (the
           app-server starts AND drives it; TwiCC does not). Marking the session
           ASSISTANT_TURN lets the frontend show it working and stream the
-          continuation's messages live. KNOWN LIMITATION (intentional, for
-          now): TwiCC does not yet observe that turn, so it will NOT auto-flip
-          back to ``USER_TURN`` when the continuation ends — a follow-up to
-          drive/observe the app-server-driven goal turn.
+          continuation's messages live. The watcher observes the goal leaving
+          ``active`` through either its status event or the successful
+          Goal-tool result and flips the parked agent back to ``USER_TURN``.
 
         Either way the optimistic ``/goal`` bubble is dropped (see
         :meth:`_settle_after_command`). On failure the agent is left usable and
@@ -1064,9 +1063,9 @@ class CodexAgent(BaseAgent):
     async def notify_goal_continuation_stopped(self) -> None:
         """Settle a ``/goal`` continuation back to USER_TURN (goal left ``active``).
 
-        Routed from the watcher via the manager when a ``thread_goal_updated``
-        with a non-``active`` status lands (the agent marked the goal
-        complete/blocked, or a usage/budget limit hit). Mirrors
+        Routed from the watcher via the manager when persisted goal evidence
+        carries a non-``active`` status (a ``thread_goal_updated`` event or a
+        successful Goal-tool result). Mirrors
         :meth:`notify_compacted`'s flag guard: act only on a continuation WE
         armed via ``/goal``, never once ``DEAD``, and never while we're driving
         a real turn ourselves (then ``_run_turn`` owns the state — its own

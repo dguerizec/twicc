@@ -123,8 +123,8 @@ class CodexSessionsWatcher(BaseSessionsWatcher):
     async def _after_new_lines_synced(self, session, new_line_nums, tool_result_updates) -> None:
         # When a live agent is parked in a ``/goal`` continuation (a synthetic
         # ASSISTANT_TURN it does NOT drive), watch the freshly-synced lines for
-        # the goal leaving ``active`` — the app-server's signal that the
-        # continuation ended — so the agent can settle back to USER_TURN. Cheap
+        # the goal leaving ``active`` — through a status event or a successful
+        # Goal-tool result — so the agent can settle back to USER_TURN. Cheap
         # gate first (no DB read unless such an agent is live); fire-and-forget
         # so the ingest path never blocks on the agent lock.
         if not new_line_nums:

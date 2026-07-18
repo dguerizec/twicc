@@ -10,13 +10,13 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
 
 - ``event_msg.user_message`` → ``USER_MESSAGE``
 - ``event_msg.agent_message`` → ``ASSISTANT_MESSAGE``
-- A ``response_item.message`` (role=user) carrying a
-  ``<codex_internal_context source="goal">`` block — the prompt Codex injects to
-  drive a goal continuation — is rewritten by :meth:`_transform_inline_provider`
-  into a synthetic ``event_msg.user_message`` of text ``/goal <objective>``, so
-  it classifies as ``USER_MESSAGE`` (above), counts toward ``user_message_count``
-  and renders as the command the user effectively issued. The original payload
-  is kept under ``twiccOriginalContent``.
+- The first ``response_item.message`` (role=user) carrying a
+  ``<codex_internal_context source="goal">`` block after a goal set/update is
+  rewritten by :meth:`_transform_inline_provider` into a synthetic
+  ``event_msg.user_message`` of text ``/goal <objective>``. Later continuation
+  prompts for the same goal stay ``SYSTEM`` / ``DEBUG_ONLY`` so the command is
+  not repeated between every assistant response. The original payload of the
+  visible boundary is kept under ``twiccOriginalContent``.
 - A ``response_item.message`` (role=user) that is a TwiCC-injected command
   (via ``thread/inject_items`` — ``/goal clear`` and ``/compact``, for which
   Codex writes no "the user asked" rollout line of its own) is likewise
@@ -103,6 +103,9 @@ Classification rules (any change MUST bump CODEX_COMPUTE_VERSION):
   ``update_plan`` also refreshes :attr:`Session.tasks` without changing the
   outer wrapper's tool identity — see
   :data:`_CODE_MODE_EXEC_TOOL` and ``code_mode_script.py``.
+- A successful Goal-tool result carrying ``{goal: {status: ...}}`` is also a
+  goal-lifecycle event. This is the completion signal emitted by GPT-5.6 code
+  mode when no final ``thread_goal_updated`` line is persisted.
 - top-level ``compacted`` → ``COMPACT_SUMMARY`` (lands at ``ALWAYS``).
   Codex CLI writes this line on auto-compaction; the payload carries
   a ``replacement_history`` of the messages that were summarized plus
@@ -1081,6 +1084,34 @@ _GOAL_OBJECTIVE_RE = re.compile(
 )
 
 
+def _goal_context_payload(parsed_json: dict) -> dict | None:
+    """Return the native goal-context message payload, raw or rewritten.
+
+    Older compute passes rewrote every continuation prompt into an
+    ``event_msg.user_message`` and preserved the native ``response_item``
+    payload under ``twiccOriginalContent``. Recognising both shapes lets a
+    compute-version bump demote those already-persisted duplicates again.
+    """
+    if parsed_json.get("type") == _TYPE_RESPONSE_ITEM:
+        payload = _payload(parsed_json)
+        if payload is not None and payload.get("type") == "message" and payload.get("role") == "user":
+            return payload
+        return None
+    if parsed_json.get("type") != _TYPE_EVENT_MSG:
+        return None
+    payload = _payload(parsed_json)
+    original = parsed_json.get("twiccOriginalContent")
+    if (
+        payload is not None
+        and payload.get("type") == _PAYLOAD_USER_MESSAGE
+        and isinstance(original, dict)
+        and original.get("type") == "message"
+        and original.get("role") == "user"
+    ):
+        return original
+    return None
+
+
 def _goal_context_objective(parsed_json: dict) -> str | None:
     """Return the objective of a Codex goal-continuation context message.
 
@@ -1101,10 +1132,8 @@ def _goal_context_objective(parsed_json: dict) -> str | None:
     budget/usage-limit steers reuse the same ``source="goal"`` + ``<objective>``
     shape; for TwiCC's budget-free ``/goal`` that case never arises.)
     """
-    if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
-        return None
-    payload = _payload(parsed_json)
-    if payload is None or payload.get("type") != "message" or payload.get("role") != "user":
+    payload = _goal_context_payload(parsed_json)
+    if payload is None:
         return None
     content = payload.get("content")
     if not isinstance(content, list) or not content:
@@ -1120,6 +1149,56 @@ def _goal_context_objective(parsed_json: dict) -> str | None:
         return None
     objective = html.unescape(match.group(2)).strip()
     return objective or None
+
+
+def _goal_snapshot_from_tool_result(parsed_json: dict) -> dict | None:
+    """Return a structured Goal snapshot from a successful tool result.
+
+    Native calls serialise their result as one JSON string. GPT-5.6 code mode
+    commonly stores an array whose first text block is the script status and
+    whose second block is ``text(JSON.stringify(result))``. Accept both forms,
+    plus a combined status+body string, and require the Goal's stable
+    ``threadId`` / ``status`` fields before treating it as lifecycle evidence.
+    """
+    if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+        return None
+    payload = _payload(parsed_json)
+    if payload is None or payload.get("type") not in _TOOL_RESULT_PAYLOAD_TYPES:
+        return None
+    output = payload.get("output")
+    texts: list[str] = []
+    if isinstance(output, str):
+        texts.append(output)
+    elif isinstance(output, list):
+        for part in output:
+            if not isinstance(part, dict) or part.get("type") not in {"input_text", "output_text"}:
+                continue
+            text = part.get("text")
+            if isinstance(text, str):
+                texts.append(text)
+
+    for text in reversed(texts):
+        candidates = [text.strip()]
+        parsed_output = parse_code_mode_output(text)
+        if parsed_output is not None and parsed_output.status == "completed" and parsed_output.body:
+            candidates.insert(0, parsed_output.body.strip())
+        for candidate in candidates:
+            if not candidate or '"goal"' not in candidate:
+                continue
+            try:
+                result = orjson.loads(candidate)
+            except orjson.JSONDecodeError:
+                continue
+            if not isinstance(result, dict):
+                continue
+            goal = result.get("goal")
+            if (
+                isinstance(goal, dict)
+                and isinstance(goal.get("threadId"), str)
+                and isinstance(goal.get("status"), str)
+            ):
+                return goal
+    return None
 
 
 # TwiCC-injected commands (via ``thread/inject_items``) for which Codex writes
@@ -1289,6 +1368,25 @@ class _PlanPrefixState:
         # The next native user_message is a ``/plan <prompt>`` inline
         # prompt and must be re-prefixed.
         self.armed = False
+
+
+class _GoalContextState:
+    """Per-session scan state deciding which Goal context is user-visible.
+
+    Codex injects the same internal user-role prompt before every autonomous
+    continuation turn. Only the first one after a goal activation/update is a
+    transcript boundary representing the user's ``/goal`` command; the rest
+    are provider control traffic. Mutable because the decision evolves during
+    the sequential compute scan.
+    """
+
+    __slots__ = ("initialized", "seen_context", "last_objective", "show_next")
+
+    def __init__(self, *, initialized: bool = False) -> None:
+        self.initialized = initialized
+        self.seen_context = False
+        self.last_objective: str | None = None
+        self.show_next = False
 
 
 def _parse_subagent_notification(parsed_json: dict) -> tuple[str, dict] | None:
@@ -1644,6 +1742,11 @@ class CodexSessionCompute(BaseSessionCompute):
         # lazily seeds ``last_mode`` from the DB
         # (:meth:`_lookup_prev_plan_context`).
         self._plan_prefix_states: dict[str, _PlanPrefixState] = {}
+        # {session_id: _GoalContextState}. Sequential-scan state deciding
+        # whether a provider-injected Goal context is the visible command
+        # boundary or a hidden autonomous continuation prompt. Batch mode
+        # starts clean; live mode lazily seeds from prior persisted goal lines.
+        self._goal_context_states: dict[str, _GoalContextState] = {}
 
     def _proc_map(self, session_id: str) -> dict[int, str]:
         """Return the per-session ``{exec_command_id: call_id}`` map.
@@ -1689,6 +1792,14 @@ class CodexSessionCompute(BaseSessionCompute):
         """
         return self._plan_prefix_states.setdefault(session_id, _PlanPrefixState())
 
+    def _goal_context_state(self, session_id: str, line_num: int) -> _GoalContextState:
+        """Return goal-context scan state, seeding a fresh live process from DB."""
+        state = self._goal_context_states.setdefault(session_id, _GoalContextState())
+        if not state.initialized:
+            state = self._lookup_prev_goal_context_state(session_id, line_num)
+            self._goal_context_states[session_id] = state
+        return state
+
     def begin_session_compute(self, session_id: str) -> None:
         # Reset per-session state at the start of a batch compute so a
         # previous run's leftover values can never leak into the new
@@ -1700,6 +1811,7 @@ class CodexSessionCompute(BaseSessionCompute):
         self._agent_id_to_spawn_call_id[session_id] = {}
         self._prev_total_tokens[session_id] = 0
         self._plan_prefix_states[session_id] = _PlanPrefixState(last_mode="default")
+        self._goal_context_states[session_id] = _GoalContextState(initialized=True)
 
     def end_session_compute(self, session_id: str) -> None:
         # Free the per-session caches after a batch compute finishes.
@@ -1714,6 +1826,7 @@ class CodexSessionCompute(BaseSessionCompute):
         self._agent_id_to_spawn_call_id.pop(session_id, None)
         self._prev_total_tokens.pop(session_id, None)
         self._plan_prefix_states.pop(session_id, None)
+        self._goal_context_states.pop(session_id, None)
 
     def _release_exec_command_for_call(
         self, session_id: str, call_id: str
@@ -2379,6 +2492,20 @@ class CodexSessionCompute(BaseSessionCompute):
             self._note_turn_context_mode(session_id, tc_mode, line_num)
             return None
 
+        # Goal lifecycle events arm/disarm visibility of the next internal
+        # Goal context. The app-server emits the same user-role control prompt
+        # before every continuation turn; only a prompt after an active goal
+        # set/update represents a new transcript boundary.
+        payload = _payload(parsed_json)
+        if (
+            parsed_json.get("type") == _TYPE_EVENT_MSG
+            and payload is not None
+            and payload.get("type") == _PAYLOAD_THREAD_GOAL_UPDATED
+        ):
+            goal = payload.get("goal")
+            if isinstance(goal, dict):
+                self._note_goal_status(session_id, line_num, goal.get("status"))
+
         # Terminal provider error → canonical visible API-error item. Codex
         # only emits the error on its live notification stream, so the agent
         # persists this private ``thread/inject_items`` marker before teardown.
@@ -2398,28 +2525,34 @@ class CodexSessionCompute(BaseSessionCompute):
             parsed_json.pop("payload", None)
             return orjson.dumps(parsed_json).decode("utf-8")
 
-        # Goal-continuation context → synthetic ``/goal <objective>`` user
-        # message. Codex drives an active goal by injecting a
-        # ``response_item.message`` (role=user) wrapping the objective in a
-        # ``<codex_internal_context source="goal">`` block. It is not human
-        # input, so it would classify as SYSTEM/DEBUG_ONLY and never count as a
-        # user message — which (a) keeps ``user_message_count`` at 0 so the live
-        # watcher broadcast (gated on ``user_message_count > 0``) stays silent
-        # for a goal session, and (b) drops the natural "the user set this goal"
-        # framing. Rewrite the line in place into the canonical
-        # ``event_msg.user_message`` shape carrying the command the user
-        # effectively issued (``/goal <objective>``), keeping the original
-        # payload under ``twiccOriginalContent``. Fires for ANY such message
-        # (first message of a new session, or a continuation in an existing one).
+        # Goal context → expose one command boundary, hide later continuations.
+        # Codex injects the same user-role control prompt before every
+        # autonomous turn. The first one after a goal set/update stands in for
+        # the user's hardcoded command; subsequent prompts are provider control
+        # traffic and must stay SYSTEM/DEBUG_ONLY. Already-rewritten duplicates
+        # from an older compute pass are restored to their native response_item
+        # shape here, allowing a compute-version bump to repair stored sessions.
         objective = _goal_context_objective(parsed_json)
         if objective is not None:
-            parsed_json["twiccOriginalContent"] = parsed_json.get("payload")
-            parsed_json["type"] = _TYPE_EVENT_MSG
-            parsed_json["payload"] = {
-                "type": _PAYLOAD_USER_MESSAGE,
-                "message": f"/goal {objective}",
-            }
-            return orjson.dumps(parsed_json).decode("utf-8")
+            show = self._consume_goal_context(session_id, line_num, objective)
+            if show:
+                if parsed_json.get("type") == _TYPE_RESPONSE_ITEM:
+                    parsed_json["twiccOriginalContent"] = parsed_json.get("payload")
+                    parsed_json["type"] = _TYPE_EVENT_MSG
+                    parsed_json["payload"] = {
+                        "type": _PAYLOAD_USER_MESSAGE,
+                        "message": f"/goal {objective}",
+                    }
+                    return orjson.dumps(parsed_json).decode("utf-8")
+                return None
+            if parsed_json.get("type") == _TYPE_EVENT_MSG:
+                original = parsed_json.get("twiccOriginalContent")
+                if isinstance(original, dict):
+                    parsed_json["type"] = _TYPE_RESPONSE_ITEM
+                    parsed_json["payload"] = original
+                    parsed_json.pop("twiccOriginalContent", None)
+                    return orjson.dumps(parsed_json).decode("utf-8")
+            return None
 
         # TwiCC-injected command (``/goal clear``, ``/compact``) → user message.
         # Injected via ``thread/inject_items`` for commands Codex writes no
@@ -2623,6 +2756,86 @@ class CodexSessionCompute(BaseSessionCompute):
                 return prev_mode, True
         return prev_mode, False
 
+    def _note_goal_status(self, session_id: str, line_num: int, status) -> None:
+        """Arm the next Goal context after activation; disarm on termination."""
+        if not isinstance(status, str):
+            return
+        state = self._goal_context_state(session_id, line_num)
+        state.show_next = status == _GOAL_STATUS_ACTIVE
+
+    def _consume_goal_context(
+        self, session_id: str, line_num: int, objective: str,
+    ) -> bool:
+        """Return whether this internal context should represent ``/goal``.
+
+        A new activation/update arms the boundary explicitly. The first context
+        in a session and an objective change are defensive fallbacks for
+        provider histories that omit the corresponding status event.
+        """
+        state = self._goal_context_state(session_id, line_num)
+        show = (
+            state.show_next
+            or not state.seen_context
+            or objective != state.last_objective
+        )
+        state.initialized = True
+        state.seen_context = True
+        state.last_objective = objective
+        state.show_next = False
+        return show
+
+    def _lookup_prev_goal_context_state(
+        self, session_id: str, current_line_num: int,
+    ) -> _GoalContextState:
+        """Seed live goal-context visibility from the latest persisted lines.
+
+        Only two facts matter: the most recent internal context (if any), and
+        whether a newer ``thread_goal_updated`` line activated another goal
+        boundary. Both scans parse-verify their cheap text-filter candidates.
+        """
+        state = _GoalContextState(initialized=True)
+        context_line = 0
+        context_candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__lt=current_line_num,
+            content__contains="codex_internal_context",
+        ).order_by("-line_num")
+        for candidate in context_candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            objective = _goal_context_objective(parsed)
+            if objective is None:
+                continue
+            state.seen_context = True
+            state.last_objective = objective
+            context_line = candidate.line_num
+            break
+
+        update_candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__gt=context_line,
+            line_num__lt=current_line_num,
+            content__contains='"type":"thread_goal_updated"',
+        ).order_by("-line_num")
+        for candidate in update_candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            if parsed.get("type") != _TYPE_EVENT_MSG:
+                continue
+            payload = _payload(parsed)
+            if payload is None or payload.get("type") != _PAYLOAD_THREAD_GOAL_UPDATED:
+                continue
+            goal = payload.get("goal")
+            if not isinstance(goal, dict):
+                continue
+            state.show_next = goal.get("status") == _GOAL_STATUS_ACTIVE
+            break
+        return state
+
     def extract_tasks_payload(self, parsed_json: dict) -> dict | None:
         """Latest plan state on a Codex ``update_plan`` line, in the common shape.
 
@@ -2652,50 +2865,55 @@ class CodexSessionCompute(BaseSessionCompute):
         }
 
     def is_goal_continuation_stopped(self, parsed_json: dict) -> bool:
-        """True for an ``event_msg.thread_goal_updated`` whose status left ``active``.
+        """True when persisted evidence says the Goal left ``active``.
 
-        Codex emits this when a goal continuation ends — the agent marked the
-        goal ``complete``/``blocked`` via ``update_goal``, or a usage/budget
-        limit moved it to ``usageLimited``/``budgetLimited``. The live watcher
-        relays it (only while a ``/goal`` continuation is parked — see
-        ``CodexSessionsWatcher``) so the agent settles its synthetic
-        ASSISTANT_TURN back to USER_TURN; TwiCC does not drive that turn itself.
+        The primary signal is ``event_msg.thread_goal_updated``. GPT-5.6 code
+        mode may omit that event after ``update_goal`` while still persisting
+        the successful tool result, so its structured Goal snapshot is an
+        equivalent stop signal. The live watcher relays either one while a
+        continuation is parked so the agent returns to USER_TURN.
+
         A ``thread_goal_cleared`` event is intentionally NOT a stop signal: a
         ``/goal`` replace clears the old goal mid-set before installing the new
         one, which must not look like the continuation ending.
         """
-        if parsed_json.get("type") != _TYPE_EVENT_MSG:
-            return False
-        payload = _payload(parsed_json)
-        if payload is None or payload.get("type") != _PAYLOAD_THREAD_GOAL_UPDATED:
-            return False
-        goal = payload.get("goal")
-        if not isinstance(goal, dict):
-            return False
-        return goal.get("status") != _GOAL_STATUS_ACTIVE
+        goal = _goal_snapshot_from_tool_result(parsed_json)
+        if goal is not None:
+            return goal.get("status") != _GOAL_STATUS_ACTIVE
+        if parsed_json.get("type") == _TYPE_EVENT_MSG:
+            payload = _payload(parsed_json)
+            if payload is not None and payload.get("type") == _PAYLOAD_THREAD_GOAL_UPDATED:
+                goal = payload.get("goal")
+                if isinstance(goal, dict):
+                    return goal.get("status") != _GOAL_STATUS_ACTIVE
+        return False
 
     def extract_goal_event(self, parsed_json: dict) -> GoalEvent | None:
-        """Goal lifecycle from ``thread_goal_updated`` or an injected ``/goal clear``.
+        """Goal lifecycle from status events, Goal results, or ``/goal clear``.
 
-        Codex emits ``event_msg.thread_goal_updated`` each turn with the goal's
-        ``objective`` and ``status`` (``active`` / ``complete`` / ``paused`` /
-        ``blocked`` / ``usage_limited`` / ``budget_limited``). The objective acts
-        as a (re)definition signal only while ``active``: that stops a repeated
-        ``complete`` tick from forking a new goal, and lets an in-place objective
-        edit (same goal, still active) land as an addendum. A ``/goal clear``
-        writes no goal event, so TwiCC's injected ``/goal clear`` user message
-        (already rewritten inline by :meth:`_transform_inline_provider`) is used.
+        ``thread_goal_updated`` and successful Goal-tool results carry the same
+        objective/status snapshot. The objective acts as a (re)definition only
+        while active: that stops a repeated completion from forking a new goal
+        and lets an in-place objective edit land as an addendum. ``/goal clear``
+        writes no status event, so TwiCC's injected user message is used.
         """
-        if parsed_json.get("type") != _TYPE_EVENT_MSG:
-            return None
-        payload = _payload(parsed_json)
-        if payload is None:
-            return None
-        ptype = payload.get("type")
-        if ptype == _PAYLOAD_THREAD_GOAL_UPDATED:
-            goal = payload.get("goal")
-            if not isinstance(goal, dict):
+        goal = _goal_snapshot_from_tool_result(parsed_json)
+        if goal is None:
+            payload = _payload(parsed_json)
+            if payload is None:
                 return None
+            ptype = payload.get("type")
+            if ptype == _PAYLOAD_THREAD_GOAL_UPDATED:
+                candidate = payload.get("goal")
+                goal = candidate if isinstance(candidate, dict) else None
+            elif ptype == _PAYLOAD_USER_MESSAGE:
+                message = payload.get("message")
+                if isinstance(message, str) and message.strip().lower() == "/goal clear":
+                    return GoalEvent(cleared=True)
+                return None
+            else:
+                return None
+        if goal is not None:
             status = goal.get("status")
             objective = goal.get("objective")
             active = status == _GOAL_STATUS_ACTIVE
@@ -2704,10 +2922,6 @@ class CodexSessionCompute(BaseSessionCompute):
                 state=GOAL_STATE_COMPLETED if status == _GOAL_STATUS_COMPLETE else GOAL_STATE_ACTIVE,
                 raw_state=status if isinstance(status, str) else None,
             )
-        if ptype == _PAYLOAD_USER_MESSAGE:
-            message = payload.get("message")
-            if isinstance(message, str) and message.strip().lower() == "/goal clear":
-                return GoalEvent(cleared=True)
         return None
 
     def compute_item_kind(self, parsed_json: dict) -> ItemKind | None:
