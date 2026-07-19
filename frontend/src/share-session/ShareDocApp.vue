@@ -53,19 +53,29 @@ onMounted(() => {
 
 <template>
     <div class="share-doc">
-        <wa-callout v-if="updated" variant="brand" class="share-banner">
-            This artifact was updated — <a href="#" @click.prevent="location.reload()">Reload</a>
-        </wa-callout>
-        <wa-callout v-if="error" variant="danger">This document is not available.</wa-callout>
-        <MarkdownContent v-else :source="source" :show-toolbar="false"
-                         :class="{ 'doc-image': docKind === 'image' }" />
-        <footer class="share-footer">Shared with TwiCC</footer>
+        <div class="share-doc-scroll">
+            <div class="share-doc-body">
+                <wa-callout v-if="updated" variant="brand" class="share-banner">
+                    This artifact was updated — <a href="#" @click.prevent="location.reload()">Reload</a>
+                </wa-callout>
+                <wa-callout v-if="error" variant="danger">This document is not available.</wa-callout>
+                <MarkdownContent v-else :source="source" :show-toolbar="false"
+                                 :class="{ 'doc-image': docKind === 'image' }" />
+            </div>
+        </div>
+        <footer class="share-footer">Shared with
+            <a href="https://github.com/twidi/twicc" target="_blank" rel="noopener noreferrer">TwiCC</a></footer>
         <GlobalMediaPreview />
     </div>
 </template>
 
 <style>
-.share-doc { max-width: 55rem; margin: 0 auto; padding: 1.5rem; }
+/* Full-viewport flex column: the document scrolls INTERNALLY so the footer stays
+   pinned at the bottom, mirroring the session and HTML-artifact share viewers
+   (dynamic height via #app's 100dvh, defined in ShareSessionApp's global style). */
+.share-doc { height: 100%; display: flex; flex-direction: column; }
+.share-doc-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.share-doc-body { max-width: 55rem; margin: 0 auto; padding: 1.5rem; }
 
 /* An image artifact is the whole document — center it, like the Mermaid diagram
    (.mermaid-diagram is centered in MarkdownContent). Only for the image doc, so

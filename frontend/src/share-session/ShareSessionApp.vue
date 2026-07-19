@@ -190,7 +190,8 @@ onUnmounted(() => window.removeEventListener('popstate', onPopState))
             :stack="subagentStack" @close="closeSubagent" @clear="clearSubagents" />
 
         <GlobalMediaPreview />
-        <footer class="share-footer">Shared with TwiCC</footer>
+        <footer class="share-footer">Shared with
+            <a href="https://github.com/twidi/twicc" target="_blank" rel="noopener noreferrer">TwiCC</a></footer>
     </div>
 </template>
 
@@ -201,7 +202,9 @@ onUnmounted(() => window.removeEventListener('popstate', onPopState))
    content height and swallows the wheel over the content, leaving only the page
    margins scrollable. This mirrors the SPA's SessionItemsList flex chain. */
 html, body { height: 100%; margin: 0; }
-#app { height: 100%; }
+/* Dynamic viewport so the pinned footer stays within the visible area even as
+   mobile browser chrome shows/hides (matches the HTML-artifact share shell). */
+#app { height: 100vh; height: 100dvh; }
 .share-shell { max-width: 60rem; margin: 0 auto; padding: 0 1rem; height: 100%;
     display: flex; flex-direction: column; }
 .share-header { flex: 0 0 auto; display: flex; justify-content: space-between;
@@ -240,7 +243,9 @@ html, body { height: 100%; margin: 0; }
     overflow: hidden; position: relative; }
 .share-items-list .session-items { flex: 1; min-height: 0; }
 .share-footer { flex: 0 0 auto; text-align: center; color: var(--wa-color-text-quiet);
-    font-size: var(--wa-font-size-s); padding: .75rem 0; }
+    background: var(--wa-color-surface-default); font-size: var(--wa-font-size-s);
+    line-height: 1.2; padding: .5rem 0; }
+.share-footer a { color: inherit; text-decoration: underline; }
 /* Print: let everything flow (the scroller still only renders its virtualized
    window, but at least it isn't clipped to one viewport). */
 @media print {

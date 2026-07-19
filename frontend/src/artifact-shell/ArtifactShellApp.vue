@@ -105,6 +105,10 @@ onMounted(() => {
         sandbox="allow-scripts allow-same-origin allow-forms"
         title="Artifact"
     ></iframe>
+    <!-- Share mode gets the same "Shared with TwiCC" footer as the session/doc
+         share viewers; the in-app owner page (a plain tool view) does not. -->
+    <footer v-if="mode === 'share'" class="share-footer">Shared with
+        <a href="https://github.com/twidi/twicc" target="_blank" rel="noopener noreferrer">TwiCC</a></footer>
     <!-- Share mode never prompts (server enforces the owner allowlist, D6). -->
     <ArtifactBrokerPrompt v-if="mode !== 'share'" :prompt="brokerPrompt" @decision="onBrokerDecision" />
     <div v-if="blockedHosts.length" class="share-blocked-banner">
@@ -121,15 +125,39 @@ html,
 body {
     margin: 0;
     height: 100%;
+    background: var(--wa-color-surface-default);
 }
 #app {
-    height: 100vh;
+    height: 100vh; /* fallback for browsers without dvh */
+    height: 100dvh; /* dynamic viewport: iframe + footer stay within the visible
+                       area even as mobile browser chrome shows/hides */
+    display: flex;
+    flex-direction: column;
 }
 .artifact-frame {
     display: block;
     width: 100%;
-    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
     border: 0;
+    /* WA's base stylesheet gives block flow elements a bottom margin; here it
+       would leave a blank strip between the iframe and the footer. */
+    margin: 0;
+}
+/* Same look as the session/doc share footers (share-session bundle); restated
+   here because that bundle's stylesheet isn't loaded in the artifact shell. */
+.share-footer {
+    flex: 0 0 auto;
+    text-align: center;
+    color: var(--wa-color-text-quiet);
+    background: var(--wa-color-surface-default);
+    font-size: var(--wa-font-size-s);
+    line-height: 1.2;
+    padding: 0.5rem 0;
+}
+.share-footer a {
+    color: inherit;
+    text-decoration: underline;
 }
 .share-update-banner {
     position: fixed;
