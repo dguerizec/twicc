@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Dark mode on shared pages** — Public share pages that didn't already support it now follow light and dark mode.
+
 ### Fixed
 
 - **Shared artifacts** — A pass of fixes and improvements to how images and Mermaid diagrams render in public links.

@@ -17,6 +17,13 @@ import '@awesome.me/webawesome/dist/components/icon/icon.js'
 
 import ArtifactShellApp from './ArtifactShellApp.vue'
 import { recordShareView } from '../share-recent/recordView'
+import { initArtifactShellColorScheme } from '../share-session/theme'
+
+// The shell's chrome (footer + banners) follows the browser's color scheme.
+// No switcher here: the only chrome is the footer strip, and the iframed
+// artifact keeps its own internal theme the shell can't read (sandboxed), so a
+// toggle recoloring just the footer would mislead. Follow the OS, nothing else.
+initArtifactShellColorScheme()
 
 const dataEl = document.getElementById('twicc-shell-data')
 const shellData = dataEl ? JSON.parse(dataEl.textContent) : {}

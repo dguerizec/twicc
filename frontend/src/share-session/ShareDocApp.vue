@@ -4,6 +4,7 @@ import MarkdownContent from '../components/ui/MarkdownContent.vue'
 // Singleton driven by MarkdownContent's openMediaPreview() — without it, clicking a
 // rendered image or Mermaid SVG has nowhere to open. Mirrors ShareSessionApp.
 import GlobalMediaPreview from '../components/media/GlobalMediaPreview.vue'
+import ShareThemeToggle from './ShareThemeToggle.vue'
 
 const props = defineProps({ tokenPath: String, meta: Object })
 const source = ref('')
@@ -63,8 +64,11 @@ onMounted(() => {
                                  :class="{ 'doc-image': docKind === 'image' }" />
             </div>
         </div>
-        <footer class="share-footer">Shared with
-            <a href="https://github.com/twidi/twicc" target="_blank" rel="noopener noreferrer">TwiCC</a></footer>
+        <footer class="share-footer">
+            <span>Shared with
+                <a href="https://github.com/twidi/twicc" target="_blank" rel="noopener noreferrer">TwiCC</a></span>
+            <ShareThemeToggle />
+        </footer>
         <GlobalMediaPreview />
     </div>
 </template>

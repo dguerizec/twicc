@@ -39,3 +39,20 @@ export function initShareTheme() {
         if (getShareColorScheme() === 'system') applyShareColorScheme('system')
     })
 }
+
+// OS-only color scheme for the artifact shell. It has no options menu and no
+// footer switcher — its only chrome is a footer strip, and the iframed artifact
+// keeps its own internal theme the shell can't read (sandboxed) — so it simply
+// follows the browser, never reading or writing the shared viewer-prefs the
+// session/doc switcher use.
+export function initArtifactShellColorScheme() {
+    document.documentElement.classList.add('wa-theme-default', 'wa-palette-default', 'wa-brand-cyan')
+    document.documentElement.dataset.theme = 'default'
+    const mq = matchMedia('(prefers-color-scheme: dark)')
+    const apply = () => {
+        document.documentElement.classList.toggle('wa-dark', mq.matches)
+        document.documentElement.dataset.colorScheme = mq.matches ? 'dark' : 'light'
+    }
+    apply()
+    mq.addEventListener('change', apply)
+}
