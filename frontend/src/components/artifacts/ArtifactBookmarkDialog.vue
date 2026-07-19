@@ -47,6 +47,10 @@ const denials = ref(null) // null = loading; [] = none
 const liveBookmark = computed(() => store.artifactBookmarks[existingId.value] || null)
 const allowedHosts = computed(() => liveBookmark.value?.allowed_hosts || existingAllowedHosts.value || {})
 const deniedHosts = computed(() => liveBookmark.value?.denied_hosts || {})
+// Network access only exists for HTML artifacts (the only ones that can fetch()
+// through the broker); hide the whole section for `.md`/`.mmd`/image/pdf bookmarks.
+const isHtmlArtifact = computed(() =>
+    isHtmlArtifactPath(liveBookmark.value?.relative_path || props.relativePath))
 
 async function fetchDenials() {
     if (!isEditMode.value) return
@@ -288,7 +292,9 @@ function open(existing = null) {
         localName.value = existing.name || ''
         localScope.value = existing.scope || 'project'
         existingAllowedHosts.value = existing.allowed_hosts || {}
-        fetchDenials()
+        // Only HTML artifacts have a network surface; skip the denials fetch otherwise
+        // (the section is hidden anyway).
+        if (isHtmlArtifactPath(existing.relative_path)) fetchDenials()
     } else {
         existingId.value = null
         // Auto-fill a suggested name: the path-derived fallback shows instantly,
@@ -384,7 +390,7 @@ defineExpose({ open, close })
                 </wa-select>
                 <div class="form-hint">Where this bookmark shows in the Artifacts sidebar.</div>
             </div>
-            <div v-if="isEditMode" class="form-group network-section">
+            <div v-if="isEditMode && isHtmlArtifact" class="form-group network-section">
                 <label class="form-label">Network access</label>
                 <p v-if="denials === null" class="muted">Loading…</p>
                 <p v-else-if="!hostRows.length" class="muted">No network activity on this artifact.</p>

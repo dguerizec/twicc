@@ -6,6 +6,7 @@ import { useDataStore } from '../../stores/data'
 import { shareAbsoluteUrl } from '../../utils/shareUrl'
 import { apiFetch } from '../../utils/api'
 import { toast } from '../../composables/useToast'
+import { isHtmlArtifactPath } from '../../utils/artifactBookmark'
 import AppTooltip from '../ui/AppTooltip.vue'
 import HelpIconButton from '../help/HelpIconButton.vue'
 
@@ -117,6 +118,11 @@ function reset() {
 
 const isSession = computed(() => props.kind === 'session')
 const allowedHostList = computed(() => Object.keys(props.allowedHosts || {}))
+// Network access only exists for HTML artifacts (the only ones that can fetch()
+// through the broker). A `.md`/`.mmd`/image/pdf artifact has no network surface,
+// so its whole allow/refuse guidance is meaningless and must not show.
+const isHtmlArtifact = computed(() =>
+    isHtmlArtifactPath(dataStore.artifactBookmarks[props.bookmarkId]?.relative_path))
 
 function sessionOptions() {
     return {
@@ -255,7 +261,7 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
                 <wa-switch :checked="form.show_timestamps" @change.stop="form.show_timestamps = $event.target.checked">Show timestamps</wa-switch>
             </template>
 
-            <template v-else>
+            <template v-else-if="isHtmlArtifact">
                 <wa-callout v-if="allowedHostList.length" variant="neutral">
                     Viewers will be able to reach these hosts (already allowed on this artifact):
                     <ul><li v-for="h in allowedHostList" :key="h"><code>{{ h }}</code></li></ul>

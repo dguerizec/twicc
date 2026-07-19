@@ -36,8 +36,8 @@ def _snapshot_rel(ctx) -> str:
 
 
 async def share_artifact_page(request, ctx):
-    """Root: HTML → shell page; markdown/mermaid → doc view (share-session bundle);
-    other → the file directly. Counts a view."""
+    """Root: HTML → shell page; markdown/mermaid/image → doc view (share-session
+    bundle); other → the file directly. Counts a view."""
     from twicc.share.view_tracking import note_view
     from twicc.views import _guess_raw_content_type, _serve_artifact_file
     from twicc.core.services.share_mutation import confined_snapshot_path
@@ -59,18 +59,29 @@ async def share_artifact_page(request, ctx):
     else:
         art_title = ""
 
+    token_path = f"/share/{ctx.share.token}"
     if ctype == "text/html":
-        token_path = f"/share/{ctx.share.token}"
         return share_artifact_shell_response(
             token_path=token_path,
             inner_doc_url=f"{token_path}/{ARTIFACT_INNER_DOC_PATH}",
             snapshot_at=ctx.options.get("snapshot_at"),
             title=art_title,
         )
-    if ext in (".md", ".markdown", ".mmd"):
-        token_path = f"/share/{ctx.share.token}"
-        meta = {"kind": "artifact", "docExt": ext.lstrip("."), "title": art_title,
-                "docUrl": f"{token_path}/__twicc_raw__/{rel}", "snapshot_at": ctx.options.get("snapshot_at")}
+    # Markdown, raw Mermaid and images render inside the branded doc view (the
+    # share-session bundle) rather than the browser showing the bare file — the
+    # viewer embeds them in Markdown, so Mermaid renders to SVG and both images and
+    # diagrams get the zoom/pan lightbox. `doc_kind` tells the viewer which shape.
+    doc_kind = None
+    if ext in (".md", ".markdown"):
+        doc_kind = "markdown"
+    elif ext in (".mmd", ".mermaid"):
+        doc_kind = "mermaid"
+    elif ctype.startswith("image/"):
+        doc_kind = "image"
+    if doc_kind:
+        meta = {"kind": "artifact", "docKind": doc_kind, "docExt": ext.lstrip("."),
+                "title": art_title, "docUrl": f"{token_path}/__twicc_raw__/{rel}",
+                "snapshot_at": ctx.options.get("snapshot_at")}
         return share_page_response(token_path=token_path, meta=meta, mode="doc")
     response = await sync_to_async(_serve_artifact_file)(abs_root, as_document=False)
     if response is None:
