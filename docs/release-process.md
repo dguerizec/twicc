@@ -44,6 +44,13 @@ When the user asks to make a new release, follow these steps in order:
    ```bash
    git push && git push --tags
    ```
+   From inside a TwiCC session the SSH agent is unavailable (`git push` over `git@github.com:` fails with *Permission denied (publickey)* / *Could not open a connection to your authentication agent*). Push over HTTPS using the `gh` token as the credential helper instead — `gh` is authenticated even when SSH is not:
+   ```bash
+   git -c credential.helper='!gh auth git-credential' \
+       -c url."https://github.com/".insteadOf="git@github.com:" push
+   git -c credential.helper='!gh auth git-credential' \
+       -c url."https://github.com/".insteadOf="git@github.com:" push --tags
+   ```
 
 10. **Create GitHub Release** using the same changelog content (with the same absolute image URLs as the tag):
     ```bash
