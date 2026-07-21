@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As a small deviation, each release opens with a one-line **Summary** recapping its highlights, and some entries include illustrative screenshots in nested sub-lists.
 
-## [Unreleased]
+## [1.92.7] - 2026-07-21
+
+### Summary
+
+- **v1.92.7: Maintenance round** — A fix for artifacts sending data to online services, a Codex context-window rollback and a Claude SDK upgrade.
 
 ### Changed
 
