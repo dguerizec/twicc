@@ -26,10 +26,12 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
     "codexDefaultPermissionMode": "read_only",
     "codexDefaultUntrustedPermissionMode": "read_only",
     "codexDefaultFastMode": False,
-    # Matches ``codexDefaultModel``'s window (gpt-terra → 372K). Mostly inert:
-    # the window is a per-model property and ``enforce_agent_settings_consistency``
-    # re-pins it against whichever model actually runs.
-    "codexDefaultContextMax": 372_000,
+    # Matches ``codexDefaultModel``'s window (gpt-terra). Mostly inert: the
+    # window is a per-model property and ``enforce_agent_settings_consistency``
+    # re-pins it against whichever model actually runs. Temporarily 272K while
+    # GPT_56_CONTEXT_WINDOW_TEMPORARILY_REDUCED is on (gpt-terra rolled back to
+    # 272K); restore to 372_000 alongside that switch.
+    "codexDefaultContextMax": 272_000,
     "codexUsageReadFileEnabled": False,
     "codexUsageReadFilePath": "",
     "codexUsageDumpFileEnabled": False,
@@ -178,6 +180,23 @@ class CodexModelExtra(NamedTuple):
 ULTRA_EFFORT_TEMPORARILY_DISABLED = True
 
 
+# Temporary rollback of the GPT-5.6 Codex input window (2026-07-21). OpenAI cut
+# the 5.6 tiers back down to the pre-5.6 272K, matching every older model, so the
+# larger 372K window is temporarily gone. The 5.6 entries below keep their real
+# ``context_window=372_000`` (the whole 372K plumbing — catalogue value, aliases,
+# frontend option, pinning — stays in place); while this switch is on, the
+# post-processing step just after ``MODEL_VERSIONS`` overrides only the 5.6 tiers'
+# window down to 272K, so ``enforce_agent_settings_consistency`` pins their
+# ``context_max`` at 272K and the 372K option offers no model. The catalogue and
+# both frontend/backend pickers are derived from the live windows, so they follow
+# automatically; only the prose docs are manual. Re-enable the 372K window when
+# OpenAI restores it by setting this back to ``False`` AND restoring the ``372k``
+# mentions in the ``twicc-create-session`` / ``twicc-update-session`` skill docs,
+# the root ``SKILLS-AND-CLI.md`` ``--context-max`` lines, and the ``context_max``
+# help text in the frontend ``codex/helpers.js``.
+GPT_56_CONTEXT_WINDOW_TEMPORARILY_REDUCED = True
+
+
 # Codex CLI models the bundled binary accepts, cross-checked against the CLI's
 # own ``model/list`` response. ``selected_model_value`` returns the bare alias
 # for ``latest=True`` entries (``"gpt"``, ``"gpt-sol"``, ``"gpt-mini"``) and the
@@ -289,6 +308,18 @@ if ULTRA_EFFORT_TEMPORARILY_DISABLED:
     MODEL_VERSIONS = [
         mv._replace(provider_extra=mv.provider_extra._replace(supports_effort_ultra=False))
         if mv.provider_extra is not None
+        else mv
+        for mv in MODEL_VERSIONS
+    ]
+
+# See ``GPT_56_CONTEXT_WINDOW_TEMPORARILY_REDUCED`` above: while the switch is on,
+# clamp every GPT-5.6 tier's window back down to 272K so it matches the temporary
+# OpenAI rollback, keeping the literal ``context_window=372_000`` in the entries
+# for a one-line revert.
+if GPT_56_CONTEXT_WINDOW_TEMPORARILY_REDUCED:
+    MODEL_VERSIONS = [
+        mv._replace(provider_extra=mv.provider_extra._replace(context_window=272_000))
+        if mv.provider_extra is not None and mv.version == "5.6"
         else mv
         for mv in MODEL_VERSIONS
     ]

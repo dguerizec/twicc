@@ -165,8 +165,10 @@ const AGENT_SETTINGS_CHOICES = {
         { value: false, label: 'Disabled', display_label: 'No fast mode' },
     ],
     // Not a user choice: the window is fixed by the model (272K pre-5.6,
-    // 372K for the GPT-5.6 tiers) — the non-matching option is disabled and
-    // ``enforceAgentSettingsConsistency`` pins the value to the model's.
+    // 372K for the GPT-5.6 tiers) — for the selected model the non-matching
+    // option is disabled, a window no model supports is dropped entirely by
+    // ``getFieldChoices``, and ``enforceAgentSettingsConsistency`` pins the
+    // value to the model's.
     context_max: [
         { value: CONTEXT_MAX.DEFAULT, label: '272K' },
         { value: CONTEXT_MAX.LARGE, label: '372K' },
@@ -324,6 +326,27 @@ export class CodexHelpers extends BaseProviderHelpers {
 
     getAgentSettingsChoices() {
         return AGENT_SETTINGS_CHOICES
+    }
+
+    /**
+     * Drop ``context_max`` windows no model in the live registry actually runs,
+     * so the picker never lists a window nothing supports. Today this removes
+     * 372K while the GPT-5.6 window is rolled back to 272K (backend
+     * ``GPT_56_CONTEXT_WINDOW_TEMPORARILY_REDUCED``); it reappears on its own
+     * once the registry re-seeds 372K models. Falls through to the full list
+     * when the registry is not seeded yet (never render an empty picker).
+     */
+    getFieldChoices(field) {
+        const choices = super.getFieldChoices(field)
+        if (field === 'context_max') {
+            const supported = new Set(
+                this.getModelRegistry()
+                    .map(e => e?.provider_extra?.context_window)
+                    .filter(Boolean),
+            )
+            if (supported.size) return choices.filter(c => supported.has(c.value))
+        }
+        return choices
     }
 
     /**
@@ -502,8 +525,11 @@ export class CodexHelpers extends BaseProviderHelpers {
             return null
         }
         if (field === 'context_max') {
+            // GPT-5.6's 372K window is temporarily rolled back to 272K (backend
+            // GPT_56_CONTEXT_WINDOW_TEMPORARILY_REDUCED). Restore the
+            // "272K up to GPT 5.5, 372K for the 5.6 tiers" wording when it returns.
             return super.getFieldHelpText(field, context)
-                ?? 'Fixed by the model: 272K up to GPT 5.5, 372K for the 5.6 tiers.'
+                ?? 'Fixed by the model: currently 272K across all Codex models.'
         }
         return super.getFieldHelpText(field, context)
     }

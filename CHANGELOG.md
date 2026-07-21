@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Codex context window** — GPT-5.6 models temporarily use a 272K context window, like the other Codex models, until the larger window returns.
+
 ### Fixed
 
 - **Interactive artifacts** — Artifacts that send data to an online service (for example to query an API) now work, instead of failing silently.

@@ -80,12 +80,17 @@ AGENT_SETTINGS_CHOICES: dict[str, list] = {
     "effort": ["low", "medium", "high", "xhigh", "max", "ultra"],
     "permission_mode": ["read_only", "strict", "auto", "autonomous", "auto_review", "yolo"],
     "fast_mode": [True, False],
-    # One entry per distinct ``CodexModelExtra.context_window`` value. Unlike
-    # Claude's 200K/1M these are not a user choice: the window is pinned to
-    # the model by ``enforce_agent_settings_consistency`` (272K pre-5.6, 372K
-    # for the GPT-5.6 tiers); the catalogue only tells validation which
-    # concrete values exist.
-    "context_max": [272_000, 372_000],
+    # One entry per distinct ``CodexModelExtra.context_window`` value, derived
+    # from the live registry so it never lists a window no model runs. Unlike
+    # Claude's 200K/1M these are not a user choice: the window is pinned to the
+    # model by ``enforce_agent_settings_consistency`` (272K pre-5.6, 372K for
+    # the GPT-5.6 tiers); the catalogue only tells validation which concrete
+    # values exist. While ``GPT_56_CONTEXT_WINDOW_TEMPORARILY_REDUCED`` is on the
+    # 5.6 tiers run at 272K, so 372K drops out here and reappears on revert — no
+    # extra edit needed, the single backend switch drives it.
+    "context_max": sorted(
+        {mv.provider_extra.context_window for mv in _MODEL_VERSIONS if mv.provider_extra is not None}
+    ),
 }
 
 

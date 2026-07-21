@@ -59,7 +59,7 @@ Agent settings flags (all optional; use `$TWICC info models agent-settings prese
 - `--thinking / --no-thinking` — Claude Code only.
 - `--claude-in-chrome / --no-claude-in-chrome` — Claude Code only (Allows to manipulate browser tabs, take screenshots, etc.).
 - `--fast-mode / --no-fast-mode` — Supported Claude Code and Codex models; increases credit usage.
-- `--context-max VALUE` — Claude Code: `200k` or `1m`. Codex: `272k` or `372k` (fixed by the model; silently pinned to its window).
+- `--context-max VALUE` — Claude Code: `200k` or `1m`. Codex: `272k` (fixed by the model; a divergent value is silently pinned to its window).
 - `--question-widget / --no-question-widget` — Claude Code only (Decide to allow or not UI interactive widget for questions, to be answered by the user).
 - `--unset TOKEN` (repeatable) — reset a field to NULL. Accepted tokens: `model`, `effort`, `permission-mode`, `thinking`, `claude-in-chrome`, `fast-mode`, `context-max`, `question-widget` (a token the session's provider doesn't support is silently ignored).
 - `--preset NAME` — apply a saved preset (replace mode). `__defaults__` resets all fields to the user-configured defaults. Use `$TWICC info presets` to list available presets (skill: `twicc-info`).

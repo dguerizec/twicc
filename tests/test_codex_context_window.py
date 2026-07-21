@@ -1,11 +1,18 @@
-"""Tests for the per-model Codex context window (272K pre-5.6, 372K GPT-5.6).
+"""Tests for the per-model Codex context window.
 
 The window is a fixed property of the model (``CodexModelExtra.context_window``),
 not a user choice: ``enforce_agent_settings_consistency`` pins ``context_max``
 to the resolved model's window in both directions, the synced defaults are
 re-clamped against the default model, and ``extract_runtime_fields`` recovers
-the same values from the JSONL ``task_started`` lines (published as 95% of the
+the values from the JSONL ``task_started`` lines (published as 95% of the
 nominal input window).
+
+NOTE: ``GPT_56_CONTEXT_WINDOW_TEMPORARILY_REDUCED`` is currently on — OpenAI
+rolled the GPT-5.6 tiers back to the pre-5.6 272K, so every model resolves to
+272K here. The 372K plumbing stays wired up (catalogue value, ``372k`` alias,
+95%-recovery of a 353_400 published window) and is still exercised below; only
+the live per-model resolution reflects the rollback. Flip the switch back and
+these 272K expectations for the 5.6 tiers revert to 372K.
 """
 
 import pytest
@@ -35,9 +42,10 @@ def helpers():
 @pytest.mark.parametrize(
     ("selected_model", "expected"),
     [
-        ("gpt-sol", 372_000),
-        ("gpt-terra", 372_000),
-        ("gpt-luna", 372_000),
+        # GPT-5.6 tiers temporarily rolled back to 272K (see module docstring).
+        ("gpt-sol", 272_000),
+        ("gpt-terra", 272_000),
+        ("gpt-luna", 272_000),
         ("gpt", 272_000),        # latest of family gpt = gpt-5.5
         ("gpt-5.4", 272_000),
         ("gpt-mini", 272_000),
@@ -48,16 +56,19 @@ def test_selected_model_context_window(helpers, selected_model, expected):
 
 
 def test_context_window_unknown_model_falls_back_to_default(helpers, temp_settings):
-    # Synced default model is gpt-terra (SYNCED_SETTINGS_DEFAULTS) -> 372K.
-    assert helpers.selected_model_context_window("no-such-model") == 372_000
-    assert helpers.selected_model_context_window(None) == 372_000
+    # Synced default model is gpt-terra (SYNCED_SETTINGS_DEFAULTS); its window is
+    # temporarily 272K while the GPT-5.6 rollback switch is on.
+    assert helpers.selected_model_context_window("no-such-model") == 272_000
+    assert helpers.selected_model_context_window(None) == 272_000
 
 
 # ─── enforce_agent_settings_consistency ─────────────────────────────────────
 
-def test_enforce_pins_window_up_for_56_model(helpers):
-    s = AgentSettings(selected_model="gpt-terra", context_max=272_000)
-    assert helpers.enforce_agent_settings_consistency(s).context_max == 372_000
+def test_enforce_pins_window_down_for_56_model_during_rollback(helpers):
+    # While the GPT-5.6 window is rolled back to 272K, a stale 372K value on a
+    # 5.6 tier is pinned back down to the temporary window.
+    s = AgentSettings(selected_model="gpt-terra", context_max=372_000)
+    assert helpers.enforce_agent_settings_consistency(s).context_max == 272_000
 
 
 def test_enforce_pins_window_down_for_pre56_model(helpers):
@@ -73,7 +84,8 @@ def test_enforce_leaves_none_context_max_untouched(helpers):
 
 
 def test_enforce_matching_window_returns_same_instance(helpers):
-    s = AgentSettings(selected_model="gpt-terra", context_max=372_000)
+    # gpt-terra resolves to 272K during the rollback, so a matching value is a no-op.
+    s = AgentSettings(selected_model="gpt-terra", context_max=272_000)
     assert helpers.enforce_agent_settings_consistency(s) is s
 
 
@@ -101,16 +113,21 @@ def test_synced_context_not_written_back_when_absent_from_changes(helpers, temp_
 
 # ─── choices / constraints catalogue ────────────────────────────────────────
 
-def test_context_max_choices_list_both_windows(helpers):
-    assert helpers.get_agent_settings_choices()["context_max"] == [272_000, 372_000]
+def test_context_max_choices_derived_from_live_windows(helpers):
+    # Derived from the registry: during the GPT-5.6 rollback every model is at
+    # 272K, so 372K drops out of the catalogue entirely (it returns on revert).
+    assert helpers.get_agent_settings_choices()["context_max"] == [272_000]
 
 
 def test_constraints_map_each_window_to_its_models(helpers):
+    # During the GPT-5.6 rollback every model resolves to 272K and 372K is no
+    # longer a catalogue value, so only the 272K bucket is present.
     constraints = helpers.get_agent_settings_constraints()["context_max"]
-    assert set(constraints[272_000]) == {"gpt-5.5", "gpt", "gpt-5.4", "gpt-mini-5.4", "gpt-mini"}
-    assert set(constraints[372_000]) == {
+    assert set(constraints[272_000]) == {
+        "gpt-5.5", "gpt", "gpt-5.4", "gpt-mini-5.4", "gpt-mini",
         "gpt-sol-5.6", "gpt-sol", "gpt-terra-5.6", "gpt-terra", "gpt-luna-5.6", "gpt-luna",
     }
+    assert 372_000 not in constraints
 
 
 # ─── extract_runtime_fields (task_started window recovery) ──────────────────
