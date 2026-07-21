@@ -263,12 +263,14 @@ async def proxy_fetch(
 # caps, header hygiene); the per-artifact allowlist + consent are phases 2/4.
 
 def _decode_request_body(req: dict) -> bytes | str | None:
-    body = req.get("body")
-    if body is None:
-        return None
-    if req.get("body_base64"):
-        return base64.b64decode(body)
-    return body
+    # The client (shim.js / host.js) serializes a non-empty request body as
+    # ``body_base64`` holding the base64 STRING itself — there is no separate
+    # ``body`` field and no boolean flag. Decode it back to raw bytes; fall back
+    # to a plain ``body`` string only for hypothetical non-shim callers.
+    b64 = req.get("body_base64")
+    if b64:
+        return base64.b64decode(b64)
+    return req.get("body")
 
 
 async def artifact_proxy(request, *, enforced_allowlist: set[str] | None = None, on_not_allowed=None):

@@ -22,6 +22,7 @@ from twicc.artifacts.proxy import (
     ResolutionError,
     ResolvedTarget,
     ResponseTooLarge,
+    _decode_request_body,
     classify_ip,
     filter_request_headers,
     filter_response_headers,
@@ -288,6 +289,46 @@ def test_proxy_view_fetch_pins_approved_ip_and_returns_body(monkeypatch):
     assert payload["status"] == 201
     assert payload["headers"] == {"content-type": "application/json"}
     assert base64.b64decode(payload["body_base64"]) == b'{"id":7}'
+
+
+def test_decode_request_body_contract():
+    # The shim/host serialize a non-empty body as ``body_base64`` holding the
+    # base64 STRING itself — there is no ``body`` field and no boolean flag.
+    payload = b'{"sql":"SELECT 1","params":[]}'
+    b64 = base64.b64encode(payload).decode("ascii")
+    assert _decode_request_body({"body_base64": b64}) == payload  # decoded to raw bytes
+    assert _decode_request_body({}) is None                       # no body → None
+    assert _decode_request_body({"body": "raw"}) == "raw"         # plain-string fallback
+
+
+def test_proxy_view_fetch_decodes_request_body(monkeypatch):
+    # Regression: a POST body arrives as ``body_base64`` (base64 string). The view
+    # must decode it back to raw bytes and hand it to proxy_fetch — otherwise the
+    # request reaches upstream with an empty body, and a JSON API rejects it
+    # (Cloudflare D1: "Invalid non-JSON request", code 7400). The earlier fetch
+    # test above mocked proxy_fetch but never asserted on ``body``, so this path
+    # went uncovered.
+    seen = {}
+    payload_bytes = b'{"sql":"SELECT COUNT(*) FROM payloads","params":[]}'
+
+    async def fake_fetch(*, method, url, headers, body, pinned_ip, client, **kw):
+        seen["body"] = body
+        return ProxyResult(status=200, reason="OK", headers={}, body=b"{}")
+
+    monkeypatch.setattr(proxy_module, "proxy_fetch", fake_fetch)
+    res = _post(
+        {
+            "mode": "fetch",
+            "pinned_ip": "8.8.8.8",
+            "request": {
+                "url": "https://api.example.com/query",
+                "method": "POST",
+                "body_base64": base64.b64encode(payload_bytes).decode("ascii"),
+            },
+        }
+    )
+    assert res.status_code == 200
+    assert seen["body"] == payload_bytes
 
 
 def test_proxy_view_fetch_refuses_metadata_pinned_ip(monkeypatch):
