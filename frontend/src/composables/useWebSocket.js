@@ -1,6 +1,6 @@
 // frontend/src/composables/useWebSocket.js
 
-import { ref, watch } from 'vue'
+import { ref, watch, defineAsyncComponent } from 'vue'
 import { useWebSocket as useVueWebSocket, useDebounceFn, useThrottleFn } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import { useDataStore } from '../stores/data'
@@ -17,6 +17,11 @@ import { handleResyncRequired } from '../utils/resync'
 import { truncateTitle } from '../utils/truncate'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { compareVersions } from '../utils/version'
+
+// Lazy (async) toast body for peer events — toast.custom detects a component
+// via its `setup` key, which an async wrapper has (see useToast.js precedent
+// with SessionToastContent). Keeps the peer components out of the main chunk.
+const PeerToastContent = defineAsyncComponent(() => import('../components/peer/PeerToastContent.vue'))
 
 // A burst of artifact file edits doesn't carry fresh share "outdated" state
 // (source_updated_at is computed server-side only when a share is serialized), so
@@ -1196,6 +1201,98 @@ export function useWebSocket() {
                     if (store.getSession(id)) store.removeSession(id)
                 }
                 break
+            case 'peers_updated': {
+                // Full snapshot pushed on WS connect (share precedent).
+                // Lazy import to avoid a useWebSocket ↔ store cycle.
+                import('../stores/peers').then(({ usePeersStore }) => {
+                    usePeersStore().applyPeers(msg.peers || [])
+                })
+                break
+            }
+            case 'peer_messages_updated': {
+                import('../stores/peers').then(({ usePeersStore }) => {
+                    usePeersStore().applyMessages(msg.messages || [])
+                })
+                break
+            }
+            case 'peer_updated': {
+                import('../stores/peers').then(({ usePeersStore }) => {
+                    const peersStore = usePeersStore()
+                    // Held-accept transition (security-relevant — must be visible
+                    // outside the manager): the peer accepted our request but our
+                    // own code verification hasn't completed yet.
+                    const stored = peersStore.getPeerById(msg.peer?.id)
+                    const becameHeld = stored
+                        && stored.state === 'pending_sent' && !stored.remote_accepted_at
+                        && msg.peer?.state === 'pending_sent'
+                        && msg.peer?.remote_accepted_at && !msg.peer?.code_confirmed_at
+                    peersStore.upsertPeer(msg.peer)
+                    if (becameHeld) {
+                        const peerName = msg.peer.name || msg.peer.base_url
+                        toast.custom(PeerToastContent, {
+                            type: 'warning',
+                            title: `"${peerName}" accepted your request — complete the code verification to activate`,
+                            duration: 15000,
+                            props: { mode: 'request', peer: msg.peer },
+                        })
+                    }
+                })
+                break
+            }
+            case 'peer_removed': {
+                import('../stores/peers').then(({ usePeersStore }) => {
+                    usePeersStore().removePeer(msg.peer_id)
+                })
+                break
+            }
+            case 'peer_request_received': {
+                import('../stores/peers').then(({ usePeersStore }) => {
+                    usePeersStore().upsertPeer(msg.peer)
+                    toast.custom(PeerToastContent, {
+                        type: 'info',
+                        title: 'Peer request',
+                        duration: 15000,
+                        props: { mode: 'request', peer: msg.peer },
+                    })
+                })
+                break
+            }
+            case 'peer_accepted': {
+                import('../stores/peers').then(({ usePeersStore }) => {
+                    usePeersStore().upsertPeer(msg.peer)
+                    toast.info(`"${msg.peer?.name || msg.peer?.base_url}" accepted your peer request`)
+                })
+                break
+            }
+            case 'peer_message_received': {
+                import('../stores/peers').then(({ usePeersStore }) => {
+                    const peersStore = usePeersStore()
+                    peersStore.upsertMessage(msg.message)
+                    const peerName = peersStore.peerLabel(msg.message?.peer_id)
+                    toast.custom(PeerToastContent, {
+                        type: 'info',
+                        title: `Message from ${peerName}`,
+                        duration: Infinity,
+                        props: { mode: 'message', message: msg.message },
+                    })
+                })
+                break
+            }
+            case 'peer_message_updated': {
+                import('../stores/peers').then(({ usePeersStore }) => {
+                    const peersStore = usePeersStore()
+                    const stored = peersStore.messages.find(m => m.id === msg.message?.id)
+                    const resolvedNow = stored
+                        && stored.direction === 'out' && stored.status === 'pending'
+                        && ['delivered', 'refused'].includes(msg.message?.status)
+                    peersStore.upsertMessage(msg.message)
+                    if (resolvedNow) {
+                        const peerName = peersStore.peerLabel(msg.message.peer_id)
+                        toast.info(`Your message to "${peerName}" was ${msg.message.status}`)
+                    }
+                })
+                break
+            }
             case 'session_removed':
                 store.removeSession(msg.session_id)
                 break

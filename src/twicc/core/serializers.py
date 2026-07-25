@@ -433,3 +433,64 @@ def serialize_share_public_meta(share):
         display_title = (opts.get("display_title") or "").strip()
         data["title"] = display_title or (bookmark.name if bookmark else None)
     return data
+
+
+def serialize_peer(peer):
+    """Owner-facing peer serializer. NO tokens, EVER (token_ours/token_theirs are
+    bearer secrets). ``verification_code`` is included ONLY on pending_received
+    rows — the owner UI must display it (design §4.2 step 2); every other state
+    serializes "" to shrink exposure. It never reaches the agent surface (the
+    CLI's peers output is a separate hand-built dict).
+
+    SECURITY INVARIANT: peer broadcasts ride the shared "updates" channel group,
+    which share viewers also join; ShareConsumer.broadcast (share/consumer.py)
+    is a strict whitelist that silently drops all peer_* types — that is what
+    keeps codes away from share links. Never add a peer type to that whitelist.
+    """
+    from twicc.core.models import PeerState
+
+    return {
+        "id": peer.id,
+        "name": peer.name,
+        "remote_display_name": peer.remote_display_name,
+        "base_url": peer.base_url,
+        "state": peer.state,
+        # Crossed handshake marker (design §4.2): a pending_received row that
+        # also carries OUR outbound leg (both users added each other). The UI
+        # must offer the code entry on it — verification applies symmetrically.
+        # Only token EXISTENCE is exposed, never the token.
+        "crossed": peer.state == PeerState.PENDING_RECEIVED and peer.token_ours is not None,
+        "verification_code": peer.verification_code if peer.state == PeerState.PENDING_RECEIVED else "",
+        "verified_at": peer.verified_at.isoformat() if peer.verified_at else None,
+        "code_confirmed_at": peer.code_confirmed_at.isoformat() if peer.code_confirmed_at else None,
+        "remote_accepted_at": peer.remote_accepted_at.isoformat() if peer.remote_accepted_at else None,
+        "created_at": peer.created_at.isoformat() if peer.created_at else None,
+        "accepted_at": peer.accepted_at.isoformat() if peer.accepted_at else None,
+        "last_contact_at": peer.last_contact_at.isoformat() if peer.last_contact_at else None,
+    }
+
+
+def serialize_peer_message(message, *, include_payload=False):
+    """Peer-message serializer. Summary form by default — base64 blobs must never
+    transit the channel layer; only the REST detail endpoint passes
+    ``include_payload=True``."""
+    text = (message.payload or {}).get("text", "") or ""
+    data = {
+        "id": message.pk,
+        "message_id": message.message_id,
+        "peer_id": message.peer_id,
+        "direction": message.direction,
+        "status": message.status,
+        "error": message.error,
+        "text_preview": text[:300],
+        "attachments_meta": message.attachments_meta,
+        "origin": message.origin,
+        "recipient_note": message.recipient_note,
+        "delivered_to_session_id": message.delivered_to_session_id,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "resolved_at": message.resolved_at.isoformat() if message.resolved_at else None,
+        "purged": message.purged_at is not None,
+    }
+    if include_payload:
+        data["payload"] = message.payload
+    return data

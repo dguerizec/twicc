@@ -608,6 +608,34 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 "shares": [serialize_share(s) for s in shares],
             })
 
+        if self._should_send("peers_updated"):
+            from twicc.core.models import Peer
+            from twicc.core.serializers import serialize_peer
+            peers = await sync_to_async(list)(Peer.objects.all())
+            await self.send_json({
+                "type": "peers_updated",
+                "peers": [serialize_peer(p) for p in peers],
+            })
+
+        if self._should_send("peer_messages_updated"):
+            from twicc.core.models import PeerMessage, PeerMessageDirection, PeerMessageStatus
+            from twicc.core.serializers import serialize_peer_message
+
+            def _peer_messages_snapshot():
+                pending = list(PeerMessage.objects.filter(
+                    direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
+                ))
+                recent = list(PeerMessage.objects.exclude(
+                    direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
+                )[:50])
+                return pending + recent
+
+            peer_messages = await sync_to_async(_peer_messages_snapshot)()
+            await self.send_json({
+                "type": "peer_messages_updated",
+                "messages": [serialize_peer_message(m) for m in peer_messages],
+            })
+
         if self._should_send("tips_manifest_pushed"):
             await self.send_json({
                 "type": "tips_manifest_pushed",

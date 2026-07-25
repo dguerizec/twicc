@@ -172,6 +172,11 @@ _KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
         "notification_test_from_payload",
         "updated",
     ),
+    "peer:send": (
+        "twicc.core.services.peer_messages",
+        "send_peer_message_from_payload",
+        "sent",
+    ),
 }
 
 
@@ -187,6 +192,11 @@ _RESULT_ID_FIELDS: tuple[str, ...] = (
     "workspace_id",
     "bookmark_id",
     "share_id",
+    # Peer sends. The remote delivery state travels via
+    # ``status_extra={"peer_status": ...}`` — NEVER add "status" here (it
+    # would clobber the transport status and break the CLI exit mapping).
+    "message_id",
+    "peer_id",
 )
 
 

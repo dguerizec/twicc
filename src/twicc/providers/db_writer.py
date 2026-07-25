@@ -1834,6 +1834,16 @@ async def _dispatch_async_job(job) -> None:
         await _settle_async_job(job, _apply_mark_sessions_indexed_job, "search-index mark")
         return
 
+    # Peer-message attachment purge (peer_purge_task). Lazy import for the
+    # same one-way dependency reason as the ProcessRun cleanup below.
+    from twicc.peer_purge_task import (
+        _apply_purge_peer_attachments_job,
+        _PurgePeerAttachmentsJob,
+    )
+    if isinstance(job, _PurgePeerAttachmentsJob):
+        await _settle_async_job(job, _apply_purge_peer_attachments_job, "peer attachment purge")
+        return
+
     # Cross-provider boot cleanup of stale ProcessRun rows. Lazy import
     # because ``twicc.agent`` imports from this module (``run_under_db_write_lock``)
     # and we want a one-way dependency edge from agent → db_writer at module

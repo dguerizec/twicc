@@ -200,3 +200,60 @@ def resolve_project_default_provider(
     """Resolve one project's inherited default provider against the live DB (sync)."""
     rows = load_defaults_rows()
     return resolve_default_provider(_target_row(project_id, directory, rows), rows)
+
+
+def materialize_inherited_defaults(
+    settings,
+    *,
+    project_id: str,
+    directory: str | None,
+    provider: str,
+    pb,
+    untrusted: bool,
+):
+    """Fill every still-``None`` supported field with its inherited default.
+
+    Shared by the CLI ``create-session`` (moved from there) and the server-side
+    peer-message delivery (``peer_messages.deliver_to_new_session``) — one
+    "fill None settings from project chain + global defaults" entry point.
+    Field by field, the project chain's value (worktree main repo / path
+    ancestors) wins, else the provider's global synced default — so the created
+    session stores a concrete snapshot, exactly like a UI-launched one (see
+    ``docs/plans/2026-06-09-project-agent-defaults-design.md`` §4, "snapshot
+    at creation"). ``permission_mode`` resolves through the trust-matching
+    variant: the ``permission_mode_if_untrusted`` chain (then the global
+    untrusted default) when the project is untrusted. The hidden
+    ``question_widget`` is not a project default and keeps its flag-driven
+    value (``None`` = the server-side global default at run time).
+
+    ``settings`` is the CLI's ``AgentSettings`` NamedTuple; ``pb`` a provider
+    bundle from the local bootstrap (``bootstrap_local.load_local_bootstrap``).
+    """
+    from twicc.cli._drop_request.aliases import supported_fields
+    from twicc.providers.helpers import (
+        AGENT_SETTINGS_HIDDEN_FROM_FRONTEND,
+        AgentSettings,
+        get_provider_helpers,
+    )
+
+    chain = resolve_project_agent_defaults(project_id, provider, directory=directory)
+    global_resolved = get_provider_helpers(provider).resolve_agent_settings(AgentSettings())
+
+    fields = (
+        supported_fields(pb) & set(AgentSettings._fields)
+    ) - set(AGENT_SETTINGS_HIDDEN_FROM_FRONTEND)
+    updates: dict = {}
+    for field in fields:
+        if getattr(settings, field) is not None:
+            continue
+        if field == "permission_mode" and untrusted:
+            value = chain.get("permission_mode_if_untrusted")
+            if value is None:
+                value = pb.untrusted_permission_mode_default
+        else:
+            value = chain.get(field)
+            if value is None:
+                value = getattr(global_resolved, field)
+        if value is not None:
+            updates[field] = value
+    return settings._replace(**updates) if updates else settings

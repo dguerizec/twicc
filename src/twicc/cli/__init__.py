@@ -1457,6 +1457,20 @@ from twicc.cli.settings.command import settings_app  # noqa: E402
 app.add_typer(settings_app)
 
 
+# Peer messaging agent surface (design 2026-07-24): read-only ``peers`` /
+# ``peer-message`` plus the write ``peer-send`` (drop-request kind
+# ``peer:send``). Relationship management (add/verify/accept/revoke) is
+# deliberately NOT on the CLI — human-only, web UI REST only.
+from twicc.cli.peers import peers_cmd  # noqa: E402
+app.command(name="peers")(peers_cmd)
+
+from twicc.cli.peer_message import peer_message_cmd  # noqa: E402
+app.command(name="peer-message")(peer_message_cmd)
+
+from twicc.cli.peer_send import peer_send_cmd  # noqa: E402
+app.command(name="peer-send")(peer_send_cmd)
+
+
 # ``info`` is a single read-only command taking zero or more positional
 # section names (presets, commands, models, agent-settings). The command
 # performs lazy Django setup inside its body, so importing it here stays

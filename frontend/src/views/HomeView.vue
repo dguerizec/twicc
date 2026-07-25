@@ -8,6 +8,7 @@ import ProjectList from '../components/project/ProjectList.vue'
 import WorkspaceList from '../components/workspace/WorkspaceList.vue'
 import FetchErrorPanel from '../components/ui/FetchErrorPanel.vue'
 import SettingsPopover from '../components/app/SettingsPopover.vue'
+import PeerInboxButton from '../components/peer/PeerInboxButton.vue'
 import ActivitySparkline from '../components/activity/ActivitySparkline.vue'
 import AppTooltip from '../components/ui/AppTooltip.vue'
 import StartupProgressCallout from '../components/app/StartupProgressCallout.vue'
@@ -154,6 +155,7 @@ onBeforeUnmount(() => {
         </main>
 
         <div class="home-settings">
+            <PeerInboxButton />
             <SettingsPopover />
         </div>
 
@@ -224,5 +226,8 @@ onBeforeUnmount(() => {
     position: fixed;
     bottom: var(--wa-space-s);
     left: var(--wa-space-s);
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
 }
 </style>

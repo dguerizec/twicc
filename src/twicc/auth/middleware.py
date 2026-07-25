@@ -38,6 +38,9 @@ PUBLIC_PATHS = (
     # the local-only remote gate — ``_is_data_path`` returns False for them.
     "/share/",
     "/_twicc/share/",
+    # Peer messaging inbound API — Bearer-auth in views (design 2026-07-24).
+    # Exempt from the instance-password gate AND the local-only remote gate.
+    "/peer/",
 )
 
 # Non-API URL prefixes whose responses leak data and therefore require an

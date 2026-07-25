@@ -29,6 +29,9 @@ _SESSION_ID_FIELDS = ("session_id", "provider", "project_id")
 _WORKSPACE_ID_FIELDS = ("workspace_id",)
 _PROJECT_ID_FIELDS = ("project_id",)
 _ARTIFACT_BOOKMARK_ID_FIELDS = ("bookmark_id", "session_id", "project_id")
+# Peer sends: ``peer_status`` is the remote delivery state the service put in
+# ``status_extra`` ("pending" until the remote user resolves the message).
+_PEER_SEND_ID_FIELDS = ("message_id", "peer_id", "peer_status")
 
 
 def build_final(outcome, *, request_uuid: str, timeout: int) -> dict:
@@ -46,7 +49,9 @@ def build_final(outcome, *, request_uuid: str, timeout: int) -> dict:
         # first); ``workspace_id`` is workspace-only; ``session_id`` is
         # session-only; ``project_id`` alone (without ``session_id``) means the
         # result describes a project mutation.
-        if "bookmark_id" in d:
+        if "message_id" in d:
+            id_fields = _PEER_SEND_ID_FIELDS
+        elif "bookmark_id" in d:
             id_fields = _ARTIFACT_BOOKMARK_ID_FIELDS
         elif "workspace_id" in d:
             id_fields = _WORKSPACE_ID_FIELDS

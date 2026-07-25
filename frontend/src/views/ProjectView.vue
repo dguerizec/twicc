@@ -31,6 +31,7 @@ import SessionSelectionBar from '../components/session/list/SessionSelectionBar.
 import FetchErrorPanel from '../components/ui/FetchErrorPanel.vue'
 import SettingsPopover from '../components/app/SettingsPopover.vue'
 import CommandPaletteButton from '../components/app/CommandPaletteButton.vue'
+import PeerInboxButton from '../components/peer/PeerInboxButton.vue'
 import ProjectBadge from '../components/project/ProjectBadge.vue'
 import ProjectMark from '../components/project/ProjectMark.vue'
 import ProjectSelectorRow from '../components/project/ProjectSelectorRow.vue'
@@ -2604,6 +2605,9 @@ function updateSidebarClosedClass(closed) {
                     <!-- Opens the command palette (mouse/touch access to the Cmd/Ctrl+K
                          shortcut); folds away on its own when the sidebar is too narrow. -->
                     <CommandPaletteButton />
+
+                    <!-- Peer inbox badge (renders nothing while the feature is dormant). -->
+                    <PeerInboxButton />
 
                     <SettingsPopover />
                 </div>

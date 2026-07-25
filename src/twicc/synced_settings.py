@@ -105,6 +105,15 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # /share/ is gated to this host only (share/asgi_filter.py) and the Share UI is
     # disabled when empty. A bare hostname or a full URL; only the hostname matters.
     "shareBaseUrl": "",
+    # Public base URL advertised to peer instances (peer messaging). Empty
+    # disables the feature entirely: /peer/ endpoints answer 404 and no
+    # outbound handshake can be sent. Unlike shareBaseUrl it MAY be the
+    # working origin — /peer/ is a same-origin carve-out, not a dedicated host.
+    "peerBaseUrl": "",
+    # Display name sent to peers in handshakes (requests and accepts) so the
+    # other user sees WHO is asking, not just an URL. Empty = fall back to the
+    # hostname of peerBaseUrl. A hint on the other side, never authoritative.
+    "peerDisplayName": "",
     # Master switch for the "extra usage started" alert: when a provider starts
     # consuming its extra usage credits again after a quiet period, notify the
     # user. This is the single kill switch for the whole feature — when off, no

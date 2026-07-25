@@ -318,6 +318,22 @@ Create a link (requires the live server). Session: `--label`, `--password`, `--e
 ### `twicc share update <ID>` / `revoke` / `unrevoke` / `delete` / `propagate <ID>`
 Manage an existing link (live server; broadcasts so open UIs refresh). `update` edits `--label` / `--password` / `--expires`. `revoke`/`unrevoke` toggle availability (row + counters kept). `delete` removes it (and its snapshot dir). `propagate` re-freezes a snapshot session share to the current line / re-snapshots an artifact share.
 
+## Peers
+
+Cross-instance agent messages between two users' TwiCC installations. Pairing (add / verify / accept / revoke) is **human-only** — managed in Settings → Peers, no CLI or MCP surface exists for it. An outbound message always waits for the REMOTE user's approval before reaching any of their agents; messages must be self-contained (instances share no memory).
+
+### `twicc peers`
+List peer instances as `{id, name, state, last_contact_at}` — `active` (messageable) and `broken` (revoked or unreachable, kept so a failing send can be explained). No arguments.
+- Skill: [`twicc-peers`](src/twicc/agent/plugin/twicc/skills/twicc-peers/SKILL.md).
+
+### `twicc peer-send <PEER> <PROMPT>`
+Send a message to a peer (id or exact local name). `PROMPT` is inline text or a file path; `--attach` (repeatable) like `send-message`; `--timeout`. Success returns `{status: "sent", message_id, peer_id, peer_status: "pending"}` — `pending` until the remote user delivers or refuses. Server failures land as `rejected` (exit 3) with the detail in the error code (`peer_broken`, `unreachable`, `send_failed`).
+- Skill: [`twicc-peer-send`](src/twicc/agent/plugin/twicc/skills/twicc-peer-send/SKILL.md).
+
+### `twicc peer-message <MESSAGE_ID>`
+Re-check one outbound message's status (read-only): `pending` / `delivered` / `refused` / `failed` plus the summary metadata. There is no push on resolution — poll this when asked.
+- Skill: [`twicc-peer-message`](src/twicc/agent/plugin/twicc/skills/twicc-peer-message/SKILL.md).
+
 ## Live processes
 
 ### `twicc processes` / `twicc processes <SUBCOMMAND>`

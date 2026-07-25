@@ -87,6 +87,7 @@ from twicc.pricing_task import start_price_sync_task, sync_all_providers  # noqa
 from twicc.benchmarks_task import start_benchmark_sync_task  # noqa: E402
 from twicc.quota_wakeup_task import start_quota_wakeup_task  # noqa: E402
 from twicc.session_dirs_cleanup_task import start_session_dirs_cleanup_task  # noqa: E402
+from twicc.peer_purge_task import start_peer_purge_task  # noqa: E402
 from twicc.tmux_cleanup_task import start_tmux_cleanup_task  # noqa: E402
 from twicc.auth.tokens import start_last_used_flush_task  # noqa: E402
 from twicc.share.view_tracking import start_share_view_flush_task  # noqa: E402
@@ -295,6 +296,7 @@ async def run_server(port: int):
     benchmark_sync_task = asyncio.create_task(start_benchmark_sync_task(shutdown_event))
     quota_wakeup_task = asyncio.create_task(start_quota_wakeup_task(shutdown_event))
     session_dirs_cleanup_task = asyncio.create_task(start_session_dirs_cleanup_task(shutdown_event))
+    peer_purge_task = asyncio.create_task(start_peer_purge_task(shutdown_event))
     tmux_cleanup_task = asyncio.create_task(start_tmux_cleanup_task(shutdown_event))
     last_used_flush_task = asyncio.create_task(start_last_used_flush_task(shutdown_event))
     share_view_flush_task = asyncio.create_task(start_share_view_flush_task(shutdown_event))
@@ -390,6 +392,7 @@ async def run_server(port: int):
         # no-op path (coroutine already returned) and the mid-sleep case.
         logger.info("Stopping session dirs cleanup task...")
         await _cancel_task(session_dirs_cleanup_task, "Session dirs cleanup task")
+        await _cancel_task(peer_purge_task, "Peer attachment purge task")
 
         logger.info("Stopping tmux reaper task...")
         await _cancel_task(tmux_cleanup_task, "tmux reaper task")

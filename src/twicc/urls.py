@@ -11,6 +11,8 @@ from .share import password_views as share_password_views
 from .share import router as share_router
 from .share import session_views as share_session_views
 from .share import views_assets as share_views_assets
+from .peer import inbound_views as peer_inbound_views
+from .peer import owner_views as peer_owner_views
 
 urlpatterns = [
     # Auth endpoints (always accessible, no auth required)
@@ -177,6 +179,23 @@ urlpatterns = [
     path("share/<str:token>/", share_router.share_root),
     path("share/<str:token>/<path:asset>", share_router.share_asset_or_doc),
     path("_twicc/share/<str:asset>", share_views_assets.share_asset),
+    # Peer messaging (design 2026-07-24). Inbound instance-to-instance API:
+    # Bearer-auth inside the views, exempt from the human auth gates (see
+    # auth/middleware.PUBLIC_PATHS). Owner management under /api/ → cookie-gated.
+    path("peer/handshake/request/", peer_inbound_views.handshake_request),
+    path("peer/handshake/verify/", peer_inbound_views.handshake_verify),
+    path("peer/handshake/accept/", peer_inbound_views.handshake_accept),
+    path("peer/messages/", peer_inbound_views.message_receive),
+    path("peer/messages/<str:message_id>/status/", peer_inbound_views.message_status),
+    path("api/peers/", peer_owner_views.peers_list),
+    path("api/peers/<str:peer_id>/", peer_owner_views.peer_detail),
+    path("api/peers/<str:peer_id>/verify/", peer_owner_views.peer_verify),
+    path("api/peers/<str:peer_id>/accept/", peer_owner_views.peer_accept),
+    path("api/peers/<str:peer_id>/refuse/", peer_owner_views.peer_refuse),
+    path("api/peer-messages/", peer_owner_views.peer_messages_list),
+    path("api/peer-messages/<int:pk>/", peer_owner_views.peer_message_detail),
+    path("api/peer-messages/<int:pk>/deliver/", peer_owner_views.peer_message_deliver),
+    path("api/peer-messages/<int:pk>/refuse/", peer_owner_views.peer_message_refuse),
     # RPC API: every CLI command auto-exposed as ``POST /rpc/<command>``.
     # Gated by Bearer API tokens via ``RpcTokenAuthMiddleware`` (open only when
     # neither a password nor any token is configured). Must precede the SPA
@@ -189,5 +208,5 @@ urlpatterns = [
     # excluded so those URLs surface as 404 instead of serving the SPA HTML.
     # Static files (/static/) are served by BlackNoise at the ASGI level,
     # before reaching Django's URL routing (see asgi.py).
-    re_path(r"^(?!api/|rpc/|static/|ws/|artifacts/|project-icons/|share/|_twicc/).*$", views.spa_index),
+    re_path(r"^(?!api/|rpc/|static/|ws/|artifacts/|project-icons/|share/|_twicc/|peer/).*$", views.spa_index),
 ]

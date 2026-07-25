@@ -95,6 +95,7 @@ const sections = computed(() => [
     ...providerSections.value.filter(s => s.enabled),
     { id: 'notifications',             label: 'Notifications' },
     { id: 'sharing',                   label: 'Sharing', synced: true },
+    { id: 'peers',                     label: 'Peers', synced: true },
     { id: 'sessions',      label: 'Sessions' },
     { id: 'layouts',       label: 'Layouts', synced: true },
     { id: 'title',         label: 'Title suggestion', navLabel: 'Titles', synced: true },
@@ -164,6 +165,10 @@ function selectSection(id) {
     }
     if (id === 'sharing') {
         shareBaseUrlInput.value = store.getShareBaseUrl || ''
+    }
+    if (id === 'peers') {
+        peerBaseUrlInput.value = store.getPeerBaseUrl || ''
+        peerDisplayNameInput.value = store.getPeerDisplayName || ''
     }
     if (id === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
@@ -639,6 +644,32 @@ const shareBaseUrlModified = computed(() => shareBaseUrlNormalized.value !== (st
 const shareBaseUrlApplyIcon = computed(() => (shareBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
 const showShareManager = ref(false)
 
+// Peer messaging address (stored as `peerBaseUrl`) — same Apply pattern as
+// shareBaseUrl but WITHOUT the different-hostname restriction: /peer/ is a
+// same-origin carve-out, so the working origin is a perfectly fine value.
+const peerBaseUrlInput = ref('')
+const peerBaseUrlInputRef = ref(null)
+const peerBaseUrlError = ref('')
+const peerBaseUrlWarning = ref('')
+const peerBaseUrlNormalized = computed(() => peerBaseUrlInput.value.trim().replace(/\/+$/, ''))
+const peerBaseUrlModified = computed(() => peerBaseUrlNormalized.value !== (store.getPeerBaseUrl || ''))
+const peerBaseUrlApplyIcon = computed(() => (peerBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
+
+// Display name advertised to peers in handshakes; empty falls back to the
+// hostname of peerBaseUrl (server-side).
+const peerDisplayNameInput = ref('')
+const peerDisplayNameModified = computed(() => peerDisplayNameInput.value.trim() !== (store.getPeerDisplayName || ''))
+const peerDisplayNameApplyIcon = computed(() => (peerDisplayNameModified.value ? 'triangle-exclamation' : 'check'))
+
+function onPeerDisplayNameInputChange(event) {
+    peerDisplayNameInput.value = event.target.value
+}
+
+function onPeerDisplayNameApply() {
+    store.setPeerDisplayName(peerDisplayNameInput.value)
+    peerDisplayNameInput.value = store.getPeerDisplayName || ''
+}
+
 // Check if the current prompt is the default
 const isDefaultPrompt = computed(() => titleSystemPrompt.value === SETTINGS_SCHEMA.titleSystemPrompt)
 const isTitleSystemPromptModified = computed(() => titleSystemPromptInput.value !== titleSystemPrompt.value)
@@ -822,6 +853,62 @@ function onShareBaseUrlApply() {
     }
     store.setShareBaseUrl(shareBaseUrlInput.value)
     shareBaseUrlInput.value = store.getShareBaseUrl || ''
+}
+
+function onPeerBaseUrlInputChange(event) {
+    peerBaseUrlInput.value = event.target.value
+    peerBaseUrlError.value = ''
+    peerBaseUrlWarning.value = ''
+}
+
+function onPeerBaseUrlApply() {
+    peerBaseUrlError.value = ''
+    peerBaseUrlWarning.value = ''
+    const raw = peerBaseUrlInput.value.trim()
+    if (raw) {
+        let parsed
+        try {
+            parsed = new URL(raw)
+        } catch {
+            peerBaseUrlError.value = 'Enter a full absolute URL (https://…).'
+            return
+        }
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+            peerBaseUrlError.value = 'The peer address must use http or https.'
+            return
+        }
+        if (parsed.protocol === 'http:') {
+            // Non-fatal (design §4.3): warn, still apply.
+            peerBaseUrlWarning.value = 'Plain http — tokens travel unencrypted. HTTPS is strongly recommended.'
+        }
+    }
+    store.setPeerBaseUrl(peerBaseUrlInput.value)
+    peerBaseUrlInput.value = store.getPeerBaseUrl || ''
+}
+
+// One-click prefill from the notifications' External URL (typically the same
+// tunnel address). Adds a scheme when the stored value is a bare hostname —
+// peerBaseUrl must be an absolute URL.
+const canPrefillPeerBaseUrl = computed(() => {
+    const pub = (store.getPublicBaseUrl || '').trim()
+    if (!pub) return false
+    const candidate = pub.includes('//') ? pub : `https://${pub}`
+    return candidate.replace(/\/+$/, '') !== peerBaseUrlNormalized.value
+})
+
+function prefillPeerBaseUrlFromPublic() {
+    const pub = (store.getPublicBaseUrl || '').trim()
+    peerBaseUrlInput.value = pub.includes('//') ? pub : `https://${pub}`
+    peerBaseUrlError.value = ''
+    peerBaseUrlWarning.value = ''
+}
+
+function openPeersManager() {
+    window.dispatchEvent(new CustomEvent('twicc:open-peers-manager'))
+}
+
+function openPeerInbox() {
+    window.dispatchEvent(new CustomEvent('twicc:open-peer-inbox'))
 }
 
 // Called when the Notifications section's callout is clicked: jump to General and
@@ -1516,6 +1603,89 @@ function onChangelogClose() {
                             <wa-icon name="share-nodes" slot="start"></wa-icon>
                             Shared links
                         </wa-button>
+                    </div>
+                </section>
+
+                <!-- Peers Section -->
+                <section v-if="activeSection === 'peers'" class="settings-section">
+                    <h3 class="settings-section-title">Peers</h3>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Your name <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                        <div class="setting-input-apply-row">
+                            <wa-input
+                                :value="peerDisplayNameInput"
+                                @input="onPeerDisplayNameInputChange"
+                                @keydown.enter="onPeerDisplayNameApply"
+                                placeholder="e.g. Stephane (laptop)"
+                                size="small"
+                            ></wa-input>
+                            <wa-button
+                                size="small"
+                                variant="neutral"
+                                @click="onPeerDisplayNameApply"
+                            >
+                                <wa-icon :name="peerDisplayNameApplyIcon" slot="start"></wa-icon>
+                                Apply
+                            </wa-button>
+                        </div>
+                        <span class="setting-group-hint">
+                            Shown to peers in your pairing requests so they know who is asking.
+                            Empty uses your address's hostname.
+                        </span>
+                    </div>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Your address <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                        <div class="setting-input-apply-row">
+                            <wa-input
+                                ref="peerBaseUrlInputRef"
+                                :value="peerBaseUrlInput"
+                                @input="onPeerBaseUrlInputChange"
+                                @keydown.enter="onPeerBaseUrlApply"
+                                placeholder="https://twicc.example.com"
+                                size="small"
+                            ></wa-input>
+                            <wa-button
+                                size="small"
+                                variant="neutral"
+                                @click="onPeerBaseUrlApply"
+                            >
+                                <wa-icon :name="peerBaseUrlApplyIcon" slot="start"></wa-icon>
+                                Apply
+                            </wa-button>
+                        </div>
+                        <wa-callout v-if="peerBaseUrlError" variant="danger" size="small">{{ peerBaseUrlError }}</wa-callout>
+                        <wa-callout v-if="peerBaseUrlWarning" variant="warning" size="small">{{ peerBaseUrlWarning }}</wa-callout>
+                        <wa-button
+                            v-if="canPrefillPeerBaseUrl"
+                            size="small" appearance="plain"
+                            @click="prefillPeerBaseUrlFromPublic"
+                        >
+                            <wa-icon name="arrow-down" slot="start"></wa-icon>
+                            Use the external URL from Global settings
+                        </wa-button>
+                        <span class="setting-group-hint">
+                            Your address, advertised to peers. Empty disables peer messaging.
+                            HTTPS strongly recommended. The host must be reachable
+                            machine-to-machine: a tunnel-level access gate (e.g. Cloudflare
+                            Access asking for an email or Google account) blocks peer calls —
+                            use a truly public hostname.
+                        </span>
+                    </div>
+                    <div class="setting-group">
+                        <wa-button size="small" variant="neutral" appearance="accent" @click="openPeersManager">
+                            <wa-icon name="user-group" slot="start"></wa-icon>
+                            Manage peers
+                        </wa-button>
+                    </div>
+                    <div class="setting-group">
+                        <wa-button size="small" variant="neutral" appearance="accent" @click="openPeerInbox">
+                            <wa-icon name="envelope" slot="start"></wa-icon>
+                            Open inbox
+                        </wa-button>
+                        <span class="setting-group-hint">
+                            Pending peer messages and history. The sidebar badge only appears
+                            when something awaits your review.
+                        </span>
                     </div>
                 </section>
 

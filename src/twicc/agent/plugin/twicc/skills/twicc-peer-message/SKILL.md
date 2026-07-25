@@ -1,0 +1,73 @@
+---
+name: twicc-peer-message
+description: Re-check the status of a message sent to a peer TwiCC instance with peer-send — still pending the remote user's approval, delivered, refused, or failed.
+argument-hint: <message_id>
+---
+
+# TwiCC Peer Message
+
+Check the current status of one outbound peer message. Delivery always goes through the remote user's approval: a message stays `pending` until they deliver it to one of their sessions (`delivered`) or turn it down (`refused`).
+
+## When to use
+
+- You sent a message with `peer-send` and want to know whether the remote user has acted on it.
+- The user asks "did David's instance get my message?".
+
+## How to invoke
+
+**Prefer the `mcp__twicc__*` tools when you have them.** Inside a TwiCC session your tool list may include `mcp__twicc__*` tools — one per command below (the command with `/` and `-` turned into `_`, e.g. `mcp__twicc__create_session`, `mcp__twicc__update_session_settings`). When present, use them instead of the `$TWICC` CLI: same arguments, same JSON result, no shell, and your session identity travels with the call so `self`/`parent` resolve on their own. Fall back to the `$TWICC` CLI below when those tools aren't available (outside a session, or when scripting from a terminal).
+
+TwiCC's executable varies by launch mode (uvx, dev, installed tool). ALWAYS USE THIS TO RESOLVE $TWICC AT THE START OF EACH BASH INVOCATION:
+
+```bash
+TWICC=${TWICC_BIN:-$(command -v twicc 2>/dev/null)}
+[ -n "$TWICC" ] || { echo "TwiCC executable not found in this context" >&2; exit 1; }
+```
+
+Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never `"$TWICC" args`): it may expand to multiple words, which quoting would break.
+
+## Usage
+
+```bash
+$TWICC peer-message <MESSAGE_ID>
+```
+
+### Arguments
+
+- `MESSAGE_ID` — the `message_id` returned by `peer-send` (`pm_...`).
+
+## Output format
+
+```json
+{"id": 12, "message_id": "pm_1a2b3c4d5e6f7a8b", "peer_id": "peer_a1b2c3d4", "direction": "out",
+ "status": "pending", "error": "", "text_preview": "Here is the recap...",
+ "attachments_meta": [{"kind": "image", "media_type": "image/png", "bytes": 48211}],
+ "origin": {"session_title": "Front revamp", "sent_at": "2026-07-24T12:00:00+00:00"},
+ "recipient_note": "", "delivered_to_session_id": null,
+ "created_at": "...", "resolved_at": null, "purged": false}
+```
+
+- `status` — `pending` (awaiting the remote user), `delivered`, `refused`, or `failed` (never reached the peer; detail in `error`).
+
+### Exit codes
+
+- `0` — Found
+- `1` — Unknown message_id
+- `64` — Bad CLI usage
+
+## Examples
+
+```bash
+$TWICC peer-message pm_1a2b3c4d5e6f7a8b
+# → {"message_id":"pm_1a2b3c4d5e6f7a8b","status":"delivered",...}
+```
+
+## Related commands
+
+- `$TWICC peer-send <peer> '<text>'` — send a message to a peer instance. Skill: `twicc-peer-send`.
+- `$TWICC peers` — list peer instances. Skill: `twicc-peers`.
+
+## How to present results
+
+1. Translate the status for the user: `pending` = "their user hasn't reviewed it yet", `delivered`/`refused` = their decision, `failed` = the send never reached the peer.
+2. There is no push on resolution — re-run this command when the user asks again.

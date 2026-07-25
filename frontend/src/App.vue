@@ -27,6 +27,9 @@ import ProjectTrustDialog from './components/project/ProjectTrustDialog.vue'
 import ProjectEditDialog from './components/project/ProjectEditDialog.vue'
 import WorktreeDialog from './components/project/WorktreeDialog.vue'
 import ShareManagerDialog from './components/share/ShareManagerDialog.vue'
+import PeersManagerDialog from './components/peer/PeersManagerDialog.vue'
+import PeerInboxDialog from './components/peer/PeerInboxDialog.vue'
+import PeerMessageReviewDialog from './components/peer/PeerMessageReviewDialog.vue'
 import TerminalPool from './components/terminal/TerminalPool.vue'
 import { registerTrustDialog, ensureProjectTrust } from './composables/useTrustGate'
 import { initStaticCommands } from './commands/staticCommands'
@@ -587,6 +590,28 @@ function openShareManager() {
     showShareManager.value = true
 }
 
+// Peer dialogs — mounted here so the settings section, the toasts and the
+// inbox badge can all open them from anywhere via window events.
+const showPeersManager = ref(false)
+function openPeersManager() {
+    showPeersManager.value = true
+}
+const showPeerInbox = ref(false)
+const peerReviewMessageId = ref(null)
+function openPeerInbox(e) {
+    const messageId = e?.detail?.messageId
+    if (messageId != null) {
+        // A toast's Read button targets one message: open the review directly.
+        peerReviewMessageId.value = messageId
+    } else {
+        showPeerInbox.value = true
+    }
+}
+function onPeerInboxReview(messageId) {
+    showPeerInbox.value = false
+    peerReviewMessageId.value = messageId
+}
+
 // Edit any project (current project, or one picked from a palette list).
 function openEditProjectDialog(e) {
     const projectId = e.detail?.projectId
@@ -626,6 +651,8 @@ onMounted(() => {
     window.addEventListener('twicc:open-edit-project-dialog', openEditProjectDialog)
     window.addEventListener('twicc:open-worktree-dialog', openWorktreeDialog)
     window.addEventListener('twicc:open-share-manager', openShareManager)
+    window.addEventListener('twicc:open-peers-manager', openPeersManager)
+    window.addEventListener('twicc:open-peer-inbox', openPeerInbox)
 })
 onBeforeUnmount(() => {
     document.removeEventListener('keydown', handleGlobalKeydown, { capture: true })
@@ -634,6 +661,8 @@ onBeforeUnmount(() => {
     window.removeEventListener('twicc:open-edit-project-dialog', openEditProjectDialog)
     window.removeEventListener('twicc:open-worktree-dialog', openWorktreeDialog)
     window.removeEventListener('twicc:open-share-manager', openShareManager)
+    window.removeEventListener('twicc:open-peers-manager', openPeersManager)
+    window.removeEventListener('twicc:open-peer-inbox', openPeerInbox)
 })
 
 // Notivue theme - inverted for contrast (dark theme when app is light, and vice-versa)
@@ -701,6 +730,14 @@ const toastTheme = computed(() => {
     <WorktreeDialog ref="worktreeDialogRef" @resolved="handleWorktreeResolved" />
     <!-- Shared-links manager (command palette: "Manage shared links"). -->
     <ShareManagerDialog :open="showShareManager" @close="showShareManager = false" />
+    <!-- Peer messaging: manager, inbox and read-and-route dialog. -->
+    <PeersManagerDialog :open="showPeersManager" @close="showPeersManager = false" />
+    <PeerInboxDialog :open="showPeerInbox" @close="showPeerInbox = false" @review="onPeerInboxReview" />
+    <PeerMessageReviewDialog
+        :open="peerReviewMessageId != null"
+        :message-id="peerReviewMessageId"
+        @close="peerReviewMessageId = null"
+    />
     <!-- Prevent browser default drop behavior (e.g. navigating to a dropped image).
          Our specific drop handlers in SessionItemsList call preventDefault themselves;
          this catches any drops that miss those zones. -->

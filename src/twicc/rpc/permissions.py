@@ -70,6 +70,8 @@ COOKIE_READONLY_COMMANDS: frozenset[str] = frozenset(
         "status",
         "usage",
         "info",
+        "peers",
+        "peer-message",
     }
 )
 

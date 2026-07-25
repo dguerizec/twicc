@@ -1723,3 +1723,128 @@ class ArtifactNetworkDenial(models.Model):
     class Meta:
         ordering = ["-last_at"]
         indexes = [models.Index(fields=["bookmark", "-last_at"], name="idx_netdenial_bookmark_at")]
+
+
+def generate_peer_id() -> str:
+    """Non-secret admin handle for a Peer (UI, CLI, logs): ``peer_<hex8>``."""
+    import secrets
+    return "peer_" + secrets.token_hex(4)
+
+
+class PeerState(models.TextChoices):
+    """Lifecycle state of a peer relationship (local view only — no cross-instance sync)."""
+    PENDING_SENT = "pending_sent", "Pending (sent)"
+    PENDING_RECEIVED = "pending_received", "Pending (received)"
+    ACTIVE = "active", "Active"
+    BROKEN = "broken", "Broken"
+
+
+class PeerMessageDirection(models.TextChoices):
+    """Direction of a peer message relative to this instance."""
+    IN = "in", "Inbound"
+    OUT = "out", "Outbound"
+
+
+class PeerMessageStatus(models.TextChoices):
+    """Delivery status of a peer message."""
+    PENDING = "pending", "Pending"
+    DELIVERED = "delivered", "Delivered"
+    REFUSED = "refused", "Refused"
+    FAILED = "failed", "Failed"
+
+
+class Peer(models.Model):
+    """One related TwiCC instance (peer messaging, design 2026-07-24).
+
+    Local-state authority: the state that matters for an inbound send is THIS
+    side's row, checked live per request. Revocation = local deletion (silent);
+    the caller's next send 403s and it flips its own row to ``broken``.
+    Per-direction bearer tokens: ``token_ours`` is the secret THEY present to
+    call us; ``token_theirs`` the secret WE present to call them. Tokens must
+    never appear in serializers, WS payloads, REST responses, CLI output or logs.
+    """
+
+    id = models.CharField(max_length=16, primary_key=True, default=generate_peer_id)
+    # Local alias; empty until the acceptor names it (acceptor side) / set at creation (requester side).
+    name = models.CharField(max_length=255, blank=True, default="")
+    # The name the other instance claims in the handshake — a hint, never authoritative.
+    remote_display_name = models.CharField(max_length=255, blank=True, default="")
+    base_url = models.URLField(max_length=500)
+    state = models.CharField(max_length=20, choices=PeerState.choices)
+    # unique=True with null=True: SQLite allows multiple NULLs.
+    token_ours = models.CharField(max_length=64, null=True, blank=True, unique=True)
+    # Indexed: handshake_verify looks rows up by the requester's token.
+    token_theirs = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    # 6-digit code shown to the local user on pending_received rows (design §4.2
+    # step 2); the SOLE barrier against an attacker-requester (rate limit + regen
+    # cap in the verify endpoint). NEVER on the agent surface.
+    verification_code = models.CharField(max_length=6, blank=True, default="")
+    verification_attempts = models.PositiveSmallIntegerField(default=0)
+    # Code regenerations; the 3rd drops the pending request (hard guess ceiling).
+    verification_regens = models.PositiveSmallIntegerField(default=0)
+    # The requester echoed our code — unlocks Accept.
+    verified_at = models.DateTimeField(null=True, blank=True)
+    # Requester side: our own code submission was confirmed by the peer; required before activation.
+    code_confirmed_at = models.DateTimeField(null=True, blank=True)
+    # Requester side: accept callback held because code_confirmed_at was not yet set.
+    remote_accepted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    last_contact_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["name", "-created_at"]
+
+    def __str__(self):
+        return f"Peer {self.id} ({self.name or self.remote_display_name or self.base_url}) [{self.state}]"
+
+
+class PeerMessage(models.Model):
+    """One cross-instance message, both directions (peer messaging design §3.2).
+
+    ``message_id`` is the wire handle, minted by the SENDER; the auto pk is the
+    REST/admin handle. History lives for the lifetime of the relationship
+    (CASCADE on peer deletion); attachment bytes are purged 7 days after
+    resolution (``purged_at``) while text + ``attachments_meta`` survive.
+    """
+
+    peer = models.ForeignKey(Peer, on_delete=models.CASCADE, related_name="messages")
+    direction = models.CharField(max_length=3, choices=PeerMessageDirection.choices)
+    message_id = models.CharField(max_length=40)
+    # {text: str, images: list, documents: list} — attachments in the SDK block
+    # shape produced by cli/_drop_request/attachments.py.
+    payload = models.JSONField(default=dict)
+    # Computed at row creation: [{kind: "image"|"document", media_type, bytes, name?}]; survives the purge.
+    attachments_meta = models.JSONField(default=list)
+    # Wire provenance: {session_title: str|null, sent_at: iso8601}. No session id
+    # on the wire (design §3.2/§8) — local ids stay local.
+    origin = models.JSONField(default=dict)
+    # LOCAL only, outbound rows: which local session sent it (deferred threading, design §8).
+    origin_session = models.ForeignKey(
+        Session, null=True, blank=True, on_delete=models.SET_NULL, related_name="peer_messages_sent",
+    )
+    status = models.CharField(max_length=12, choices=PeerMessageStatus.choices)
+    error = models.CharField(max_length=255, blank=True, default="")
+    # Inbound rows: the note added at delivery time (design §6.2).
+    recipient_note = models.TextField(blank=True, default="")
+    delivered_to_session = models.ForeignKey(
+        Session, null=True, blank=True, on_delete=models.SET_NULL, related_name="peer_messages_received",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    purged_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["peer", "direction", "message_id"],
+                name="uniq_peermessage_peer_direction_msgid",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["status", "direction"], name="idx_peermessage_status"),
+        ]
+
+    def __str__(self):
+        return f"PeerMessage {self.message_id} [{self.direction}/{self.status}] peer={self.peer_id}"

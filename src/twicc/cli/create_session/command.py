@@ -319,7 +319,9 @@ def create_session_cmd(
         # concrete snapshot at creation and never follows later default
         # changes.
         if provider in bootstrap.providers:
-            settings = _materialize_inherited_defaults(
+            from twicc.project_agent_defaults import materialize_inherited_defaults
+
+            settings = materialize_inherited_defaults(
                 settings,
                 project_id=resolved_project.project_id,
                 directory=resolved_project.directory,
@@ -493,55 +495,6 @@ def create_session_cmd(
     raise typer.Exit(5)  # timeout
 
 
-def _materialize_inherited_defaults(
-    settings,
-    *,
-    project_id: str,
-    directory: str | None,
-    provider: str,
-    pb,
-    untrusted: bool,
-):
-    """Fill every still-``None`` supported field with its inherited default.
-
-    The CLI counterpart of the frontend's draft pre-fill
-    (``_resolveDraftAgentSettings`` in ``frontend/src/stores/data.js``): field
-    by field, the project chain's value (worktree main repo / path ancestors)
-    wins, else the provider's global synced default — so the created session
-    stores a concrete snapshot, exactly like a UI-launched one (see
-    ``docs/plans/2026-06-09-project-agent-defaults-design.md`` §4, "snapshot
-    at creation"). ``permission_mode`` resolves through the trust-matching
-    variant: the ``permission_mode_if_untrusted`` chain (then the global
-    untrusted default) when the project is untrusted. The hidden
-    ``question_widget`` is not a project default and keeps its flag-driven
-    value (``None`` = the server-side global default at run time).
-    """
-    from twicc.cli._drop_request.aliases import supported_fields
-    from twicc.project_agent_defaults import resolve_project_agent_defaults
-    from twicc.providers.helpers import (
-        AGENT_SETTINGS_HIDDEN_FROM_FRONTEND,
-        AgentSettings,
-        get_provider_helpers,
-    )
-
-    chain = resolve_project_agent_defaults(project_id, provider, directory=directory)
-    global_resolved = get_provider_helpers(provider).resolve_agent_settings(AgentSettings())
-
-    fields = (
-        supported_fields(pb) & set(AgentSettings._fields)
-    ) - set(AGENT_SETTINGS_HIDDEN_FROM_FRONTEND)
-    updates: dict = {}
-    for field in fields:
-        if getattr(settings, field) is not None:
-            continue
-        if field == "permission_mode" and untrusted:
-            value = chain.get("permission_mode_if_untrusted")
-            if value is None:
-                value = pb.untrusted_permission_mode_default
-        else:
-            value = chain.get(field)
-            if value is None:
-                value = getattr(global_resolved, field)
-        if value is not None:
-            updates[field] = value
-    return settings._replace(**updates) if updates else settings
+# _materialize_inherited_defaults moved to
+# twicc.project_agent_defaults.materialize_inherited_defaults (shared with the
+# server-side peer-message delivery path).

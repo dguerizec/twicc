@@ -72,6 +72,8 @@ export const SETTINGS_SCHEMA = {
     externalNotificationTargets: [],
     publicBaseUrl: null,
     shareBaseUrl: null,
+    peerBaseUrl: null,
+    peerDisplayName: null,
     notifyOnExtraUsageStart: null,
     // Whether the user has seen the hybrid-mode explainer dialog (never shown
     // in the settings panel; gates the hybrid toggle's explainer).
@@ -165,6 +167,8 @@ const SETTINGS_VALIDATORS = {
             && (item.awayOnly === undefined || typeof item.awayOnly === 'boolean')),
     publicBaseUrl: (v) => typeof v === 'string',
     shareBaseUrl: (v) => typeof v === 'string',
+    peerBaseUrl: (v) => typeof v === 'string',
+    peerDisplayName: (v) => typeof v === 'string',
 }
 
 /**
@@ -347,6 +351,8 @@ export const useSettingsStore = defineStore('settings', {
         getExternalNotificationTargets: (state) => state.externalNotificationTargets,
         getPublicBaseUrl: (state) => state.publicBaseUrl,
         getShareBaseUrl: (state) => state.shareBaseUrl,
+        getPeerBaseUrl: (state) => state.peerBaseUrl,
+        getPeerDisplayName: (state) => state.peerDisplayName,
         /**
          * Whether the ``disabledProviders`` key is physically present in settings.json.
          * False until the backend writes it (e.g. after the initial provider-activation dialog).
@@ -914,6 +920,30 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
+         * Set the peer messaging base URL (the address advertised to peer
+         * instances). Unlike shareBaseUrl it MAY be the working origin —
+         * /peer/ is a same-origin carve-out, not a dedicated host. Trimmed
+         * and stripped of trailing slashes. Empty disables peer messaging.
+         * @param {string} url
+         */
+        setPeerBaseUrl(url) {
+            if (SETTINGS_VALIDATORS.peerBaseUrl(url)) {
+                this.peerBaseUrl = url.trim().replace(/\/+$/, '')
+            }
+        },
+
+        /**
+         * Set the display name advertised to peers in pairing handshakes.
+         * Empty = fall back to the hostname of peerBaseUrl (backend-side).
+         * @param {string} name
+         */
+        setPeerDisplayName(name) {
+            if (SETTINGS_VALIDATORS.peerDisplayName(name)) {
+                this.peerDisplayName = name.trim()
+            }
+        },
+
+        /**
          * Apply synced settings received from the backend.
          * Merges with schema: validates each key, ignores unknown keys,
          * keeps current value if validation fails.
@@ -1138,6 +1168,8 @@ export function initSettings() {
             externalNotificationTargets: store.externalNotificationTargets,
             publicBaseUrl: store.publicBaseUrl,
             shareBaseUrl: store.shareBaseUrl,
+            peerBaseUrl: store.peerBaseUrl,
+            peerDisplayName: store.peerDisplayName,
         }
         for (const provider of getRegisteredProviders()) {
             Object.assign(dict, getProviderHelpers(provider).getSyncedSettings())
