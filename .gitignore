@@ -241,6 +241,10 @@ search-index/
 # into it). Root-anchored for the same reason as above.
 /project-icons/
 
+# Same story for a data-dir file: the anonymous telemetry state. Root-anchored
+# for the same reason as above.
+/telemetry.json
+
 # SQLite database (legacy location, kept for safety)
 data.sqlite
 data.sqlite-wal
