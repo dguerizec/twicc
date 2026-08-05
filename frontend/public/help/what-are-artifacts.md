@@ -18,6 +18,14 @@ artifact.
 From there you can **bookmark** any artifact, giving it a name and a scope:
 the project the session belongs to, that project's workspace, or everywhere.
 
+Interactive pages can also **save data**: what you do in the page (choices,
+settings, notes, game state…) is stored in a `data/` folder next to the
+artifact, and survives closing and reopening it. The agent can read those
+files back, so a page can act as a rich form: the agent hands you an
+artifact, you make your choices and save, you tell the agent you're done —
+it reads them from there. The files appear in the artifacts tree like any
+others, so you can always inspect or delete what a page has stored.
+
 For rendered web pages, the round **tools** button in the corner unfolds
 extra actions: a **responsive mode** to preview the page at an exact device
 size, and an **element selection** mode to click any element on the page

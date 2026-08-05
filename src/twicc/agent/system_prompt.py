@@ -128,8 +128,11 @@ wall of code or text.
   `.list()` / `.remove` (or plain `fetch('data/x.json', {method:'PUT', body})`).
   Use it to let the user make choices you read back later: seed
   `<artifact dir>/data/config.json` yourself, have the page load it, edit it,
-  save — then Read the file. Writes are silent, confined to `data/`, capped
-  (10 MB/file, 100 MB total). The user sees the files in the Artifacts tab.
+  save — then Read the file. This turns an artifact into a rich form for
+  decisions, settings, selections on ANY topic: hand the user the link, ask
+  them to tell you when they're done, then read their choices from `data/`.
+  Writes are silent, confined to `data/`, capped (10 MB/file, 100 MB total).
+  The user sees the files in the Artifacts tab.
 - Give the user a **clickable Markdown link**, e.g.
   `[Open the demo](/artifacts/{session_id}/demo/index.html)`: TwiCC intercepts it
   and opens the rendered page in the tab. It's an in-app link (for HTML and

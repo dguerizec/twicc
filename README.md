@@ -106,7 +106,7 @@ uv tool upgrade twicc
 - **Slash commands and file references**: `/` for Claude Code, `$` for Codex, `@` for files — from the message input
 - **Snippets and history**: reusable text snippets with placeholders (global or per-project), plus a picker to reuse earlier messages
 - **Drafts**: unsent messages and new sessions are saved locally and survive a reload
-- **Artifacts**: agents produce rendered artifacts — images, reports, interactive HTML playgrounds (with network calls you approve per host) — shown inside TwiCC in the session's Artifacts tab, and bookmarkable in a dedicated view
+- **Artifacts**: agents produce rendered artifacts — images, reports, interactive HTML playgrounds (with network calls you approve per host, and a per-artifact `data/` store so a page can save your choices for the agent to read back) — shown inside TwiCC in the session's Artifacts tab, and bookmarkable in a dedicated view
 - **Public sharing**: publish revocable, read-only links to session transcripts or bookmarked artifacts, with optional password protection, expiry, view controls, and live or frozen modes — see [Sharing](#sharing)
 
 ### Code and files
