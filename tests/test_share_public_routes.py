@@ -6,7 +6,7 @@ from django.test import AsyncClient
 from django.utils import timezone as djtz
 
 from twicc.auth.hashers import hash_password
-from twicc.core.models import Project, Session, SessionItem, SessionType, Share
+from twicc.core.models import ArtifactBookmark, PinMode, Project, Session, SessionItem, SessionType, Share
 from twicc.core.services.share_tokens import mint_token
 
 
@@ -308,3 +308,73 @@ def test_backend_patch_snapshot_clamp_and_size_cap(client, session):
     SessionItem.objects.filter(session=session, line_num=4).update(content=big)
     live = _share(session, options={"mode": "live", "max_display_mode": "normal"})
     assert orjson.loads(_run(client.get(f"/share/{live.token}/api/backend-patch/tu-mid/")).content) == []
+
+
+# ── Artifact shares stay read-only (design §8) ───────────────────────────────
+#
+# Task 1-2 added a data/ write capability (PUT/DELETE) to the OWNER-side
+# artifact-serving routes, gated by an X-Twicc-Artifact-Doc header. These tests
+# pin that the PUBLIC share routes never honor that header — writes 405 even
+# when it's present — while snapshot data/ files remain readable (a documented
+# consequence of sharing, not a bug).
+
+
+@pytest.fixture
+def artifact_share(transactional_db, tmp_path, monkeypatch, settings):
+    """An artifact-kind share with a hand-built on-disk snapshot: index.html +
+    data/seed.json. The snapshot dir is never produced by the real snapshotting
+    service here — it's hand-built under a monkeypatched data dir, matching the
+    layout confined_snapshot_path/get_share_snapshot_dir expect."""
+    settings.TWICC_PASSWORD_HASH = ""
+    monkeypatch.setattr("twicc.paths.get_data_dir", lambda: tmp_path)
+    now = djtz.now()
+    project = Project.objects.create(id="-tmp-art-share", directory="/tmp/art-share")
+    sess = Session.objects.create(
+        id="sess-art-share", project=project, provider="claude_code",
+        file_path="sess-art-share.jsonl", type=SessionType.SESSION, title="Artifact session",
+        created_at=now, last_new_content_at=now, user_message_count=1, last_line=1,
+    )
+    bookmark = ArtifactBookmark.objects.create(
+        session=sess, project=project,
+        relative_path="demo/index.html", name="Demo", scope=PinMode.ALL,
+    )
+    share = Share.objects.create(kind="artifact", token=mint_token(), artifact_bookmark=bookmark, options={})
+    snap = tmp_path / "shares" / str(share.id)
+    (snap / "data").mkdir(parents=True)
+    (snap / "index.html").write_bytes(b"<html><head></head><body>hi</body></html>")
+    (snap / "data" / "seed.json").write_bytes(b'{"seed":1}')
+    return share
+
+
+def test_share_artifact_asset_refuses_put(artifact_share):
+    client = AsyncClient()
+    resp = _run(client.put(
+        f"/share/{artifact_share.token}/data/x.json", b"{}",
+        headers={"x-twicc-artifact-doc": f"/share/{artifact_share.token}/__twicc_doc__"},
+    ))
+    assert resp.status_code == 405  # even WITH the doc header: shares are read-only (design §8)
+
+
+def test_share_artifact_doc_refuses_put(artifact_share):
+    client = AsyncClient()
+    resp = _run(client.put(f"/share/{artifact_share.token}/__twicc_doc__", b"x"))
+    assert resp.status_code == 405
+
+
+def test_share_artifact_data_read_still_serves(artifact_share):
+    # Snapshot data/ files remain readable — publishing them is design §8's
+    # documented consequence, not a bug.
+    client = AsyncClient()
+    resp = _run(client.get(f"/share/{artifact_share.token}/data/seed.json"))
+    assert resp.status_code == 200
+
+
+def test_share_artifact_data_listing_is_404(artifact_share):
+    # Documented limitation (design §8): the share routes serve files only —
+    # no dir-GET listing on a share; the shim's list() maps this to [].
+    client = AsyncClient()
+    resp = _run(client.get(
+        f"/share/{artifact_share.token}/data/",
+        headers={"x-twicc-artifact-doc": f"/share/{artifact_share.token}/__twicc_doc__"},
+    ))
+    assert resp.status_code == 404

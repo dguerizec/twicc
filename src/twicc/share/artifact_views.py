@@ -98,6 +98,8 @@ async def api_meta(request, token):
 
 async def share_artifact_doc(request, token):
     """``__twicc_doc__``: the artifact HTML wrapped (shim + CSP)."""
+    if request.method not in ("GET", "HEAD"):
+        return HttpResponseNotAllowed(["GET", "HEAD"])
     ctx, resp = await _ctx(request, token)
     if resp:
         return resp
