@@ -243,9 +243,21 @@ MODEL_VERSIONS: list[ModelVersion] = [
     ),
     ModelVersion(
         provider=Provider.CLAUDE_CODE,
-        model="opus", version="4.8", full_name="claude-opus-4-8",
+        model="opus", version="5", full_name="claude-opus-5",
         retirement_date=None,
         latest=True,
+        weight=100,
+        provider_extra=ClaudeCodeModelExtra(
+            supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,
+            supports_fast=True, supports_permission_auto=True,
+            supports_highres_images=True, supports_thinking_disabled=True,
+        ),
+    ),
+    ModelVersion(
+        provider=Provider.CLAUDE_CODE,
+        model="opus", version="4.8", full_name="claude-opus-4-8",
+        retirement_date=None,
+        latest=False,
         weight=90,
         provider_extra=ClaudeCodeModelExtra(
             supports_1m=True, supports_effort_xhigh=True, supports_effort_max=True,

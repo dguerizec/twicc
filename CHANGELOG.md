@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Opus 5** — support for Anthropic's new Opus model, now the latest Opus (Opus 4.8 remains selectable).
+
 ### Changed
 
 - **Claude Agent SDK** — Upgrade from 0.2.124 to 0.2.130 (bundled Claude Code CLI: 2.1.216 → 2.1.222)

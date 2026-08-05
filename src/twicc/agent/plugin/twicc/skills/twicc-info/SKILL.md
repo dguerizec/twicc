@@ -151,10 +151,10 @@ $TWICC info models [--provider <key>] [--include-disabled-providers]
 "models": {
   "claude_code": [
     {
-      "identifier": "opus-4.8",
+      "identifier": "opus-5",
       "alias": "opus",
       "family": "opus",
-      "version": "4.8",
+      "version": "5",
       "latest": true,
       "enabled": true,
       "retirement_date": null,
@@ -195,7 +195,7 @@ $TWICC info agent-settings [--provider <key>] [--include-disabled-providers]
         {"value": "fable",    "latest": true},
         {"value": "opus",     "latest": true},
         {"value": "sonnet",   "latest": true},
-        {"value": "opus-4.7", "latest": false}
+        {"value": "opus-4.8", "latest": false}
       ],
       "aliases": {"max": "fable", "strongest": "fable", "medium": "opus", "balanced": "opus", "min": "sonnet", "fastest": "sonnet", "cheapest": "sonnet"}
     },
@@ -204,8 +204,8 @@ $TWICC info agent-settings [--provider <key>] [--include-disabled-providers]
         {"value": "low",    "restricted_to": null},
         {"value": "medium", "restricted_to": null},
         {"value": "high",   "restricted_to": null},
-        {"value": "xhigh",  "restricted_to": ["fable-5", "fable", "opus-4.8", "opus", "opus-4.7"]},
-        {"value": "max",    "restricted_to": ["fable-5", "fable", "opus-4.8", "opus", "opus-4.7", "opus-4.6", "sonnet-4.6", "sonnet"]}
+        {"value": "xhigh",  "restricted_to": ["fable-5", "fable", "opus-5", "opus", "opus-4.8", "opus-4.7"]},
+        {"value": "max",    "restricted_to": ["fable-5", "fable", "opus-5", "opus", "opus-4.8", "opus-4.7", "opus-4.6", "sonnet-4.6", "sonnet"]}
       ],
       "aliases": {"min": "low", "max": "max"}
     },
