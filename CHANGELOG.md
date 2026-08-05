@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Artifacts can save data** — An interactive artifact can now remember what you do in it (choices, settings, notes…), and the agent can read it back: make your choices in the page, save, tell the agent you're done.
+
 ### Fixed
 
 - **Project icons** — The project selector in the sidebar now shows the current project's icon, like the rest of the app, instead of only its color dot.
