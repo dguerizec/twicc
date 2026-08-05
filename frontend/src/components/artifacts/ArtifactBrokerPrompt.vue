@@ -1,14 +1,22 @@
 <script setup>
-// The network-broker consent prompt (design §9). Dumb + controlled: it shows
-// whenever `prompt` is set and emits the user's choice. The parent owns the
-// pending fetch's promise and settles it (idempotently) on `decision`.
+// The broker consent prompt (design §9). Dumb + controlled: it shows whenever
+// `prompt` is set and emits the user's choice. The parent owns the pending
+// fetch's promise and settles it (idempotently) on `decision`.
+//
+// Two prompt types share this dialog: `network` (a cross-origin/brokered
+// request) and `data-write` (the page wants to store data next to itself,
+// design 2026-08-05 §6 — tab-lifetime only, hence no "Forever").
 import { computed } from 'vue'
 
 const props = defineProps({
-    // { host, ip, kind, canRemember } | null
+    // { type: 'network', host, ip, kind, canRemember }
+    // | { type: 'data-write', path }
+    // | null
     prompt: { type: Object, default: null },
 })
 const emit = defineEmits(['decision'])
+
+const isDataWrite = computed(() => props.prompt?.type === 'data-write')
 
 const KIND_LABEL = {
     public: 'a public site',
@@ -66,10 +74,15 @@ const calloutText = computed(() => {
          the safe default. -->
     <wa-dialog
         :open="!!prompt"
-        label="Network request"
+        :label="isDataWrite ? 'Store data' : 'Network request'"
         @wa-hide.self="emit('decision', 'deny')"
     >
-        <div v-if="prompt" class="broker-prompt">
+        <div v-if="prompt && isDataWrite" class="broker-prompt">
+            <p>This page wants to store data in:</p>
+            <p class="broker-prompt-host"><strong>{{ prompt.path }}</strong></p>
+            <p class="broker-prompt-target">Files are written on the machine TwiCC runs on, next to the page.</p>
+        </div>
+        <div v-else-if="prompt" class="broker-prompt">
             <p>This artifact wants to connect to:</p>
             <p class="broker-prompt-host"><strong>{{ prompt.host }}</strong></p>
             <p class="broker-prompt-target">
@@ -81,7 +94,17 @@ const calloutText = computed(() => {
             </wa-callout>
         </div>
 
-        <div slot="footer" class="broker-prompt-footer">
+        <!-- Data writes are remembered for the tab only: there is nothing to
+             persist a "Forever" onto (design 2026-08-05 §6). -->
+        <div v-if="isDataWrite" slot="footer" class="broker-prompt-footer">
+            <p class="broker-prompt-question">Do you want to allow this page to store data?</p>
+            <div class="broker-prompt-actions">
+                <wa-button @click="emit('decision', 'deny')">No, deny</wa-button>
+                <wa-button variant="brand" @click="emit('decision', 'session')">Yes, allow for this tab</wa-button>
+            </div>
+            <p class="broker-prompt-hint">This stays allowed until you reload or close the tab.</p>
+        </div>
+        <div v-else slot="footer" class="broker-prompt-footer">
             <p class="broker-prompt-question">Do you want to allow this connection?</p>
             <div class="broker-prompt-actions">
                 <wa-button @click="emit('decision', 'deny')">No, deny</wa-button>

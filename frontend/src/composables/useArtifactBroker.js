@@ -14,7 +14,7 @@ import { mountBrokerHost } from '../artifact-broker/host'
 
 /**
  * @param {import('vue').Ref<HTMLIFrameElement|null>} iframeRef  The artifact iframe.
- * @param {() => ({ documentUrl: string, getBookmarkId: () => (number|null), getAllowedHosts: () => object, getDeniedHosts: () => object, persistAllow?: Function, onDenied?: Function, onBlocked?: Function }) | null} getConfig
+ * @param {() => ({ documentUrl: string, getBookmarkId: () => (number|null), getAllowedHosts: () => object, getDeniedHosts: () => object, persistAllow?: Function, onDenied?: Function, onBlocked?: Function, inArtifactsRoot?: boolean, getDataDirLabel?: () => string }) | null} getConfig
  *        Evaluated at each (re)mount; return `null` to mount nothing (inactive).
  *        `getBookmarkId`/`getAllowedHosts`/`getDeniedHosts` are kept as getters
  *        (not snapshots) so the host reflects the live bookmark state —
@@ -28,7 +28,10 @@ import { mountBrokerHost } from '../artifact-broker/host'
  *        Bind these to `<ArtifactBrokerPrompt :prompt="brokerPrompt" @decision="onBrokerDecision" />`.
  */
 export function useArtifactBroker(iframeRef, getConfig, watchSources) {
-    const brokerPrompt = ref(null) // { host, ip, kind, canRemember, settle } | null
+    // { type: 'network', host, ip, kind, canRemember, settle }
+    // | { type: 'data-write', path, settle }
+    // | null
+    const brokerPrompt = ref(null)
     let brokerConnection = null
     // The iframe contentWindow the live connection is bound to, plus the iframe
     // element we hold a `load` listener on. Tracked so we rebind on a *new* browsing
@@ -86,6 +89,10 @@ export function useArtifactBroker(iframeRef, getConfig, watchSources) {
             mode: config.mode ?? 'owner',
             proxyUrl: config.proxyUrl,
             onBlocked: config.onBlocked,
+            // Data-store writes (design 2026-08-05 §6): silent under a session's
+            // artifacts root, prompted (tab-lifetime) anywhere else.
+            inArtifactsRoot: config.inArtifactsRoot ?? false,
+            getDataDirLabel: config.getDataDirLabel,
         })
         boundWindow = win
     }

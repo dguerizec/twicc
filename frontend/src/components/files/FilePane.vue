@@ -364,6 +364,16 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
                   getAllowedHosts: () => artifactBookmark.value?.allowed_hosts ?? {},
                   getDeniedHosts: () => artifactBookmark.value?.denied_hosts ?? {},
                   persistAllow: persistBrokerAllow,
+                  // Silent data/ writes only when the previewed doc lives under
+                  // a session's artifacts root (design 2026-08-05 §6); the
+                  // project Files tab prompts.
+                  inArtifactsRoot: !!props.artifactBookmarkSessionId,
+                  // Human-readable location for the data-write prompt: the
+                  // page's real directory on disk, not the /api/file-raw URL.
+                  getDataDirLabel: () => {
+                      const fp = props.filePath || ''
+                      return fp.slice(0, fp.lastIndexOf('/') + 1) + 'data/'
+                  },
                   // Record a prompt denial server-side (fire-and-forget).
                   onDenied: (url, kind) => {
                       const id = artifactBookmark.value?.id

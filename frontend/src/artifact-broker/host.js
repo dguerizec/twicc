@@ -69,6 +69,11 @@ async function callProxy(proxyUrl, body) {
 // one host core).
 const sessionGrants = new Map() // artifactKey -> { "scheme://host:port": { kind } }
 
+// Tab-lifetime "this page may write its data/" grants for documents OUTSIDE an
+// artifacts root (design 2026-08-05 §6). Module scope like sessionGrants: a
+// preview re-mount must not re-prompt; a page reload starts fresh.
+const writeGrants = new Set() // artifactKey
+
 function artifactKeyFor(documentUrl) {
     const u = new URL(documentUrl)
     // The cache-bust token lives in the query (`?_=…`), so origin + pathname is
@@ -116,8 +121,10 @@ export function getSessionGrantsForBookmark(bookmarkId) {
  * @param {(url: string, kind: string) => Promise<void>} [opts.persistAllow]  Persist "allow forever" (bookmarked only).
  * @param {(url: string, kind: string) => void} [opts.onDenied]  Owner mode: called (fire-and-forget) when the user denies a prompt, so the caller can record the denial server-side.
  * @param {(hostKey: string) => void} [opts.onBlocked]  Share mode only: called with the normalized host key when the server proxy refuses a host the owner never allowed (`not_allowed`).
+ * @param {boolean} [opts.inArtifactsRoot]  True when the document lives under a session's artifacts root: its `data/` writes are silent (that folder is the agent's own workspace). False (the default) prompts once per tab (design 2026-08-05 §6).
+ * @param {() => string} [opts.getDataDirLabel]  Human-readable location of the store, shown in the data-write prompt (the real directory on disk, not the serving URL). Falls back to the document URL's own `data/`.
  */
-export function createBrokerHost({ documentUrl, getBookmarkId, getAllowedHosts, getDeniedHosts, showPrompt, persistAllow, onDenied, mode = 'owner', proxyUrl = DEFAULT_PROXY_URL, onBlocked }) {
+export function createBrokerHost({ documentUrl, getBookmarkId, getAllowedHosts, getDeniedHosts, showPrompt, persistAllow, onDenied, mode = 'owner', proxyUrl = DEFAULT_PROXY_URL, onBlocked, inArtifactsRoot = false, getDataDirLabel }) {
     // Per-artifact "This session" grants persist across host re-mounts via the
     // module cache. They pair with the LIVE persisted lists below (never merged
     // into a snapshot): the DB-backed grants are re-read through the getters on
@@ -166,7 +173,7 @@ export function createBrokerHost({ documentUrl, getBookmarkId, getAllowedHosts, 
             // it) without a reload.
             const canRemember = canPersist && currentBookmarkId() != null
             const decision = await showPrompt({
-                host: key, ip: target.ip, kind: target.kind, canRemember,
+                type: 'network', host: key, ip: target.ip, kind: target.kind, canRemember,
             })
             if (decision === 'deny') {
                 // Fire-and-forget: the caller records the denial server-side.
@@ -184,6 +191,30 @@ export function createBrokerHost({ documentUrl, getBookmarkId, getAllowedHosts, 
             if (pendingGate[key] === settled) delete pendingGate[key]
         })
         pendingGate[key] = settled
+        return settled
+    }
+
+    // Consent for data/ writes outside an artifacts root (design 2026-08-05 §6).
+    // Serialized on the SAME gateChain as network prompts (one dialog at a time)
+    // and coalesced per artifact: concurrent writes share one prompt/decision.
+    // Tab-lifetime only — no "Forever" (nothing to persist onto; design §6).
+    let pendingWriteGate = null
+    function writeGate() {
+        if (writeGrants.has(artifactKey)) return Promise.resolve()
+        if (pendingWriteGate) return pendingWriteGate
+        const run = gateChain.then(async () => {
+            if (writeGrants.has(artifactKey)) return // granted while we waited
+            const label = (typeof getDataDirLabel === 'function' && getDataDirLabel())
+                || new URL(ownDir).pathname + 'data/'
+            const decision = await showPrompt({ type: 'data-write', path: label })
+            if (decision === 'deny') throw new Error('denied by user')
+            writeGrants.add(artifactKey)
+        })
+        gateChain = run.then(() => {}, () => {}) // keep the chain alive on either outcome
+        const settled = run.finally(() => {
+            if (pendingWriteGate === settled) pendingWriteGate = null
+        })
+        pendingWriteGate = settled
         return settled
     }
 
@@ -208,8 +239,30 @@ export function createBrokerHost({ documentUrl, getBookmarkId, getAllowedHosts, 
         const url = new URL(req.url)
         const sameOrigin = url.origin === location.origin
 
-        // The artifact's own files → served directly, no prompt (§6.6).
-        if (sameOrigin && url.href.startsWith(ownDir)) return await hostDirectFetch(req)
+        // The artifact's own files → served directly, no prompt (§6.6). Writes
+        // and data/ requests additionally carry the data-store protocol
+        // (design 2026-08-05): confined to <ownDir>data/, doc header set by US
+        // (never trusted from the artifact), consent outside an artifacts root.
+        // Behaviour change, deliberate: an own-dir write outside data/ (or on a
+        // share) now REJECTS the artifact's fetch instead of surfacing the
+        // server's 405 response.
+        if (sameOrigin && url.href.startsWith(ownDir)) {
+            const isWrite = req.method !== 'GET' && req.method !== 'HEAD'
+            const dataDir = ownDir + 'data/'
+            const inData = url.href === dataDir || url.href.startsWith(dataDir)
+            if (isWrite && mode === 'share') throw new Error('broker: shared artifact is read-only')
+            if (isWrite && !inData) throw new Error('broker: writes allowed only under data/')
+            if (isWrite || inData) {
+                if (isWrite && !inArtifactsRoot) await writeGate() // throws on deny
+                // Overwrite any artifact-supplied homonym — this header is the
+                // server's proof the write comes from a served document.
+                req.headers = {
+                    ...req.headers,
+                    'x-twicc-artifact-doc': new URL(documentUrl).pathname,
+                }
+            }
+            return await hostDirectFetch(req)
+        }
 
         // Share mode (design §9.3/D6): no preflight, no prompt. The server proxy
         // enforces the owner's allowlist; a non-listed host comes back as an error

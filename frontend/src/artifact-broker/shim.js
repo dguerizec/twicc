@@ -94,6 +94,46 @@ async function connectToHost() {
     throw lastError ?? new Error('host handshake timed out')
 }
 
+// Persistence sugar over the data/ store (design 2026-08-05 §5). Pure wrapper
+// over the same fetch() the interceptor already routes through the host — no
+// extra penpal method. Its real point is detectability: an artifact can test
+// `window.twicc?.data`, while nothing advertises that a PUT would be accepted.
+function installDataApi() {
+    const data = {
+        async get(name) {
+            const res = await fetch('data/' + name)
+            if (res.status === 404) return null
+            if (!res.ok) throw new Error(`twicc.data.get: ${res.status}`)
+            return await res.json()
+        },
+        async set(name, value) {
+            const res = await fetch('data/' + name, {
+                method: 'PUT',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(value),
+            })
+            if (!res.ok) {
+                let detail = ''
+                try { detail = (await res.json()).error || '' } catch { /* not JSON */ }
+                throw new Error(`twicc.data.set: ${res.status}${detail ? ` (${detail})` : ''}`)
+            }
+        },
+        async list() {
+            const res = await fetch('data/')
+            if (res.status === 404) return []
+            if (!res.ok) throw new Error(`twicc.data.list: ${res.status}`)
+            return (await res.json()).files
+        },
+        async remove(name) {
+            const res = await fetch('data/' + name, { method: 'DELETE' })
+            if (res.status === 404) return false
+            if (!res.ok) throw new Error(`twicc.data.remove: ${res.status}`)
+            return true
+        },
+    }
+    window.twicc = Object.assign(window.twicc || {}, { data })
+}
+
 function main() {
     // A top-level document (opened directly, without a broker wrapper) has no host
     // and never will — fail fast instead of retrying against ourselves.
@@ -128,6 +168,11 @@ function main() {
         interceptors: browserInterceptors,
     })
     interceptor.apply()
+
+    // Exposed only once the interceptor is armed: every call it makes is a
+    // fetch() that MUST be routed through the host (the CSP blocks the native
+    // one), so advertising the API earlier could hand out a broken store.
+    installDataApi()
 
     interceptor.on('request', async ({ request, controller }) => {
         let host

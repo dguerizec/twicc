@@ -69,6 +69,11 @@ const { brokerPrompt, onBrokerDecision } = useArtifactBroker(
         mode: props.mode,
         proxyUrl: props.proxyUrl,
         onBlocked: props.mode === 'share' ? noteBlockedHost : undefined,
+        // The dedicated page serves bookmarks, which live under a session's
+        // artifacts root by construction → data/ writes are silent (design
+        // 2026-08-05 §6). Share mode never reaches the write path: the host
+        // rejects it before the gate.
+        inArtifactsRoot: true,
     }),
     [iframeRef],
 )
