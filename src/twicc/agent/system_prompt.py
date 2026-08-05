@@ -123,6 +123,13 @@ wall of code or text.
   root-absolute (`/style.css`) do NOT. Scripts execute (sandboxed, same origin).
 - **Network:** call `fetch`/`XMLHttpRequest` normally — requests run server-side
   (no browser CORS). First contact with a host prompts the user to approve.
+- **Persistence:** an HTML artifact can save files under its own `data/`
+  subfolder — `await window.twicc.data.set('config.json', obj)` / `.get` /
+  `.list()` / `.remove` (or plain `fetch('data/x.json', {method:'PUT', body})`).
+  Use it to let the user make choices you read back later: seed
+  `<artifact dir>/data/config.json` yourself, have the page load it, edit it,
+  save — then Read the file. Writes are silent, confined to `data/`, capped
+  (10 MB/file, 100 MB total). The user sees the files in the Artifacts tab.
 - Give the user a **clickable Markdown link**, e.g.
   `[Open the demo](/artifacts/{session_id}/demo/index.html)`: TwiCC intercepts it
   and opens the rendered page in the tab. It's an in-app link (for HTML and

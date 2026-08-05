@@ -262,6 +262,9 @@ function onHide(e) { if (e.target === dialogRef.value) emit('close') }
             </template>
 
             <template v-else-if="isHtmlArtifact">
+                <p class="net-hint">
+                    The snapshot includes any files the artifact saved under its data/ folder.
+                </p>
                 <wa-callout v-if="allowedHostList.length" variant="neutral">
                     Viewers will be able to reach these hosts (already allowed on this artifact):
                     <ul><li v-for="h in allowedHostList" :key="h"><code>{{ h }}</code></li></ul>

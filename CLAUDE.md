@@ -120,6 +120,8 @@ Interactive HTML artifacts make outbound network calls with a **plain `fetch()`*
 
 **One shell, both run contexts.** The in-SPA preview (`FilePane.vue`) and the dedicated page (`/artifacts/<id>/`, a standalone Vite bundle under `frontend/src/artifact-shell/`) mount the **same** broker host + `ArtifactBrokerPrompt.vue` via `composables/useArtifactBroker.js` — never re-implement one side. Backend: `twicc/artifacts/broker_html.py` (shim+CSP wrap, the trusted shell page) + `views.artifact_serve`/`artifact_shell_asset`. The shim + shell + browser-companion + share-session bundles are **not HMR'd** — `cd frontend && npm run build` after editing `artifact-broker/*`, `artifact-shell/*`, `browser-companion/*`, `share-session/*`/`share-recent/*` (the standalone read-only share viewer, design §8) or `element-select/*` (the shared element picker, bundled into the companion and lazy-imported by the SPA for the artifact HTML preview's select mode).
 
+**Artifact data persistence.** An HTML artifact may write under its own `data/` subfolder — plain `fetch` PUT/DELETE (+ dir-GET listing) through the broker's own-asset path, gated server-side by the host-set `X-Twicc-Artifact-Doc` header; `window.twicc.data` sugar in the shim. Silent under an artifacts root, tab-lifetime prompt elsewhere; shares stay read-only; a page's own `data/` writes never reload its preview. Design: `docs/plans/2026-08-05-artifact-data-persistence-design.md`.
+
 ## Python Patterns
 
 - **`NamedTuple`** for simple immutable data (return values, decisions, configs) — works with all field types incl. lists; prefer over `@dataclass` when mutability isn't needed.
