@@ -501,7 +501,9 @@ let artifactFlushTimer = null
  * common ancestor below the artifacts root. Changes under the page's own data/
  * subfolder (design 2026-08-05 §7) are excluded: that's the artifact's own state
  * store, and reloading on its own writes would wipe the very state it persists —
- * those changes still refresh the tree, just never the preview. Paths are
+ * those changes still refresh the tree, just never the preview. The bare data/
+ * directory path itself is excluded too — watchfiles emits an event for it on
+ * its very first creation, alongside the file written inside it. Paths are
  * relative to the root (forward slashes).
  *
  * @param {string} renderedRel — the previewed HTML file, relative to the root
@@ -514,7 +516,7 @@ function changeAffectsHtmlPage(renderedRel, paths) {
     // persists. data/ changes still refresh the tree, never the preview.
     const pageDir = renderedSegments.slice(0, -1).join('/')
     const dataPrefix = (pageDir ? pageDir + '/' : '') + 'data/'
-    const relevant = paths.filter(p => !p.startsWith(dataPrefix))
+    const relevant = paths.filter(p => p !== dataPrefix.slice(0, -1) && !p.startsWith(dataPrefix))
     if (renderedSegments.length <= 1) return relevant.length > 0  // page at the root → any non-data change
     const topFolder = renderedSegments[0]
     return relevant.some(p => {
