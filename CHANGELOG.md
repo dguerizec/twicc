@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). As a small deviation, each release opens with a one-line **Summary** recapping its highlights, and some entries include illustrative screenshots in nested sub-lists.
 
+## [Unreleased]
+
+### Changed
+
+- **Claude Agent SDK** — Upgrade from 0.2.124 to 0.2.130 (bundled Claude Code CLI: 2.1.216 → 2.1.222)
+
 ## [1.92.7] - 2026-07-21
 
 ### Summary
