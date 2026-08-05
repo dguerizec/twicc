@@ -171,6 +171,11 @@ MIDDLEWARE = [
     "twicc.auth.middleware.RpcTokenAuthMiddleware",
 ]
 
+# Artifact data-store PUTs (design 2026-08-05 §4) carry up to 10 MB bodies;
+# Django's 2.5 MB default would reject them at request.body. Kept modestly
+# above the per-file cap so the data_store's own 413 stays the visible limit.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 12 * 1024 * 1024
+
 # Password protection
 # Set TWICC_PASSWORD_HASH in .env to enable password protection.
 # Use `twicc password set` (or `uvx twicc password set`, etc.) to set it

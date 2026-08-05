@@ -6,6 +6,7 @@ import os
 import re
 from bisect import bisect_left
 from datetime import datetime, timedelta
+from urllib.parse import unquote
 
 from django.conf import settings
 from django.db import IntegrityError
@@ -2112,19 +2113,103 @@ def _normalize_raw_filepath(filepath: str) -> str:
     return os.path.normpath("/" + filepath.lstrip("/"))
 
 
+def _doc_dir_from_header(request, *, prefix: str) -> str | None:
+    """Filesystem directory of the serving document, from the host-set
+    ``X-Twicc-Artifact-Doc`` header (its URL pathname). ``None`` when absent
+    or not under this route's own ``prefix`` — a doc served by another route
+    (or a forged value) never authorizes a write here.
+
+    The header is trusted because the broker host overwrites it before
+    forwarding, so an artifact cannot forge it; a user forging it by hand gains
+    nothing the standalone file-modify endpoints do not already grant (same
+    reasoning as the broker design §6.4).
+    """
+    raw = request.headers.get("X-Twicc-Artifact-Doc")
+    if not raw:
+        return None
+    doc_path = unquote(raw)
+    if not doc_path.startswith(prefix):
+        return None
+    return os.path.dirname(_normalize_raw_filepath(doc_path[len(prefix):]))
+
+
+def _dispatch_data_request(request, doc_dir: str, target: str):
+    """Handle a ``data/`` store request on an artifact-serving route
+    (design 2026-08-05 §3/§4): ``PUT``/``DELETE`` on a file, ``GET`` on the
+    ``data/`` tree (the listing). Called only when the ``X-Twicc-Artifact-Doc``
+    header checked out; ``doc_dir`` is the serving document's directory,
+    already validated by the caller against the route's own confinement — this
+    helper only enforces the ``data/`` boundary. ``target`` is the caller's
+    already-normalized filesystem path for the request. Returns ``None`` when
+    the request is a plain file ``GET``/``HEAD`` (caller keeps its existing
+    raw-serving path). Sync (file I/O): call via ``asyncio.to_thread``.
+    """
+    from twicc.artifacts import data_store
+
+    data_root = os.path.join(os.path.realpath(doc_dir), "data")
+    if request.method in ("GET", "HEAD"):
+        resolved = os.path.realpath(target)
+        # The data/ root itself lists even when it does not exist yet (empty
+        # store — the artifact probes before its first write); an existing
+        # subdirectory under it lists its own subtree. Files stay raw-served.
+        if resolved == data_root or (
+            resolved.startswith(data_root + os.sep) and os.path.isdir(resolved)
+        ):
+            payload, status = data_store.list_data_dir(resolved)
+            return JsonResponse(payload, status=status)
+        return None
+    resolved = data_store.resolve_data_target(doc_dir, target)
+    if resolved is None:
+        return JsonResponse({"error": "outside_data"}, status=403)
+    if request.method == "PUT":
+        payload, status = data_store.write_data_file(data_root, resolved, request.body)
+    else:
+        payload, status = data_store.delete_data_file(resolved)
+    return JsonResponse(payload, status=status)
+
+
 async def file_raw(request, project_id, filepath, session_id=None):
     """GET raw file bytes for HTML preview (project / session scope).
 
     Mounted at ``/api/projects/<id>/file-raw/<path:filepath>`` and the
     session-scoped variant. Confinement matches :func:`file_content`: the
     file's directory must be within the project/session allowed base dirs.
+
+    ``PUT``/``DELETE`` (and a ``GET`` on a directory) additionally serve the
+    artifact data store when the host-set ``X-Twicc-Artifact-Doc`` header names
+    a document this route serves — see :func:`_dispatch_data_request`.
     """
     from twicc.file_tree import validate_path
 
-    if request.method not in ("GET", "HEAD"):
-        return HttpResponseNotAllowed(["GET", "HEAD"])
+    if request.method not in ("GET", "HEAD", "PUT", "DELETE"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "PUT", "DELETE"])
 
     normalized = _normalize_raw_filepath(filepath)
+
+    # The data-store dispatch runs BEFORE the target's own validate_path: the
+    # latter requires the target's directory to already exist, which the very
+    # first write into a fresh ``data/`` tree cannot satisfy. Confinement is not
+    # weakened — validate_path is applied to the *document's* directory, and the
+    # dispatch then requires the target to live under ``<doc dir>/data/``, hence
+    # transitively inside the same allowed base dirs.
+    if session_id:
+        prefix = f"/api/projects/{project_id}/sessions/{session_id}/file-raw/"
+    else:
+        prefix = f"/api/projects/{project_id}/file-raw/"
+    doc_dir = _doc_dir_from_header(request, prefix=prefix)
+    if request.method in ("PUT", "DELETE") and doc_dir is None:
+        # Writes are only ever authorized by a document this route serves.
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    if doc_dir is not None:
+        _doc_session, _doc_dir_path, doc_error = await sync_to_async(validate_path)(
+            project_id, doc_dir, session_id=session_id
+        )
+        if doc_error:
+            return doc_error
+        handled = await asyncio.to_thread(_dispatch_data_request, request, doc_dir, normalized)
+        if handled is not None:
+            return handled
+
     _session, _dir_path, error = await sync_to_async(validate_path)(
         project_id, os.path.dirname(normalized), session_id=session_id
     )
@@ -2146,11 +2231,15 @@ async def standalone_file_raw(request, root_b64, filepath):
     Mounted at ``/api/file-raw/<root_b64>/<path:filepath>``. ``root_b64`` is the
     base64url-encoded confinement root (the Artifacts tab passes the session's
     artifacts dir). Confinement mirrors :func:`standalone_file_content`.
+
+    ``PUT``/``DELETE`` (and a ``GET`` on a directory) additionally serve the
+    artifact data store when the host-set ``X-Twicc-Artifact-Doc`` header names
+    a document this route serves — see :func:`_dispatch_data_request`.
     """
     import base64
 
-    if request.method not in ("GET", "HEAD"):
-        return HttpResponseNotAllowed(["GET", "HEAD"])
+    if request.method not in ("GET", "HEAD", "PUT", "DELETE"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "PUT", "DELETE"])
 
     try:
         padding = "=" * (-len(root_b64) % 4)
@@ -2171,6 +2260,18 @@ async def standalone_file_raw(request, root_b64, filepath):
         resolved = os.path.realpath(normalized)
         if resolved != resolved_root and not resolved.startswith(resolved_root + os.sep):
             raise Http404("File not found")
+
+    doc_dir = _doc_dir_from_header(request, prefix=f"/api/file-raw/{root_b64}/")
+    if request.method in ("PUT", "DELETE") and doc_dir is None:
+        # Writes are only ever authorized by a document this route serves.
+        return HttpResponseNotAllowed(["GET", "HEAD"])
+    if doc_dir is not None:
+        # The doc itself must satisfy the same confinement as the target.
+        if validate_standalone_root(doc_dir, root) is not None:
+            return JsonResponse({"error": "doc_outside_root"}, status=403)
+        handled = await asyncio.to_thread(_dispatch_data_request, request, doc_dir, normalized)
+        if handled is not None:
+            return handled
 
     from twicc.artifacts.broker_html import is_artifact_document_request
 
@@ -3761,9 +3862,13 @@ async def artifact_serve(request, bookmark_id, asset=""):
     unauthenticated requests to the standalone password page). Path confinement
     and byte serving reuse the same helpers as the file-raw endpoints, so nothing
     about rendering is duplicated here.
+
+    ``PUT``/``DELETE`` (and a ``GET`` on a directory) additionally serve the
+    artifact data store when the host-set ``X-Twicc-Artifact-Doc`` header names
+    this bookmark's document — see :func:`_dispatch_data_request`.
     """
-    if request.method not in ("GET", "HEAD"):
-        return HttpResponseNotAllowed(["GET", "HEAD"])
+    if request.method not in ("GET", "HEAD", "PUT", "DELETE"):
+        return HttpResponseNotAllowed(["GET", "HEAD", "PUT", "DELETE"])
     try:
         bookmark = await ArtifactBookmark.objects.aget(id=bookmark_id)
     except ArtifactBookmark.DoesNotExist:
@@ -3773,6 +3878,36 @@ async def artifact_serve(request, bookmark_id, asset=""):
     from twicc.core.services.artifact_bookmark_mutation import confined_artifact_path
 
     abs_root = confined_artifact_path(bookmark.session_id, bookmark.relative_path)
+
+    if request.method in ("PUT", "DELETE") or (
+        request.method in ("GET", "HEAD") and request.headers.get("X-Twicc-Artifact-Doc")
+    ):
+        # The doc dir is intrinsic here (the bookmarked file's own directory);
+        # the header only proves the request comes from THIS bookmark's document.
+        doc_dir_fs = None
+        if _doc_dir_from_header(request, prefix=f"/artifacts/{bookmark_id}/") is not None:
+            doc_dir_fs = os.path.dirname(abs_root) if abs_root else None
+        is_write = request.method in ("PUT", "DELETE")
+        if is_write and doc_dir_fs is None:
+            return HttpResponseNotAllowed(["GET", "HEAD"])
+        if asset in ("", ARTIFACT_INNER_DOC_PATH):
+            # The document itself, never part of the data store: a write here is
+            # refused outright instead of falling through to the serving path.
+            if is_write:
+                return JsonResponse({"error": "outside_data"}, status=403)
+        elif doc_dir_fs is not None:
+            target = confined_artifact_path(
+                bookmark.session_id, os.path.join(os.path.dirname(bookmark.relative_path), asset)
+            )
+            # confined_artifact_path realpaths a possibly-not-yet-existing file
+            # fine; None here means escape from the session's artifacts dir.
+            if is_write and target is None:
+                return JsonResponse({"error": "outside_root"}, status=403)
+            if target is not None:
+                handled = await asyncio.to_thread(_dispatch_data_request, request, doc_dir_fs, target)
+                if handled is not None:
+                    return handled
+
     if asset == "":
         # Root request. An HTML artifact gets the trusted *shell* page (it iframes
         # the artifact's inner doc + mounts the broker), so the dedicated page
