@@ -32,6 +32,7 @@ import FetchErrorPanel from '../components/ui/FetchErrorPanel.vue'
 import SettingsPopover from '../components/app/SettingsPopover.vue'
 import CommandPaletteButton from '../components/app/CommandPaletteButton.vue'
 import ProjectBadge from '../components/project/ProjectBadge.vue'
+import ProjectMark from '../components/project/ProjectMark.vue'
 import ProjectSelectorRow from '../components/project/ProjectSelectorRow.vue'
 import WorktreeSelectorRows from '../components/project/WorktreeSelectorRows.vue'
 import WorktreePickerRows from '../components/project/WorktreePickerRows.vue'
@@ -711,6 +712,12 @@ const isCurrentProjectStale = computed(() => {
     if (isAllProjectsMode.value) return false
     const project = store.getProject(projectId.value)
     return project?.stale ?? false
+})
+
+// Selected project icon for display in the closed select (null → color dot).
+const selectedProjectIconUrl = computed(() => {
+    if (isAllProjectsMode.value) return null
+    return store.resolvedProjectIcons[projectId.value] || null
 })
 
 // Selected project color for display in the closed select
@@ -1756,7 +1763,12 @@ function updateSidebarClosedClass(closed) {
                             size="small"
                             class="project-selector-trigger"
                         >
-                            <span v-if="!isAllProjectsMode" class="selected-project-dot" :style="selectedProjectColor ? { '--dot-color': selectedProjectColor } : null"></span>
+                            <ProjectMark
+                                v-if="!isAllProjectsMode"
+                                class="selected-project-mark"
+                                :icon-url="selectedProjectIconUrl"
+                                :color="selectedProjectColor"
+                            />
                             <span v-if="isWorkspaceMode" class="project-selector-label"><wa-icon name="layer-group" auto-width :style="activeWorkspace?.color ? { color: activeWorkspace.color } : null"></wa-icon> {{ activeWorkspace?.name }}</span>
                             <span v-else-if="isAllProjectsMode" class="project-selector-label">All Projects</span>
                             <span v-else-if="isCurrentProjectWorktree" class="project-selector-label"><WorktreeBadge :project-id="projectId" :dot="false" gap="var(--wa-space-2xs)" /></span>
@@ -2798,15 +2810,11 @@ wa-split-panel::part(divider) {
     }
 }
 
-.selected-project-dot {
-    width: 0.75em;
-    height: 0.75em;
-    border-radius: 50%;
-    flex-shrink: 0;
-    border: 1px solid;
-    box-sizing: border-box;
-    background-color: var(--dot-color, transparent);
-    border-color: var(--dot-color, var(--wa-color-border-quiet));
+/* Project mark in the closed selector: the icon at the usual list size, the
+   fallback dot at the trigger's historical 0.75em. */
+.selected-project-mark {
+    --project-mark-icon-size: var(--wa-space-m);
+    --project-mark-size: 0.75em;
 }
 
 /* Tighter right padding for every list row (projects, workspaces, worktree
