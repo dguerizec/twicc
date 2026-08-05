@@ -496,19 +496,28 @@ let artifactFlushTimer = null
 /**
  * Whether a changed file should reload the currently-previewed HTML page. An
  * HTML page pulls its assets (CSS/JS/images) from its own folder and below, so
- * reload when the page sits directly at the artifacts root (any change), or when
- * a changed file shares the page's top-level folder — i.e. the two have a common
- * ancestor below the artifacts root. Paths are relative to the root (forward
- * slashes).
+ * reload when the page sits directly at the artifacts root (any non-data change),
+ * or when a changed file shares the page's top-level folder — i.e. the two have a
+ * common ancestor below the artifacts root. Changes under the page's own data/
+ * subfolder (design 2026-08-05 §7) are excluded: that's the artifact's own state
+ * store, and reloading on its own writes would wipe the very state it persists —
+ * those changes still refresh the tree, just never the preview. Paths are
+ * relative to the root (forward slashes).
  *
  * @param {string} renderedRel — the previewed HTML file, relative to the root
  * @param {string[]} paths — changed files, relative to the root
  */
 function changeAffectsHtmlPage(renderedRel, paths) {
     const renderedSegments = renderedRel.split('/')
-    if (renderedSegments.length <= 1) return true  // page at the root → any change
+    // A page's own data/ store (design 2026-08-05 §7): the artifact writing its
+    // state must NOT reload itself — the save would wipe the very state it
+    // persists. data/ changes still refresh the tree, never the preview.
+    const pageDir = renderedSegments.slice(0, -1).join('/')
+    const dataPrefix = (pageDir ? pageDir + '/' : '') + 'data/'
+    const relevant = paths.filter(p => !p.startsWith(dataPrefix))
+    if (renderedSegments.length <= 1) return relevant.length > 0  // page at the root → any non-data change
     const topFolder = renderedSegments[0]
-    return paths.some(p => {
+    return relevant.some(p => {
         const segments = p.split('/')
         return segments.length > 1 && segments[0] === topFolder
     })
