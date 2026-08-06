@@ -7,14 +7,11 @@
 // run that appears live (a new tab) auto-activates, but only as it's added (a
 // manual switch to another run isn't undone by later refetches).
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
 import WorkflowRunDetail from './WorkflowRunDetail.vue'
 import TabBar from '../ui/TabBar.vue'
 import { generateTemplates, sha256Hex, extractMeta } from '../../utils/workflowTemplates'
 import { useWorkflowRunsStore } from '../../stores/workflowRuns'
 
-const router = useRouter()
-const route = useRoute()
 const workflowRunsStore = useWorkflowRunsStore()
 
 const props = defineProps({
@@ -25,6 +22,9 @@ const props = defineProps({
     // True while the Workflows tab is the shown tab in its region.
     active: { type: Boolean, default: false },
 })
+
+// The active run to reflect in the URL — the owner performs the navigation (see syncUrl).
+const emit = defineEmits(['navigate'])
 
 const workflows = ref([])
 const loading = ref(false)
@@ -198,13 +198,15 @@ function onTabShow(event) {
 // a real navigation (replace → no history spam). The route's runId param flows
 // back as focusRunId, keeping clicks and external "View Workflow" links in sync.
 // No-op when the URL already targets this run.
+//
+// The navigation itself is delegated to the owner (like every other tool pane):
+// it holds the frame — current sidebar project filter + ?workspace= — which this
+// pane has no business rewriting. Building the location here from `props.projectId`
+// (the session's OWN project) used to switch the sidebar to it and drop the
+// workspace whenever the session was being viewed cross-filter.
 function syncUrl(runId) {
-    if (route.params.runId === runId) return
-    const name = route.name?.startsWith('projects-') ? 'projects-session-workflows' : 'session-workflows'
-    router.replace({
-        name,
-        params: { projectId: props.projectId, sessionId: props.sessionId, runId },
-    }).catch(() => {})
+    if (props.focusRunId === runId) return
+    emit('navigate', { runId })
 }
 
 // Select the targeted run's tab (from a "View Workflow" click). If it isn't in

@@ -32,7 +32,10 @@ export function gotoChatFooterPanel(route, router, eventName) {
         dispatch()
     } else {
         const chatRouteName = route.name.startsWith('projects-session') ? 'projects-session' : 'session'
-        router.push({ name: chatRouteName, params: route.params }).then(dispatch)
+        // `query` carried explicitly: the guard only re-propagates ?workspace= when the target
+        // project belongs to it, so a session viewed from outside the workspace would otherwise
+        // lose it on the way to its own Chat tab.
+        router.push({ name: chatRouteName, params: route.params, query: route.query }).then(dispatch)
     }
 }
 

@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Navigation inside a session** — Moving between a session's tabs (chat, an agent, Files…) no longer sends the sidebar back to another project, and keeps the active workspace.
 - **Project icons** — The project selector in the sidebar now shows the current project's icon, like the rest of the app, instead of only its color dot.
 
 ## [1.92.8] - 2026-08-05

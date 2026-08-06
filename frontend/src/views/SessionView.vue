@@ -296,24 +296,40 @@ function insertTextAtCursor(text, options) {
 provide('insertTextAtCursor', insertTextAtCursor)
 
 // Current session from route params
-// IMPORTANT: these refs are captured at creation time (not reactive computeds
+// IMPORTANT: sessionId is captured at creation time (not a reactive computed
 // from route.params) because with KeepAlive, the route changes globally when
-// switching sessions. If they were reactive, ALL cached SessionView instances
+// switching sessions. If it were reactive, ALL cached SessionView instances
 // would see the NEW session's params, breaking deactivation hooks and item lookups.
 // The KeepAlive key (route.params.sessionId) ensures each instance gets the correct
 // value at creation time and keeps it permanently.
 //
-// filterProjectId is the project the sidebar filter was on when this SessionView
-// was created. It is used only by router.push calls that rebuild the current
-// URL, so that switching tabs (main / subagent / files / git / terminal) never
-// changes the sidebar filter — even when the session lives in a different
-// project than the filter (cross-filter artifact bookmarks, future pin cross-filter).
+// filterProjectId is the project the sidebar filter is on for THIS session's route.
+// It is used only by router.push calls that rebuild the current URL, so that
+// switching tabs (main / subagent / files / git / terminal) never changes the
+// sidebar filter — even when the session lives in a different project than the
+// filter (cross-filter pinned/active sessions, artifact bookmarks).
+// Unlike sessionId it must NOT be frozen: the KeepAlive cache is keyed by session
+// id alone, so one instance is re-entered under whatever filter is current at the
+// time (leave the session, switch project, reopen it from the new project's
+// sidebar). A stale value made every intra-session navigation — tab click, tab
+// close, tab href — rewrite the URL with the project of the FIRST visit, yanking
+// the sidebar back to it. The watcher below keeps it on the live route.
 //
 // projectId (declared further down, after `session`) is the project the session
 // belongs to, driven by `session.project_id`. It is used for API calls, code-
 // comments lookups, and WS payloads.
 const filterProjectId = ref(route.params.projectId)
 const sessionId = ref(route.params.sessionId)
+// Both params are watched, not projectId alone: returning to the session after a
+// detour (project root, another session) usually leaves projectId untouched while
+// only sessionId flips back to ours, so watching the project alone would miss the
+// re-entry. The sessionId guard is what keeps a cached background instance from
+// adopting another session's project (route.params is global under KeepAlive); it
+// also covers the deactivated window, so no onActivated re-sync is needed.
+watch([() => route.params.projectId, () => route.params.sessionId], ([routeProjectId, routeSessionId]) => {
+    if (routeSessionId !== sessionId.value || !routeProjectId) return
+    filterProjectId.value = routeProjectId
+})
 const subagentId = computed(() => route.params.subagentId)
 // Workflow run to focus in the Workflows tab (from .../workflows/<runId>).
 // Scoped to this instance's session — route.params is global under KeepAlive.
@@ -651,6 +667,17 @@ function onTerminalNavigate({ termIndex, replace }) {
     const params = buildTerminalRouteParams({ termIndex })
     rememberToolTabRoute('terminal', params)
     navigateInTab('terminal', params, replace ? 'replace' : 'push')
+}
+
+// The Workflows pane reflects its active run in the URL. Unlike the other panes this
+// navigation can be programmatic (a run appearing live auto-activates its tab), so it
+// is scoped to the session that currently owns the route: a KeepAlive-cached instance
+// whose workflow just produced a new run must not yank the URL onto itself.
+function onWorkflowsNavigate({ runId }) {
+    if (!isActive.value) return
+    if (route.params.sessionId !== sessionId.value) return
+    cancelPaneFocus()
+    navigateInTab('workflows', { runId }, 'replace')
 }
 
 const TOOL_TAB_IDS = ['files', 'artifacts', 'git', 'terminal', 'orchestration', 'plan', 'tasks', 'workflows', 'browser']
@@ -2441,6 +2468,7 @@ onBeforeUnmount(() => {
                         :project-id="session.project_id"
                         :focus-run-id="workflowFocusRunId"
                         :active="isActive && isToolTabShown('workflows')"
+                        @navigate="onWorkflowsNavigate"
                     />
                 </div>
             </Teleport>
