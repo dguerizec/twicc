@@ -9,8 +9,8 @@ const props = defineProps({
     // resolver gutter: { edge, x, y, w, h, items: [{ dockId, tabs, action, anchor }] }
     gutter: { type: Object, required: true },
     openOverlayEdge: { type: String, default: null },
-    // (item) -> the active tab id of a single rail dock — used by empty-area clicks so they act on the
-    // dock's active (remembered) tab, exactly like clicking its active chip. See dockActiveTabId.
+    // (item) -> the active tab id of a single rail dock. Marks that dock's active chip, and used by
+    // empty-area clicks so they act on it, exactly like clicking the chip itself. See dockActiveTabId.
     resolveActiveTab: { type: Function, default: null },
     tabHref: { type: Function, required: true },
 })
@@ -23,20 +23,30 @@ const style = computed(() => ({
     height: `${props.gutter.h}px`,
 }))
 
-// Flatten items into per-tab icons, split into the start- and end-anchored groups.
+// The tab a rail dock is currently on — the chip it marks, and the one the rail's empty area acts on.
+function activeTabOf(item) {
+    return props.resolveActiveTab ? props.resolveActiveTab(item) : item.tabs[0]?.id
+}
+
+// Flatten items into per-tab icons, split into the start- and end-anchored groups. Each entry carries
+// whether it is its dock's active tab, so exactly one chip per dock is marked.
 function iconsFor(anchor) {
     const out = []
     for (const item of props.gutter.items) {
         if (item.anchor !== anchor) continue
-        for (const tab of item.tabs) out.push({ item, tab })
+        const activeId = activeTabOf(item)
+        for (const tab of item.tabs) out.push({ item, tab, active: tab.id === activeId })
     }
     return out
 }
 const startIcons = computed(() => iconsFor('start'))
 const endIcons = computed(() => iconsFor('end'))
 
+// The peek is open on THIS chip: its edge holds the open overlay and the chip is its dock's active tab
+// (the overlay shows exactly that tab). Both halves are needed — an edge can hold two docks, and a dock
+// several tabs, all of which would otherwise read as open.
 function isOpen(entry) {
-    return entry.item.action === 'overlay' && props.openOverlayEdge === props.gutter.edge
+    return entry.item.action === 'overlay' && props.openOverlayEdge === props.gutter.edge && entry.active
 }
 function verb(entry) {
     if (entry.item.action === 'swap') return 'show this column'
@@ -154,7 +164,7 @@ onUnmounted(cancelPending)
                 class="g-chip"
                 :data-layout-tab-id="entry.tab.id"
                 :data-layout-dock-id="entry.item.dockId"
-                :class="{ open: isOpen(entry) }"
+                :class="{ active: entry.active, open: isOpen(entry) }"
                 :title="chipTitle(entry)"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"
                 @plain-click="onClick(entry)"
@@ -172,7 +182,7 @@ onUnmounted(cancelPending)
                 class="g-chip"
                 :data-layout-tab-id="entry.tab.id"
                 :data-layout-dock-id="entry.item.dockId"
-                :class="{ open: isOpen(entry) }"
+                :class="{ active: entry.active, open: isOpen(entry) }"
                 :title="chipTitle(entry)"
                 :aria-label="`${entry.tab.label} — ${verb(entry)}`"
                 @plain-click="onClick(entry)"
@@ -276,7 +286,14 @@ onUnmounted(cancelPending)
 .g-chip:hover {
     color: inherit;
 }
-.g-chip.open {
+/* Two marks, one chip per rail dock. `active` = the tab the dock is on (always shown, open or not):
+   full-strength text, no fill, so a resting rail stays calm. `open` = that tab is currently peeking as
+   an overlay: the fill makes it the only chip on the rail that reads as pressed. */
+.g-chip.active {
     color: inherit;
+}
+.g-chip.open {
+    color: var(--wa-color-brand-on-quiet);
+    background: var(--wa-color-brand-fill-quiet);
 }
 </style>

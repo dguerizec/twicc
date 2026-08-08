@@ -121,11 +121,15 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     }
 
     // The active tab for a single dock sitting in the rail (gutter), from its dockId + the tabs it
-    // holds. No route override (a railed dock never owns the route); memory (activeByGroup, keyed by the
-    // dockId when un-merged) then first content — mirrors regionActiveTabId. Lets the gutter's empty
-    // area act on "the active tab" of the dock it points at.
+    // holds. Mirrors regionActiveTabId: route override, then memory (activeByGroup, keyed by the dockId
+    // when un-merged), then first content. The route override matters for the one case where a railed
+    // dock DOES own the route — its tab peeking as an overlay (the overlay is derived from the route):
+    // the rail then marks that tab as active and its empty area acts on it, so a click closes the peek.
+    // Lets the gutter mark, and its empty area act on, "the active tab" of the dock it points at.
     function dockActiveTabId(dockId, tabs) {
         if (!tabs || !tabs.length) return null
+        const routed = routeActiveTabId.value
+        if (routed && tabs.some((t) => t.id === routed)) return routed
         const wanted = intention.value.activeByGroup[dockId]
         if (wanted && tabs.some((t) => t.id === wanted)) return wanted
         const firstContent = tabs.find((t) => !t.optional || t.hasContent)
