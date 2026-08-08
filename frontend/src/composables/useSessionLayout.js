@@ -46,7 +46,20 @@ export function useSessionLayout({ sessionId, containerRef, tabs, routeActiveTab
     const settings = useSettingsStore()
 
     // ---- Measure ----
-    const { width, height } = useElementSize(containerRef)
+    // The raw measure drops to 0×0 while the session is deactivated (KeepAlive detaches the
+    // DOM), which would collapse the resolver to its mobile 'tabs' fallback and tear the whole
+    // dock layout down — then back up on return. A cached session is not being looked at, so
+    // there is nothing to re-resolve: latch the last size actually seen on screen and let the
+    // layout stay exactly as the user left it.
+    const { width: liveWidth, height: liveHeight } = useElementSize(containerRef)
+    const width = ref(0)
+    const height = ref(0)
+    watch([liveWidth, liveHeight], ([w, h]) => {
+        if (w > 0 && h > 0) {
+            width.value = w
+            height.value = h
+        }
+    }, { immediate: true })
     const measured = computed(() => width.value > 0 && height.value > 0)
 
     // ---- Intention (null-safe; mutations go through store actions only) ----

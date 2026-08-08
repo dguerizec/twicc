@@ -132,10 +132,15 @@ export function useVirtualScroll(options) {
      *   if it were a plain variable, Vue wouldn't track it as a dependency, and
      *   setting suspended=false in resume() would NOT re-trigger the watchEffect,
      *   leaving renderRange frozen and items unrendered.
-     * - `savedAnchor`: { index, key, offset } — the first visible item and pixel offset into it
+     * - `savedAnchors`: [{ index, key, offset }] — the item at the top of the viewport and the
+     *   few above it, each with its OWN offset measured from the same scrollTop. Several
+     *   candidates because the items array can be recomputed shorter while suspended (a
+     *   completed agent turn folds items into a collapsible group, conversation mode drops
+     *   the previous assistant message, a synthetic item is retired…): whichever candidate
+     *   survived restores the exact same position, since all offsets share one origin.
      */
     const suspended = ref(false)
-    let savedAnchor = null
+    let savedAnchors = null
     let pendingResume = false
     // When the container is hidden by a parent (e.g., wa-tab-panel display:none),
     // the scroller auto-suspends to prevent scrollTop corruption from browser reset.
@@ -143,6 +148,28 @@ export function useVirtualScroll(options) {
     // (KeepAlive deactivation), so we know to auto-resume when the container
     // becomes visible again.
     let autoSuspended = false
+
+    /**
+     * RAF handle of a pending anchor re-application (see restoreSavedAnchor).
+     */
+    let resumeRetryHandle = null
+
+    /**
+     * Bumped by every explicit navigation (scrollToIndex/scrollToTop/scrollToBottom/
+     * scrollToAnchor). A pending anchor restore compares it across frames and gives up
+     * when it changed: an explicit scroll is a newer intent than the position being restored.
+     */
+    let explicitScrollSeq = 0
+
+    /**
+     * How many frames the anchor restore keeps re-applying while the DOM refuses it.
+     */
+    const RESUME_RETRY_FRAMES = 8
+
+    /**
+     * How many fallback anchor candidates are captured on suspend (see savedAnchors).
+     */
+    const ANCHOR_CANDIDATES = 5
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Computed: Positions
@@ -627,6 +654,8 @@ export function useVirtualScroll(options) {
         const posArray = positions.value
         if (index < 0 || index >= posArray.length) return
 
+        explicitScrollSeq++
+
         const pos = posArray[index]
         let targetScrollTop
 
@@ -677,6 +706,7 @@ export function useVirtualScroll(options) {
         const container = containerRef.value
         if (!container) return
 
+        explicitScrollSeq++
         isProgrammaticScroll = true
 
         if (behavior === 'smooth') {
@@ -704,6 +734,7 @@ export function useVirtualScroll(options) {
 
         const targetScrollTop = Math.max(0, totalHeight.value - viewportHeight.value)
 
+        explicitScrollSeq++
         isProgrammaticScroll = true
 
         if (behavior === 'smooth') {
@@ -827,6 +858,9 @@ export function useVirtualScroll(options) {
      * is required instead of an automatic resume from updateViewportHeight().
      */
     function suspend() {
+        // A restore from the previous cycle is moot: this suspension re-captures the anchor.
+        cancelResumeRetry()
+
         if (suspended.value) {
             // Already suspended (e.g., auto-suspended from tab switch).
             // Clear autoSuspended so that a KeepAlive resume() is required
@@ -839,13 +873,21 @@ export function useVirtualScroll(options) {
         if (posArray.length > 0) {
             const currentScrollTop = scrollTop.value
             const anchorIndex = findIndexAtPosition(currentScrollTop)
-            const anchorItem = posArray[anchorIndex]
-            if (anchorItem) {
-                savedAnchor = {
-                    index: anchorIndex,
-                    key: anchorItem.key,
-                    offset: currentScrollTop - anchorItem.top,
+            if (anchorIndex >= 0) {
+                // The item at the top of the viewport, then the ones above it: an item that
+                // gets folded into a collapsed group has its group head above it, so walking
+                // upwards is what maximizes the chance of finding a survivor.
+                const candidates = []
+                for (let i = anchorIndex; i >= 0 && candidates.length < ANCHOR_CANDIDATES; i--) {
+                    const item = posArray[i]
+                    if (!item) continue
+                    candidates.push({
+                        index: i,
+                        key: item.key,
+                        offset: currentScrollTop - item.top,
+                    })
                 }
+                if (candidates.length > 0) savedAnchors = candidates
             }
         }
 
@@ -860,7 +902,7 @@ export function useVirtualScroll(options) {
      * anchorTop + offset.
      *
      * If the container is not yet visible (e.g., inside a hidden wa-tab-panel),
-     * the resume is deferred: the scroller stays suspended and savedAnchor is
+     * the resume is deferred: the scroller stays suspended and savedAnchors are
      * preserved. The actual resume will happen when updateViewportHeight()
      * receives a positive height (triggered by the ResizeObserver when the
      * tab panel becomes visible).
@@ -884,6 +926,125 @@ export function useVirtualScroll(options) {
     }
 
     /**
+     * Cancel a pending anchor re-application.
+     */
+    function cancelResumeRetry() {
+        if (resumeRetryHandle !== null) {
+            cancelAnimationFrame(resumeRetryHandle)
+            resumeRetryHandle = null
+        }
+    }
+
+    /**
+     * Resolve saved anchor candidates against the current positions.
+     *
+     * Keys win over indices: a surviving key restores the exact position (every candidate
+     * carries its own offset from the same origin), whereas an index only means anything as
+     * long as the list did not shift. The index of the primary candidate is the fallback, and
+     * the end of the list the last resort — reached when the items array was recomputed
+     * shorter than the saved index, which otherwise restores nothing at all and leaves the
+     * scroller at the top.
+     *
+     * @param {Array<{ index: number, key: any, offset: number }>} anchors - Candidates, primary first
+     * @returns {{ item: Object, offset: number } | null}
+     */
+    function resolveAnchors(anchors) {
+        const posArray = positions.value
+        if (posArray.length === 0) return null
+
+        for (const anchor of anchors) {
+            const item = posArray.find(p => p.key === anchor.key)
+            if (item) return { item, offset: anchor.offset }
+        }
+
+        const primary = anchors[0]
+        if (primary.index < posArray.length) {
+            return { item: posArray[primary.index], offset: primary.offset }
+        }
+        return { item: posArray[posArray.length - 1], offset: primary.offset }
+    }
+
+    /**
+     * Write the position of the first resolvable anchor candidate to the container.
+     *
+     * `scrollTop.value` takes the INTENDED position rather than whatever the container
+     * ended up at: the render range derives from it, so the next render produces the
+     * right window — and therefore a tall enough DOM — even when the write was clamped.
+     * The caller realigns the reactive state on the DOM once the restore is settled.
+     *
+     * @param {HTMLElement} container - The scroller container element
+     * @param {Array<{ index: number, key: any, offset: number }>} anchors - Candidates, primary first
+     * @returns {boolean | null} true when the container accepted the position, false when
+     *   the browser clamped it, null when no candidate could be resolved.
+     */
+    function writeAnchor(container, anchors) {
+        const resolved = resolveAnchors(anchors)
+        if (!resolved) return null
+
+        const targetScrollTop = resolved.item.top + resolved.offset
+        if (!Number.isFinite(targetScrollTop)) return null
+
+        const maxScrollTop = Math.max(0, totalHeight.value - viewportHeight.value)
+        const wanted = Math.max(0, Math.min(targetScrollTop, maxScrollTop))
+
+        container.scrollTop = wanted
+        scrollTop.value = wanted
+
+        return Math.abs(container.scrollTop - wanted) <= 1
+    }
+
+    /**
+     * Restore the saved anchors, re-applying them over the next frames until the DOM accepts.
+     *
+     * A single write is not enough. performResume runs before Vue re-renders the scroller,
+     * so the container's scrollHeight is still whatever the previous render left — from
+     * slightly short (stale item heights) to fully collapsed (scrollHeight === clientHeight
+     * right after a KeepAlive reattach). The browser silently clamps a scrollTop write to the
+     * current maximum, 0 in the collapsed case: that is how a session comes back scrolled to
+     * the top. The anchor is therefore released only once the container really sits where we
+     * asked — or once the attempts run out.
+     *
+     * @param {HTMLElement} container - The scroller container element
+     * @param {number} [attempt=0] - Current attempt (0-based)
+     */
+    function restoreSavedAnchor(container, attempt = 0) {
+        cancelResumeRetry()
+        if (!savedAnchors) return
+
+        if (writeAnchor(container, savedAnchors) === true) {
+            savedAnchors = null
+            return
+        }
+
+        if (attempt + 1 >= RESUME_RETRY_FRAMES) {
+            // Give up on the DOM, but keep the INTENDED position in the reactive state:
+            // aligning it on the container here would tell the render range the scroller
+            // sits at whatever the clamp left (0 in the worst case), which re-renders the
+            // top of the list and makes the loss permanent.
+            savedAnchors = null
+            return
+        }
+
+        // Retry on the next frame, by which point Vue has flushed the render and the
+        // spacers describe the real total height.
+        const seqAtSchedule = explicitScrollSeq
+        resumeRetryHandle = requestAnimationFrame(() => {
+            resumeRetryHandle = null
+            const el = containerRef.value
+            if (!el) return
+            // A new suspend/resume cycle owns the anchor now — leave it to it.
+            if (suspended.value) return
+            // An explicit scroll landed in between (auto-scroll to bottom, scrollToKey, …):
+            // that is the newer intent, drop the restore.
+            if (explicitScrollSeq !== seqAtSchedule) {
+                savedAnchors = null
+                return
+            }
+            restoreSavedAnchor(el, attempt + 1)
+        })
+    }
+
+    /**
      * Perform the actual resume: unsuspend, update viewport, restore scroll.
      * Called either directly from resume() when the container is visible,
      * or deferred from updateViewportHeight() when the container becomes visible.
@@ -898,28 +1059,7 @@ export function useVirtualScroll(options) {
         // Update viewportHeight from the now-visible container
         viewportHeight.value = container.clientHeight
 
-        if (savedAnchor) {
-            const posArray = positions.value
-
-            // Try to find the anchor by key first (more reliable if items shifted)
-            let anchorItem = posArray.find(p => p.key === savedAnchor.key)
-
-            // Fallback to index if key not found (item may have been removed)
-            if (!anchorItem && savedAnchor.index < posArray.length) {
-                anchorItem = posArray[savedAnchor.index]
-            }
-
-            if (anchorItem) {
-                const targetScrollTop = anchorItem.top + savedAnchor.offset
-                const maxScrollTop = Math.max(0, totalHeight.value - viewportHeight.value)
-                const clampedScrollTop = Math.max(0, Math.min(targetScrollTop, maxScrollTop))
-
-                container.scrollTop = clampedScrollTop
-                scrollTop.value = clampedScrollTop
-            }
-
-            savedAnchor = null
-        }
+        restoreSavedAnchor(container)
     }
 
     /**
@@ -962,6 +1102,8 @@ export function useVirtualScroll(options) {
 
         const container = containerRef.value
         if (!container) return
+
+        explicitScrollSeq++
 
         const posArray = positions.value
 
@@ -1112,6 +1254,7 @@ export function useVirtualScroll(options) {
             cancelAnimationFrame(rafId)
             rafId = null
         }
+        cancelResumeRetry()
     })
 
     // ═══════════════════════════════════════════════════════════════════════════
