@@ -7,6 +7,7 @@ the motivation (Django-free re-use by lightweight callers like
 
 from __future__ import annotations
 
+from datetime import date
 from typing import NamedTuple
 
 from twicc.core.enums import Provider
@@ -112,8 +113,12 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
 # ``strict``, ``yolo`` and ``auto`` need no entry — they are already native
 # Codex permission modes, so native-first keeps them as-is.
 AGENT_SETTINGS_ALIASES: dict[str, dict[str, str]] = {
+    # ``min``/``fastest``/``cheapest`` point at Luna, not at the 5.4 mini: the
+    # 5.6 price cut took Luna below it ($0.20/$1.20 per Mtok against
+    # $0.75/$4.50), so Luna is now the cheapest model of the catalogue outright
+    # — and the mini retires on 2026-08-31 anyway.
     "selected_model": {
-        "min": "gpt-mini", "fastest": "gpt-mini", "cheapest": "gpt-mini",
+        "min": "gpt-luna", "fastest": "gpt-luna", "cheapest": "gpt-luna",
         "medium": "gpt-terra", "balanced": "gpt-terra",
         "max": "gpt-sol", "strongest": "gpt-sol",
     },
@@ -216,6 +221,17 @@ GPT_56_CONTEXT_WINDOW_TEMPORARILY_REDUCED = True
 # also the pricing-equivalence key ``extract_model_info`` derives from the
 # ``full_name`` (``gpt-5.6-sol`` → family ``gpt-sol``), which keeps the registry
 # and the price table in agreement without a second mapping.
+#
+# ``weight`` is laid out by *tier block*, not by generation — the same shape as
+# Claude Code, where Sonnet 5 sits below Opus 4.5. The 5.6 tiers each open a
+# block and the pre-5.6 models fall in behind the tier they belong to. That
+# placement is what makes the nearest-by-weight fallback land on the right
+# successor when a model retires, with no explicit successor mapping:
+# ``gpt-5.4-mini`` → ``gpt-luna``, matching OpenAI's own migration guidance.
+# ``gpt-5.5`` sits between Terra and ``gpt-5.4``: a retiring ``gpt-5.4`` lands
+# on it rather than on Terra, which is the intended behaviour — someone still
+# on 5.4 declined the newer generations, so the substitution moves them by the
+# smallest possible step.
 MODEL_VERSIONS: list[ModelVersion] = [
     ModelVersion(
         provider=Provider.CODEX,
@@ -224,7 +240,7 @@ MODEL_VERSIONS: list[ModelVersion] = [
         full_name="gpt-5.6-sol",
         retirement_date=None,
         latest=True,
-        weight=130,
+        weight=200,
         provider_extra=CodexModelExtra(
             supports_effort_max=True,
             supports_effort_ultra=True,
@@ -249,27 +265,12 @@ MODEL_VERSIONS: list[ModelVersion] = [
     ),
     ModelVersion(
         provider=Provider.CODEX,
-        model="gpt-luna",
-        version="5.6",
-        full_name="gpt-5.6-luna",
-        retirement_date=None,
-        latest=True,
-        weight=110,
-        provider_extra=CodexModelExtra(
-            supports_effort_max=True,
-            supports_effort_ultra=False,
-            supports_fast=True,
-            context_window=372_000,
-        ),
-    ),
-    ModelVersion(
-        provider=Provider.CODEX,
         model="gpt",
         version="5.5",
         full_name="gpt-5.5",
         retirement_date=None,
         latest=True,
-        weight=100,
+        weight=110,
         provider_extra=CodexModelExtra(
             supports_effort_max=False,
             supports_effort_ultra=False,
@@ -282,9 +283,13 @@ MODEL_VERSIONS: list[ModelVersion] = [
         model="gpt",
         version="5.4",
         full_name="gpt-5.4",
-        retirement_date=None,
+        # Retires from Codex with ChatGPT sign-in on 2026-08-31 (the OpenAI API
+        # and Codex authenticated with an API key are unaffected). Announced
+        # replacement is gpt-5.6-terra; see the weight comment above for why we
+        # let the fallback land on gpt-5.5 instead.
+        retirement_date=date(2026, 8, 31),
         latest=False,
-        weight=90,
+        weight=100,
         provider_extra=CodexModelExtra(
             supports_effort_max=False,
             supports_effort_ultra=False,
@@ -294,12 +299,31 @@ MODEL_VERSIONS: list[ModelVersion] = [
     ),
     ModelVersion(
         provider=Provider.CODEX,
+        model="gpt-luna",
+        version="5.6",
+        full_name="gpt-5.6-luna",
+        retirement_date=None,
+        latest=True,
+        weight=30,
+        provider_extra=CodexModelExtra(
+            supports_effort_max=True,
+            supports_effort_ultra=False,
+            supports_fast=True,
+            context_window=372_000,
+        ),
+    ),
+    ModelVersion(
+        provider=Provider.CODEX,
         model="gpt-mini",
         version="5.4",
         full_name="gpt-5.4-mini",
-        retirement_date=None,
+        # Retires alongside gpt-5.4 on 2026-08-31, same ChatGPT-sign-in scope.
+        # The weight puts it right under gpt-5.6-luna, so the fallback lands on
+        # Luna — OpenAI's announced replacement, and now the cheapest model of
+        # the catalogue.
+        retirement_date=date(2026, 8, 31),
         latest=True,
-        weight=50,
+        weight=20,
         provider_extra=CodexModelExtra(
             supports_effort_max=False,
             supports_effort_ultra=False,

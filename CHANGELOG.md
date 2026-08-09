@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Artifacts can save data** — An interactive artifact can now remember your choices, and the agent can read them back.
 
+### Changed
+
+- **GPT-5.4 leaves Codex** — GPT-5.4 and GPT-5.4 mini retire on August 31, 2026. The model pickers now show the date, and sessions still on them move to a supported model on the day.
+
 ### Fixed
 
 - **Scroll position when switching sessions** — Coming back to a session returns you where you were.

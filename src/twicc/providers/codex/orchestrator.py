@@ -5,8 +5,8 @@ Owns the Codex initial JSONL sync, the background metadata compute,
 the JSONL sessions watcher, the Codex CLI auth check task, the ChatGPT
 usage sync task, the OpenAI statuspage poll, the periodic skill
 catalogue sync (``skills/list`` → ``Command`` rows under the ``$``
-prefix), and the shutdown of the Codex agent manager (its construction
-is lazy via the agent registry).
+prefix), the daily model retirement check, and the shutdown of the Codex
+agent manager (its construction is lazy via the agent registry).
 """
 
 from __future__ import annotations
@@ -38,6 +38,10 @@ from twicc.providers.codex.plugin_install import ensure_twicc_plugin_installed
 from twicc.providers.codex.sessions_watcher import get_watcher
 from twicc.providers.codex.statuspage_task import start_statuspage_task, stop_statuspage_task
 from twicc.providers.codex.usage_task import start_usage_sync_task, stop_usage_sync_task
+from twicc.providers.model_retirement_task import (
+    start_model_retirement_task,
+    stop_model_retirement_task,
+)
 from twicc.startup_progress import broadcast_startup_progress
 
 logger = logging.getLogger(__name__)
@@ -78,7 +82,10 @@ def _on_watcher_done(task: asyncio.Task) -> None:
 
 
 class CodexOrchestrator(BaseOrchestrator):
-    """Lifecycle manager for Codex provider tasks (initial sync + auth check + usage sync + statuspage)."""
+    """Lifecycle manager for Codex provider tasks.
+
+    Initial sync + auth check + usage sync + statuspage + model retirement.
+    """
 
     provider = Provider.CODEX
 
@@ -103,6 +110,7 @@ class CodexOrchestrator(BaseOrchestrator):
         self._statuspage_task: asyncio.Task | None = None
         self._commands_task: asyncio.Task | None = None
         self._original_files_cache_task: asyncio.Task | None = None
+        self._retirement_task: asyncio.Task | None = None
 
         # Started by the dependency orchestrator coroutine after the
         # initial sync completes (compute) or after the search index is
@@ -164,6 +172,7 @@ class CodexOrchestrator(BaseOrchestrator):
         self._original_files_cache_task = self._create_task(
             start_original_files_cache_cleanup()
         )
+        self._retirement_task = self._create_task(start_model_retirement_task(self.provider))
 
     async def shutdown(self) -> None:
         """Stop the Codex tasks (sync + compute first, then the periodic ones)."""
@@ -269,6 +278,12 @@ class CodexOrchestrator(BaseOrchestrator):
                 self._original_files_cache_task,
                 "Codex original files cache cleanup",
             )
+
+        # Model retirement
+        if self._retirement_task is not None:
+            logger.info("Stopping Codex model retirement task...")
+            stop_model_retirement_task(self.provider)
+            await _cancel_task(self._retirement_task, "Codex model retirement task")
 
         # Stop every live Codex agent. The manager itself is owned by the
         # AgentManagerRegistry singleton, so we just ask it to drain — its

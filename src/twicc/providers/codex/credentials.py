@@ -73,8 +73,10 @@ _TOKEN_REFRESH_TIMEOUT = 30
 
 # Fixed model + prompt for the throwaway turn. We don't care about the
 # answer; the act of opening a thread and running one turn is what makes
-# the codex-app-server binary check / refresh its OAuth tokens.
-_REFRESH_MODEL = "gpt-5.4-mini"
+# the codex-app-server binary check / refresh its OAuth tokens. Luna is the
+# cheapest model of the catalogue, and the turns below pin ``low`` — the
+# lowest effort any Codex model accepts — to keep the probe minimal.
+_REFRESH_MODEL = "gpt-5.6-luna"
 _REFRESH_PROMPT = "What model are you?"
 
 

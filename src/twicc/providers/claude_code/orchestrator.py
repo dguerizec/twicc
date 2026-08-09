@@ -40,7 +40,7 @@ from twicc.providers.claude_code.agent.original_file_cache import (
 from twicc.core.models import Project, Session, SessionType
 from twicc.providers.claude_code.cron_restart import restart_all_session_crons
 from twicc.providers.claude_code.initial_sync import scan_projects, scan_sessions, sync_all
-from twicc.providers.claude_code.model_retirement_task import (
+from twicc.providers.model_retirement_task import (
     start_model_retirement_task,
     stop_model_retirement_task,
 )
@@ -189,7 +189,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         self._statuspage_task = self._create_task(start_statuspage_task())
         self._commands_task = self._create_task(start_commands_task())
         self._original_file_cache_task = self._create_task(start_original_file_cache_cleanup())
-        self._retirement_task = self._create_task(start_model_retirement_task())
+        self._retirement_task = self._create_task(start_model_retirement_task(self.provider))
         # Plan files watcher — powers the session view's Plan tab. Filesystem
         # only (like the artifacts watcher), so it starts immediately with no
         # dependency on the initial JSONL sync or background compute.
@@ -310,7 +310,7 @@ class ClaudeCodeOrchestrator(BaseOrchestrator):
         # Model retirement
         if self._retirement_task is not None:
             logger.info("Stopping model retirement task...")
-            stop_model_retirement_task()
+            stop_model_retirement_task(self.provider)
             await _cancel_task(self._retirement_task, "Model retirement task")
 
         # Cron restart (may still be retrying)

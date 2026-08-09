@@ -1,4 +1,4 @@
-import { BaseProviderHelpers } from '../baseHelpers'
+import { BaseProviderHelpers, formatRetirementDate } from '../baseHelpers'
 import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
 import { CONTEXT_MAX, EFFORT, PERMISSION_MODE, UNTRUSTED_PERMISSION_MODES } from './constants'
 import { useClaudeCodeStore } from './store'
@@ -13,12 +13,6 @@ import {
 // the server rejects the request, so the frontend enforces it client-side
 // to fail fast on the toast surface instead of waiting for an SDK error.
 const CLAUDE_MAX_FILE_BYTES = 5 * 1024 * 1024
-
-function formatRetirementDate(isoDate) {
-    return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
-        month: 'short', day: 'numeric', year: 'numeric',
-    })
-}
 
 // Claude CLI's built-in commands (invoked with ``/``). Hardcoded here because
 // the CLI never exposes the list programmatically; entries are sourced from
@@ -686,8 +680,15 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
                 )),
             },
             {
+                // An older version usually carries an end-of-service date, but
+                // not always — a freshly superseded model can sit here with
+                // ``retirement_date: null`` until Anthropic announces one, and
+                // formatting that would print "(until Invalid Date)".
                 entries: list.filter(e => !e.latest).map(e => this.buildModelOption(
-                    e, `${this.getModelLabel(e.selected_model)} (until ${formatRetirementDate(e.retirement_date)})`,
+                    e,
+                    e.retirement_date
+                        ? `${this.getModelLabel(e.selected_model)} (until ${formatRetirementDate(e.retirement_date)})`
+                        : this.getModelLabel(e.selected_model),
                 )),
             },
         ]

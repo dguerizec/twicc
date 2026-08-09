@@ -1,4 +1,4 @@
-import { BaseProviderHelpers } from '../baseHelpers'
+import { BaseProviderHelpers, formatRetirementDate } from '../baseHelpers'
 import { PROVIDER, SYNTHETIC_ITEM } from '../../constants'
 import { getTwiccLaunchPrefix } from '../../utils/twiccLaunch'
 import { SUPPORTED_IMAGE_TYPES } from '../../utils/fileUtils'
@@ -409,6 +409,22 @@ export class CodexHelpers extends BaseProviderHelpers {
         return useCodexStore().modelRegistry
     }
 
+    /**
+     * Decoration appended to a registry entry's label: the end-of-service date
+     * when the model has one, otherwise the family version for a family's
+     * latest, otherwise nothing.
+     *
+     * The retirement date wins over "(latest: vX)" because the two are
+     * independent on Codex — ``gpt-mini`` is a single-entry family, so it is
+     * both its family's latest *and* dated — and because a model about to
+     * disappear has nothing useful to advertise about being the latest.
+     */
+    _modelLabelSuffix(entry) {
+        if (entry?.retirement_date) return ` (until ${formatRetirementDate(entry.retirement_date)})`
+        if (entry?.latest) return ` (latest: ${entry.version})`
+        return ''
+    }
+
     // ─── Model capabilities ──────────────────────────────────────────────
     // Mirrors the backend ``selected_model_supports_*`` helpers: when the
     // explicit ``selectedModel`` is unknown to the registry, fall back to the
@@ -613,25 +629,19 @@ export class CodexHelpers extends BaseProviderHelpers {
         if (field === 'selected_model') {
             const resolved = this.resolveToAvailableModel(value)
             const entry = this.getModelRegistry().find(e => e.selected_model === resolved)
-            if (entry?.latest) return `${this.getModelLabel(resolved)} (latest: ${entry.version})`
-            return this.getModelLabel(resolved)
+            return `${this.getModelLabel(resolved)}${this._modelLabelSuffix(entry)}`
         }
         return super.getDefaultValueLabel(field, value)
     }
 
     getModelSelectGroups(registry) {
         const list = registry ?? []
+        const option = e => this.buildModelOption(
+            e, `${this.getModelLabel(e.selected_model)}${this._modelLabelSuffix(e)}`,
+        )
         return [
-            {
-                entries: list.filter(e => e.latest).map(e => this.buildModelOption(
-                    e, `${this.getModelLabel(e.selected_model)} (latest: ${e.version})`,
-                )),
-            },
-            {
-                entries: list.filter(e => !e.latest).map(e => this.buildModelOption(
-                    e, this.getModelLabel(e.selected_model),
-                )),
-            },
+            { entries: list.filter(e => e.latest).map(option) },
+            { entries: list.filter(e => !e.latest).map(option) },
         ]
     }
 

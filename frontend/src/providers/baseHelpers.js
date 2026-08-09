@@ -1,6 +1,17 @@
 import { effortIconSrc } from '../utils/effortIcon'
 
 /**
+ * Render a registry entry's ``retirement_date`` (an ISO day string) as a short
+ * localised date, for the "(until DATE)" decoration in the model pickers.
+ * Shared because every provider that dates its models needs the same wording.
+ */
+export function formatRetirementDate(isoDate) {
+    return new Date(isoDate + 'T00:00:00').toLocaleDateString(undefined, {
+        month: 'short', day: 'numeric', year: 'numeric',
+    })
+}
+
+/**
  * Base class for per-provider frontend helpers.
  *
  * Mirrors the backend `BaseProviderHelpers` pattern: each provider ships a

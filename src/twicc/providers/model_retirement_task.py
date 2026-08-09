@@ -1,6 +1,10 @@
 """
 Daily async task that detects retired model versions and auto-upgrades.
 
+One loop per provider — each orchestrator starts its own, the same way
+``background_compute_task`` is a shared module driven per provider. A
+provider that ships no ``retirement_date`` simply never finds anything.
+
 When a retirement is detected:
 1. Global default is updated in synced settings (if affected)
 2. Active processes are updated via the existing apply_live_settings machinery
@@ -13,39 +17,45 @@ import asyncio
 import logging
 from datetime import date
 
+from twicc.core.enums import Provider
+
 logger = logging.getLogger(__name__)
 
 RETIREMENT_CHECK_INTERVAL = 24 * 60 * 60  # 24 hours
 
-_retirement_stop_event: asyncio.Event | None = None
+# One stop event per provider: the two loops are independent, so a shutdown
+# of one must not stop the other.
+_retirement_stop_events: dict[Provider, asyncio.Event] = {}
 
 
-def get_retirement_stop_event() -> asyncio.Event:
-    global _retirement_stop_event
-    if _retirement_stop_event is None:
-        _retirement_stop_event = asyncio.Event()
-    return _retirement_stop_event
+def get_retirement_stop_event(provider: Provider) -> asyncio.Event:
+    event = _retirement_stop_events.get(provider)
+    if event is None:
+        event = asyncio.Event()
+        _retirement_stop_events[provider] = event
+    return event
 
 
-def stop_model_retirement_task() -> None:
-    if _retirement_stop_event is not None:
-        _retirement_stop_event.set()
+def stop_model_retirement_task(provider: Provider) -> None:
+    event = _retirement_stop_events.get(provider)
+    if event is not None:
+        event.set()
 
 
-async def start_model_retirement_task() -> None:
-    """Run the retirement check loop: once at startup, then every 24 hours."""
-    stop_event = get_retirement_stop_event()
+async def start_model_retirement_task(provider: Provider) -> None:
+    """Run ``provider``'s retirement check loop: once at startup, then every 24 hours."""
+    stop_event = get_retirement_stop_event(provider)
     # Reset for hot-restart support: clear the stop event so a relaunched
     # task isn't killed by a stale set() left by the prior shutdown.
     stop_event.clear()
 
-    _log_upcoming_retirements()
+    _log_upcoming_retirements(provider)
 
     # Initial check on startup
     try:
-        await _check_and_retire()
+        await _check_and_retire(provider)
     except Exception:
-        logger.exception("Error in initial retirement check")
+        logger.exception("Error in initial retirement check for %s", provider.value)
 
     while not stop_event.is_set():
         try:
@@ -55,27 +65,29 @@ async def start_model_retirement_task() -> None:
             pass  # Time to check again
 
         try:
-            await _check_and_retire()
+            await _check_and_retire(provider)
         except Exception:
-            logger.exception("Error in retirement check cycle")
+            logger.exception("Error in retirement check cycle for %s", provider.value)
 
 
-async def _check_and_retire() -> None:
-    """Perform one retirement check cycle."""
+async def _check_and_retire(provider: Provider) -> None:
+    """Perform one retirement check cycle for ``provider``."""
     from channels.layers import get_channel_layer
 
-    from twicc.core.enums import Provider
     from twicc.providers.helpers import get_provider_helpers
     from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS
 
-    helpers = get_provider_helpers(Provider.CLAUDE_CODE)
+    helpers = get_provider_helpers(provider)
 
-    # Identify all retired non-latest versions
+    # Identify all retired versions. The identifier is built by the provider's
+    # own ``selected_model_value`` (bare alias for a family's latest, versioned
+    # alias otherwise) — a retiring model may well be its family's latest, as
+    # Codex's single-entry ``gpt-mini`` family is.
     retired_models: dict[str, str] = {}  # old selected_model → new selected_model
     for mv in helpers.MODEL_VERSIONS:
         if mv.retirement_date is None:
             continue
-        selected = f"{mv.model}-{mv.version}"
+        selected = helpers.selected_model_value(mv)
         if helpers.is_model_retired(selected):
             target = helpers.resolve_to_available_model(selected)
             if target != selected:
@@ -84,27 +96,38 @@ async def _check_and_retire() -> None:
     if not retired_models:
         return
 
-    logger.info("Retired models detected: %s", retired_models)
+    logger.info("Retired %s models detected: %s", provider.value, retired_models)
 
     # 1. Update global default if affected
     settings_changed = False
-    from twicc.synced_settings import _settings_lock, prepare_settings_for_client, read_synced_settings, write_synced_settings
+    from twicc.synced_settings import (
+        _settings_lock,
+        prepare_settings_for_client,
+        read_synced_settings,
+        write_synced_settings,
+    )
 
-    with _settings_lock:
-        current = read_synced_settings()
-        default_model = current.get(
-            "claudeCodeDefaultModel", SYNCED_SETTINGS_DEFAULTS["claudeCodeDefaultModel"]
-        )
-        if default_model in retired_models:
-            current["claudeCodeDefaultModel"] = retired_models[default_model]
-            current["_version"] = current.get("_version", 0) + 1
-            write_synced_settings(current)
-            settings_changed = True
-            logger.info(
-                "Updated global default model: %s → %s",
-                default_model,
-                retired_models[default_model],
+    # Each provider names its own default-model key in the synced settings
+    # (``claudeCodeDefaultModel``, ``codexDefaultModel``, …).
+    default_model_key = helpers.AGENT_SETTINGS_FIELDS_MAPPING.get("selected_model")
+
+    if default_model_key:
+        with _settings_lock:
+            current = read_synced_settings()
+            default_model = current.get(
+                default_model_key, SYNCED_SETTINGS_DEFAULTS.get(default_model_key)
             )
+            if default_model in retired_models:
+                current[default_model_key] = retired_models[default_model]
+                current["_version"] = current.get("_version", 0) + 1
+                write_synced_settings(current)
+                settings_changed = True
+                logger.info(
+                    "Updated global default model (%s): %s → %s",
+                    default_model_key,
+                    default_model,
+                    retired_models[default_model],
+                )
 
     # Broadcast global settings update if changed
     if settings_changed:
@@ -123,20 +146,22 @@ async def _check_and_retire() -> None:
         )
 
     # 2. Update active processes (running sessions)
-    # Model change is an "idle" setting: apply_live_settings() calls set_model()
-    # on the SDK — no process restart needed.
-    # - USER_TURN: applied immediately via set_model()
+    # Model change is an "idle" setting: apply_live_settings() calls the SDK's
+    # model setter — no process restart needed.
+    # - USER_TURN: applied immediately
     # - ASSISTANT_TURN: apply_live_settings skips idle changes, so we also
     #   update the session DB row; _apply_pending_settings will pick it up
     #   at the next USER_TURN transition.
-    from twicc.providers.claude_code.agent.manager import get_claude_code_agent_manager
+    from twicc.agent.registry import get_agent_manager_registry
     from twicc.providers.db_writer import _RetireSessionsJob, submit_async_job
 
-    manager = get_claude_code_agent_manager()
-    # NOTE: ClaudeCodeAgentManager doesn't expose a public get_all_agents() method.
-    # We need to iterate over manager._agents.values() which gives ClaudeCodeAgent instances.
-    # Collect updates first, then apply them as a single DB-writer-routed batch
-    # so this task never races the DB writer on the SQLite write lock.
+    manager = get_agent_manager_registry().get(provider)
+    # NOTE: the managers don't expose a public accessor returning the agent
+    # objects themselves (``get_active_agents`` returns ``AgentInfo``), so we
+    # iterate ``_agents`` — the attribute lives on ``BaseAgentManager``, so it
+    # is the same for every provider. Collect updates first, then apply them as
+    # a single DB-writer-routed batch so this task never races the DB writer on
+    # the SQLite write lock.
     updates_per_session: dict[str, dict[str, object]] = {}
     pending_live_applies: list[tuple[object, object, str, str]] = []
     for process in list(manager._agents.values()):
@@ -161,13 +186,13 @@ async def _check_and_retire() -> None:
 
     # Apply DB updates as a single DB-writer-routed batch. The DB writer wraps
     # every session UPDATE in one transaction.atomic. On failure we skip the
-    # live applies — without the DB row updated, set_model() on the SDK
+    # live applies — without the DB row updated, the SDK-side model change
     # would be reverted by the next _apply_pending_settings pass.
     if updates_per_session:
         future = asyncio.get_running_loop().create_future()
         try:
             await submit_async_job(_RetireSessionsJob(
-                provider=Provider.CLAUDE_CODE,
+                provider=provider,
                 updates=updates_per_session,
                 future=future,
             ))
@@ -202,7 +227,7 @@ async def _check_and_retire() -> None:
             "type": "broadcast",
             "data": {
                 "type": "model_retirement",
-                "provider": Provider.CLAUDE_CODE.value,
+                "provider": provider.value,
                 "retired_models": retired_models,
                 "default_changed": settings_changed,
             },
@@ -210,13 +235,12 @@ async def _check_and_retire() -> None:
     )
 
 
-def _log_upcoming_retirements() -> None:
+def _log_upcoming_retirements(provider: Provider) -> None:
     """Log a summary of model versions and upcoming retirements at startup."""
-    from twicc.core.enums import Provider
     from twicc.providers.helpers import get_provider_helpers
 
     today = date.today()
-    for mv in get_provider_helpers(Provider.CLAUDE_CODE).MODEL_VERSIONS:
+    for mv in get_provider_helpers(provider).MODEL_VERSIONS:
         if mv.retirement_date is None:
             continue
         days_left = (mv.retirement_date - today).days

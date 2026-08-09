@@ -580,7 +580,7 @@ class CodexHelpers(BaseProviderHelpers):
             synced["codexDefaultContextMax"] = adjusted.context_max
 
     async def generate_title(self, prompt: str, system_prompt: str) -> str | None:
-        """Run a short gpt-5.4-mini SDK query to suggest a title for ``prompt``."""
+        """Run a short gpt-5.6-luna SDK query to suggest a title for ``prompt``."""
         from .title_suggest import generate_title as _generate_title
 
         return await _generate_title(prompt, system_prompt)
@@ -588,7 +588,7 @@ class CodexHelpers(BaseProviderHelpers):
     async def warm_up_quota(self) -> bool | None:
         """Open the Codex 5-hour window via the existing auth-probe throwaway turn.
 
-        ``probe_auth_via_codex_sdk`` runs one ephemeral gpt-5.4-mini turn over
+        ``probe_auth_via_codex_sdk`` runs one ephemeral gpt-5.6-luna turn over
         the ChatGPT OAuth credentials and reports whether it completed — the
         same minimal turn we want for the warm-up, and the same
         accepted/rejected signal. Reused rather than duplicated.
