@@ -8,14 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Artifacts can save data** — An interactive artifact can now remember what you do in it (choices, settings, notes…), and the agent can read it back: make your choices in the page, save, tell the agent you're done.
+- **Artifacts can save data** — An interactive artifact can now remember your choices, and the agent can read them back.
 
 ### Fixed
 
-- **Scroll position when switching sessions** — Coming back to a session returns you where you were, instead of sometimes jumping back to the very top of the conversation.
-- **Navigation inside a session** — Moving between a session's tabs (chat, an agent, Files…) no longer sends the sidebar back to another project, and keeps the active workspace.
-- **Minimized docks** — The strip of icons now shows which tab a minimized dock is on, and highlights it while its panel is open, so you can see which icon closes it again.
-- **Project icons** — The project selector in the sidebar now shows the current project's icon, like the rest of the app, instead of only its color dot.
+- **Scroll position when switching sessions** — Coming back to a session returns you where you were.
+- **Navigation inside a session** — Moving between a session's tabs no longer sends the sidebar to another project or workspace.
+- **Codex sessions spawned by an agent** — They can now put their questions in the conversation instead of a click-only dialog, so a hidden one no longer gets stuck.
+- **Minimized docks** — The strip of icons now shows which tab a minimized dock is on, and which one is open.
+- **Project icons** — The project selector now shows the current project's icon, not only its color dot.
 
 ## [1.92.8] - 2026-08-05
 
