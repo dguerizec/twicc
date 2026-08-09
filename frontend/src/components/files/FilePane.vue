@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch, computed, nextTick, useId, inject, onMounted, onBeforeUnmount } from 'vue'
+import { useResizeObserver } from '@vueuse/core'
 import { apiFetch } from '../../utils/api'
 import { useArtifactBroker } from '../../composables/useArtifactBroker'
 import { useSettingsStore } from '../../stores/settings'
@@ -559,6 +560,11 @@ async function attachElementScreenshot(dataUrl) {
     await dataStore.addAttachment(sessionId, file)
 }
 
+// The non-scrolling wrapper around whichever preview is active. Declared here
+// because the floating actions below observe it (it is their offset parent
+// outside the pooled-frame case); also the focus target of focusContent().
+const previewWrapRef = ref(null)
+
 // --- Floating preview actions: collapsed behind a round "tools" toggle ------
 // With two or more actions offered, the floating row folds behind a single
 // round screwdriver-wrench button (click to unfold) so it doesn't crowd the
@@ -645,6 +651,26 @@ function clampActionsPos(left, top) {
         top: Math.max(0, Math.min(pr.height - el.offsetHeight, top)),
     }
 }
+
+// A dragged position is absolute px in the offset parent, so any shrink of
+// that parent can leave the group outside the visible area — unreachable, with
+// no way to bring it back. Exiting full screen after dragging it to the bottom
+// is the obvious case; a dock/window resize and a sub-toolbar appearing over
+// the frame do it too. Re-clamp on every parent resize (one-way: shrinking then
+// re-expanding does not restore the pre-clamp spot).
+useResizeObserver(
+    () => frameOverlayEl.value ?? previewWrapRef.value,
+    () => {
+        if (!previewActionsPos.value) return // still on its default CSS corner
+        const el = previewActionsRef.value
+        const parent = el?.offsetParent || el?.parentElement
+        // A 0-sized parent is transient (frame hidden, KeepAlive detach) —
+        // clamping against it would slam the group into the top-left corner.
+        if (!parent || parent.clientWidth < 1 || parent.clientHeight < 1) return
+        previewActionsPos.value = clampActionsPos(previewActionsPos.value.left, previewActionsPos.value.top)
+        computePreviewActionsGeometry() // drop side + tooltip side may need to flip
+    }
+)
 
 function onToolsPointerDown(event) {
     if (event.button != null && event.button > 0) return // left / touch / pen only
@@ -1378,7 +1404,6 @@ function openDiffInFilesTab() {
 // as source/diff (so the user can read / scroll / navigate it with the keyboard), otherwise the
 // preview — a scrollable or natively-interactive element inside it (so arrows / PageUp-Down / space
 // act on the preview). Returns whether focus now lands inside our content (drives the retry pump).
-const previewWrapRef = ref(null)
 const requestContentFocus = useFocusRetry()
 function focusContent() {
     requestContentFocus(focusContentOnce)
