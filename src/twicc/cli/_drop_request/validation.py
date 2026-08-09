@@ -145,7 +145,8 @@ def validate_hidden_constraints(
       ``NON_INTERACTIVE_PERMISSION_MODES`` (each provider declares which of its
       modes run without interactive approval);
     - ``question_widget`` must NOT be ``True`` for providers that use it
-      (Claude Code). For other providers (Codex) the field is ignored.
+      (they declare it in their ``AGENT_SETTINGS_CATEGORIES``). A provider
+      that does not is left alone.
 
     Always returns a flat list of :class:`ValidationError` so the caller
     can aggregate with the other validators.
@@ -181,9 +182,13 @@ def validate_hidden_constraints(
             f"Provider {provider} accepts: {whitelist_str}. Got: {mode!r}.",
         ))
 
-    # --- question_widget incompatibility (Claude Code only) -----
-    # Codex never uses question_widget; ignore the field entirely there.
-    if provider == "claude_code":
+    # --- question_widget incompatibility -------------------------
+    # Only for providers that actually map the field to a widget tool — they
+    # declare it in their categories. A provider that ignores it is left alone.
+    supported: set[str] = set()
+    for fields in (helpers.AGENT_SETTINGS_CATEGORIES or {}).values():
+        supported.update(fields)
+    if "question_widget" in supported:
         qw = getattr(settings, "question_widget", None)
         if qw is True:
             errors.append(ValidationError(

@@ -121,8 +121,10 @@ def update_settings_cmd(
         "--question-widget/--no-question-widget",
         help=(
             "Enable interactive question widgets. Pass --no-question-widget "
-            "to force the agent to ask its questions as plain text. Omit to "
-            "leave the current value unchanged."
+            "to force the agent to ask its questions as plain text. A startup "
+            "setting: Claude Code restarts the agent to apply it, Codex applies "
+            "it only at the next process start (stop the session, then send a "
+            "message to resume it). Omit to leave the current value unchanged."
             + default_suffix(_HELP_CTX, "question_widget")
         ),
     ),

@@ -1,4 +1,4 @@
-"""Codex thread-level work-directory configuration."""
+"""Codex thread-level configuration bound at thread_start / thread_resume."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from twicc.providers.codex.agent.manager import (
     CodexAgentManager,
     _apply_auto_review_network,
     _apply_codex_work_dirs,
+    _apply_request_user_input,
 )
 from twicc.providers.helpers import AgentSettings
 
@@ -224,3 +225,60 @@ def test_auto_review_network_preserves_existing_features_and_roots() -> None:
         "writable_roots": ["/scratch/session"],
     }
     assert "suppress_unstable_features_warning" not in config
+
+
+def test_request_user_input_enabled_forces_the_default_mode_feature() -> None:
+    config: dict = {}
+    _apply_request_user_input(config, enabled=True)
+
+    assert config["features"]["default_mode_request_user_input"] is True
+    assert config["suppress_unstable_features_warning"] is True
+    assert "tools" not in config
+
+
+def test_request_user_input_disabled_drops_the_tool_and_the_feature() -> None:
+    config: dict = {}
+    _apply_request_user_input(config, enabled=False)
+
+    assert config["features"]["default_mode_request_user_input"] is False
+    assert config["tools"]["experimental_request_user_input"] is False
+
+
+def test_new_thread_without_question_widget_disables_request_user_input(monkeypatch) -> None:
+    codex, _ = _install_factory_fakes(monkeypatch, [])
+
+    async def scenario():
+        manager = CodexAgentManager()
+        return await manager._create_agent(
+            "draft-id",
+            "project-id",
+            "/project",
+            resume=False,
+            settings=AgentSettings(permission_mode="yolo", question_widget=False),
+        )
+
+    asyncio.run(scenario())
+
+    config = codex.start_calls[0]["config"]
+    assert config["features"]["default_mode_request_user_input"] is False
+    assert config["tools"]["experimental_request_user_input"] is False
+
+
+def test_resumed_thread_keeps_request_user_input_when_widget_unset(monkeypatch) -> None:
+    codex, _ = _install_factory_fakes(monkeypatch, [])
+
+    async def scenario():
+        manager = CodexAgentManager()
+        return await manager._create_agent(
+            "thread-id",
+            "project-id",
+            "/project",
+            resume=True,
+            settings=AgentSettings(permission_mode="yolo"),
+        )
+
+    asyncio.run(scenario())
+
+    config = codex.resume_calls[0][1]["config"]
+    assert config["features"]["default_mode_request_user_input"] is True
+    assert "tools" not in config

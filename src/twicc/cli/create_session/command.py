@@ -144,9 +144,9 @@ def create_session_cmd(
             "force the agent to ask its questions as plain text instead of using "
             "a UI widget (useful for CLI workflows where you want to read and "
             "answer questions textually, without going through the TwiCC UI). "
-            "Honored by providers that map this flag to a widget tool; currently "
-            "Claude Code (maps to AskUserQuestion). Omit to use the default "
-            "(widget enabled)."
+            "Honored by providers that map this flag to a widget tool: Claude "
+            "Code (AskUserQuestion) and Codex (request_user_input). Omit to use "
+            "the default (widget enabled)."
             + default_suffix(_HELP_CTX,"question_widget")
         ),
     ),

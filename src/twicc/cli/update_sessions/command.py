@@ -366,7 +366,10 @@ def _settings(
         "--question-widget/--no-question-widget",
         help=(
             "Enable interactive question widgets. Pass --no-question-widget to "
-            "force plain-text questions. Omit to leave unchanged."
+            "force plain-text questions. A startup setting: Claude Code restarts "
+            "the agent to apply it, Codex applies it only at the next process "
+            "start (stop the session, then send a message to resume it). Omit to "
+            "leave unchanged."
             + default_suffix(_HELP_CTX, "question_widget")
         ),
     ),

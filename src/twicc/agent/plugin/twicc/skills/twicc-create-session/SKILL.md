@@ -68,7 +68,7 @@ All optional. A field you omit (and the preset doesn't set) takes the target pro
 - `--claude-in-chrome / --no-claude-in-chrome` — Claude Code only (Allows to manipulate browser tabs, take screenshots, etc.).
 - `--fast-mode / --no-fast-mode` — Supported Claude Code and Codex models; increases credit usage.
 - `--context-max VALUE` — Claude Code: `200k` or `1m` (silently capped to 200k on unsupported models). Codex: `272k` (fixed by the model; a divergent value is silently pinned to the model's window).
-- `--question-widget / --no-question-widget` — Claude Code only. See below.
+- `--question-widget / --no-question-widget` — Claude Code and Codex. See below.
 
 ### Aliases
 
@@ -97,7 +97,9 @@ The child's only output channel is the final assistant message of its turn. **Th
 
 ### `--no-question-widget`
 
-By default (Claude Code), questions from the agent surface as an interactive UI widget (`AskUserQuestion`) — the user must click in the TwiCC UI to answer. Pass `--no-question-widget` when driving the workflow from a script: questions then appear as plain text in the conversation, readable via `messages` and answerable via `send-message`.
+By default, questions from the agent surface as an interactive UI widget — the user must click in the TwiCC UI to answer. Each provider has its own: Claude Code `AskUserQuestion`, Codex `request_user_input`. Pass `--no-question-widget` when driving the workflow from a script: the widget tool is removed at start, so questions appear as plain text in the conversation, readable via `messages` and answerable via `send-message`.
+
+Always pass it to a child you drive yourself. A widget answer travels on the UI channel only — neither `send-message` nor any CLI command can answer one, so a scripted child that opens a widget blocks until a human clicks.
 
 ### Annotations
 

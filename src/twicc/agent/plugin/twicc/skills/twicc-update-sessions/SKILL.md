@@ -70,7 +70,7 @@ $TWICC update-sessions hide [SESSION_ID...] [--spawned-by X|--descendants X]
 $TWICC update-sessions unhide [SESSION_ID...] [--spawned-by X|--descendants X]
 ```
 
-`hide` requires each session to have a non-interactive `permission_mode` and `question_widget` disabled (see `twicc-update-session`); a session that doesn't qualify is `rejected` individually while the rest are hidden. `unhide` has no preconditions.
+`hide` requires each session to have a non-interactive `permission_mode` and `question_widget` disabled — both providers (see `twicc-update-session`); a session that doesn't qualify is `rejected` individually while the rest are hidden. `unhide` has no preconditions.
 
 ### `annotations`
 
@@ -90,7 +90,7 @@ Same flags as `update-session settings` (skill: `twicc-update-session`): `--pres
 
 Resolution is **per session against its own provider**, which makes a mixed-provider batch trivial. Provider-agnostic aliases resolve to each provider's concrete value — `--model max`, `--effort max`, `--permission-mode open`, `--context-max max` (and `min`, `strict`, `auto`, ...; see `twicc-create-session` for the full list) each land on the right value per session. A flag a session's provider doesn't support (e.g. `--thinking` on Codex) is silently ignored for that session — no error. A genuinely invalid value on a supported field (e.g. `--model opus` on a Codex session) yields a per-id `validation_error` (`invalid_choice` / `invalid_format` / `invalid_preset`) while the other sessions proceed.
 
-Claude Code startup settings (`effort`, `thinking`, `claude-in-chrome`, `fast-mode`, `question-widget`) are applied on the next restart; Codex Fast mode applies on its next turn. No agent is interrupted mid-turn.
+Claude Code startup settings (`effort`, `thinking`, `claude-in-chrome`, `fast-mode`, `question-widget`) are applied on the next restart; Codex Fast mode applies on its next turn. No agent is interrupted mid-turn. Codex `question-widget` is a startup setting with **no automatic restart** — stop each session (`$TWICC processes stop`, skill: `twicc-processes`) and send it a message to apply the new value.
 
 ## Errors
 

@@ -60,7 +60,7 @@ Agent settings flags (all optional; use `$TWICC info models agent-settings prese
 - `--claude-in-chrome / --no-claude-in-chrome` — Claude Code only (Allows to manipulate browser tabs, take screenshots, etc.).
 - `--fast-mode / --no-fast-mode` — Supported Claude Code and Codex models; increases credit usage.
 - `--context-max VALUE` — Claude Code: `200k` or `1m`. Codex: `272k` (fixed by the model; a divergent value is silently pinned to its window).
-- `--question-widget / --no-question-widget` — Claude Code only (Decide to allow or not UI interactive widget for questions, to be answered by the user).
+- `--question-widget / --no-question-widget` — Claude Code (`AskUserQuestion`) and Codex (`request_user_input`): decide whether the agent may ask questions through a UI widget the user answers by clicking, instead of plain text.
 - `--unset TOKEN` (repeatable) — reset a field to NULL. Accepted tokens: `model`, `effort`, `permission-mode`, `thinking`, `claude-in-chrome`, `fast-mode`, `context-max`, `question-widget` (a token the session's provider doesn't support is silently ignored).
 - `--preset NAME` — apply a saved preset (replace mode). `__defaults__` resets all fields to the user-configured defaults. Use `$TWICC info presets` to list available presets (skill: `twicc-info`).
 
@@ -79,6 +79,7 @@ A flag the session's provider doesn't support (e.g. `--thinking` on Codex) is si
 - *Live* (`permission_mode` on Claude Code) — applied immediately.
 - *Idle* (`model`, `context_max` on Claude Code; `model`, `effort`, `permission_mode`, `context_max`, `fast_mode` on Codex) — applied on next `user_turn`.
 - *Startup* (`effort`, `thinking`, `claude_in_chrome`, `fast_mode`, `question_widget` on Claude Code) — applied on the next restart: the agent is stopped (immediately if at `user_turn`, or at the end of its current `assistant_turn` if working), so the next message you send restarts it with the new settings. If currently `awaiting_user_input`, the pending dialog is lost.
+- *Startup on Codex* (`question_widget`) — **no automatic restart**. The value is stored, the running process keeps the old one. To apply it: `$TWICC process <ID> stop` (skill: `twicc-process`), then send a message — the resumed thread picks up the new value. A session with no live process needs nothing.
 
 ### `title`
 
@@ -129,7 +130,7 @@ $TWICC update-session '<SESSION_ID>' hide
 $TWICC update-session '<SESSION_ID>' unhide
 ```
 
-`hide` requires a non-interactive `permission_mode` (Claude Code: `bypassPermissions`/`dontAsk`; Codex: `yolo`/`strict`; alias `open` or `strict`) and `question_widget` disabled (Claude Code). If not met, update `settings` first. `unhide` has no preconditions.
+`hide` requires a non-interactive `permission_mode` (Claude Code: `bypassPermissions`/`dontAsk`; Codex: `yolo`/`strict`; alias `open` or `strict`) and `question_widget` disabled (both providers). If not met, update `settings` first. `unhide` has no preconditions.
 
 ## Errors
 

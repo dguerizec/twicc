@@ -94,6 +94,7 @@ $TWICC topology self
 - **Strongly prefer `--hidden`** for the sessions you spawn (especially if you are hidden yourself): no UI clutter, and a hidden session can never get stuck on a UI dialog.
 - **The user's choice wins and propagates.** If the user asks for visible (non-hidden) sessions, or for a specific permission level, honor it **and pass the same rules to every child** — managers spawn with the same rules.
 - If the user gave no instruction, the leader may ask, noting the trade-off: visible sessions in non-permissive modes will produce many interruptions and approval prompts.
+- **Pass `--no-question-widget` to every visible child.** `--hidden` already forces it, but a visible child keeps its widget tool (Claude Code `AskUserQuestion`, Codex `request_user_input`) and only a human clicking in the UI can answer one — you cannot. With the flag, its questions arrive as plain text you read with `session <ID> messages` and answer with `send-message`.
 
 ## Annotations
 

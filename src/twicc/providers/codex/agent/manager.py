@@ -616,8 +616,11 @@ class CodexAgentManager(BaseAgentManager):
                 thread_config["mcp_servers"] = {"twicc": _twicc_mcp_server_config(session_id)}
                 _apply_codex_mcp_context_mode(thread_config)
             # Offer request_user_input (the AskUserQuestion-equivalent) in every
-            # collaboration mode, not just Plan. Applied on both start and resume.
-            _force_request_user_input(thread_config)
+            # collaboration mode, not just Plan — unless the session opted out
+            # via ``question_widget=False``. Applied on both start and resume.
+            _apply_request_user_input(
+                thread_config, enabled=settings.question_widget is not False,
+            )
             if approvals_reviewer is ApprovalsReviewer.auto_review:
                 # Give the workspace sandbox direct network access. Do not turn
                 # on Codex's managed network proxy here: without an administrator
@@ -819,8 +822,8 @@ def _apply_codex_mcp_context_mode(thread_config: dict) -> None:
     thread_config["suppress_unstable_features_warning"] = True
 
 
-def _force_request_user_input(thread_config: dict) -> None:
-    """Expose Codex's ``request_user_input`` tool in the Default collaboration mode.
+def _apply_request_user_input(thread_config: dict, *, enabled: bool) -> None:
+    """Expose or remove Codex's ``request_user_input`` tool for this thread.
 
     The tool handler is added by default (``tools.experimental_request_user_input``
     resolves to on when unset), but in the Default (non-Plan) collaboration mode —
@@ -828,12 +831,28 @@ def _force_request_user_input(thread_config: dict) -> None:
     ``default_mode_request_user_input`` feature is enabled. Force it so the
     AskUserQuestion-equivalent works in every mode, not just Plan.
 
+    ``enabled=False`` is the ``question_widget=False`` path: the agent must ask
+    its questions as plain text. Turning the feature off already hides the tool
+    in the Default mode; we also drop the handler itself so no collaboration
+    mode can bring it back. Without this the agent would call a widget nobody
+    can answer — the reply travels on the WS approval channel
+    (``toolRequestUserInput``), which a scripted or hidden session has no access
+    to, and the turn would block forever.
+
+    Both keys live in the per-thread ``config`` patch, read at ``thread_start``
+    and ``thread_resume`` only: ``thread/settings/update`` cannot carry them, so
+    a change on a live session lands at the next process start. That is why
+    ``question_widget`` is a STARTUP setting for Codex.
+
     The feature is stage ``UnderDevelopment``, so silence the per-start
     unstable-features warning (same knob ``_apply_codex_mcp_context_mode`` sets).
     """
     features = thread_config.setdefault("features", {})
-    features["default_mode_request_user_input"] = True
+    features["default_mode_request_user_input"] = enabled
     thread_config["suppress_unstable_features_warning"] = True
+    if not enabled:
+        tools = thread_config.setdefault("tools", {})
+        tools["experimental_request_user_input"] = False
 
 
 def _apply_codex_work_dirs(thread_config: dict, work_dirs: list[str]) -> None:

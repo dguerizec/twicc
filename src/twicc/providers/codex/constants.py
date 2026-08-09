@@ -42,6 +42,14 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
 }
 
 
+# ``question_widget`` is STARTUP because it rides the per-thread ``config``
+# patch (``features.default_mode_request_user_input`` +
+# ``tools.experimental_request_user_input``), which Codex reads at
+# ``thread_start`` / ``thread_resume`` only — ``thread/settings/update`` carries
+# sandbox / collaboration mode / service tier and nothing else. Unlike Claude
+# Code, the Codex manager runs no STARTUP reconciliation: a change on a live
+# session is persisted but takes effect only once the process starts again
+# (stop the session, then send a message to resume it).
 AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
     AgentSettingCategory.LIVE: [],
     AgentSettingCategory.IDLE: [
@@ -51,7 +59,7 @@ AGENT_SETTINGS_CATEGORIES: dict[AgentSettingCategory, list[str]] = {
         "context_max",
         "fast_mode",
     ],
-    AgentSettingCategory.STARTUP: [],
+    AgentSettingCategory.STARTUP: ["question_widget"],
 }
 
 
