@@ -144,6 +144,20 @@ export class BaseProviderHelpers {
         return null
     }
 
+    /**
+     * Count the attachments (images, documents) carried by a parsed
+     * user_message item, in this provider's native JSONL shape. A message
+     * made only of attachments has no text, so text comparison cannot
+     * identify it — the count is what the generic surfaces match on instead
+     * (optimistic bubble replacement, in-flight send resolution).
+     *
+     * @param {Object} parsed - Parsed session item content.
+     * @returns {number}
+     */
+    extractUserMessageAttachmentCount(/* parsed */) {
+        return 0
+    }
+
     // ─── Authentication ──────────────────────────────────────────────────
     //
     // Some providers gate sending on an external authentication step (e.g.

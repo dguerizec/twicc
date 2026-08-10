@@ -46,12 +46,14 @@ def send_messages_cmd(
         ),
     ),
     message: str = typer.Option(
-        ...,
+        None,
         "--message",
         help=(
             "Message text, or path to a file whose content is the message. Over "
             "--remote the file is read locally; prefix an absolute path with "
-            "'remote:' to read it on the remote server instead."
+            "'remote:' to read it on the remote server instead. Optional when "
+            "at least one --attach is given: a message made only of "
+            "attachments is valid."
         ),
     ),
     attach: list[str] = typer.Option(
@@ -121,6 +123,9 @@ def send_messages_cmd(
 ) -> None:
     """Send the same message to several sessions at once.
 
+    `--message` may be omitted when at least one `--attach` is given: both
+    providers accept a message made only of attachments.
+
     Selection, output shape, and exit codes match `update-sessions`: a positional
     SESSION_ID list merged (union) with `--spawned-by` / `--descendants` /
     `--annotation` (plus `--siblings`, unique to send-messages). Output is keyed
@@ -156,10 +161,19 @@ def send_messages_cmd(
     from twicc.providers.helpers import get_provider_helpers
 
     # Resolve the message once — same text for every recipient (global, fatal).
-    try:
-        text = resolve_prompt(message)
-    except PromptError as e:
-        emit_error(f"Error: invalid --message: {e}", code=1)
+    # Omitting it is only valid when the batch carries attachments instead.
+    if message is None:
+        if not attach:
+            emit_error(
+                "Error: --message is required unless at least one --attach is given.",
+                code=1,
+            )
+        text = ""
+    else:
+        try:
+            text = resolve_prompt(message)
+        except PromptError as e:
+            emit_error(f"Error: invalid --message: {e}", code=1)
 
     bootstrap = load_local_bootstrap()
 

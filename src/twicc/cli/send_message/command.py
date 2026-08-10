@@ -15,11 +15,13 @@ def send_message_cmd(
         ),
     ),
     prompt: str = typer.Argument(
-        ...,
+        None,
         help=(
             "Message text, or path to a file whose content is the message. Over "
             "--remote the file is read locally; prefix an absolute path with "
-            "'remote:' to read it on the remote server instead."
+            "'remote:' to read it on the remote server instead. Optional when "
+            "at least one --attach is given: a message made only of "
+            "attachments is valid."
         ),
     ),
     attach: list[str] = typer.Option(
@@ -47,6 +49,9 @@ def send_message_cmd(
     ),
 ) -> None:
     """Send a message to an existing session.
+
+    PROMPT may be omitted when at least one ``--attach`` is given: both
+    providers accept a message made only of attachments.
 
     The session keeps its currently stored agent settings (model, effort,
     permission mode, ...). To change settings, use
@@ -147,14 +152,27 @@ def send_message_cmd(
         )
         raise typer.Exit(1)
 
-    # Resolve the prompt (inline text or file path → text content).
-    try:
-        text = resolve_prompt(prompt)
-    except PromptError as e:
-        emit_validation_errors(
-            [ValidationError("PROMPT", "invalid_prompt", str(e))],
-        )
-        raise typer.Exit(1)
+    # Resolve the prompt (inline text or file path → text content). Omitting it
+    # is only valid when the message carries attachments instead.
+    if prompt is None:
+        if not attach:
+            emit_validation_errors(
+                [ValidationError(
+                    "PROMPT", "missing_prompt",
+                    "PROMPT is required unless the message carries at least "
+                    "one --attach file.",
+                )],
+            )
+            raise typer.Exit(1)
+        text = ""
+    else:
+        try:
+            text = resolve_prompt(prompt)
+        except PromptError as e:
+            emit_validation_errors(
+                [ValidationError("PROMPT", "invalid_prompt", str(e))],
+            )
+            raise typer.Exit(1)
 
     # Put the sender header above the message whenever the caller is itself
     # a TwiCC session, whatever the target — otherwise the recipient would

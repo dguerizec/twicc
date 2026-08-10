@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **Artifacts can save data** — An interactive artifact can now remember your choices, and the agent can read them back.
+- **Attachments on their own** — In an ongoing conversation, you can now send images or files without writing any text.
 
 ### Changed
 

@@ -187,11 +187,34 @@ const INFLIGHT_AUDIT_FETCH_CAP = 300
 // visual-item cache. Display order is by sentAt, not by lineNum.
 let failedSendSeq = 0
 
+// Identity of a user message for "is this the same send?" comparisons. Text is
+// the discriminant when there is any; a message made only of attachments has
+// none, so its attachment count stands in (two attachment-only sends of the
+// same size are then indistinguishable — acceptable, exactly like two identical
+// texts). Returns null when the message carries neither.
+function userMessageMatchKey(providerHelpers, parsed) {
+    const text = providerHelpers.extractUserMessageText(parsed)
+    if (text) return `t:${text}`
+    const count = providerHelpers.extractUserMessageAttachmentCount(parsed)
+    return count > 0 ? `a:${count}` : null
+}
+
+// Same key, computed from an in-flight send snapshot (composer side) rather
+// than from a parsed JSONL item.
+function inflightSendMatchKey(entry) {
+    const text = (entry?.text || '').trim()
+    if (text) return `t:${text}`
+    // ``mediaCount`` is the fallback for a snapshot rehydrated from IndexedDB
+    // whose medias were too big to persist (mediasDropped).
+    const count = entry?.medias?.length || entry?.mediaCount || 0
+    return count > 0 ? `a:${count}` : null
+}
+
 function userMessageMatchesOptimistic(providerHelpers, optimistic, item) {
     if (!providerHelpers || !optimistic || item?.kind !== 'user_message') return false
 
-    const optimisticText = providerHelpers.extractUserMessageText(getParsedContent(optimistic))
-    if (!optimisticText) return false
+    const optimisticKey = userMessageMatchKey(providerHelpers, getParsedContent(optimistic))
+    if (!optimisticKey) return false
 
     const parsed = getParsedContent(item)
     const createdAtMs = optimistic._optimisticCreatedAtMs
@@ -202,8 +225,7 @@ function userMessageMatchesOptimistic(providerHelpers, optimistic, item) {
         return false
     }
 
-    const itemText = providerHelpers.extractUserMessageText(parsed)
-    return itemText === optimisticText
+    return userMessageMatchKey(providerHelpers, parsed) === optimisticKey
 }
 
 // Special project ID for "All Projects" mode
@@ -3245,26 +3267,25 @@ export const useDataStore = defineStore('data', {
             if ((!inflightSends.size && !hasFailed) || !items?.length) return
             const providerHelpers = getProviderHelpers(this.getSession(sessionId)?.provider)
             if (!providerHelpers) return
-            const texts = new Set()
+            const keys = new Set()
             for (const item of items) {
                 if (item?.kind !== 'user_message') continue
-                const text = providerHelpers.extractUserMessageText(getParsedContent(item))
-                if (text) texts.add(text.trim())
+                const key = userMessageMatchKey(providerHelpers, getParsedContent(item))
+                if (key) keys.add(key)
             }
-            if (!texts.size) return
+            if (!keys.size) return
             for (const [id, entry] of inflightSends) {
-                if (entry.sessionId === sessionId && texts.has(entry.text.trim())) {
-                    this._dropInflightSend(id)
-                }
+                if (entry.sessionId !== sessionId) continue
+                const key = inflightSendMatchKey(entry)
+                if (key && keys.has(key)) this._dropInflightSend(id)
             }
-            // A failed bubble whose text finally arrived was delivered after
+            // A failed bubble whose message finally arrived was delivered after
             // all (audited failures are best-effort guesses) — self-heal by
             // removing it from the flow.
             if (hasFailed) {
                 for (const entry of Object.values(failed)) {
-                    if (texts.has(entry.text.trim())) {
-                        this.removeFailedSend(sessionId, entry.requestId)
-                    }
+                    const key = inflightSendMatchKey(entry)
+                    if (key && keys.has(key)) this.removeFailedSend(sessionId, entry.requestId)
                 }
             }
         },

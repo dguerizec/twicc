@@ -51,6 +51,13 @@ const displayMessage = computed(() =>
         : (failedSend.value?.message || '')
 )
 
+// A message made only of attachments whose attachments could not be preserved
+// (too large for IndexedDB, dropped on the reload that rediscovered it) has
+// nothing left to send: Retry and Edit would both be no-ops. Only Delete stays.
+const nothingLeftToSend = computed(() =>
+    !!failedSend.value?.mediasDropped && !(failedSend.value?.text || '').trim()
+)
+
 function getEntry() {
     const requestId = failedSend.value?.requestId
     return requestId ? store.getFailedSend(props.sessionId, requestId) : null
@@ -138,15 +145,31 @@ function discard() {
         <wa-icon slot="icon" name="circle-exclamation"></wa-icon>
         <div class="failed-send-content">
             <div class="failed-send-message">{{ displayMessage }}</div>
-            <div v-if="failedSend.mediasDropped" class="failed-send-note">
+            <div v-if="nothingLeftToSend" class="failed-send-note">
+                Its attachments were too large to preserve, and it carried no text — nothing is left to retry.
+            </div>
+            <div v-else-if="failedSend.mediasDropped" class="failed-send-note">
                 Its attachments were too large to preserve — only the text can be retried or edited.
             </div>
             <div class="failed-send-actions">
-                <wa-button size="small" variant="danger" appearance="outlined" @click="retry">
+                <wa-button
+                    size="small"
+                    variant="danger"
+                    appearance="outlined"
+                    :disabled="nothingLeftToSend"
+                    @click="retry"
+                >
                     <wa-icon slot="start" name="rotate-right"></wa-icon>
                     Retry
                 </wa-button>
-                <wa-button v-if="insertTextAtCursor" size="small" variant="neutral" appearance="outlined" @click="edit">
+                <wa-button
+                    v-if="insertTextAtCursor"
+                    size="small"
+                    variant="neutral"
+                    appearance="outlined"
+                    :disabled="nothingLeftToSend"
+                    @click="edit"
+                >
                     <wa-icon slot="start" name="pen"></wa-icon>
                     Edit
                 </wa-button>

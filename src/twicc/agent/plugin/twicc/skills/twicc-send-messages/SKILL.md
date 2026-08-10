@@ -1,7 +1,7 @@
 ---
 name: twicc-send-messages
 description: Send the SAME message (and optional attachments) to several TwiCC sessions, selected by id and/or --spawned-by/--descendants/--siblings/--annotation. Use to broadcast a steering instruction, status request, or correction to a batch (e.g. every worker in an orchestration), or for a worker to message peers with --siblings self.
-argument-hint: '[SESSION_ID...] --message <text> [--spawned-by X|--descendants X|--siblings X] [--annotation ...] [--attach PATH...]'
+argument-hint: '[SESSION_ID...] [--message <text>] [--spawned-by X|--descendants X|--siblings X] [--annotation ...] [--attach PATH...]'
 ---
 
 # TwiCC Send Messages
@@ -34,13 +34,13 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never 
 ## Usage
 
 ```bash
-$TWICC send-messages [SESSION_ID...] --message <TEXT> [--attach PATH...] [--spawned-by X|--descendants X|--siblings X] [--annotation ...]
+$TWICC send-messages [SESSION_ID...] [--message <TEXT>] [--attach PATH...] [--spawned-by X|--descendants X|--siblings X] [--annotation ...]
 ```
 
 Selection is identical to `update-sessions` (skill: `twicc-update-sessions`): a positional `SESSION_ID...` list merged (union, explicit first) with the scope filters. `self` means the current session.
 
 - `SESSION_ID...` — recipients; optional if a filiation scope is given.
-- `--message TEXT` — **required**. Message text, or a path to a UTF-8 file whose content is the message. Same text for every recipient (each delivery gets the sender header on top — see *Sender header*). Over `--remote` the file is read locally; prefix an absolute path with `remote:` to read it on the remote server instead.
+- `--message TEXT` — message text, or a path to a UTF-8 file whose content is the message. **Required unless at least one `--attach` is given**: a message made only of attachments is valid. Same text for every recipient (each delivery gets the sender header on top — see *Sender header*). Over `--remote` the file is read locally; prefix an absolute path with `remote:` to read it on the remote server instead.
 - `--attach PATH` (repeatable) — attach a file to every message. **Validated per session against its provider** (Claude Code: PNG/JPEG/GIF/WebP/PDF/text up to 5 MB; Codex: images only), so a file one provider rejects yields a per-id `validation_error` while the others still receive it. Local path or a `data:<mime>;base64,...` URI for remote/API callers. Over `--remote`, prefix an absolute path with `remote:` to read it on the remote server instead.
 - `--spawned-by <ID|self>` / `--descendants <ID|self>` — also target children / proper descendants. `parent` is **not** supported (use `send-message parent`). Mutually exclusive.
 - `--siblings <ID|self>` — also target the siblings of the given session: the *other* sessions spawned by the same parent, **reference always excluded**. `self` broadcasts to your peers (the canonical worker → worker channel). `parent` is **not** supported. Mutually exclusive with `--spawned-by` / `--descendants`. Note `--spawned-by parent` (the same set but including yourself) is **not** available here, so `--siblings self` is the way to reach your peers from this command.
@@ -55,7 +55,7 @@ When the caller is itself a TwiCC session, each recipient receives the text unde
 
 ## Errors
 
-Argument-level problems fail the whole command (exit 1, plain-text on stderr): empty/unreadable `--message`, bad `--timeout`, two of `--spawned-by`/`--descendants`/`--siblings` together, `parent` scope (on `--spawned-by`/`--descendants`, or any value on `--siblings`), `--annotation` without a filiation scope, neither ids nor scope.
+Argument-level problems fail the whole command (exit 1, plain-text on stderr): empty/unreadable `--message`, neither `--message` nor `--attach`, bad `--timeout`, two of `--spawned-by`/`--descendants`/`--siblings` together, `parent` scope (on `--spawned-by`/`--descendants`, or any value on `--siblings`), `--annotation` without a filiation scope, neither ids nor scope.
 
 Per-session problems never fail the batch — reported in `results[<id>]` with `status` `validation_error` (local lookup: `session_not_found`, `is_subagent`, `session_stale`, `project_no_directory`; or an attachment its provider rejects) or `rejected` (server: `awaiting_user_input` — the session has a pending UI dialog a CLI message can't unblock; `manager_busy` — transient, retry; `provider_disabled`). Same vocabulary as `twicc-send-message`.
 
@@ -92,6 +92,7 @@ $TWICC send-messages --spawned-by self --message "What's your status and ETA?"
 $TWICC send-messages --siblings self --message 'Auth module done — wire against /v2/login.'  # worker → peers
 $TWICC send-messages --descendants self --annotation status=working --message 'Wrap up, write your report, reply DONE.'
 $TWICC send-messages --spawned-by self --message 'Review this mockup.' --attach /home/twidi/mockup.png
+$TWICC send-messages --spawned-by self --attach /home/twidi/mockup.png  # attachment alone, no --message
 $TWICC send-messages --spawned-by self --message /home/twidi/prompts/broadcast.md
 ```
 

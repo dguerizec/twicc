@@ -47,7 +47,10 @@ async def send_message_to_session_from_payload(payload: dict) -> SendMessageResu
 
     Expected keys in ``payload``:
     - ``session_id``: id of the existing target session (required).
-    - ``text``: message body (required, non-empty).
+    - ``text``: message body. Required unless the payload carries at least one
+      attachment: both providers accept a user message made only of image /
+      document blocks (creating a session still demands text — that is where
+      the title comes from; see :mod:`twicc.core.services.session_creation`).
     - ``images``, ``documents``: lists of SDK block dicts (already validated
       by the caller — the service does not re-validate attachments).
 
@@ -71,8 +74,10 @@ async def send_message_to_session_from_payload(payload: dict) -> SendMessageResu
     errors: list[SendMessageError] = []
     if not session_id:
         errors.append(SendMessageError("session_id", "missing", "session_id is required"))
-    if not text:
-        errors.append(SendMessageError("text", "empty_text", "text is required"))
+    if not text and not images and not documents:
+        errors.append(SendMessageError(
+            "text", "empty_text", "text is required (unless the message carries attachments)",
+        ))
     if errors:
         return SendMessageResult(False, None, None, None, errors)
 

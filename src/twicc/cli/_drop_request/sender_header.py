@@ -74,4 +74,7 @@ def prefix_sender_header(
         title = title[: TITLE_MAX_CHARS - 1] + "…"
     suffix = f' ("**{_MD_SPECIAL_RE.sub(r"\\\1", title)}**")' if title else ""
 
-    return f":: message from {relation} `{caller.id}`{suffix}\n\n{text}"
+    header = f":: message from {relation} `{caller.id}`{suffix}"
+    # An attachments-only message has no text: the header is then the whole
+    # body, so don't append a dangling blank line.
+    return f"{header}\n\n{text}" if text else header

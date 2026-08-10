@@ -1,7 +1,7 @@
 ---
 name: twicc-send-message
 description: Send a message (and optional attachments) to an existing TwiCC session. Use when you or the user want to continue a conversation, drop a follow-up from a script, or attach files.
-argument-hint: <session_id|parent> <prompt>
+argument-hint: <session_id|parent> [prompt]
 ---
 
 # TwiCC Send Message
@@ -30,13 +30,13 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never 
 ## Usage
 
 ```bash
-$TWICC send-message [OPTIONS] '<SESSION_ID|parent>' '<PROMPT>'
+$TWICC send-message [OPTIONS] '<SESSION_ID|parent>' ['<PROMPT>']
 ```
 
 ### Arguments
 
 - `SESSION_ID` — id of the session to send to, **or** the keyword `parent` to target the session that spawned the calling agent. When using `parent`, fails with `parent_not_found` if not running inside a TwiCC agent or if the current session has no spawner.
-- `PROMPT` — message text, or a path to a UTF-8 file. For available slash/dollar commands, use `$TWICC info commands` (skill: `twicc-info`). Over `--remote` the file is read locally; prefix an absolute path with `remote:` to read it on the remote server instead.
+- `PROMPT` — message text, or a path to a UTF-8 file. Optional when at least one `--attach` is given: a message made only of attachments is valid (unlike `create-session`, which always needs text). For available slash/dollar commands, use `$TWICC info commands` (skill: `twicc-info`). Over `--remote` the file is read locally; prefix an absolute path with `remote:` to read it on the remote server instead.
 
 ### Options
 
@@ -70,6 +70,7 @@ Symmetrically: an incoming message that opens with this header comes from anothe
 - `session_stale`
 - `project_no_directory`
 - `parent_not_found` — `parent` used but no TwiCC session in the ancestry, or the current session has no `spawned_by` link.
+- `missing_prompt` — no `PROMPT` and no `--attach`: the message would be empty.
 
 ### Server (exit 3)
 
@@ -107,6 +108,8 @@ Symmetrically: an incoming message that opens with this header comes from anothe
 $TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a 'Run the tests now'
 $TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a /home/twidi/prompts/follow-up.md
 $TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a --attach /home/twidi/screenshot.png --attach /home/twidi/report.pdf 'What do you think?'
+$TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a --attach /home/twidi/screenshot.png
+# No PROMPT: the attachment alone is the message.
 $TWICC send-message 4a8352fb-1674-41c0-8a85-0a5a3e4e623a 'Hello'
 # → {"status":"sent","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}
 $TWICC send-message parent 'I finished the sub-task you asked for.'

@@ -629,7 +629,14 @@ class CodexAgent(BaseAgent):
             if not data:
                 continue
             items.append(ImageInput(url=f"data:{media_type};base64,{data}"))
-        items.append(TextInput(text))
+        # Images alone are a valid turn input (the frontend allows sending
+        # attachments with an empty composer on an existing session); an empty
+        # ``TextInput`` would only add a blank item to the rollout. Keep it as
+        # the fallback though: callers upstream refuse a message with neither
+        # text nor attachments, so an empty list here would mean every image
+        # block was skipped — send the (empty) text rather than nothing.
+        if text or not items:
+            items.append(TextInput(text))
         return items
 
     async def _run_turn(self, text: str, images: list[dict] | None) -> None:

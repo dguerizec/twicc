@@ -435,6 +435,13 @@ const isDisabled = computed(() => {
     return isStarting.value
 })
 
+// Attachments alone are a valid message on an EXISTING session: both providers
+// accept a user message made only of image/document blocks (verified against the
+// Claude Code and Codex SDKs — creation, resume, live turn and mid-turn steer).
+// Drafts are excluded on purpose: a brand new session must carry text, which is
+// what the title (and its suggestion) is derived from.
+const canSendAttachmentsOnly = computed(() => !isDraft.value && attachmentCount.value > 0)
+
 // Button label based on process state and settings changes
 // On drafts, the button is always "Send" since there's no process to apply settings to.
 // Whether the (non-draft) session has unapplied changes that "Apply settings"
@@ -442,16 +449,21 @@ const isDisabled = computed(() => {
 const hasUnappliedChanges = computed(() =>
     !isDraft.value && (hasSettingsChanged.value || isHybridStaged.value)
 )
+// Attachments count as a message, so they keep the button on "Send" even when
+// settings are staged (the send applies them on the way, like a text message).
+const isSettingsOnlyButton = computed(() =>
+    hasUnappliedChanges.value && !messageText.value.trim() && !canSendAttachmentsOnly.value
+)
 const buttonLabel = computed(() => {
     const state = processState.value?.state
     if (state === 'starting') return 'Starting...'
-    if (hasUnappliedChanges.value && !messageText.value.trim()) return 'Apply settings'
+    if (isSettingsOnlyButton.value) return 'Apply settings'
     return 'Send'
 })
 
 // Button icon changes based on mode
 const buttonIcon = computed(() => {
-    if (hasUnappliedChanges.value && !messageText.value.trim()) return 'arrows-rotate'
+    if (isSettingsOnlyButton.value) return 'arrows-rotate'
     return 'paper-plane'
 })
 
@@ -1415,18 +1427,25 @@ function removeAllAttachments() {
  * Also handles settings-only updates: when text is empty but model/permission
  * mode has changed on an active process, sends a payload with empty text so
  * the backend applies the settings via SDK methods without sending a query.
+ *
+ * On an existing session, attachments alone are a message: the payload then
+ * carries empty text plus the image/document blocks (see canSendAttachmentsOnly).
  */
 async function handleSend() {
     // Sending is locked while a pending request shares the footer: the composer
     // is for *preparing* only. Guards both the click and the keyboard shortcut.
     if (props.sendingLocked) return
     const text = messageText.value.trim()
+    // Attachments alone make a real message, so they take precedence over the
+    // settings-only interpretation of an empty composer.
+    const attachmentsOnly = !text && canSendAttachmentsOnly.value
     // A staged hybrid switch is an unapplied change too — committed below.
     const hasStagedHybrid = isHybridStaged.value
-    const isSettingsOnlyUpdate = !text && (hasSettingsChanged.value || hasStagedHybrid)
+    const isSettingsOnlyUpdate = !text && !attachmentsOnly
+        && (hasSettingsChanged.value || hasStagedHybrid)
 
-    // Need text, a settings change, or a staged hybrid switch to proceed
-    if ((!text && !isSettingsOnlyUpdate) || isDisabled.value) return
+    // Need text, attachments, a settings change, or a staged hybrid switch
+    if ((!text && !attachmentsOnly && !isSettingsOnlyUpdate) || isDisabled.value) return
 
     // Trust gate for drafts whose project is still unresolved — e.g. a draft
     // hydrated from before the trust system existed, or one created while the
@@ -1456,7 +1475,7 @@ async function handleSend() {
     if (hasStagedHybrid) {
         sendWsMessage({ type: 'set_session_hybrid', session_id: props.sessionId })
         store.setStagedHybrid(props.sessionId, false)
-        if (!text) return
+        if (!text && !attachmentsOnly) return
     }
 
     // Build the message payload
@@ -2083,7 +2102,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                 <wa-button
                     v-if="!sendingLocked"
                     variant="brand"
-                    :disabled="isDisabled || (!messageText.trim() && !hasUnappliedChanges)"
+                    :disabled="isDisabled || (!messageText.trim() && !canSendAttachmentsOnly && !hasUnappliedChanges)"
                     @click="handleSend"
                     size="small"
                     class="send-button"

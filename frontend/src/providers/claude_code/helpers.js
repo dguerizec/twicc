@@ -221,7 +221,9 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
         const content = []
         if (attachments?.images?.length) content.push(...attachments.images)
         if (attachments?.documents?.length) content.push(...attachments.documents)
-        content.push({ type: 'text', text })
+        // Attachments alone are a valid message: emit no text block at all
+        // then, exactly like the backend does when building the SDK prompt.
+        if (text) content.push({ type: 'text', text })
         return {
             type: 'user',
             syntheticKind: SYNTHETIC_ITEM.OPTIMISTIC_USER_MESSAGE.kind,
@@ -242,6 +244,14 @@ export class ClaudeCodeHelpers extends BaseProviderHelpers {
             .join('\n')
             .trim()
         return text || null
+    }
+
+    extractUserMessageAttachmentCount(parsed) {
+        const content = parsed?.message?.content
+        if (!Array.isArray(content)) return 0
+        return content.filter(
+            block => block?.type === 'image' || block?.type === 'document',
+        ).length
     }
 
     getAuthState() {

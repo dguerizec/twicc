@@ -228,8 +228,10 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                         code="agent_starting",
                     )
 
-            # No live agent — text is required to start a new one
-            if not text:
+            # No live agent — a message is required to start one. Attachments
+            # alone qualify: Claude Code accepts a user message made only of
+            # image / document blocks.
+            if not has_content:
                 raise RuntimeError(
                     "Cannot start a new agent without a message"
                 )
@@ -994,10 +996,13 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             )
             # After successful cron restart, send pending content if any
             pending = self._pending_after_restart.pop(session_id, None)
-            if pending and pending.get("text"):
+            # Attachments alone are a message too — never gate on text only.
+            if pending and (
+                pending.get("text") or pending.get("images") or pending.get("documents")
+            ):
                 agent = self._agents.get(session_id)
                 if agent and agent.state == AgentState.USER_TURN:
-                    logger.info("Sending pending text after cron restart for session %s", session_id)
+                    logger.info("Sending pending message after cron restart for session %s", session_id)
                     await agent.send(
                         pending["text"],
                         images=pending.get("images"),

@@ -814,7 +814,14 @@ class ClaudeCodeAgent(BaseAgent):
         if documents:
             content_blocks.extend(documents)
 
-        content_blocks.append({"type": "text", "text": text})
+        # Attachments alone are a valid message (the frontend allows sending
+        # them with an empty composer on an existing session), and the CLI
+        # writes the content array verbatim to the JSONL — so emit no text
+        # block at all rather than an empty one. The empty block stays the
+        # fallback for a message with no attachments either (callers upstream
+        # refuse those, so this only guards against an empty content array).
+        if text or not content_blocks:
+            content_blocks.append({"type": "text", "text": text})
 
         async def _message_stream() -> AsyncIterator[dict]:
             yield {

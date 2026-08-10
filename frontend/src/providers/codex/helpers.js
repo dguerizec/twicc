@@ -253,6 +253,17 @@ export class CodexHelpers extends BaseProviderHelpers {
         return parsed.payload.message.trim() || null
     }
 
+    extractUserMessageAttachmentCount(parsed) {
+        if (parsed?.payload?.type !== 'user_message') return 0
+        // Codex CLI splits attachments over two sibling lists: ``images``
+        // (data URLs, what TwiCC sends) and ``local_images`` (paths, what the
+        // native CLI writes). Count both so the shape TwiCC did not produce
+        // still matches.
+        const { images, local_images: localImages } = parsed.payload
+        return (Array.isArray(images) ? images.length : 0)
+            + (Array.isArray(localImages) ? localImages.length : 0)
+    }
+
     // ─── Authentication ─────────────────────────────────────────────────
 
     getAuthState() {

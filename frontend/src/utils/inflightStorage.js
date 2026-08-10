@@ -30,9 +30,12 @@ export async function saveInflightSend(requestId, snapshot) {
     const db = await getDb()
     const medias = (snapshot.medias || []).map(media => ({ ...media }))
     const mediaBytes = medias.reduce((sum, media) => sum + (media.data?.length || 0), 0)
+    // ``mediaCount`` survives the drop: a message made only of attachments has
+    // no text, and the count is what identifies it when the store matches a
+    // rediscovered snapshot against the session's user_message lines.
     const toStore = mediaBytes > MEDIA_PERSIST_LIMIT
-        ? { ...snapshot, medias: [], mediasDropped: true }
-        : { ...snapshot, medias }
+        ? { ...snapshot, medias: [], mediasDropped: true, mediaCount: medias.length }
+        : { ...snapshot, medias, mediaCount: medias.length }
     return new Promise((resolve, reject) => {
         const tx = db.transaction(INFLIGHT_SENDS_STORE, 'readwrite')
         const request = tx.objectStore(INFLIGHT_SENDS_STORE).put(toStore, requestId)
