@@ -46,6 +46,24 @@ _WHITESPACE_RUN_RE = re.compile(r"\s+")
 _MD_SPECIAL_RE = re.compile(r"([\\`*_\[\]])")
 
 
+def inline_md(value: str | None, *, max_chars: int = TITLE_MAX_CHARS) -> str:
+    """Make arbitrary text safe to interpolate into a ``::`` header line.
+
+    A header owns a single line and mixes generated markdown with values that
+    are not ours (a session title, a peer's claimed name), so newlines are
+    flattened, the result is truncated, and the markdown specials that could
+    break out of a bold span or a code span are escaped. Truncation measures
+    the real text, before escaping adds characters. Shared with the peer
+    delivery envelope (``core/services/peer_messages.py``).
+    """
+    flattened = _WHITESPACE_RUN_RE.sub(" ", (value or "")).strip()
+    if not flattened:
+        return ""
+    if len(flattened) > max_chars:
+        flattened = flattened[: max_chars - 1] + "…"
+    return _MD_SPECIAL_RE.sub(r"\\\1", flattened)
+
+
 def prefix_sender_header(
     text: str,
     caller,
@@ -72,12 +90,8 @@ def prefix_sender_header(
     else:
         relation = "another session"
 
-    # The header is a single line, so newlines in the title are flattened first.
-    # Truncation then measures the real title, before escaping adds characters.
-    title = _WHITESPACE_RUN_RE.sub(" ", (caller.title or "")).strip()
-    if len(title) > TITLE_MAX_CHARS:
-        title = title[: TITLE_MAX_CHARS - 1] + "…"
-    suffix = f' ("**{_MD_SPECIAL_RE.sub(r"\\\1", title)}**")' if title else ""
+    title = inline_md(caller.title)
+    suffix = f' ("**{title}**")' if title else ""
 
     header = f"{SENDER_HEADER_PREFIX}{relation} `{caller.id}`{suffix}"
     # An attachments-only message has no text: the header is then the whole
