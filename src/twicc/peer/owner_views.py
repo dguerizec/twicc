@@ -40,7 +40,9 @@ async def _load_message(pk):
     from twicc.core.models import PeerMessage
 
     message = await sync_to_async(
-        lambda: PeerMessage.objects.select_related("peer").filter(pk=pk).first()
+        lambda: PeerMessage.objects
+        .select_related("peer", "origin_session", "delivered_to_session")
+        .filter(pk=pk).first()
     )()
     if message is None:
         raise Http404("Peer message not found")
@@ -143,10 +145,13 @@ async def peer_messages_list(request):
         limit = 50
 
     def _fetch():
-        pending = list(PeerMessage.objects.filter(
+        # The serializer reads each message's local session titles: one JOIN,
+        # not one query per row.
+        rows = PeerMessage.objects.select_related("origin_session", "delivered_to_session")
+        pending = list(rows.filter(
             direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
         ))
-        rest = list(PeerMessage.objects.exclude(
+        rest = list(rows.exclude(
             direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
         )[:limit])
         return pending + rest
@@ -188,6 +193,29 @@ async def peer_message_deliver(request, pk):
     if not success:
         return _err_response(errors)
     return JsonResponse({"envelope": envelope})
+
+
+async def peer_message_link_session(request, pk):
+    """POST /api/peer-messages/<pk>/link-session/ — {session_id}.
+
+    Late completion of a "deliver to a new session": the session did not exist
+    when the message was delivered (it was a local draft), so the UI comes back
+    with the real id once the provider created it. Fills an empty link only —
+    see ``peer_messages.link_delivered_session``.
+    """
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    message = await _load_message(pk)
+    data = _parse_body(request)
+    if data is None:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+    session_id = data.get("session_id") or ""
+    if not isinstance(session_id, str) or not session_id:
+        return JsonResponse({"error": "session_id is required"}, status=400)
+    success, errors = await peer_messages.link_delivered_session(message, session_id)
+    if not success:
+        return _err_response(errors)
+    return JsonResponse({"status": "ok"})
 
 
 async def peer_message_refuse(request, pk):

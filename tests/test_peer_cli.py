@@ -50,7 +50,7 @@ def test_peer_message_found_and_not_found():
     PeerMessage.objects.create(
         peer=peer, direction=PeerMessageDirection.OUT, message_id="pm_cli1",
         payload={"text": "hello", "images": [], "documents": []},
-        origin={"session_title": None, "sent_at": "2026-07-24T12:00:00+00:00"},
+        origin={"sent_at": "2026-07-24T12:00:00+00:00"},
         status=PeerMessageStatus.PENDING,
     )
     res = invoke(["peer-message", "pm_cli1"])

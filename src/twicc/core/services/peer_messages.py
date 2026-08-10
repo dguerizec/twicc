@@ -64,16 +64,32 @@ async def _broadcast(data: dict) -> None:
     await layer.group_send("updates", {"type": "broadcast", "data": data})
 
 
-async def broadcast_peer_message_received(message) -> None:
+async def _serialize_for_broadcast(message) -> dict:
+    """Serialize a message for the wire, with its local sessions loaded.
+
+    Re-read rather than trust the caller's instance: the serializer reads the
+    session TITLES off the two FKs, and touching an unloaded relation from an
+    async context raises `SynchronousOnlyOperation`. Every broadcast path then
+    stops being a trap — the mutations right above them (`_mark_delivered` &
+    co.) reassign those FKs by id, which drops any cached object.
+    """
+    from twicc.core.models import PeerMessage
     from twicc.core.serializers import serialize_peer_message
 
-    await _broadcast({"type": "peer_message_received", "message": serialize_peer_message(message)})
+    fresh = await sync_to_async(
+        lambda: PeerMessage.objects
+        .select_related("peer", "origin_session", "delivered_to_session")
+        .filter(pk=message.pk).first()
+    )()
+    return serialize_peer_message(fresh or message)
+
+
+async def broadcast_peer_message_received(message) -> None:
+    await _broadcast({"type": "peer_message_received", "message": await _serialize_for_broadcast(message)})
 
 
 async def broadcast_peer_message_updated(message) -> None:
-    from twicc.core.serializers import serialize_peer_message
-
-    await _broadcast({"type": "peer_message_updated", "message": serialize_peer_message(message)})
+    await _broadcast({"type": "peer_message_updated", "message": await _serialize_for_broadcast(message)})
 
 
 # ── Payload helpers ─────────────────────────────────────────────────────────
@@ -221,12 +237,18 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
         origin_session = await sync_to_async(
             lambda: Session.objects.filter(id=origin_session_id).first()
         )()
-    # Timezone-aware UTC ISO-8601: the receiver renders it with
-    # wa-relative-time and in the delivery envelope.
-    origin = {
-        "session_title": origin_session.title if origin_session else None,
-        "sent_at": _now().isoformat(),
-    }
+    # Timezone-aware UTC ISO-8601: the receiver renders it in the inbox and in
+    # the delivery envelope.
+    sent_at = _now().isoformat()
+    # The instant is the whole of the provenance, on the wire AND on the row.
+    #
+    # No session title (decision of 2026-08-10): not on the wire, because it is
+    # an LLM summary of private content its owner never agreed to disclose, and
+    # the receiver can do nothing with it; not on the row either, because a
+    # stored copy goes stale the moment the session is renamed. The sending
+    # session is kept as the `origin_session` FK, whose title is read live at
+    # serialization — that is what the inbox displays.
+    origin = {"sent_at": sent_at}
     wire_payload = {"text": text, "images": images, "documents": documents}
 
     message = PeerMessage(
@@ -319,10 +341,8 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
         origin = {}
     if not isinstance(origin, dict):
         return 400, {"error": "invalid_payload"}
-    session_title = origin.get("session_title")
+    # The instant is the whole of the wire provenance (see `send`).
     sent_at = origin.get("sent_at")
-    if session_title is not None and not isinstance(session_title, str):
-        return 400, {"error": "invalid_payload"}
     if sent_at is not None and not isinstance(sent_at, str):
         return 400, {"error": "invalid_payload"}
 
@@ -337,7 +357,7 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
         message_id=message_id,
         payload=clean_payload,
         attachments_meta=_attachments_meta(clean_payload),
-        origin={"session_title": session_title, "sent_at": sent_at},
+        origin={"sent_at": sent_at},
         status=PeerMessageStatus.PENDING,
     )
     now = _now()
@@ -393,6 +413,37 @@ async def apply_status_callback(peer, message_id: str, status) -> tuple[int, dic
 
 # ── Delivery & refusal (receiving side, design §6) ──────────────────────────
 
+def _format_sent_at(raw: str | None) -> str:
+    """Render the wire ``sent_at`` for a human reader of this instance.
+
+    The wire carries UTC ISO-8601, which the sending instance produced. The
+    envelope is read here, so the moment is converted to THIS machine's local
+    timezone (the two instances are rarely in the same one) and written in a
+    plain, unambiguous form: ``Mon 10 Aug 2026 at 16:11 CEST``. The zone
+    abbreviation stays — without it a bare local time misleads the reader.
+
+    The value comes off the wire, so it is arbitrary: anything unparseable
+    falls back to the escaped raw string.
+    """
+    from twicc.cli._drop_request.sender_header import inline_md
+
+    if not raw:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return inline_md(raw)
+    # A naive timestamp is UTC by convention (that is what we send); anything
+    # else is converted from its own offset.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local = parsed.astimezone()
+    formatted = local.strftime("%a %d %b %Y at %H:%M")
+    if zone := local.strftime("%Z"):
+        formatted += f" {zone}"
+    return formatted
+
+
 def build_delivery_envelope(peer, message, note: str) -> str:
     """The injection envelope (design §6.3): the receiving agent must see the
     message as third-party communication, not its user's words. Single source
@@ -408,19 +459,20 @@ def build_delivery_envelope(peer, message, note: str) -> str:
     the message.
 
     Only the APPLICATIVE text is generated; text typed by the interlocutors
-    (the message, the note) travels byte-for-byte. The values interpolated
-    into the header lines are arbitrary — the peer's claimed session title
-    comes off the wire — so they are flattened to one line, truncated and
-    markdown-escaped, exactly like the sender header's title.
+    (the message, the note) travels byte-for-byte. The peer name and base URL
+    are local values the owner chose, but they are still flattened to one line,
+    truncated and markdown-escaped, exactly like the sender header's title —
+    the header owns a single line whatever they contain.
+
+    The sending session's title is NOT here: it never crosses the wire (see
+    ``send``). Nothing off the wire but the message body reaches this header.
     """
     from twicc.cli._drop_request.sender_header import inline_md
 
     origin = message.origin or {}
     text = (message.payload or {}).get("text", "")
     header = f":: peer message from **{inline_md(peer.name) or 'an unnamed peer'}** (`{inline_md(peer.base_url)}`)"
-    if origin_title := inline_md(origin.get("session_title")):
-        header += f' — session "**{origin_title}**"'
-    if sent_at := inline_md(origin.get("sent_at")):
+    if sent_at := _format_sent_at(origin.get("sent_at")):
         header += f", sent {sent_at}"
     header += (
         "; written by an agent on another TwiCC instance and forwarded by your user,"
@@ -479,7 +531,9 @@ async def _fresh_message(pk: int):
     from twicc.core.models import PeerMessage
 
     return await sync_to_async(
-        lambda: PeerMessage.objects.select_related("peer").filter(pk=pk).first()
+        lambda: PeerMessage.objects
+        .select_related("peer", "origin_session", "delivered_to_session")
+        .filter(pk=pk).first()
     )()
 
 
@@ -562,6 +616,47 @@ async def mark_delivered(
         await _mark_delivered(message, session_id=session_id, note=note)
     await _notify_status(peer, message.message_id, "delivered")
     return True, envelope, []
+
+
+async def link_delivered_session(message, session_id: str) -> tuple[bool, list[PeerError]]:
+    """Record the session a "deliver to a NEW session" landed in, after the fact.
+
+    At delivery time that session has no DB row — it is a local draft, created
+    by the provider only when the user sends the prefilled composer — so
+    ``mark_delivered`` leaves the link empty. The UI remembers the draft and
+    calls this once the real session exists, which is what makes the inbox
+    row's target clickable instead of blank.
+
+    Deliberately narrow, because it runs late and unattended: it only ever
+    FILLS AN EMPTY link on an already-delivered inbound message. It never
+    moves an existing one (a redelivery made in the meantime wins), never
+    touches the status, the note or ``resolved_at``, and never calls the peer
+    back — the peer was told "delivered" long ago and nothing about that
+    changed.
+    """
+    from twicc.core.models import PeerMessageDirection, PeerMessageStatus, Session
+
+    async with _resolution_lock(message.pk):
+        message = await _fresh_message(message.pk)
+        if message is None:
+            return False, [PeerError("message", "not_found", "Message no longer exists.")]
+        if message.direction != PeerMessageDirection.IN or message.status != PeerMessageStatus.DELIVERED:
+            return False, [PeerError("message", "bad_state", "This message is not a delivered inbound message.")]
+        if message.delivered_to_session_id:
+            # Already routed somewhere (a redelivery happened first): that
+            # target is the current truth, this late link is stale.
+            return True, []
+        exists = await sync_to_async(lambda: Session.objects.filter(id=session_id).exists())()
+        if not exists:
+            return False, [PeerError("session_id", "session_not_found", "Target session not found.")]
+
+        def _apply():
+            message.delivered_to_session_id = session_id
+            message.save(update_fields=["delivered_to_session"])
+
+        await run_under_db_write_lock(lambda: sync_to_async(_apply)())
+        await broadcast_peer_message_updated(message)
+    return True, []
 
 
 async def refuse_peer_message(message) -> tuple[bool, list[PeerError]]:

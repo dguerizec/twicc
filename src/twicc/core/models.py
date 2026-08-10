@@ -1816,8 +1816,12 @@ class PeerMessage(models.Model):
     payload = models.JSONField(default=dict)
     # Computed at row creation: [{kind: "image"|"document", media_type, bytes, name?}]; survives the purge.
     attachments_meta = models.JSONField(default=list)
-    # Wire provenance: {session_title: str|null, sent_at: iso8601}. No session id
-    # on the wire (design §3.2/§8) — local ids stay local.
+    # Provenance: {sent_at: iso8601}, and nothing else — the ONLY thing the
+    # wire carries besides the payload. No session id (design §3.2/§8) and no
+    # session title (decision of 2026-08-10): it is an LLM summary of private
+    # content its owner never agreed to disclose. Not stored for our own
+    # outbound rows either — a copied title goes stale on the next rename; the
+    # sending session is `origin_session` below, whose title is read live.
     origin = models.JSONField(default=dict)
     # LOCAL only, outbound rows: which local session sent it (deferred threading, design §8).
     origin_session = models.ForeignKey(

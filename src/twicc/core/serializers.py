@@ -470,6 +470,24 @@ def serialize_peer(peer):
     }
 
 
+def peer_message_session_ref(session):
+    """A peer message's local session, as the UI needs it: ``{id, title,
+    project_id}`` or ``None``.
+
+    The title is read LIVE from the session row, never stored on the message:
+    a session gets renamed (by its user or by the title generator), and the
+    inbox must show the name the user knows today. It is also the reason the
+    UI never has to fall back on an id — the one thing a human cannot place.
+
+    Callers in an async context MUST have loaded the relation
+    (``select_related``); the broadcast helpers do it for every push, the REST
+    views for every list. Sync callers (CLI) may let it lazy-load.
+    """
+    if session is None:
+        return None
+    return {"id": session.id, "title": session.title, "project_id": session.project_id}
+
+
 def serialize_peer_message(message, *, include_payload=False):
     """Peer-message serializer. Summary form by default — base64 blobs must never
     transit the channel layer; only the REST detail endpoint passes
@@ -486,7 +504,14 @@ def serialize_peer_message(message, *, include_payload=False):
         "attachments_meta": message.attachments_meta,
         "origin": message.origin,
         "recipient_note": message.recipient_note,
+        # The two LOCAL endpoints, one per direction: where an outbound message
+        # left from, where an inbound one landed. The inbox shows either as the
+        # same "local session" column. The ids serve scripts; the refs carry
+        # the live title + project the UI displays.
+        "origin_session_id": message.origin_session_id,
         "delivered_to_session_id": message.delivered_to_session_id,
+        "origin_session": peer_message_session_ref(message.origin_session),
+        "delivered_to_session": peer_message_session_ref(message.delivered_to_session),
         "created_at": message.created_at.isoformat() if message.created_at else None,
         "resolved_at": message.resolved_at.isoformat() if message.resolved_at else None,
         "purged": message.purged_at is not None,

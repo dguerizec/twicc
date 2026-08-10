@@ -622,10 +622,13 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             from twicc.core.serializers import serialize_peer_message
 
             def _peer_messages_snapshot():
-                pending = list(PeerMessage.objects.filter(
+                # The serializer reads each message's local session titles: one
+                # JOIN, not one query per row.
+                rows = PeerMessage.objects.select_related("origin_session", "delivered_to_session")
+                pending = list(rows.filter(
                     direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
                 ))
-                recent = list(PeerMessage.objects.exclude(
+                recent = list(rows.exclude(
                     direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
                 )[:50])
                 return pending + recent

@@ -598,10 +598,15 @@ function openPeersManager() {
 }
 const showPeerInbox = ref(false)
 const peerReviewMessageId = ref(null)
+// A message opened FROM the inbox goes back to it when closed: triaging is a
+// list-then-message-then-list loop, and reaching the inbox again costs several
+// clicks (more so with no unread badge to click).
+const peerReviewFromInbox = ref(false)
 function openPeerInbox(e) {
     const messageId = e?.detail?.messageId
     if (messageId != null) {
         // A toast's Read button targets one message: open the review directly.
+        peerReviewFromInbox.value = false
         peerReviewMessageId.value = messageId
     } else {
         showPeerInbox.value = true
@@ -609,7 +614,17 @@ function openPeerInbox(e) {
 }
 function onPeerInboxReview(messageId) {
     showPeerInbox.value = false
+    peerReviewFromInbox.value = true
     peerReviewMessageId.value = messageId
+}
+function onPeerReviewClose(reason) {
+    // The dialog closes twice: once on the action (button, refusal, delivery),
+    // once on the wa-hide that follows. Only the first one decides.
+    if (peerReviewMessageId.value == null) return
+    const backToInbox = peerReviewFromInbox.value && reason !== 'navigating'
+    peerReviewFromInbox.value = false
+    peerReviewMessageId.value = null
+    showPeerInbox.value = backToInbox
 }
 
 // Edit any project (current project, or one picked from a palette list).
@@ -736,7 +751,7 @@ const toastTheme = computed(() => {
     <PeerMessageReviewDialog
         :open="peerReviewMessageId != null"
         :message-id="peerReviewMessageId"
-        @close="peerReviewMessageId = null"
+        @close="onPeerReviewClose"
     />
     <!-- Prevent browser default drop behavior (e.g. navigating to a dropped image).
          Our specific drop handlers in SessionItemsList call preventDefault themselves;

@@ -681,6 +681,15 @@ export const useDataStore = defineStore('data', {
             // Drained by tryFinalizePendingBinding() the moment the
             // canonical session lands in the store.
             pendingDraftBindings: {},
+
+            // Peer messages delivered to a NEW session, waiting for that
+            // session to exist. { sessionId: peerMessageId } — keyed by the
+            // draft id, rekeyed to the canonical one on bind. Drained by
+            // `_tryLinkPeerDelivery` when the real session lands in the store,
+            // which is what finally records the delivery target backend-side.
+            // Mirrored on the draft's IndexedDB record, so the link survives a
+            // reload between the delivery and the first send.
+            pendingPeerDeliveries: {},
         }
     }),
 
@@ -1458,6 +1467,7 @@ export const useDataStore = defineStore('data', {
             this.$patch({ sessions: { [session.id]: session } })
             this._hydrateSessionLayoutFromPersisted(session.id, session.layout)
             this.tryFinalizePendingBinding(session.id)
+            this._tryLinkPeerDelivery(session)
         },
         updateSession(session) {
             // When lifecycle timestamps change, clean up stale synthetic process states
@@ -1503,6 +1513,7 @@ export const useDataStore = defineStore('data', {
             // cross-device sync), unless we have an unsaved local edit in flight (guarded inside).
             this._hydrateSessionLayoutFromPersisted(session.id, session.layout)
             this.tryFinalizePendingBinding(session.id)
+            this._tryLinkPeerDelivery(session)
         },
         /**
          * Remove a session from the store by id.
@@ -1591,6 +1602,10 @@ export const useDataStore = defineStore('data', {
                 // pure JSON data (it round-trips to the backend as JSON), so this is exact. null /
                 // undefined (legacy / single-pane drafts) pass through untouched.
                 layout: s.layout == null ? s.layout : JSON.parse(JSON.stringify(s.layout)),
+                // Peer message this draft was created to answer, if any (see
+                // `setDraftPeerMessage`): persisted so a reload before the
+                // first send does not lose the link.
+                peerMessageId: s.peerMessageId,
                 ...this._pickAgentSettings(s),
             }).catch((err) =>
                 console.warn('Failed to save draft session to IndexedDB:', err),
@@ -1645,6 +1660,51 @@ export const useDataStore = defineStore('data', {
             // Persist to IndexedDB (settings + layout included so the seeded default survives a reload)
             this._saveDraftToIndexedDB(id)
             return id
+        },
+
+        /**
+         * Remember that this draft was created to receive a peer message
+         * delivered "to a new session".
+         *
+         * The delivery is recorded backend-side with no target: the session
+         * has no DB row yet — the provider creates it when the user sends the
+         * prefilled composer, and may never (a discarded draft). The link is
+         * therefore completed later, by `_tryLinkPeerDelivery`, once the real
+         * session lands in the store.
+         *
+         * @param {string} draftId
+         * @param {number|string} peerMessageId - `PeerMessage.id` (REST pk).
+         */
+        setDraftPeerMessage(draftId, peerMessageId) {
+            const session = this.sessions[draftId]
+            if (!session?.draft || peerMessageId == null) return
+            session.peerMessageId = peerMessageId
+            this.localState.pendingPeerDeliveries[draftId] = peerMessageId
+            this._saveDraftToIndexedDB(draftId)
+        },
+
+        /**
+         * Record the delivery target of a peer message whose session finally
+         * exists. No-op unless that exact session was awaited.
+         *
+         * Fire-and-forget: the backend fills an EMPTY link only, so a failure
+         * (offline, message redelivered elsewhere meanwhile) costs nothing but
+         * a blank target in the inbox — never a wrong one.
+         *
+         * @param {Object} session - The session that just landed in the store.
+         */
+        _tryLinkPeerDelivery(session) {
+            if (!session || session.draft) return
+            const messageId = this.localState.pendingPeerDeliveries[session.id]
+            if (messageId == null) return
+            delete this.localState.pendingPeerDeliveries[session.id]
+            apiFetch(`/api/peer-messages/${messageId}/link-session/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: session.id }),
+            }).catch((err) =>
+                console.warn('[peer] could not record the delivery target:', err),
+            )
         },
 
         /**
@@ -1717,7 +1777,12 @@ export const useDataStore = defineStore('data', {
          */
         deleteDraftSession(sessionId, { keepInStore = false } = {}) {
             if (this.sessions[sessionId]?.draft) {
+                // A discarded draft never becomes a session, so a peer delivery
+                // waiting on it waits forever: drop it. `keepInStore` is the
+                // opposite case — the draft was just SENT and is about to
+                // become the very session we are waiting for.
                 if (!keepInStore) {
+                    delete this.localState.pendingPeerDeliveries[sessionId]
                     // Removing the MRU entry is the navigational half of "this
                     // session leaves the store" — keep it paired with the delete
                     // (same as removeSession). When keepInStore promotes the draft
@@ -1750,6 +1815,16 @@ export const useDataStore = defineStore('data', {
          */
         async bindDraftSession(draftId, sessionId) {
             delete this.localState.pendingDraftBindings[draftId]
+
+            // A peer delivery waiting on this draft follows it to the canonical
+            // id. When the canonical session is ALREADY in the store, no
+            // addSession/updateSession will fire again — link it right here.
+            const pendingPeer = this.localState.pendingPeerDeliveries[draftId]
+            if (pendingPeer != null && draftId !== sessionId) {
+                delete this.localState.pendingPeerDeliveries[draftId]
+                this.localState.pendingPeerDeliveries[sessionId] = pendingPeer
+            }
+            this._tryLinkPeerDelivery(this.sessions[sessionId])
 
             if (draftId === sessionId) {
                 return
@@ -5611,7 +5686,14 @@ export const useDataStore = defineStore('data', {
                         // with the user's edits). Undefined for legacy drafts → ensureSessionLayout
                         // seeds an empty (single-pane) intention.
                         layout: draft.layout,
+                        peerMessageId: draft.peerMessageId,
                         ...settings,
+                    }
+                    // Re-arm the peer delivery this draft was created for, so a
+                    // reload between the delivery and the first send does not
+                    // lose the link (see `setDraftPeerMessage`).
+                    if (draft.peerMessageId != null) {
+                        this.localState.pendingPeerDeliveries[sessionId] = draft.peerMessageId
                     }
                 }
             } catch (err) {

@@ -28,7 +28,7 @@ def peer_message_cmd(
 
     message = (
         PeerMessage.objects.filter(direction=PeerMessageDirection.OUT, message_id=message_id)
-        .select_related("peer")
+        .select_related("peer", "origin_session", "delivered_to_session")
         .first()
     )
     if message is None:

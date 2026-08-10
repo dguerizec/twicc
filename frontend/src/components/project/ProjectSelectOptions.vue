@@ -16,6 +16,7 @@ import { useDataStore } from '../../stores/data'
 import { splitProjectsByPriority } from '../../utils/projectSort'
 import { buildProjectTree, flattenProjectTree } from '../../utils/projectTree'
 import ProjectBadge from './ProjectBadge.vue'
+import WorktreeSelectOptions from './WorktreeSelectOptions.vue'
 import AggregatedProcessIndicator from '../ui/AggregatedProcessIndicator.vue'
 import CodeCommentsIndicator from '../ui/CodeCommentsIndicator.vue'
 
@@ -44,6 +45,13 @@ const props = defineProps({
     priorityColor: {
         type: String,
         default: null,
+    },
+    /** List each project's git worktrees under it (the sidebar "New session"
+     *  picker's behaviour). Off by default: most selects target a repository,
+     *  not one of its worktrees. */
+    includeWorktrees: {
+        type: Boolean,
+        default: false,
     },
 })
 
@@ -80,9 +88,32 @@ const flatTree = computed(() => {
             <wa-icon name="layer-group" auto-width class="ws-header-icon" :style="priorityColor ? { color: priorityColor } : null"></wa-icon>
             {{ priorityLabel }}
         </wa-option>
+        <template v-for="p in prioritySplit.prioritized" :key="p.id">
+            <wa-option
+                :value="p.id"
+                :label="store.getProjectDisplayName(p.id)"
+            >
+                <span class="project-option">
+                    <ProjectBadge :project-id="p.id" />
+                    <span class="project-option-indicators">
+                        <CodeCommentsIndicator :project-ids="[p.id]" :show-tooltip="false" />
+                        <AggregatedProcessIndicator v-if="showProcessIndicator" :project-ids="[p.id]" size="small" />
+                    </span>
+                </span>
+            </wa-option>
+            <WorktreeSelectOptions v-if="includeWorktrees" :parent-id="p.id" />
+        </template>
+
+        <!-- Divider + "Other projects" header between priority and remaining projects -->
+        <template v-if="prioritySplit.prioritized.length && (namedProjects.length || flatTree.length)">
+            <wa-divider></wa-divider>
+            <wa-option v-if="priorityLabel" disabled class="section-header-option">Other projects</wa-option>
+        </template>
+    </template>
+
+    <!-- Named projects -->
+    <template v-for="p in namedProjects" :key="p.id">
         <wa-option
-            v-for="p in prioritySplit.prioritized"
-            :key="p.id"
             :value="p.id"
             :label="store.getProjectDisplayName(p.id)"
         >
@@ -94,29 +125,8 @@ const flatTree = computed(() => {
                 </span>
             </span>
         </wa-option>
-
-        <!-- Divider + "Other projects" header between priority and remaining projects -->
-        <template v-if="prioritySplit.prioritized.length && (namedProjects.length || flatTree.length)">
-            <wa-divider></wa-divider>
-            <wa-option v-if="priorityLabel" disabled class="section-header-option">Other projects</wa-option>
-        </template>
+        <WorktreeSelectOptions v-if="includeWorktrees" :parent-id="p.id" />
     </template>
-
-    <!-- Named projects -->
-    <wa-option
-        v-for="p in namedProjects"
-        :key="p.id"
-        :value="p.id"
-        :label="store.getProjectDisplayName(p.id)"
-    >
-        <span class="project-option">
-            <ProjectBadge :project-id="p.id" />
-            <span class="project-option-indicators">
-                <CodeCommentsIndicator :project-ids="[p.id]" :show-tooltip="false" />
-                <AggregatedProcessIndicator v-if="showProcessIndicator" :project-ids="[p.id]" size="small" />
-            </span>
-        </span>
-    </wa-option>
 
     <!-- Divider between named and unnamed sections (only when both exist) -->
     <wa-divider v-if="namedProjects.length && flatTree.length"></wa-divider>
@@ -132,19 +142,21 @@ const flatTree = computed(() => {
                 {{ item.segment }}
             </span>
         </wa-option>
-        <wa-option
-            v-else
-            :value="item.project.id"
-            :label="store.getProjectDisplayName(item.project.id)"
-        >
-            <span class="project-option" :style="{ paddingLeft: `${item.depth * 12}px` }">
-                <ProjectBadge :project-id="item.project.id" />
-                <span class="project-option-indicators">
-                    <CodeCommentsIndicator :project-ids="[item.project.id]" :show-tooltip="false" />
-                    <AggregatedProcessIndicator v-if="showProcessIndicator" :project-ids="[item.project.id]" size="small" />
+        <template v-else>
+            <wa-option
+                :value="item.project.id"
+                :label="store.getProjectDisplayName(item.project.id)"
+            >
+                <span class="project-option" :style="{ paddingLeft: `${item.depth * 12}px` }">
+                    <ProjectBadge :project-id="item.project.id" />
+                    <span class="project-option-indicators">
+                        <CodeCommentsIndicator :project-ids="[item.project.id]" :show-tooltip="false" />
+                        <AggregatedProcessIndicator v-if="showProcessIndicator" :project-ids="[item.project.id]" size="small" />
+                    </span>
                 </span>
-            </span>
-        </wa-option>
+            </wa-option>
+            <WorktreeSelectOptions v-if="includeWorktrees" :parent-id="item.project.id" :base-depth="item.depth" />
+        </template>
     </template>
 </template>
 

@@ -42,12 +42,15 @@ $TWICC peer-message <MESSAGE_ID>
 {"id": 12, "message_id": "pm_1a2b3c4d5e6f7a8b", "peer_id": "peer_a1b2c3d4", "direction": "out",
  "status": "pending", "error": "", "text_preview": "Here is the recap...",
  "attachments_meta": [{"kind": "image", "media_type": "image/png", "bytes": 48211}],
- "origin": {"session_title": "Front revamp", "sent_at": "2026-07-24T12:00:00+00:00"},
- "recipient_note": "", "delivered_to_session_id": null,
+ "origin": {"sent_at": "2026-07-24T12:00:00+00:00"},
+ "recipient_note": "", "origin_session_id": "abc123", "delivered_to_session_id": null,
+ "origin_session": {"id": "abc123", "title": "Front revamp", "project_id": "-home-me-app"},
+ "delivered_to_session": null,
  "created_at": "...", "resolved_at": null, "purged": false}
 ```
 
 - `status` — `pending` (awaiting the remote user), `delivered`, `refused`, or `failed` (never reached the peer; detail in `error`).
+- `origin_session` / `delivered_to_session` — the local session at each end (`null` when there is none), with its title read live. The peer receives neither: the wire carries `sent_at` and the payload, nothing else.
 
 ### Exit codes
 
