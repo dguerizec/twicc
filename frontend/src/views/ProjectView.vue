@@ -3384,10 +3384,16 @@ html.wa-dark .usage-lane-time {
     background: var(--wa-color-neutral-fill-quiet);
 }
 
+/* Two stacked lines (period label + reset time), but the reset line only exists
+   once the period has started. Reserve its height and center the block, so a row
+   without a reset time keeps the same height (the label stays centered instead of
+   jumping up) and the footer no longer resizes when switching provider. */
 .usage-quota-info {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
+    justify-content: center;
+    min-height: calc(1.2 * (var(--wa-font-size-xs) + var(--wa-font-size-2xs)));
     line-height: 1.2;
     flex: 0 0 auto;
 }
