@@ -1690,7 +1690,8 @@ function insertTextAtCursor(text, { focus = true } = {}) {
     // focus:false so "Add to message" doesn't grab focus and pop the mobile
     // keyboard — jarring in general, and outright broken when the composer sits
     // behind an overlay (a docked Browser pane). The text still lands in the
-    // draft; only the caret move + focus are skipped.
+    // draft; only the caret move + focus are skipped. The widget re-enables focus
+    // in the chat pane on pointer devices only (see its focusComposerOnAdd prop).
     if (!focus) return
 
     // Position cursor after the inserted text and focus

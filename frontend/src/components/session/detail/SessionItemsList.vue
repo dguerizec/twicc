@@ -1940,6 +1940,7 @@ defineExpose({
                 :selected-text="textSelectionText"
                 :position="textSelectionPosition"
                 :metadata="textSelectionMetadata"
+                focus-composer-on-add
                 @close="closeTextSelectionComment"
             />
         </Teleport>

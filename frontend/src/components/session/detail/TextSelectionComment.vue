@@ -43,6 +43,12 @@ const props = defineProps({
      *  captured screenshot as a draft attachment. Required alongside
      *  captureScreenshot for the screenshot to actually reach the message. */
     attachScreenshot: { type: Function, default: null },
+    /** When true, "Add to message" focuses the composer (caret after the inserted
+     *  text). Only the chat consumer sets it: the composer lives in that same pane,
+     *  so it is visible and focusing it chains ⌘↵ (add) → ⌘↵ (send). Panes where
+     *  the composer may sit behind an overlay (browser, files, terminal) leave it
+     *  false. Ignored on touch devices — see addToMessage(). */
+    focusComposerOnAdd: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['close'])
@@ -261,10 +267,13 @@ async function addToMessage() {
             lang: props.metadata?.lang ?? null,
         },
     )
-    // No focus: the user already composed here in the widget; grabbing the
-    // composer's focus would pop the mobile keyboard (and the composer may be
-    // behind a docked-pane overlay). The text still lands in the draft.
-    insertTextAtCursor(formatted + '\n', { focus: false })
+    // Focus only in the chat pane on a pointer device (same condition as the ⌘↵
+    // hint in the placeholder): the composer is right there, and keeping the focus
+    // lets the user send with a second ⌘↵. On touch, focusing pops the virtual
+    // keyboard and gets in the way of a follow-up selection; elsewhere the composer
+    // may sit behind a docked-pane overlay. The text lands in the draft either way.
+    const focusComposer = props.focusComposerOnAdd && !settingsStore.isTouchDevice
+    insertTextAtCursor(formatted + '\n', { focus: focusComposer })
     submitting.value = false
     close()
 }
