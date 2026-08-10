@@ -14,8 +14,6 @@ logger = logging.getLogger(__name__)
 _FLUSH_INTERVAL = 30
 # share_id -> list[(at_iso, ip, user_agent)]
 _pending: dict[str, list[tuple[str, str, str]]] = {}
-# share_id -> label snapshot (for the notification copy), captured at note time.
-_labels: dict[str, str] = {}
 _MAX_ACCESS_ROWS = 500
 
 
@@ -29,7 +27,6 @@ def note_view(share, request) -> None:
     at = datetime.now(tz=timezone.utc).isoformat()
     ua = (request.headers.get("User-Agent") or "")[:255]
     _pending.setdefault(share.id, []).append((at, _client_ip(request), ua))
-    _labels[share.id] = share.label or ""
 
 
 def _drain() -> dict[str, list[tuple[str, str, str]]]:
@@ -74,18 +71,49 @@ _notify_state: dict[str, tuple[float, int]] = {}
 _NOTIFY_THROTTLE_SECONDS = 3600
 
 
-async def _maybe_notify(share_id: str, view_count: int) -> None:
+def _share_descriptor(share) -> str:
+    """Owner-facing handle for the 'share viewed' copy: ``session share 'Title' (label)``.
+
+    The reader is the *creator*, so the ``show_title`` option — which only hides the
+    title from viewers — is ignored, and the real target title wins over the public
+    ``display_title`` override (it is what the owner recognises; the override is the
+    fallback when the target has no title). The private label is appended when set, to
+    tell two links to the same object apart. Neither ⇒ the raw share id.
+
+    Requires ``share`` to carry its target relation already loaded (``select_related``):
+    a lazy FK load here would run a sync query inside the async flush task.
+    """
+    from twicc.core.enums import ShareKind
+    from twicc.external_notifications import _truncate
+
+    is_session = share.kind == ShareKind.SESSION.value
+    if is_session:
+        target = (share.session.title if share.session else "") or ""
+    else:
+        bookmark = share.artifact_bookmark
+        target = ((bookmark.name or bookmark.relative_path) if bookmark else "") or ""
+    title = target.strip() or ((share.options or {}).get("display_title") or "").strip()
+    # A bookmark falls back to its relative path, which is unbounded — keep the copy short.
+    title = _truncate(title, 80, "")
+    label = (share.label or "").strip()
+    if title and label:
+        name = f"'{title}' ({label})"
+    else:
+        name = f"'{title or label or share.id}'"
+    return f"{'session' if is_session else 'artifact'} share {name}"
+
+
+async def _maybe_notify(share) -> None:
     """Fire a 'share viewed' external notification (first view, then ≤1/hour)."""
     import time
 
     from asgiref.sync import sync_to_async
-    from twicc.core.models import Share
     from twicc.external_notifications import _send  # reuse the Apprise send path
     from twicc.synced_settings import read_synced_settings
 
-    share = await sync_to_async(lambda: Share.objects.filter(id=share_id).first())()
     if share is None or not share.notify_on_view:
         return
+    share_id = share.id
     settings = await sync_to_async(read_synced_settings)()
     targets = [t for t in settings.get("externalNotificationTargets") or []
                if isinstance(t, dict) and t.get("enabled") and t.get("url") and t.get("tested") is True]
@@ -98,9 +126,8 @@ async def _maybe_notify(share_id: str, view_count: int) -> None:
         return
     extra = f" ({suppressed} more views since the last alert)" if suppressed else ""
     _notify_state[share_id] = (now, 0)
-    label = share.label or share.id
     await _send([t["url"] for t in targets], "Share viewed",
-                f"Your share '{label}' was viewed.{extra}")
+                f"Your {_share_descriptor(share)} was viewed.{extra}")
 
 
 async def start_share_view_flush_task(stop_event: asyncio.Event) -> None:
@@ -129,7 +156,7 @@ async def start_share_view_flush_task(stop_event: asyncio.Event) -> None:
                 )()
                 if share is not None:
                     await broadcast_share_updated(share)
-                    await _maybe_notify(share_id, share.view_count)
+                    await _maybe_notify(share)
         except Exception:  # noqa: BLE001 — keep the loop alive
             for share_id, views in snapshot.items():
                 _pending.setdefault(share_id, []).extend(views)

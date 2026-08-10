@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Navigation inside a session** — Moving between a session's tabs no longer sends the sidebar to another project or workspace.
 - **Codex sessions spawned by an agent** — They can now put their questions in the conversation instead of a click-only dialog, so a hidden one no longer gets stuck.
 - **Minimized docks** — The strip of icons now shows which tab a minimized dock is on, and which one is open.
+- **"Share viewed" notifications** — They now name the shared session or artifact, and the link's own label, instead of an internal identifier.
 - **Project icons** — The project selector now shows the current project's icon, not only its color dot.
 - **Quota tooltips** — no longer close before you can reach the buttons inside them (attempt #2).
 
