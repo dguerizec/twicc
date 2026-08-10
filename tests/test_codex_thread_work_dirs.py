@@ -241,7 +241,7 @@ def test_request_user_input_disabled_drops_the_tool_and_the_feature() -> None:
     _apply_request_user_input(config, enabled=False)
 
     assert config["features"]["default_mode_request_user_input"] is False
-    assert config["tools"]["experimental_request_user_input"] is False
+    assert config["tools"]["experimental_request_user_input"] == {"enabled": False}
 
 
 def test_new_thread_without_question_widget_disables_request_user_input(monkeypatch) -> None:
@@ -261,7 +261,7 @@ def test_new_thread_without_question_widget_disables_request_user_input(monkeypa
 
     config = codex.start_calls[0]["config"]
     assert config["features"]["default_mode_request_user_input"] is False
-    assert config["tools"]["experimental_request_user_input"] is False
+    assert config["tools"]["experimental_request_user_input"] == {"enabled": False}
 
 
 def test_resumed_thread_keeps_request_user_input_when_widget_unset(monkeypatch) -> None:

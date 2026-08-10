@@ -839,6 +839,12 @@ def _apply_request_user_input(thread_config: dict, *, enabled: bool) -> None:
     (``toolRequestUserInput``), which a scripted or hidden session has no access
     to, and the turn would block forever.
 
+    ``tools.experimental_request_user_input`` is a TABLE (``{enabled = bool}``),
+    not a bool: unlike the neighbouring ``tools.web_search``, it has no untagged
+    bool form, and a bare ``false`` makes Codex reject the whole config patch
+    ("expected struct ExperimentalRequestUserInput"). Same shape for the sibling
+    ``tools.update_plan``.
+
     Both keys live in the per-thread ``config`` patch, read at ``thread_start``
     and ``thread_resume`` only: ``thread/settings/update`` cannot carry them, so
     a change on a live session lands at the next process start. That is why
@@ -852,7 +858,7 @@ def _apply_request_user_input(thread_config: dict, *, enabled: bool) -> None:
     thread_config["suppress_unstable_features_warning"] = True
     if not enabled:
         tools = thread_config.setdefault("tools", {})
-        tools["experimental_request_user_input"] = False
+        tools["experimental_request_user_input"] = {"enabled": False}
 
 
 def _apply_codex_work_dirs(thread_config: dict, work_dirs: list[str]) -> None:
