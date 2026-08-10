@@ -134,7 +134,7 @@ function onNextTip() {
 </script>
 
 <template>
-    <div class="tip-toast wa-invert" tabindex="-1" @keydown.esc="onClose">
+    <div class="tip-toast" tabindex="-1" @keydown.esc="onClose">
         <header class="tip-header">
             <wa-tag size="medium" class="tip-badge" variant="brand">
                 <wa-icon name="lightbulb" />

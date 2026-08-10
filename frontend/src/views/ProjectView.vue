@@ -7,7 +7,7 @@ import { useSettingsStore } from '../stores/settings'
 import { useSharesStore } from '../stores/shares'
 import { useHelpStore } from '../stores/help'
 import { useWorkspacesStore } from '../stores/workspaces'
-import { COLOR_SCHEME, SESSION_TIME_FORMAT } from '../constants'
+import { SESSION_TIME_FORMAT } from '../constants'
 import { formatDate } from '../utils/date'
 import { useCommandRegistry } from '../composables/useCommandRegistry'
 import { useStartupPolling } from '../composables/useStartupPolling'
@@ -87,13 +87,6 @@ useStartupPolling(() => store.loadHomeData())
 
 // Costs setting
 const showCosts = computed(() => settingsStore.areCostsShown)
-
-// In light mode the tooltip background is dark (WA inverts it), so buttons need a filled
-// appearance to be readable on that dark background. In dark mode the tooltip is light and
-// outlined buttons work fine.
-const quotaButtonAppearance = computed(() =>
-    settingsStore.getEffectiveColorScheme === COLOR_SCHEME.DARK ? 'outlined' : 'filled'
-)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Provider authentication callouts
@@ -2371,9 +2364,9 @@ function updateSidebarClosedClass(closed) {
                             <div class="quota-tooltip">
                                 <div class="quota-stale-header"><wa-icon name="triangle-exclamation" class="quota-stale-header-icon"></wa-icon><span>Data may be outdated</span></div>
                                 <div class="quota-tooltip-row"><span class="quota-tooltip-label">Last update</span><span>{{ quotaLastUpdateFormatted }}</span></div>
-                                <div class="quota-tooltip-buttons wa-light">
-                                    <wa-button v-if="canRefreshUsage" size="small" variant="brand" :appearance="quotaButtonAppearance" :loading="usageRefreshing" :disabled="usageRefreshing" class="quota-stale-button" @click="refreshUsage()"><wa-icon slot="start" name="arrow-rotate-right"></wa-icon>Refresh now</wa-button>
-                                    <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
+                                <div class="quota-tooltip-buttons">
+                                    <wa-button v-if="canRefreshUsage" size="small" variant="brand" appearance="outlined" :loading="usageRefreshing" :disabled="usageRefreshing" class="quota-stale-button" @click="refreshUsage()"><wa-icon slot="start" name="arrow-rotate-right"></wa-icon>Refresh now</wa-button>
+                                    <wa-button v-if="usageExternalLink" size="small" variant="brand" appearance="outlined" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
                                 </div>
                             </div>
                         </AppTooltip>
@@ -2420,9 +2413,9 @@ function updateSidebarClosedClass(closed) {
                                 <div class="quota-tooltip-row" v-if="quotaFiveHourCost.estimatedMonthly != null"><span class="quota-tooltip-label">Est. 30 days</span><CostDisplay :cost="quotaFiveHourCost.estimatedMonthly" /></div>
                                 <div class="quota-tooltip-note quota-tooltip-row-danger" v-if="quotaFiveHourCost.capped"><wa-icon name="triangle-exclamation"></wa-icon> Based on capped 5h estimate</div>
                             </template>
-                            <div class="quota-tooltip-buttons wa-light">
-                                <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
-                                <wa-button size="small" variant="brand" :appearance="quotaButtonAppearance" @click="openUsageGraph('five-hour')"><wa-icon slot="start" name="chart-line"></wa-icon>View graph</wa-button>
+                            <div class="quota-tooltip-buttons">
+                                <wa-button v-if="usageExternalLink" size="small" variant="brand" appearance="outlined" :href="usageExternalLink.url" target="_blank" rel="noopener"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
+                                <wa-button size="small" variant="brand" appearance="outlined" @click="openUsageGraph('five-hour')"><wa-icon slot="start" name="chart-line"></wa-icon>View graph</wa-button>
                             </div>
                         </div>
                     </AppTooltip>
@@ -2468,9 +2461,9 @@ function updateSidebarClosedClass(closed) {
                                 <div class="quota-tooltip-row" v-if="quotaSevenDayCost.estimatedMonthly != null"><span class="quota-tooltip-label">Est. 30 days</span><CostDisplay :cost="quotaSevenDayCost.estimatedMonthly" /></div>
                                 <div class="quota-tooltip-note quota-tooltip-row-danger" v-if="quotaSevenDayCost.capped"><wa-icon name="triangle-exclamation"></wa-icon> Based on capped 7d estimate</div>
                             </template>
-                            <div class="quota-tooltip-buttons wa-light">
-                                <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
-                                <wa-button size="small" variant="brand" :appearance="quotaButtonAppearance" @click="openUsageGraph('seven-day')"><wa-icon slot="start" name="chart-line"></wa-icon>View graph</wa-button>
+                            <div class="quota-tooltip-buttons">
+                                <wa-button v-if="usageExternalLink" size="small" variant="brand" appearance="outlined" :href="usageExternalLink.url" target="_blank" rel="noopener"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
+                                <wa-button size="small" variant="brand" appearance="outlined" @click="openUsageGraph('seven-day')"><wa-icon slot="start" name="chart-line"></wa-icon>View graph</wa-button>
                             </div>
                         </div>
                     </AppTooltip>
@@ -2509,8 +2502,8 @@ function updateSidebarClosedClass(closed) {
                                 <div class="quota-tooltip-row"><span class="quota-tooltip-label">Remaining</span><span>{{ Math.round(quotaExtraUsage.remainingCredits) }} credits</span></div>
                             </template>
                             <div v-if="quotaExtraUsage.utilization != null" class="quota-tooltip-row"><span class="quota-tooltip-label">Reset</span><span>{{ formatResetTime(extraUsageResetDate()) }}</span></div>
-                            <div class="quota-tooltip-buttons wa-light">
-                               <wa-button v-if="usageExternalLink" size="small" variant="brand" :appearance="quotaButtonAppearance" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
+                            <div class="quota-tooltip-buttons">
+                               <wa-button v-if="usageExternalLink" size="small" variant="brand" appearance="outlined" :href="usageExternalLink.url" target="_blank" rel="noopener" class="quota-stale-button"><wa-icon slot="start" name="up-right-from-square"></wa-icon>{{ usageExternalLink.label }}</wa-button>
                             </div>
                         </div>
                     </AppTooltip>

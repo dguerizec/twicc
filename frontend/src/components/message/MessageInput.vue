@@ -1993,12 +1993,16 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     </button>
                     <AppTooltip :for="`attachments-popover-trigger-${sessionId}`">{{ attachmentCount }} file{{ attachmentCount > 1 ? 's' : '' }} attached</AppTooltip>
                     <!-- Temporary tooltip shown when new files are attached -->
-                    <wa-tooltip
+                    <!-- `force`: driven manually after an attachment, so it must
+                         also show on touch devices, where AppTooltip otherwise
+                         renders nothing. -->
+                    <AppTooltip
+                        force
                         :for="`attachments-popover-trigger-${sessionId}`"
                         trigger="manual"
                         placement="top"
                         :open="showAttachTooltip || undefined"
-                    >{{ attachTooltipText }}</wa-tooltip>
+                    >{{ attachTooltipText }}</AppTooltip>
                     <wa-popover
                         v-popover-focus-fix
                         :for="`attachments-popover-trigger-${sessionId}`"

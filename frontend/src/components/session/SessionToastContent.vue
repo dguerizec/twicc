@@ -143,7 +143,7 @@ function goToSession() {
         <span v-if="parsedError" class="session-toast-error" :title="errorMessage">
             {{ parsedError.summary }}<span v-if="parsedError.status" class="error-status"> ({{ parsedError.status }})</span>
         </span>
-        <div v-if="!isCurrentSession" class="session-toast-actions wa-light">
+        <div v-if="!isCurrentSession" class="session-toast-actions">
             <wa-button v-if="showActions" size="small" variant="brand" appearance="outlined" @click="archiveSession">Archive</wa-button>
             <wa-button v-if="showActions" size="small" variant="brand" appearance="outlined" @click="markRead">Mark as read</wa-button>
             <wa-button size="small" variant="brand" appearance="outlined" @click="goToSession">Go to session</wa-button>

@@ -713,14 +713,27 @@ const toastTheme = computed(() => {
          navigation, enabling parent-terminal attachment. -->
     <TerminalPool v-if="isAppReady" />
 
-    <!-- Toast notification system (theme inverted for contrast) -->
+    <!-- Toast notification system (theme inverted for contrast).
+         The `.wa-invert` box flips the whole `--wa-color-*` set for every toast,
+         so WA components and semantic tokens used inside toast content match the
+         inverted background without each call site opting in. It sits INSIDE the
+         Notivue slot (not around <Notivue>) so it follows the notifications even
+         if Notivue teleports its root, and uses `display: contents` so it stays
+         out of Notivue's layout and animations. -->
     <Notivue v-slot="item">
-        <CustomNotification v-if="item.props?.custom" :item="item" :theme="toastTheme" />
-        <Notification v-else :item="item" :theme="toastTheme" />
+        <div class="toast-invert wa-invert">
+            <CustomNotification v-if="item.props?.custom" :item="item" :theme="toastTheme" />
+            <Notification v-else :item="item" :theme="toastTheme" />
+        </div>
     </Notivue>
 </template>
 
 <style>
+/* Carries the inverted color tokens for every toast, nothing else. */
+.toast-invert {
+    display: contents;
+}
+
 .version-reload-content {
     display: flex;
     flex-direction: column;

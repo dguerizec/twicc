@@ -81,7 +81,7 @@ function copyLoginCommand() {
         <p class="provider-auth-toast-message">
             Run <code class="copyable" title="Click to copy" @click="copyLoginCommand">{{ loginCommand }}</code> to enable sending messages.
         </p>
-        <div class="provider-auth-toast-actions wa-light">
+        <div class="provider-auth-toast-actions">
             <wa-button
                 v-if="canDisable"
                 size="small"

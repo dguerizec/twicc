@@ -17,6 +17,16 @@
  *     cancelled as soon as the pointer lands on it. See cancelPendingHide.
  *
  * All extra attributes are forwarded to the underlying <wa-tooltip>.
+ *
+ * Color scheme: the tooltip body is painted with `--wa-color-text-normal`, so it
+ * always reads as the opposite of the page (dark bubble in light mode and vice
+ * versa) — but that is a "loud fill", not a scheme switch, so WA components and
+ * semantic tokens inside the tooltip would still resolve against the page
+ * scheme and become unreadable. The slotted content is therefore wrapped in a
+ * `.wa-invert` box (see template), which flips the whole `--wa-color-*` set for
+ * the subtree. The class goes on the content, never on the <wa-tooltip> host:
+ * on the host it would also flip `--wa-tooltip-background-color` and the bubble
+ * would lose its contrast.
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useSettingsStore } from '../../stores/settings'
@@ -132,6 +142,16 @@ onBeforeUnmount(stopListening)
         :hide-delay="interactive ? INTERACTIVE_HIDE_DELAY : undefined"
         v-bind="$attrs"
     >
-        <slot />
+        <!-- display: contents — the box only carries the inverted color tokens,
+             it never takes part in the layout. -->
+        <div class="wa-invert tooltip-invert">
+            <slot />
+        </div>
     </wa-tooltip>
 </template>
+
+<style scoped>
+.tooltip-invert {
+    display: contents;
+}
+</style>
