@@ -9,7 +9,11 @@ Fans out one ``kind="session:send_message"`` drop per id via the shared
 :func:`twicc.cli._batch_runner.run_batch` (no server-side change), polls every
 status under one ``--timeout``, and emits an aggregated result.
 
-The message text is resolved once (inline or a file path → its content). The
+The message text is resolved once (inline or a file path → its content), then
+prefixed **per recipient** with the sender header (see
+``_drop_request/sender_header.py``) when the caller is itself a TwiCC session —
+the relation wording (spawned/parent/sibling/another) depends on each
+recipient, so the delivered text can differ between them. The
 attachments are validated/encoded **per session** against that session's
 provider and effective model — so the same file can succeed on a Claude Code
 session and be rejected on a Codex one (which only accepts images), surfacing as
@@ -123,6 +127,11 @@ def send_messages_cmd(
     by session id with a summary; a per-session failure never fails the batch
     (exit 0), exit 6 if no session was sent.
 
+    When the caller is itself a TwiCC session, each recipient receives the
+    text prefixed with a sender header ("> Message from <relation> session
+    <id> (\"<title>\")") identifying the calling session; the relation wording
+    (spawned/parent/sibling/another) is computed per recipient.
+
     Heads-up: each send starts/resumes an agent (real work, token spend); a
     batch can cold-start many stopped sessions at once.
     """
@@ -139,7 +148,9 @@ def send_messages_cmd(
     )
     from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
     from twicc.cli._drop_request.prompt import PromptError, resolve_prompt
+    from twicc.cli._drop_request.sender_header import prefix_sender_header
     from twicc.cli._drop_request.validation import ValidationError
+    from twicc.cli._drop_request.whoami import resolve_current_session
     from twicc.cli._output import emit_error
     from twicc.providers.helpers import get_provider_helpers
 
@@ -151,12 +162,24 @@ def send_messages_cmd(
 
     bootstrap = load_local_bootstrap()
 
+    # Identify the calling agent once (PID ancestry; MCP sets a forced session
+    # id) — the sender header itself is computed per recipient in ``_prepare``,
+    # since the relation wording depends on each target. None for a human
+    # invoking the CLI from a plain shell → no header.
+    caller = resolve_current_session()
+
     def _prepare(resolved):
         """Per-id: build the send payload, encoding attachments for this provider."""
+        recipient_text = prefix_sender_header(
+            text,
+            caller,
+            recipient_id=resolved.session_id,
+            recipient_spawned_by_id=resolved.spawned_by_id,
+        )
         if not attach:
             return {
                 "session_id": resolved.session_id,
-                "text": text,
+                "text": recipient_text,
                 "images": [],
                 "documents": [],
             }
@@ -188,7 +211,7 @@ def send_messages_cmd(
 
         return {
             "session_id": resolved.session_id,
-            "text": text,
+            "text": recipient_text,
             "images": attach_result.images,
             "documents": attach_result.documents,
         }

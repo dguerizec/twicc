@@ -38,6 +38,12 @@ class ResolvedSession(NamedTuple):
     project_id: str
     directory: str
     hidden: bool
+    spawned_by_id: str | None
+    """Id of the session that spawned this one (``None`` for a root session).
+
+    Used to compute the spawn-tree relation in the sender header of
+    ``send-message`` / ``send-messages``.
+    """
     current_settings: "AgentSettings"
     """The session row's AgentSettings at lookup time (all fields, None = use synced default).
 
@@ -101,5 +107,6 @@ def lookup_session(session_id: str) -> ResolvedSession:
         project_id=session.project_id,
         directory=project.directory,
         hidden=bool(session.hidden),
+        spawned_by_id=session.spawned_by_id,
         current_settings=AgentSettings.from_session(session),
     )

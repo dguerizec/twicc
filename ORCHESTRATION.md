@@ -37,6 +37,7 @@ Orchestration is built entirely from the ordinary commands in [`SKILLS-AND-CLI.m
 ## Communication
 
 - **Push / pull coexist.** An executor child reports with `send-message parent`; a parent can also pull any child's messages at will. A read-only child (below) cannot push, so pull is the only way to read it.
+- **Attribution.** A message sent from one session to another arrives prefixed with a sender header — `> Message from <relation> session <id> ("<title>")` then `---` — where the relation (`your spawned session` / `your parent session` / `a sibling session` / `another session`) is computed from the spawn tree. It is added automatically by `send-message` / `send-messages`; a message without it comes from the user.
 - **Siblings never talk directly** — they route through the common parent.
 - **A node waits only on its direct children** in normal synchronization, never on grandchildren. Each level pilots its own children; `--descendants` is for exceptional subtree cleanup, not for routine barriers.
 

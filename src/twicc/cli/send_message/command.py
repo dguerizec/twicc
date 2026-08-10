@@ -52,6 +52,11 @@ def send_message_cmd(
     permission mode, ...). To change settings, use
     ``twicc update-session <ID> settings`` — or the UI.
 
+    When the caller is itself a TwiCC session, the recipient receives the
+    text prefixed with a sender header ("> Message from <relation> session
+    <id> (\"<title>\")") identifying the calling session and its spawn-tree
+    relation to the recipient (spawned/parent/sibling/another).
+
     Asynchronous: a "sent" status only means the message was handed to the
     agent — not that the agent has finished processing it. To block until it
     reaches a given state, follow up with
@@ -78,6 +83,7 @@ def send_message_cmd(
         emit_validation_errors,
     )
     from twicc.cli._drop_request.prompt import resolve_prompt, PromptError
+    from twicc.cli._drop_request.sender_header import prefix_sender_header
     from twicc.cli._drop_request.session_lookup import (
         SessionLookupError,
         lookup_session,
@@ -92,16 +98,18 @@ def send_message_cmd(
     except ServerDownError as e:
         emit_error(str(e), code=2)
 
-    # 'parent' keyword: PID ancestry → current TwiCC session (same mechanism
-    # as `--spawned-by self` on create-session) → its `spawned_by` field, which
-    # is the session that originally created the current one via
+    # Identify the calling agent (PID ancestry; MCP sets a forced session id).
+    # Used both to resolve the 'parent' keyword and to prefix the message with
+    # a sender header (see sender_header.py) — the recipient is otherwise
+    # blind to which session is talking. None for a human invoking the CLI
+    # from a plain shell → no header.
+    current_session = resolve_current_session()
+
+    # 'parent' keyword: the current session's `spawned_by` field, which is the
+    # session that originally created the current one via
     # `twicc create-session`. Done before lookup_session, which expects a real
-    # session_id. The current session's id is kept aside so the message can be
-    # prefixed with the caller's identity (the recipient parent is otherwise
-    # blind to which spawned session is talking).
-    parent_caller_id: str | None = None
+    # session_id.
     if session_id == "parent":
-        current_session = resolve_current_session()
         if current_session is None:
             emit_validation_errors(
                 [ValidationError(
@@ -125,7 +133,6 @@ def send_message_cmd(
                 )],
             )
             raise typer.Exit(1)
-        parent_caller_id = current_session.id
         session_id = current_session.spawned_by_id
 
     # Local pre-check: session must exist, not be stale, and have a project
@@ -148,16 +155,16 @@ def send_message_cmd(
         )
         raise typer.Exit(1)
 
-    # When the 'parent' keyword was used, prefix the message so the recipient
-    # parent session sees who is talking — otherwise it would receive an
-    # anonymous follow-up from "the user" and have no way to tell which of
-    # its spawned sessions sent it.
-    if parent_caller_id is not None:
-        text = (
-            f"> Message from your spawned session {parent_caller_id}\n"
-            f"---\n"
-            f"{text}"
-        )
+    # Prefix the message with the sender header whenever the caller is itself
+    # a TwiCC session, whatever the target — otherwise the recipient would
+    # receive an anonymous follow-up from "the user" and have no way to tell
+    # another session is talking. No-op for a human caller or a self-send.
+    text = prefix_sender_header(
+        text,
+        current_session,
+        recipient_id=resolved.session_id,
+        recipient_spawned_by_id=resolved.spawned_by_id,
+    )
 
     # Attachments are validated against the resolved session's provider, with
     # the resize cap derived from its currently stored ``selected_model``
