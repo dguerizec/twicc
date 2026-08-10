@@ -91,7 +91,10 @@ function openSearch() {
 </script>
 
 <template>
-    <div class="tool-diff-viewer">
+    <!-- data-file-path is the DOM channel the conversation's text-selection widget
+         reads (a DOM walk can't reach the codeCommentToolContext inject): a
+         selection inside this editor is quoted as code, in the file's language. -->
+    <div class="tool-diff-viewer" :data-file-path="filePath || null">
         <div class="tool-diff-header">
             <div class="tool-diff-header-left">
                 <wa-button

@@ -22,8 +22,14 @@ const props = defineProps({
     /** What the quoted block is in the formatted output (e.g. "selected area"). */
     subject: { type: String, default: 'selected text' },
     /** Optional source metadata used to enrich the formatted comment.
-     *  Shape: { filePath: string, lineFrom: number, lineTo: number }. */
+     *  Shape: { filePath: string, lineFrom: number, lineTo: number,
+     *  quoteMode: 'code'|'quote', lang: string }. The last two override the
+     *  `quoteMode` prop when the consumer decides per selection (the chat, where
+     *  the same container holds prose and code views). */
     metadata: { type: Object, default: null },
+    /** How the selection is wrapped in the formatted output: 'code' (fenced block,
+     *  for anything verbatim) or 'quote' (blockquote, for prose). */
+    quoteMode: { type: String, default: 'code' },
     /** Function called when the widget needs to dismiss the source selection
      *  (on Comment/Copy clicks). Defaults to clearing the DOM selection, which is
      *  enough for normal HTML; consumers (e.g. FilePane) override it to also clear
@@ -247,7 +253,13 @@ async function addToMessage() {
             lineFrom: props.metadata?.lineFrom,
             lineTo: props.metadata?.lineTo,
         },
-        { isSelectedText: true, sourceLabel: props.sourceLabel, subject: props.subject },
+        {
+            isSelectedText: true,
+            sourceLabel: props.sourceLabel,
+            subject: props.subject,
+            quoteMode: props.metadata?.quoteMode ?? props.quoteMode,
+            lang: props.metadata?.lang ?? null,
+        },
     )
     // No focus: the user already composed here in the widget; grabbing the
     // composer's focus would pop the mobile keyboard (and the composer may be

@@ -6,6 +6,7 @@ import MarkdownItAsync from 'markdown-it-async'
 import { fromAsyncCodeToHtml } from '@shikijs/markdown-it/async'
 import { codeToHtml } from 'shiki'
 import DOMPurify from 'dompurify'
+import { installColonBlocks } from './markdownColonBlocks.js'
 
 // Configure markdown-it with all features enabled
 const md = MarkdownItAsync({
@@ -86,6 +87,9 @@ md.core.ruler.push('slash_command_tag', (state) => {
 
 md.renderer.rules.slash_command_tag = (tokens, idx) =>
     `<span class="slash-command-tag">${md.utils.escapeHtml(tokens[idx].content)}</span>`
+
+// Colon blocks (`:: line` / `::: container`) — see utils/markdownColonBlocks.js.
+installColonBlocks(md)
 
 // Hide HTML comments (`<!-- ... -->`) from the rendered output.
 //
@@ -341,5 +345,5 @@ export async function renderBlockToHtml(src, env) {
 export function hasMarkdownSyntax(text) {
     if (!text) return false
     // Check for common markdown patterns
-    return /(?:^|\n)#{1,6}\s|```|`[^`]+`|\*\*|__|\[.+\]\(.+\)|^\s*[-*+]\s|^\s*\d+\.\s|^\s*>\s|\|.*\|/m.test(text)
+    return /(?:^|\n)#{1,6}\s|```|`[^`]+`|\*\*|__|\[.+\]\(.+\)|^\s*[-*+]\s|^\s*\d+\.\s|^\s*>\s|^\s*:{2,}\s|\|.*\|/m.test(text)
 }

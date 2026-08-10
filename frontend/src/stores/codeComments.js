@@ -3,8 +3,8 @@
 
 import { toRaw } from 'vue'
 import { defineStore, acceptHMRUpdate } from 'pinia'
-import { getAllCodeComments, saveCodeComment, deleteCodeComment } from '../utils/codeCommentsStorage'
-import { getLanguageFromPath } from '../utils/languages'
+import { getAllCodeComments, saveCodeComment, deleteCodeComment } from '../utils/codeCommentsStorage.js'
+import { getLanguageFromPath } from '../utils/languages.js'
 
 // ─── Key helpers ────────────────────────────────────────────────────────────
 
@@ -322,22 +322,69 @@ function makeFence(text) {
 }
 
 /**
+ * Return a colon fence long enough to wrap `texts` without being closed early.
+ * Same principle as makeFence: scan every line that opens with a colon run and
+ * use one colon more, so quoted content containing `:::` stays inside the block.
+ */
+function makeContainerMarker(...texts) {
+    let max = 2
+    const re = /^ {0,3}(:{3,})/gm
+    for (const text of texts) {
+        if (!text) continue
+        re.lastIndex = 0
+        let m
+        while ((m = re.exec(text)) !== null) {
+            if (m[1].length > max) max = m[1].length
+        }
+    }
+    return ':'.repeat(max + 1)
+}
+
+/**
+ * Wrap the selected text the way its source reads best: a fenced block for
+ * anything verbatim (code, diffs, terminal output — shiki highlights it when a
+ * language is known), a blockquote for prose taken from a conversation.
+ */
+function formatQuotedSelection(text, quoteMode, lang) {
+    if (quoteMode === 'quote') {
+        return text.split('\n').map(line => `> ${line}`).join('\n')
+    }
+    const fence = makeFence(text)
+    return `${fence}${lang || ''}\n${text}\n${fence}`
+}
+
+/**
  * Format a single comment for insertion into the message textarea.
+ *
+ * The output is a `:::` container (see utils/markdownContainers.js): a label
+ * line, the quoted selection, then the user's comment as plain markdown. The
+ * rendering mode is implicit — the renderer reads it from the first child block
+ * — so nothing can desync between the source and the display. A blank line
+ * separates the two: without it a comment following a blockquote is swallowed
+ * by it (markdown's lazy continuation).
+ *
  * @param {Object} comment - Comment object with lineText, content, filePath, etc.
  * @param {Object} [options]
  * @param {boolean} [options.isSelectedText=false] - If true, formats as a session text
- *   comment ("Comment on selected text:") instead of a file/line comment.
+ *   comment ("comment on selected text") instead of a file/line comment.
  * @param {string} [options.sourceLabel] - Optional source suffix (e.g. "from terminal").
  *   Only used when isSelectedText is true.
  * @param {string} [options.subject='selected text'] - What the quoted block is (e.g.
  *   "selected area" for the browser element picker). Only used when isSelectedText is true.
+ * @param {'code'|'quote'} [options.quoteMode='code'] - How to wrap the selection.
+ *   Only used when isSelectedText is true.
+ * @param {string} [options.lang] - Language for the fence, when the caller knows it and
+ *   no file path carries it (e.g. a shiki code block selected in the conversation).
  */
-export function formatComment(comment, { isSelectedText = false, sourceLabel = '', subject = 'selected text' } = {}) {
-    const fence = makeFence(comment.lineText)
-    const hasComment = !!comment.content?.trim()
-    const quotedComment = hasComment
-        ? comment.content.split('\n').map(line => `> ${line}`).join('\n')
-        : ''
+export function formatComment(
+    comment,
+    { isSelectedText = false, sourceLabel = '', subject = 'selected text', quoteMode = 'code', lang = null } = {},
+) {
+    const body = comment.content?.trim() || ''
+    const marker = makeContainerMarker(comment.lineText, body)
+    // The label's first word is the container type: a block with no comment is
+    // a bare excerpt, not a comment on something.
+    const verb = body ? 'comment on' : 'excerpt of'
 
     if (isSelectedText) {
         const suffix = sourceLabel ? ` ${sourceLabel}` : ''
@@ -352,21 +399,22 @@ export function formatComment(comment, { isSelectedText = false, sourceLabel = '
                 const range = comment.lineFrom === comment.lineTo
                     ? `line ${comment.lineFrom}`
                     : `lines ${comment.lineFrom}-${comment.lineTo}`
-                location = ` from **\`${comment.filePath}\`** ${range}`
+                location = ` from \`${comment.filePath}\` ${range}`
             } else {
-                location = ` from **\`${comment.filePath}\`**`
+                location = ` from \`${comment.filePath}\``
             }
         }
-        const header = hasComment
-            ? `Comment on ${subject}${location}${suffix}:`
-            : `${subject.charAt(0).toUpperCase()}${subject.slice(1)}${location}${suffix}:`
-        const commentBlock = hasComment ? `\n\n${quotedComment}` : ''
-        return `\n---\n${header}\n${fence}\n${comment.lineText}\n${fence}${commentBlock}`
+        const label = `${verb} ${subject}${location}${suffix}`
+        const resolvedLang = lang || getLanguageFromPath(comment.filePath) || ''
+        const quoted = formatQuotedSelection(comment.lineText, quoteMode, resolvedLang)
+        return `\n${marker} ${label}\n${quoted}${body ? `\n\n${body}` : ''}\n${marker}`
     }
 
-    const lang = getLanguageFromPath(comment.filePath) || ''
+    const resolvedLang = lang || getLanguageFromPath(comment.filePath) || ''
     const line = comment.displayLineNumber ?? comment.lineNumber
-    return `\n---\nComment on **\`${comment.filePath}\`** line ${line}:\n${fence}${lang}\n${comment.lineText}\n${fence}\n\n${quotedComment}`
+    const label = `${verb} \`${comment.filePath}\` line ${line}`
+    const quoted = formatQuotedSelection(comment.lineText, 'code', resolvedLang)
+    return `\n${marker} ${label}\n${quoted}${body ? `\n\n${body}` : ''}\n${marker}`
 }
 
 /**

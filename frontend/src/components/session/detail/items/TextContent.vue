@@ -51,18 +51,11 @@ const tagSlashCommand = computed(() =>
 }
 
 /* Leading /command of a user message, rendered as a tag (see the
-   slash_command_tag rule in utils/markdown.js). */
+   slash_command_tag rule in utils/markdown.js). The tag look itself lives in
+   MarkdownContent.vue, shared with `::` line blocks; only the spacing is
+   specific here: the source keeps the space after the command (copy fidelity),
+   so a sliver of extra margin next to the chip's padding is enough. */
 .text-content :deep(.slash-command-tag) {
-    display: inline-block;
-    padding: 0.05em 0.45em;
-    /* The source keeps the space after the command (copy fidelity), so only a
-       sliver of extra margin is needed next to the chip's padding. */
     margin-right: 0.1em;
-    border-radius: var(--wa-border-radius-s);
-    background: var(--wa-color-brand-fill-quiet);
-    border: 1px solid var(--wa-color-brand-border-quiet);
-    color: var(--wa-color-brand-on-quiet);
-    font-family: var(--wa-font-family-code);
-    font-size: 0.875em;
 }
 </style>

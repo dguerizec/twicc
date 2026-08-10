@@ -10,7 +10,7 @@ Fans out one ``kind="session:send_message"`` drop per id via the shared
 status under one ``--timeout``, and emits an aggregated result.
 
 The message text is resolved once (inline or a file path → its content), then
-prefixed **per recipient** with the sender header (see
+topped **per recipient** with the sender header (see
 ``_drop_request/sender_header.py``) when the caller is itself a TwiCC session —
 the relation wording (spawned/parent/sibling/another) depends on each
 recipient, so the delivered text can differ between them. The
@@ -128,9 +128,10 @@ def send_messages_cmd(
     (exit 0), exit 6 if no session was sent.
 
     When the caller is itself a TwiCC session, each recipient receives the
-    text prefixed with a sender header ("> Message from <relation> session
-    <id> (\"<title>\")") identifying the calling session; the relation wording
-    (spawned/parent/sibling/another) is computed per recipient.
+    text under a sender header (a single ":: message from <relation> session
+    <id> (\"**<title>**\")" line, then the text) identifying the calling session;
+    the relation wording (spawned/parent/sibling/another) is computed per
+    recipient.
 
     Heads-up: each send starts/resumes an agent (real work, token spend); a
     batch can cold-start many stopped sessions at once.

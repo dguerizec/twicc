@@ -35,7 +35,7 @@ def test_child_to_parent_uses_spawned_session_wording():
     result = prefix_sender_header(
         "report", caller, recipient_id="parent", recipient_spawned_by_id=None,
     )
-    assert result == "> Message from your spawned session child\n---\nreport"
+    assert result == ":: message from your spawned session `child`\n\nreport"
 
 
 def test_parent_to_child_uses_parent_session_wording():
@@ -43,7 +43,7 @@ def test_parent_to_child_uses_parent_session_wording():
     result = prefix_sender_header(
         "steer", caller, recipient_id="child", recipient_spawned_by_id="parent",
     )
-    assert result == "> Message from your parent session parent\n---\nsteer"
+    assert result == ":: message from your parent session `parent`\n\nsteer"
 
 
 def test_siblings_use_sibling_session_wording():
@@ -51,7 +51,7 @@ def test_siblings_use_sibling_session_wording():
     result = prefix_sender_header(
         "heads-up", caller, recipient_id="worker-b", recipient_spawned_by_id="leader",
     )
-    assert result == "> Message from a sibling session worker-a\n---\nheads-up"
+    assert result == ":: message from a sibling session `worker-a`\n\nheads-up"
 
 
 def test_unrelated_sessions_use_another_session_wording():
@@ -59,7 +59,7 @@ def test_unrelated_sessions_use_another_session_wording():
     result = prefix_sender_header(
         "ping", caller, recipient_id="b", recipient_spawned_by_id="y",
     )
-    assert result == "> Message from another session a\n---\nping"
+    assert result == ":: message from another session `a`\n\nping"
 
 
 def test_two_root_sessions_are_unrelated_not_siblings():
@@ -68,7 +68,7 @@ def test_two_root_sessions_are_unrelated_not_siblings():
     result = prefix_sender_header(
         "ping", caller, recipient_id="b", recipient_spawned_by_id=None,
     )
-    assert result.startswith("> Message from another session a")
+    assert result.startswith(":: message from another session `a`")
 
 
 def test_title_is_appended_in_quotes():
@@ -77,7 +77,7 @@ def test_title_is_appended_in_quotes():
         "done", caller, recipient_id="parent", recipient_spawned_by_id=None,
     )
     assert result == (
-        '> Message from your spawned session child ("Fix the tests")\n---\ndone'
+        ':: message from your spawned session `child` ("**Fix the tests**")\n\ndone'
     )
 
 
@@ -87,7 +87,7 @@ def test_empty_or_whitespace_title_is_omitted():
         result = prefix_sender_header(
             "x", caller, recipient_id="b", recipient_spawned_by_id=None,
         )
-        assert result == "> Message from another session a\n---\nx"
+        assert result == ":: message from another session `a`\n\nx"
 
 
 def test_long_title_is_truncated_with_ellipsis():
@@ -96,6 +96,49 @@ def test_long_title_is_truncated_with_ellipsis():
         "x", caller, recipient_id="b", recipient_spawned_by_id=None,
     )
     header = result.split("\n", 1)[0]
-    title_part = header.split('("', 1)[1].rstrip('")')
+    title_part = header.split('("**', 1)[1].rstrip('**")')
     assert title_part == "t" * (TITLE_MAX_CHARS - 1) + "…"
+    # The cap measures the real title, before escaping.
     assert len(title_part) == TITLE_MAX_CHARS
+
+
+def test_title_newlines_are_flattened():
+    # The header is one line: a newline would push the rest of the title into
+    # the message below.
+    caller = _caller(id="a", title="fix\nthe tests")
+    result = prefix_sender_header(
+        "x", caller, recipient_id="b", recipient_spawned_by_id=None,
+    )
+    assert result.split("\n", 1)[0] == ':: message from another session `a` ("**fix the tests**")'
+
+
+def test_title_markdown_specials_are_escaped():
+    # The title sits inside a bold span; unescaped markers would break out of it.
+    caller = _caller(id="a", title="fix *all* the `tests` [now]")
+    result = prefix_sender_header(
+        "x", caller, recipient_id="b", recipient_spawned_by_id=None,
+    )
+    assert result.split("\n", 1)[0] == (
+        ':: message from another session `a` '
+        '("**fix \\*all\\* the \\`tests\\` \\[now\\]**")'
+    )
+
+
+def test_a_colon_run_in_the_message_is_left_alone():
+    # Nothing closes the header, so the message needs no escaping.
+    caller = _caller(id="a")
+    result = prefix_sender_header(
+        "before\n:::\nafter", caller, recipient_id="b", recipient_spawned_by_id=None,
+    )
+    assert result == ":: message from another session `a`\n\nbefore\n:::\nafter"
+
+
+def test_the_header_is_a_single_line_above_the_message():
+    caller = _caller(id="a", title="T")
+    result = prefix_sender_header(
+        "line one\nline two", caller, recipient_id="b", recipient_spawned_by_id=None,
+    )
+    header, blank, *body = result.split("\n")
+    assert header == ':: message from another session `a` ("**T**")'
+    assert blank == ""
+    assert body == ["line one", "line two"]

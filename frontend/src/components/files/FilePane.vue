@@ -844,7 +844,7 @@ function getCmSelectionOverride() {
                 anchor: view.dom,
                 rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
                 above,
-                metadata: { filePath: props.filePath, lineFrom, lineTo },
+                metadata: { filePath: props.filePath, lineFrom, lineTo, quoteMode: 'code' },
             }
         } catch {
             continue
@@ -860,7 +860,8 @@ function getMarkdownPreviewMetadata(anchor) {
     if (!anchor || !props.filePath) return null
     const el = anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement
     if (el?.closest?.('.markdown-preview-container')) {
-        return { filePath: props.filePath }
+        // Rendered prose, not source: quote it rather than fencing it.
+        return { filePath: props.filePath, quoteMode: 'quote' }
     }
     return null
 }

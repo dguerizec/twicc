@@ -40,7 +40,7 @@ $TWICC send-messages [SESSION_ID...] --message <TEXT> [--attach PATH...] [--spaw
 Selection is identical to `update-sessions` (skill: `twicc-update-sessions`): a positional `SESSION_ID...` list merged (union, explicit first) with the scope filters. `self` means the current session.
 
 - `SESSION_ID...` — recipients; optional if a filiation scope is given.
-- `--message TEXT` — **required**. Message text, or a path to a UTF-8 file whose content is the message. Same text for every recipient (each delivery gets the sender header prefixed — see *Sender header*). Over `--remote` the file is read locally; prefix an absolute path with `remote:` to read it on the remote server instead.
+- `--message TEXT` — **required**. Message text, or a path to a UTF-8 file whose content is the message. Same text for every recipient (each delivery gets the sender header on top — see *Sender header*). Over `--remote` the file is read locally; prefix an absolute path with `remote:` to read it on the remote server instead.
 - `--attach PATH` (repeatable) — attach a file to every message. **Validated per session against its provider** (Claude Code: PNG/JPEG/GIF/WebP/PDF/text up to 5 MB; Codex: images only), so a file one provider rejects yields a per-id `validation_error` while the others still receive it. Local path or a `data:<mime>;base64,...` URI for remote/API callers. Over `--remote`, prefix an absolute path with `remote:` to read it on the remote server instead.
 - `--spawned-by <ID|self>` / `--descendants <ID|self>` — also target children / proper descendants. `parent` is **not** supported (use `send-message parent`). Mutually exclusive.
 - `--siblings <ID|self>` — also target the siblings of the given session: the *other* sessions spawned by the same parent, **reference always excluded**. `self` broadcasts to your peers (the canonical worker → worker channel). `parent` is **not** supported. Mutually exclusive with `--spawned-by` / `--descendants`. Note `--spawned-by parent` (the same set but including yourself) is **not** available here, so `--siblings self` is the way to reach your peers from this command.
@@ -51,7 +51,7 @@ If neither ids nor a filiation scope is given, the command errors (exit 1). An e
 
 ## Sender header
 
-When the caller is itself a TwiCC session, each recipient receives the text prefixed with the same sender header as `send-message` (`> Message from <relation> session <id> ("<title>")`, then `---`), computed **per recipient** — the relation wording (`your spawned session` / `your parent session` / `a sibling session` / `another session`) depends on each target's spawn-tree link to you. Never write it yourself; a self-send in the batch gets no header. See the *Sender header* section of `twicc-send-message`.
+When the caller is itself a TwiCC session, each recipient receives the text under the same sender header as `send-message` (a single `:: message from <relation> session <id> ("**<title>**")` line, then the text), computed **per recipient** — the relation wording (`your spawned session` / `your parent session` / `a sibling session` / `another session`) depends on each target's spawn-tree link to you. Never write it yourself; a self-send in the batch gets no header. See the *Sender header* section of `twicc-send-message`.
 
 ## Errors
 

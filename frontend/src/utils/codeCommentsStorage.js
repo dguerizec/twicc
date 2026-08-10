@@ -2,7 +2,7 @@
 // IndexedDB CRUD for code comments (inline annotations on code lines).
 // Uses the shared 'twicc' database managed by draftStorage.js.
 
-import { getDb, CODE_COMMENTS_STORE } from './draftStorage'
+import { getDb, CODE_COMMENTS_STORE } from './draftStorage.js'
 
 /**
  * Save (create or update) a code comment.

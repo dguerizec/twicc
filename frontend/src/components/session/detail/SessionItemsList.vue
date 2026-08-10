@@ -1619,13 +1619,50 @@ async function handleForwardedDrop({ files, text }) {
 // Text selection comment (ephemeral annotation on selected session text)
 // =============================================================================
 
+/** True when `el` holds both ends of the selection, not just its start. */
+function holdsWholeSelection(el, selection) {
+    if (!selection?.rangeCount) return false
+    const range = selection.getRangeAt(0)
+    return el.contains(range.startContainer) && el.contains(range.endContainer)
+}
+
+/**
+ * Decide how a conversation selection should be quoted. The chat mixes prose
+ * with two kinds of code view, and the formatted comment mirrors whichever the
+ * selection sits entirely inside:
+ *  - a tool diff/write block (CodeMirror) → fenced, language from the file path;
+ *  - a code block the agent wrote (shiki <pre>) → fenced, language from the
+ *    data-language attribute MarkdownContent adds after render;
+ *  - anything else, or a selection straddling both → blockquote.
+ */
+function describeChatSelection(anchor, selection) {
+    const el = anchor?.nodeType === Node.ELEMENT_NODE ? anchor : anchor?.parentElement
+    if (!el) return { quoteMode: 'quote' }
+
+    const toolBlock = el.closest('[data-file-path]')
+    if (toolBlock && holdsWholeSelection(toolBlock, selection)) {
+        return { quoteMode: 'code', filePath: toolBlock.dataset.filePath || null }
+    }
+
+    const pre = el.closest('pre')
+    if (pre && holdsWholeSelection(pre, selection)) {
+        const lang = pre.dataset.language
+            || pre.querySelector('code[class*="language-"]')?.className.match(/language-(\S+)/)?.[1]
+        return { quoteMode: 'code', lang: lang && lang !== 'text' ? lang : null }
+    }
+
+    return { quoteMode: 'quote' }
+}
+
 const {
     textSelectionCommentRef,
     textSelectionText,
     textSelectionPosition,
+    textSelectionMetadata,
     closeTextSelectionComment,
 } = useTextSelectionComment({
     containerRef: scrollerRef,
+    enrichNativeMetadata: describeChatSelection,
     enabled: ref(true),
 })
 
@@ -1902,6 +1939,7 @@ defineExpose({
                 ref="textSelectionCommentRef"
                 :selected-text="textSelectionText"
                 :position="textSelectionPosition"
+                :metadata="textSelectionMetadata"
                 @close="closeTextSelectionComment"
             />
         </Teleport>

@@ -53,9 +53,10 @@ def send_message_cmd(
     ``twicc update-session <ID> settings`` — or the UI.
 
     When the caller is itself a TwiCC session, the recipient receives the
-    text prefixed with a sender header ("> Message from <relation> session
-    <id> (\"<title>\")") identifying the calling session and its spawn-tree
-    relation to the recipient (spawned/parent/sibling/another).
+    text under a sender header (a single ":: message from <relation> session
+    <id> (\"**<title>**\")" line, then the text) identifying the calling session
+    and its spawn-tree relation to the recipient
+    (spawned/parent/sibling/another).
 
     Asynchronous: a "sent" status only means the message was handed to the
     agent — not that the agent has finished processing it. To block until it
@@ -99,8 +100,8 @@ def send_message_cmd(
         emit_error(str(e), code=2)
 
     # Identify the calling agent (PID ancestry; MCP sets a forced session id).
-    # Used both to resolve the 'parent' keyword and to prefix the message with
-    # a sender header (see sender_header.py) — the recipient is otherwise
+    # Used both to resolve the 'parent' keyword and to put a sender header
+    # above the message (see sender_header.py) — the recipient is otherwise
     # blind to which session is talking. None for a human invoking the CLI
     # from a plain shell → no header.
     current_session = resolve_current_session()
@@ -155,7 +156,7 @@ def send_message_cmd(
         )
         raise typer.Exit(1)
 
-    # Prefix the message with the sender header whenever the caller is itself
+    # Put the sender header above the message whenever the caller is itself
     # a TwiCC session, whatever the target — otherwise the recipient would
     # receive an anonymous follow-up from "the user" and have no way to tell
     # another session is talking. No-op for a human caller or a self-send.

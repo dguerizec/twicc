@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **GPT-5.4 leaves Codex** — GPT-5.4 and GPT-5.4 mini retire on August 31, 2026. The model pickers now show the date, and sessions still on them move to a supported model on the day.
 - **Messages between sessions** — A session that writes to another one is now always named, instead of its message looking like it came from you.
+- **Quoted text in a message** — Comments on a selection, quotes, and messages from another session now stand out as their own block instead of blending into the text around them.
 
 ### Fixed
 
