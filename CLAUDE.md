@@ -29,7 +29,7 @@ Never run these on your own initiative. If the user explicitly asks, do it witho
 
 uv + npm · Django 6 ASGI (Uvicorn, Python ≥ 3.13) · Channels + InMemoryChannelLayer · SQLite (WAL) · watchfiles · claude-agent-sdk + openai_codex · Vue 3 (Composition API, `<script setup>`) + Vite 7 · Pinia + VueUse · Web Awesome 3+ (`wa-*`) · CodeMirror 6 · xterm.js (PTY) · markdown-it + shiki + mermaid.
 
-Python: ruff (line-length=120). Tests: pytest + pytest-django.
+Python: ruff (line-length=120). Tests: pytest + pytest-django. Frontend tests: `cd frontend && npm test` (node:test, auto-discovers `src/**/*.test.js`).
 
 ## Architecture
 
