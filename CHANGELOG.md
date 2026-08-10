@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Codex sessions spawned by an agent** — They can now put their questions in the conversation instead of a click-only dialog, so a hidden one no longer gets stuck.
 - **Minimized docks** — The strip of icons now shows which tab a minimized dock is on, and which one is open.
 - **Project icons** — The project selector now shows the current project's icon, not only its color dot.
+- **Quota tooltips** — no longer close before you can reach the buttons inside them (attempt #2).
 
 ## [1.92.8] - 2026-08-05
 

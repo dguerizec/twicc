@@ -2367,7 +2367,7 @@ function updateSidebarClosedClass(closed) {
                                 <template v-else>{{ formatUsageDateAbsolute(quotaFetchedDate) }}</template>
                             </span>
                         </div>
-                        <AppTooltip v-if="quotaIsStale" for="quota-stale-warning" hoist force :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
+                        <AppTooltip v-if="quotaIsStale" for="quota-stale-warning" hoist force interactive :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
                             <div class="quota-tooltip">
                                 <div class="quota-stale-header"><wa-icon name="triangle-exclamation" class="quota-stale-header-icon"></wa-icon><span>Data may be outdated</span></div>
                                 <div class="quota-tooltip-row"><span class="quota-tooltip-label">Last update</span><span>{{ quotaLastUpdateFormatted }}</span></div>
@@ -2400,7 +2400,7 @@ function updateSidebarClosedClass(closed) {
                             </span>
                         </div>
                     </div>
-                    <AppTooltip v-if="quotaFiveHour" for="quota-five-hour" hoist force :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
+                    <AppTooltip v-if="quotaFiveHour" for="quota-five-hour" hoist force interactive :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
                         <div class="quota-tooltip">
                             <div class="quota-tooltip-title">{{ currentUsageProviderLabel }} usage — 5h</div>
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Usage</span><span>{{ (quotaFiveHour.utilization ?? 0).toFixed(1) }}%</span></div>
@@ -2448,7 +2448,7 @@ function updateSidebarClosedClass(closed) {
                             </span>
                         </div>
                     </div>
-                    <AppTooltip v-if="quotaSevenDay" for="quota-seven-day" hoist force :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
+                    <AppTooltip v-if="quotaSevenDay" for="quota-seven-day" hoist force interactive :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
                         <div class="quota-tooltip">
                             <div class="quota-tooltip-title">{{ currentUsageProviderLabel }} usage — 7d</div>
                             <div class="quota-tooltip-row"><span class="quota-tooltip-label">Usage</span><span>{{ (quotaSevenDay.utilization ?? 0).toFixed(1) }}%</span></div>
@@ -2492,7 +2492,7 @@ function updateSidebarClosedClass(closed) {
                             </span>
                         </div>
                     </div>
-                    <AppTooltip v-if="quotaExtraUsage" for="quota-extra-usage" hoist force :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
+                    <AppTooltip v-if="quotaExtraUsage" for="quota-extra-usage" hoist force interactive :placement="usageTooltipPlacement" :trigger="usageTooltipTrigger">
                         <div class="quota-tooltip">
                             <template v-if="quotaExtraUsage.utilization != null">
                                 <template v-if="quotaExtraUsageMoney">
@@ -3241,7 +3241,12 @@ wa-dropdown-item:hover .row-menu-trigger,
  * re-checks on mouseout), independent of that coordinate math. The strip is
  * transparent, sits beside the row (never over it), and stays below the top-layer
  * tooltip, so it never blocks the buttons. (On mobile the tooltip is re-placed
- * above the row and shown on tap, not hover, so this bridge is a no-op there.) */
+ * above the row and shown on tap, not hover, so this bridge is a no-op there.)
+ *
+ * This strip only covers the row's own height, so it misses a diagonal move
+ * towards a button further down a tall tooltip. AppTooltip's `interactive` prop
+ * is what actually makes the crossing safe, whatever its shape; the strip stays
+ * because it keeps the straight-across move instant, with no timer involved. */
 .usage-quota::after,
 .quota-stale-icon::after {
     content: '';
