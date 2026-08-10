@@ -32,10 +32,10 @@ export const DOCKS = [
 export const DEFAULT_CONFIG = {
   // --- Structural thresholds: decide the layout STRUCTURE (columns shown, merges, mode) ---
   centerMinW: 460,        // min comfortable width for the chat / center
-  centerMinH: 300,        // min comfortable height for the center
+  centerMinH: 220,        // min comfortable height for the center
   sideMinW: 300,          // min width for a persistent side column
   sideMergeBelowH: 600,   // side-column height below which the two vertical siblings merge into one tab bar
-  bottomMinH: 300,        // min height for the bottom region (else it overlays)
+  bottomMinH: 150,        // min height for the bottom region (else it overlays)
   bottomMergeBelowW: 600, // bottom-span width below which the two bottom siblings merge into one tab bar
   bottomComfortW: 600,    // center-col width below which the bottom flips to full width (classic)
   mobileMaxW: 520,        // at or below this width -> pure tabs (no docks)
