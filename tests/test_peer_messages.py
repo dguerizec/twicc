@@ -337,7 +337,7 @@ def _make_target_session(project_id="-tmp-deliver", directory="/tmp/deliver", ar
     project = Project.objects.create(id=project_id, directory=directory, archived=archived)
     session = Session.objects.create(
         id=f"sess-{project_id}", project=project, provider="claude_code",
-        file_path="t.jsonl", type=SessionType.SESSION, title="Target",
+        file_path=f"{project_id}.jsonl", type=SessionType.SESSION, title="Target",
         created_at=now, last_new_content_at=now,
     )
     return project, session
@@ -444,6 +444,79 @@ def test_mark_delivered_to_draft_guards(transactional_db, status_callbacks):
     success, envelope, errors = _run(peer_messages.mark_delivered(resolved))
     assert not success and envelope is None and errors[0].code == "bad_state"
     assert status_callbacks == []
+
+
+# ── Redelivery (reopened from the inbox history) ────────────────────────────
+
+def test_redeliver_reroutes_to_another_session(transactional_db, broadcasts, status_callbacks):
+    """The owner picked the wrong session: the delivery is redone, the status
+    does not move, and the original resolution timestamp is kept (the purge
+    window must not slide on every retry)."""
+    peer = _active_peer()
+    message = _in_message(peer)
+    _, first = _make_target_session()
+    _run(peer_messages.mark_delivered(message, session_id=first.id, note="first note"))
+    message.refresh_from_db()
+    original_resolved_at = message.resolved_at
+
+    _, second = _make_target_session(project_id="-tmp-deliver2", directory="/tmp/deliver2")
+    success, envelope, errors = _run(peer_messages.mark_delivered(
+        message, session_id=second.id, note="second note", redeliver=True,
+    ))
+    assert success and errors == []
+    assert "the message body" in envelope and "second note" in envelope
+    message.refresh_from_db()
+    assert message.status == PeerMessageStatus.DELIVERED
+    assert message.delivered_to_session_id == second.id
+    assert message.recipient_note == "second note"
+    assert message.resolved_at == original_resolved_at
+    # The peer already knows "delivered"; re-sending doubles as a retry.
+    assert status_callbacks[-1] == {"message_id": message.message_id, "status": "delivered"}
+    assert broadcasts[-1]["type"] == "peer_message_updated"
+
+
+def test_redeliver_to_draft_drops_the_previous_target(transactional_db, status_callbacks):
+    peer = _active_peer()
+    message = _in_message(peer)
+    _, first = _make_target_session()
+    _run(peer_messages.mark_delivered(message, session_id=first.id, note=""))
+    success, _envelope, errors = _run(peer_messages.mark_delivered(message, redeliver=True))
+    assert success and errors == []
+    message.refresh_from_db()
+    # A draft has no DB row — the stale link to the wrong session must go.
+    assert message.delivered_to_session_id is None
+
+
+def test_redeliver_allowed_after_attachment_purge(transactional_db, status_callbacks):
+    """Bytes are gone 7 days after resolution; the text still deserves a home."""
+    peer = _active_peer()
+    message = _in_message(
+        peer, status=PeerMessageStatus.DELIVERED, resolved_at=djtz.now(), purged_at=djtz.now(),
+    )
+    _, session = _make_target_session()
+    success, _envelope, errors = _run(peer_messages.mark_delivered(
+        message, session_id=session.id, redeliver=True,
+    ))
+    assert success and errors == []
+
+
+def test_redeliver_never_reopens_a_refused_message(transactional_db, status_callbacks):
+    peer = _active_peer()
+    message = _in_message(peer, status=PeerMessageStatus.REFUSED, resolved_at=djtz.now())
+    success, _envelope, errors = _run(peer_messages.mark_delivered(
+        message, session_id="s", redeliver=True,
+    ))
+    assert not success and errors[0].code == "bad_state"
+    assert status_callbacks == []
+
+
+def test_redeliver_does_not_reopen_refusal(transactional_db, status_callbacks):
+    """A delivered message stays re-routable but can never be refused after
+    the fact — the peer was already told "delivered"."""
+    peer = _active_peer()
+    message = _in_message(peer, status=PeerMessageStatus.DELIVERED, resolved_at=djtz.now())
+    success, errors = _run(peer_messages.refuse_peer_message(message))
+    assert not success and errors[0].code == "bad_state"
 
 
 def test_refuse_message(transactional_db, broadcasts, status_callbacks):

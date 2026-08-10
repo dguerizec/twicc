@@ -433,14 +433,27 @@ def build_delivery_envelope(peer, message, note: str) -> str:
     return envelope
 
 
-def _delivery_guards(message) -> list[PeerError]:
+def _delivery_guards(message, *, allow_redeliver: bool = False) -> list[PeerError]:
+    """Guards for resolving an inbound message.
+
+    ``allow_redeliver`` also accepts an already-DELIVERED row: the owner may
+    have routed the message into the wrong session and wants to redo the
+    delivery. A REFUSED row is never re-openable — the sender was already told
+    "refused", and that answer stands.
+    """
     from twicc.core.models import PeerMessageDirection, PeerMessageStatus
 
     errors: list[PeerError] = []
-    if message.direction != PeerMessageDirection.IN or message.status != PeerMessageStatus.PENDING:
+    if message.direction != PeerMessageDirection.IN:
         errors.append(PeerError("message", "bad_state", "This message is not pending delivery."))
-    elif message.purged_at is not None:
-        errors.append(PeerError("message", "purged", "This message's attachments were purged."))
+    elif message.status == PeerMessageStatus.PENDING:
+        if message.purged_at is not None:
+            errors.append(PeerError("message", "purged", "This message's attachments were purged."))
+    elif not (allow_redeliver and message.status == PeerMessageStatus.DELIVERED):
+        errors.append(PeerError("message", "bad_state", "This message is not pending delivery."))
+    # A redelivered row may well be purged (purge runs 7 days after resolution):
+    # the text survives, the attachment bytes do not. Deliberately allowed —
+    # the UI warns; a text-only redelivery beats no redelivery at all.
     return errors
 
 
@@ -482,11 +495,19 @@ async def _mark_delivered(message, *, session_id: str, note: str) -> None:
         # a not-yet-existing row would blow the whole delivery up on the FK
         # constraint AFTER the session was actually launched. Link only when
         # the row already exists (always true for deliver-to-existing).
-        if session_id and Session.objects.filter(id=session_id).exists():
-            message.delivered_to_session_id = session_id
+        # Assigned unconditionally: a redelivery must not keep pointing at the
+        # previous (wrong) target when the new one is a draft.
+        linkable = bool(session_id) and Session.objects.filter(id=session_id).exists()
+        message.delivered_to_session_id = session_id if linkable else None
         message.recipient_note = (note or "").strip()
-        message.resolved_at = now
-        message.save(update_fields=["status", "delivered_to_session", "recipient_note", "resolved_at"])
+        fields = ["status", "delivered_to_session", "recipient_note"]
+        # A redelivery keeps the ORIGINAL resolution timestamp: the attachment
+        # purge window stays anchored to the first delivery instead of being
+        # pushed back 7 days on every retry.
+        if message.resolved_at is None:
+            message.resolved_at = now
+            fields.append("resolved_at")
+        message.save(update_fields=fields)
 
     await run_under_db_write_lock(lambda: sync_to_async(_apply)())
     await broadcast_peer_message_updated(message)
@@ -503,7 +524,9 @@ async def _notify_status(peer, message_id: str, status: str) -> None:
         logger.info("[peer_status_callback] unreachable peer=%s message=%s", peer.id, message_id)
 
 
-async def mark_delivered(message, *, session_id: str | None = None, note: str = "") -> tuple[bool, str | None, list[PeerError]]:
+async def mark_delivered(
+    message, *, session_id: str | None = None, note: str = "", redeliver: bool = False,
+) -> tuple[bool, str | None, list[PeerError]]:
     """Resolve the message as delivered WITHOUT injecting anything: the UI
     routes it into a composer — the picked EXISTING session's draft
     (``session_id`` given, recorded as ``delivered_to_session``) or a
@@ -512,14 +535,20 @@ async def mark_delivered(message, *, session_id: str | None = None, note: str = 
     made either way). The whole existing send pipeline (agent settings,
     title flow, attachments, busy-session handling) then applies.
     Returns ``(success, envelope, errors)`` — the envelope text is what the
-    UI prefills the composer with."""
+    UI prefills the composer with.
+
+    ``redeliver`` re-runs the routing of an already-delivered message (wrong
+    target picked, draft cleared by mistake): the new target and note replace
+    the recorded ones. The status does not move (delivered → delivered), so
+    the sender sees nothing change; the callback is re-sent anyway, which
+    doubles as a free retry when the first one never reached the peer."""
     from twicc.core.models import Session
 
     async with _resolution_lock(message.pk):
         message = await _fresh_message(message.pk)
         if message is None:
             return False, None, [PeerError("message", "not_found", "Message no longer exists.")]
-        guards = _delivery_guards(message)
+        guards = _delivery_guards(message, allow_redeliver=redeliver)
         if guards:
             return False, None, guards
         if session_id:

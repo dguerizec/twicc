@@ -164,13 +164,16 @@ async def peer_message_detail(request, pk):
 
 
 async def peer_message_deliver(request, pk):
-    """POST /api/peer-messages/<pk>/deliver/ — {session_id?, note?}.
+    """POST /api/peer-messages/<pk>/deliver/ — {session_id?, note?, redeliver?}.
 
     NOTHING is injected server-side: the message is marked delivered and the
     envelope text is returned; the UI prefills a composer with it — the
     picked existing session's draft (``session_id`` given, recorded as
     ``delivered_to_session``) or a locally-created new draft session. The
     user reviews and sends through the normal pipeline in both cases.
+
+    ``redeliver`` (opt-in, never implicit) re-routes an already-delivered
+    message to another target — the inbox's way to fix a wrong pick.
     """
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
@@ -180,6 +183,7 @@ async def peer_message_deliver(request, pk):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
     success, envelope, errors = await peer_messages.mark_delivered(
         message, session_id=data.get("session_id") or None, note=data.get("note") or "",
+        redeliver=bool(data.get("redeliver")),
     )
     if not success:
         return _err_response(errors)

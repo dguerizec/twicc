@@ -7,6 +7,10 @@
  * session in a picked project, or refused. The message itself is never
  * editable — an optional recipient note is injected alongside instead.
  *
+ * Also the read-back surface for a resolved message (reopened from the inbox
+ * history): an already-delivered one offers the delivery pickers again (wrong
+ * target picked, draft cleared), a refused or outbound one is read-only.
+ *
  * The full payload (base64 blobs) is fetched from REST on open; the store
  * only ever holds summaries.
  */
@@ -25,6 +29,7 @@ import { matchQuery } from '../../utils/textFilter'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../../utils/workspaceIds'
 import { ensureProjectTrust } from '../../composables/useTrustGate'
 import MediaThumbnailGroup from '../media/MediaThumbnailGroup.vue'
+import ProjectBadge from '../project/ProjectBadge.vue'
 import ProjectSelectOptions from '../project/ProjectSelectOptions.vue'
 import SessionListItem from '../session/list/SessionListItem.vue'
 import SidebarListSeparator from '../sidebar/SidebarListSeparator.vue'
@@ -59,7 +64,27 @@ const selectedSessionId = ref(null)
 
 const peerName = computed(() => peersStore.peerLabel(detail.value?.peer_id))
 const origin = computed(() => detail.value?.origin || {})
-const isPending = computed(() => detail.value?.direction === 'in' && detail.value?.status === 'pending')
+const isInbound = computed(() => detail.value?.direction === 'in')
+const isPending = computed(() => isInbound.value && detail.value?.status === 'pending')
+// Redelivery (design decision, 2026-08-10): the owner routed the message into
+// the wrong session, or cleared the prefilled draft. A delivered message stays
+// re-routable — the peer already got its "delivered" answer, so nothing changes
+// for them. A REFUSED one never reopens: that answer stands.
+const isRedeliverable = computed(() => isInbound.value && detail.value?.status === 'delivered')
+const canDeliver = computed(() => isPending.value || isRedeliverable.value)
+// Attachment bytes are dropped 7 days after resolution — a late redelivery
+// carries the text only.
+const attachmentsLost = computed(() =>
+    isRedeliverable.value && detail.value?.purged && (detail.value?.attachments_meta?.length || 0) > 0
+)
+// Where a previous delivery landed. The session title alone is ambiguous
+// across projects — the project badge (dot or icon) is what identifies it.
+const deliveredTo = computed(() => {
+    const sessionId = detail.value?.delivered_to_session_id
+    if (!sessionId) return null
+    const session = dataStore.getSession(sessionId)
+    return { title: session?.title || sessionId, projectId: session?.project_id || null }
+})
 
 const mediaItems = computed(() => {
     const payload = detail.value?.payload
@@ -159,6 +184,9 @@ watch(() => [props.open, props.messageId], async ([open]) => {
             return
         }
         detail.value = await response.json()
+        // Redelivery: bring back the note typed the first time (empty on a
+        // never-delivered message).
+        note.value = detail.value?.recipient_note || ''
     } catch {
         // fetch rejects on network failure — never leave the dialog blank.
         loadError.value = 'Could not load the message — is the server reachable?'
@@ -197,7 +225,13 @@ async function markDelivered(sessionId) {
     const response = await apiFetch(`/api/peer-messages/${props.messageId}/deliver/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId || undefined, note: note.value }),
+        body: JSON.stringify({
+            session_id: sessionId || undefined,
+            note: note.value,
+            // Opt-in server-side: an already-delivered message is only
+            // re-routed when the UI asks for it explicitly.
+            redeliver: isRedeliverable.value || undefined,
+        }),
     })
     let payload = null
     try { payload = await response.json() } catch { /* empty */ }
@@ -316,17 +350,29 @@ function onHide(event) {
 
             <!-- Attachments -->
             <MediaThumbnailGroup v-if="mediaItems.length" :items="mediaItems" />
-            <p v-else-if="detail.purged && detail.attachments_meta?.length" class="pr-purged">
+            <p v-else-if="detail.purged && detail.attachments_meta?.length && !attachmentsLost" class="pr-purged">
                 {{ detail.attachments_meta.length }} attachment(s) — bytes purged.
             </p>
 
             <!-- Already resolved -->
             <wa-callout v-if="!isPending" variant="neutral" size="small">
-                This message was already {{ detail.status }}.
+                <template v-if="!isInbound">Sent to {{ peerName }} — {{ detail.status }}.</template>
+                <template v-else>
+                    This message was already {{ detail.status }}<template v-if="deliveredTo">, to session
+                    "{{ deliveredTo.title }}"<template v-if="deliveredTo.projectId">
+                        in <ProjectBadge :project-id="deliveredTo.projectId" class="pr-target-project" /></template>
+                    </template>.
+                    <template v-if="isRedeliverable"> You can deliver it again below.</template>
+                </template>
+            </wa-callout>
+
+            <wa-callout v-if="attachmentsLost" variant="warning" size="small">
+                Its {{ detail.attachments_meta.length }} attachment(s) were purged — a new delivery
+                carries the text only.
             </wa-callout>
 
             <!-- Actions -->
-            <template v-else>
+            <template v-if="canDeliver">
                 <div class="pr-note">
                     <label class="pr-note__label">Recipient note (optional)</label>
                     <wa-textarea
@@ -354,7 +400,10 @@ function onHide(event) {
                         appearance="outlined"
                         @click="mode = mode === 'new' ? null : 'new'; pickedProjectId = ''; selectedSessionId = null"
                     >Deliver to new session</wa-button>
+                    <!-- No refusal once delivered: the peer was already told
+                         "delivered", and that answer is final. -->
                     <wa-button
+                        v-if="isPending"
                         size="small" variant="danger" appearance="outlined"
                         :disabled="busy"
                         @click="confirmingRefuse = true"
@@ -458,6 +507,11 @@ function onHide(event) {
     overflow: auto;
 }
 .pr-purged { color: var(--wa-color-text-quiet); font-size: 0.85rem; }
+/* Sits inside a sentence: aligned on the text baseline, never a block. */
+.pr-target-project {
+    vertical-align: text-bottom;
+    max-width: 18ch;
+}
 .pr-note { display: flex; flex-direction: column; gap: var(--wa-space-2xs); margin: var(--wa-space-s) 0; }
 .pr-note__label { font-size: 0.85rem; color: var(--wa-color-text-quiet); }
 .pr-actions {
