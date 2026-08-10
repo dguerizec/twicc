@@ -137,7 +137,11 @@ function layoutTemplate(intention) {
 // the last actual ``agentMessage/delta`` by several seconds (15+ observed),
 // during which the SDK has nothing more to say but the agent is technically
 // still working — without this nudge the UI looks frozen with no indicator.
-const STREAM_BLOCK_INACTIVITY_MS = 500
+// Kept deliberately long: the placeholder is appended below the streaming
+// text, so every appearance/disappearance shifts the whole block. Short
+// natural pauses between deltas are common on both providers, and a tighter
+// delay made the indicator flicker in and out while the text jumped with it.
+const STREAM_BLOCK_INACTIVITY_MS = 2000
 
 // Max number of sessions surfaced by the Ctrl+` session switcher (the MRU
 // itself keeps up to 100 entries; the switcher panel shows the most recent
