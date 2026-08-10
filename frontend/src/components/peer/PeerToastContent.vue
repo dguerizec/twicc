@@ -3,9 +3,10 @@
  * PeerToastContent - Actionable toast body for peer events.
  *
  * mode 'request': an incoming (or held) peer request — Review opens the
- * peers manager. mode 'message': an incoming peer message — Read opens the
- * inbox on that message. Both dialogs are mounted once in App.vue and opened
- * through window CustomEvents, so the toast stays decoupled from them.
+ * peers manager. mode 'message': an incoming peer message — "Open in inbox"
+ * opens the inbox on that message, "Keep unread" only dismisses the toast.
+ * Both dialogs are mounted once in App.vue and opened through window
+ * CustomEvents, so the toast stays decoupled from them.
  */
 const props = defineProps({
     /** 'request' | 'message' */
@@ -62,17 +63,20 @@ function later() {
             {{ message.text_preview }}
         </span>
         <div class="peer-toast-actions wa-light">
-            <wa-button
-                v-if="mode === 'request'"
-                size="small" variant="brand" appearance="outlined"
-                @click="review"
-            >Review</wa-button>
-            <wa-button
-                v-else
-                size="small" variant="brand" appearance="outlined"
-                @click="read"
-            >Read</wa-button>
-            <wa-button size="small" variant="neutral" appearance="outlined" @click="later">Later</wa-button>
+            <template v-if="mode === 'request'">
+                <wa-button
+                    size="small" variant="brand" appearance="outlined"
+                    @click="review"
+                >Review</wa-button>
+                <wa-button size="small" variant="neutral" appearance="outlined" @click="later">Later</wa-button>
+            </template>
+            <template v-else>
+                <wa-button
+                    size="small" variant="brand" appearance="outlined"
+                    @click="read"
+                >Open in inbox</wa-button>
+                <wa-button size="small" variant="neutral" appearance="outlined" @click="later">Keep unread</wa-button>
+            </template>
         </div>
     </div>
 </template>
@@ -120,6 +124,7 @@ function later() {
 
 .peer-toast-actions {
     display: flex;
+    flex-wrap: wrap;
     justify-content: flex-end;
     gap: var(--wa-space-xs);
 }
