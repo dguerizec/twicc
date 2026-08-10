@@ -186,10 +186,10 @@ class CodexHelpers(BaseProviderHelpers):
     # bucket. Keep them honest anyway, so the fallback never understates a cost
     # if those tokens ever start being counted.
     DEFAULT_FAMILY_PRICES: ClassVar[dict[str, FamilyPrices]] = {
-        "gpt": FamilyPrices(  # baseline gpt-5.4 pricing as of 2026-05
-            input_price=Decimal("2.50"),
-            output_price=Decimal("15.00"),
-            cache_read_price=Decimal("0.25"),
+        "gpt": FamilyPrices(  # gpt-5.5 pricing (the family's latest; gpt-5.4 retires 2026-08-31)
+            input_price=Decimal("5.00"),
+            output_price=Decimal("30.00"),
+            cache_read_price=Decimal("0.50"),
             cache_write_5m_price=Decimal("0"),
             cache_write_1h_price=Decimal("0"),
         ),

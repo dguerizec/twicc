@@ -454,6 +454,22 @@ const titleGenerationEnabled = computed(() => store.isTitleGenerationEnabled)
 const titleAutoApply = computed(() => store.isTitleAutoApply)
 const titleSystemPrompt = computed(() => store.getTitleSystemPrompt)
 const titleSystemPromptInput = ref('')
+
+// "Haiku for Claude, GPT-5.6 Luna for Codex" — built from the enabled
+// providers that name their pinned title model, so the sentence follows a
+// model change (or a provider being turned off) instead of going stale.
+const titleSuggestionModels = computed(() => {
+    const parts = getRegisteredProviders()
+        .filter(provider => enabledProviders.value.has(provider))
+        .map(provider => {
+            const helpers = getProviderHelpers(provider).constructor
+            return helpers.titleSuggestionModelLabel
+                ? `${helpers.titleSuggestionModelLabel} for ${helpers.label ?? provider}`
+                : null
+        })
+        .filter(Boolean)
+    return parts.length ? `Using ${parts.join(', ')}` : ''
+})
 const terminalUseTmux = computed(() => store.isTerminalUseTmux)
 const terminalTmuxConfigPath = computed(() => store.getTerminalTmuxConfigPath)
 const terminalMacOptionIsMeta = computed(() => store.isTerminalMacOptionIsMeta)
@@ -1616,7 +1632,7 @@ function onChangelogClose() {
                             :checked="titleGenerationEnabled"
                             @change="onTitleGenerationChange"
                             size="small"
-                        >Enabled (Using Haiku for Claude, GPT 5.4 mini for Codex)</wa-switch>
+                        >Enabled<template v-if="titleSuggestionModels"> ({{ titleSuggestionModels }})</template></wa-switch>
                         <wa-switch
                             v-if="titleGenerationEnabled"
                             :checked="titleAutoApply"

@@ -26,6 +26,11 @@ export class BaseProviderHelpers {
     static icon = null
     // Brand tint for the provider icon (any CSS colour). null → inherit.
     static iconColor = null
+    // Display name of the model the backend pins for title suggestion (its
+    // own ``title_suggest`` module — never a user-configurable setting). Kept
+    // next to the provider's other model knowledge so the settings panel
+    // names it without hardcoding a provider list. null → not named in the UI.
+    static titleSuggestionModelLabel = null
 
     /**
      * Whether the current frontend state allows sending a message to a
