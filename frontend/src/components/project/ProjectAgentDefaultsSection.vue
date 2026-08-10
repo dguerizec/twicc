@@ -15,6 +15,11 @@
 //
 // This component owns its local draft state and exposes getChangedFields() to
 // the parent, which folds the result into its existing PUT /api/projects/<id>/.
+//
+// Class prefix: ``agset-``, never ``ad-``. Content blockers ship generic cosmetic
+// filters on advertising class names, and ``.ad-field`` is one of them — under
+// uBlock Origin (Firefox Android) every settings row was hidden while its
+// siblings rendered. Keep any new class here away from ad/ads/banner/sponsor.
 
 import { ref, computed, watch } from 'vue'
 import { useDataStore } from '../../stores/data'
@@ -298,7 +303,7 @@ defineExpose({ getChangedFields, reset: initLocal })
 <template>
     <div class="form-group">
         <label class="form-label">Default provider</label>
-        <p class="ad-intro">
+        <p class="agset-intro">
             Which agent a new session in this project starts with. Inherits from
             parent projects, then your global default.
         </p>
@@ -306,7 +311,7 @@ defineExpose({ getChangedFields, reset: initLocal })
             :value.prop="localProvider"
             @change="localProvider = $event.target.value"
             size="small"
-            class="ad-provider-select"
+            class="agset-provider-select"
         >
             <ProviderIcon
                 v-if="localProvider"
@@ -331,7 +336,7 @@ defineExpose({ getChangedFields, reset: initLocal })
 
     <div class="form-group">
         <label class="form-label">Agent settings defaults</label>
-        <p class="ad-intro">
+        <p class="agset-intro">
             Per-provider defaults for new sessions here. Empty fields inherit from
             parent projects, then your global defaults.
         </p>
@@ -349,8 +354,8 @@ defineExpose({ getChangedFields, reset: initLocal })
                 slot="nav"
                 :panel="p.value"
             >
-                <ProviderIcon :provider="p.value" class="ad-tab-icon" />
-                {{ getProviderLabel(p.value) }}<span v-if="!isEnabled(p.value)" class="ad-disabled-badge">disabled</span>
+                <ProviderIcon :provider="p.value" class="agset-tab-icon" />
+                {{ getProviderLabel(p.value) }}<span v-if="!isEnabled(p.value)" class="agset-disabled-badge">disabled</span>
             </wa-tab>
 
             <wa-tab-panel v-for="p in providers" :key="p.value" :name="p.value">
@@ -360,13 +365,13 @@ defineExpose({ getChangedFields, reset: initLocal })
                     @change="loadFrom(p.value, $event)"
                     placeholder="Load from…"
                     size="small"
-                    class="ad-load-select"
+                    class="agset-load-select"
                 >
                     <wa-option v-for="src in loadSources(p.value)" :key="src.key" :value="src.key" :label="src.label">
                         <span>{{ src.label }}</span>
                         <AgentSettingsSummaryView
                             v-if="src.summaryParts?.length"
-                            class="ad-option-summary"
+                            class="agset-option-summary"
                             :parts="src.summaryParts"
                         />
                     </wa-option>
@@ -374,8 +379,8 @@ defineExpose({ getChangedFields, reset: initLocal })
 
                 <template v-for="field in supportedFields(p.value)" :key="field">
                     <!-- Model row: registry-driven groups -->
-                    <div v-if="field === 'selected_model'" class="ad-field">
-                        <label class="ad-field-label">{{ fieldLabel(p.value, 'selected_model') }}</label>
+                    <div v-if="field === 'selected_model'" class="agset-field">
+                        <label class="agset-field-label">{{ fieldLabel(p.value, 'selected_model') }}</label>
                         <wa-callout v-if="modelFallbackNotice(p.value)" variant="warning" class="model-fallback-callout">
                             {{ modelFallbackNotice(p.value) }}
                         </wa-callout>
@@ -385,7 +390,7 @@ defineExpose({ getChangedFields, reset: initLocal })
                             @change="setField(p.value, 'selected_model', $event.target.value)"
                         >
                             <wa-option :value="DEFAULT_SENTINEL">Inherit</wa-option>
-                            <small class="ad-group-label">Force to:</small>
+                            <small class="agset-group-label">Force to:</small>
                             <template v-for="(group, gi) in modelGroups(p.value)" :key="gi">
                                 <wa-divider v-if="gi > 0 && group.entries.length"></wa-divider>
                                 <wa-option
@@ -396,14 +401,14 @@ defineExpose({ getChangedFields, reset: initLocal })
                                     :disabled="entry.disabled"
                                 >
                                     <span>{{ entry.labelWithSuffix }}</span>
-                                    <span v-if="entry.description" class="ad-option-description">{{ entry.description }}</span>
+                                    <span v-if="entry.description" class="agset-option-description">{{ entry.description }}</span>
                                 </wa-option>
                             </template>
                         </wa-select>
                     </div>
                     <!-- Generic row: flat choices -->
-                    <div v-else class="ad-field">
-                        <label class="ad-field-label">{{ fieldLabel(p.value, field) }}</label>
+                    <div v-else class="agset-field">
+                        <label class="agset-field-label">{{ fieldLabel(p.value, field) }}</label>
                         <wa-select
                             size="small"
                             :value.prop="toSentinel(fieldValue(p.value, field))"
@@ -428,7 +433,7 @@ defineExpose({ getChangedFields, reset: initLocal })
                                 :color="permissionSelectIcon(p.value, field).color"
                             />
                             <wa-option :value="DEFAULT_SENTINEL">Inherit</wa-option>
-                            <small class="ad-group-label">Force to:</small>
+                            <small class="agset-group-label">Force to:</small>
                             <wa-option
                                 v-for="opt in fieldChoices(p.value, field)"
                                 :key="String(opt.value)"
@@ -439,22 +444,22 @@ defineExpose({ getChangedFields, reset: initLocal })
                                     v-if="field === 'effort' && effortIconSrc(opt.value)"
                                     auto-width
                                     :src="effortIconSrc(opt.value)"
-                                    class="ad-effort-option-icon"
+                                    class="agset-effort-option-icon"
                                 ></wa-icon>
                                 <SettingFlagIcon
                                     v-if="isFlagField(field)"
                                     :field="field"
                                     :on="opt.value === true"
-                                    class="ad-flag-option-icon"
+                                    class="agset-flag-option-icon"
                                 />
                                 <PermissionModeIcon
                                     v-if="isPermissionField(field) && opt.icon"
                                     :icon="opt.icon"
                                     :color="opt.color"
-                                    class="ad-flag-option-icon"
+                                    class="agset-flag-option-icon"
                                 />
                                 <span>{{ opt.label }}</span>
-                                <span v-if="opt.description" class="ad-option-description">{{ opt.description }}</span>
+                                <span v-if="opt.description" class="agset-option-description">{{ opt.description }}</span>
                             </wa-option>
                         </wa-select>
                     </div>
@@ -485,13 +490,13 @@ defineExpose({ getChangedFields, reset: initLocal })
     color: var(--wa-color-text-quiet);
 }
 
-.ad-intro {
+.agset-intro {
     margin: 0;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
 }
 
-.ad-provider-select {
+.agset-provider-select {
     max-width: 280px;
 }
 
@@ -499,16 +504,16 @@ defineExpose({ getChangedFields, reset: initLocal })
     margin-right: 0.5em;
 }
 
-.ad-tab-icon {
+.agset-tab-icon {
     margin-right: var(--wa-space-2xs);
 }
 
-.ad-load-select {
+.agset-load-select {
     max-width: 280px;
     margin-bottom: var(--wa-space-s);
 }
 
-.ad-disabled-badge {
+.agset-disabled-badge {
     margin-left: var(--wa-space-2xs);
     padding: 0 var(--wa-space-2xs);
     border-radius: var(--wa-border-radius-s);
@@ -519,19 +524,19 @@ defineExpose({ getChangedFields, reset: initLocal })
     letter-spacing: 0.03em;
 }
 
-.ad-field {
+.agset-field {
     display: flex;
     flex-direction: column;
     gap: var(--wa-space-2xs);
     margin-bottom: var(--wa-space-s);
 }
 
-.ad-field-label {
+.agset-field-label {
     font-size: var(--wa-font-size-s);
     font-weight: var(--wa-font-weight-semibold);
 }
 
-.ad-group-label {
+.agset-group-label {
     display: block;
     padding: var(--wa-space-2xs) var(--wa-space-s);
     color: var(--wa-color-text-quiet);
@@ -539,13 +544,13 @@ defineExpose({ getChangedFields, reset: initLocal })
     font-style: italic;
 }
 
-.ad-effort-option-icon,
-.ad-flag-option-icon {
+.agset-effort-option-icon,
+.agset-flag-option-icon {
     margin-right: 0.5em;
     vertical-align: -0.15em;
 }
 
-.ad-option-description {
+.agset-option-description {
     display: block;
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
@@ -553,7 +558,7 @@ defineExpose({ getChangedFields, reset: initLocal })
 
 /* The shared agent-settings icon summary keeps its own flex layout — only tint
    and shrink it to the quiet option-description size. */
-.ad-option-summary {
+.agset-option-summary {
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
 }
