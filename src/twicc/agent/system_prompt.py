@@ -92,6 +92,10 @@ and search history. `twicc-create-session` makes them visible or hidden
 Sessions share no memory — any prompt you hand a spawned session must be
 self-contained.
 
+When the "Context" block below has a `spawned by` line, another session created
+you: your first user message is that session's prompt, not the user's. Report
+back to it with `send-message parent`.
+
 ## Projects and workspaces
 
 Every session belongs to a project (a working directory TwiCC tracks). Projects
@@ -351,6 +355,7 @@ def build_dynamic_block(
     session_id: str | None = None,
     started_at: datetime | None = None,
     spawned_by_id: str | None = None,
+    spawned_by_title: str | None = None,
     spawned_by_project_id: str | None = None,
     hidden: bool = False,
     annotations: dict | None = None,
@@ -401,7 +406,13 @@ def build_dynamic_block(
         lines.append(f"- started at: {started_at.isoformat()}")
 
     if spawned_by_id:
+        # Title quoted right after the id, mirroring the sender header of an
+        # inter-session message. Not truncated — like the project name and the
+        # workspace names above, the block states the value as it is.
         parent_line = f"- spawned by: {spawned_by_id}"
+        parent_title = (spawned_by_title or "").strip()
+        if parent_title:
+            parent_line += f' ("{parent_title}")'
         if spawned_by_project_id:
             parent_line += f" (project: {spawned_by_project_id})"
         lines.append(parent_line)
@@ -442,6 +453,7 @@ def compose_addendum(
     session_id: str | None = None,
     started_at: datetime | None = None,
     spawned_by_id: str | None = None,
+    spawned_by_title: str | None = None,
     spawned_by_project_id: str | None = None,
     hidden: bool = False,
     annotations: dict | None = None,
@@ -459,6 +471,7 @@ def compose_addendum(
         session_id=session_id,
         started_at=started_at,
         spawned_by_id=spawned_by_id,
+        spawned_by_title=spawned_by_title,
         spawned_by_project_id=spawned_by_project_id,
         hidden=hidden,
         annotations=annotations,

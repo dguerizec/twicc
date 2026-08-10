@@ -310,15 +310,19 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
         from twicc.core.models import Session as SessionModel
 
         spawned_by_project_id: str | None = None
+        spawned_by_title: str | None = None
         if spawned_by_session_id:
             parent = (
                 SessionModel.objects
                 .filter(id=spawned_by_session_id)
-                .only("project_id")
+                .only("project_id", "title")
                 .first()
             )
             if parent is not None:
                 spawned_by_project_id = parent.project_id
+                # May still be None: a parent spawned moments ago has no title
+                # yet (it is derived from its own first user message).
+                spawned_by_title = parent.title
 
         return compose_addendum(
             provider=provider.value,
@@ -327,6 +331,7 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
             session_id=addendum_session_id,
             started_at=datetime.now(timezone.utc),
             spawned_by_id=spawned_by_session_id,
+            spawned_by_title=spawned_by_title,
             spawned_by_project_id=spawned_by_project_id,
             hidden=hidden,
             annotations=annotations,
