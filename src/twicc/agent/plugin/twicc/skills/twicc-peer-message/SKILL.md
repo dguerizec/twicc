@@ -40,7 +40,7 @@ $TWICC peer-message <MESSAGE_ID>
 
 ```json
 {"id": 12, "message_id": "pm_1a2b3c4d5e6f7a8b", "peer_id": "peer_a1b2c3d4", "direction": "out",
- "status": "pending", "error": "", "text_preview": "Here is the recap...",
+ "title": "API changes recap", "status": "pending", "error": "", "text_preview": "Here is the recap...",
  "attachments_meta": [{"kind": "image", "media_type": "image/png", "bytes": 48211}],
  "origin": {"sent_at": "2026-07-24T12:00:00+00:00"},
  "recipient_note": "", "origin_session_id": "abc123", "delivered_to_session_id": null,
@@ -50,7 +50,8 @@ $TWICC peer-message <MESSAGE_ID>
 ```
 
 - `status` — `pending` (awaiting the remote user), `delivered`, `refused`, or `failed` (never reached the peer; detail in `error`).
-- `origin_session` / `delivered_to_session` — the local session at each end (`null` when there is none), with its title read live. The peer receives neither: the wire carries `sent_at` and the payload, nothing else.
+- `title` — the required subject the send carried.
+- `origin_session` / `delivered_to_session` — the local session at each end (`null` when there is none), with its title read live. The peer receives neither: the wire carries the title, `sent_at` and the payload, nothing else.
 
 ### Exit codes
 
@@ -67,7 +68,7 @@ $TWICC peer-message pm_1a2b3c4d5e6f7a8b
 
 ## Related commands
 
-- `$TWICC peer-send <peer> '<text>'` — send a message to a peer instance. Skill: `twicc-peer-send`.
+- `$TWICC peer-send <peer> '<title>' '<text>'` — send a titled message to a peer instance. Skill: `twicc-peer-send`.
 - `$TWICC peers` — list peer instances. Skill: `twicc-peers`.
 
 ## How to present results

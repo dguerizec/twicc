@@ -8,8 +8,14 @@
  * own line, opened by a label:
  *
  *   ↓ twicc-dell3                             [attachments] [status] [time]
+ *     The message title
  *     | the message, quoted, two lines at most
  *   Delivered to session  “Peer inbox polish”  in ●twicc-poc
+ *
+ * Reading order encodes importance (decision of 2026-08-11): WHO speaks (the
+ * peer, on the header line), then WHAT it is about (the sender-written title),
+ * then what it says (the preview). The title line is skipped on rows stored
+ * before the title became required.
  *
  * An outbound row is the same shape, its routing line reading "Sent from
  * session …": the local end is the sending session there. Only local context
@@ -152,6 +158,9 @@ const timestampSeconds = computed(() =>
             </span>
         </span>
 
+        <!-- The sender-written subject — second in importance after the peer. -->
+        <span v-if="message.title" class="pir__title">{{ message.title }}</span>
+
         <!-- The message itself, alone on its line: it is the content, not metadata. -->
         <span class="pir__message">{{ message.text_preview }}</span>
 
@@ -228,6 +237,19 @@ const timestampSeconds = computed(() =>
     display: inline-flex;
     align-items: center;
     gap: var(--wa-space-2xs);
+}
+
+/* The subject, indented with the quoted message it titles. Semibold is enough
+   emphasis under the peer name (bold), which stays the loudest element. A
+   title is one flattened line by construction; a long one ellipsizes. */
+.pir__title {
+    margin-left: 2rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    max-width: 100%;
 }
 
 /* The message is a quotation of someone else's words, so it wears the quote

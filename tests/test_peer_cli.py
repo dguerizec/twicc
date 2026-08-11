@@ -72,12 +72,19 @@ def test_peer_send_precheck_errors():
         finally:
             transport.backend_loop.reset(token)
 
-    res = asyncio.run(scenario(["peer-send", "ghost", "hello"]))
+    res = asyncio.run(scenario(["peer-send", "ghost", "Subject", "hello"]))
     assert res.exit_code == 1
 
     _active_peer(name="brk", base_url="https://brk.example.com", state=PeerState.BROKEN,
                  token_ours=mint_token())
-    res = asyncio.run(scenario(["peer-send", "brk", "hello"]))
+    res = asyncio.run(scenario(["peer-send", "brk", "Subject", "hello"]))
+    assert res.exit_code == 1
+
+    # Title pre-check (local, before the drop-request): empty and over-cap.
+    _active_peer()
+    res = asyncio.run(scenario(["peer-send", "alice", "   ", "hello"]))
+    assert res.exit_code == 1
+    res = asyncio.run(scenario(["peer-send", "alice", "x" * 101, "hello"]))
     assert res.exit_code == 1
 
 
@@ -86,8 +93,8 @@ def test_peer_send_end_to_end_in_process(monkeypatch):
     peer = _active_peer()
     calls = []
 
-    async def _fake_post(base_url, *, bearer, message_id, payload, origin):
-        calls.append({"bearer": bearer, "message_id": message_id})
+    async def _fake_post(base_url, *, bearer, message_id, title, payload, origin):
+        calls.append({"bearer": bearer, "message_id": message_id, "title": title})
         return 202, {}
 
     monkeypatch.setattr("twicc.peer.outbound.post_message", _fake_post)
@@ -95,7 +102,7 @@ def test_peer_send_end_to_end_in_process(monkeypatch):
     async def scenario():
         token = transport.backend_loop.set(asyncio.get_running_loop())
         try:
-            return await asyncio.to_thread(invoke, ["peer-send", "alice", "recap of the day"])
+            return await asyncio.to_thread(invoke, ["peer-send", "alice", "Daily recap", "recap of the day"])
         finally:
             transport.backend_loop.reset(token)
 
@@ -106,9 +113,11 @@ def test_peer_send_end_to_end_in_process(monkeypatch):
     assert res.result["message_id"].startswith("pm_")
     assert res.result["peer_status"] == "pending"  # remote state via status_extra
     assert calls[0]["bearer"] == peer.token_theirs
+    assert calls[0]["title"] == "Daily recap"
     message = PeerMessage.objects.get()
     assert message.direction == PeerMessageDirection.OUT
     assert message.status == PeerMessageStatus.PENDING
+    assert message.title == "Daily recap"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -123,7 +132,7 @@ def test_peer_send_rejected_maps_exit_3(monkeypatch):
     async def scenario():
         token = transport.backend_loop.set(asyncio.get_running_loop())
         try:
-            return await asyncio.to_thread(invoke, ["peer-send", "alice", "hello"])
+            return await asyncio.to_thread(invoke, ["peer-send", "alice", "Subject", "hello"])
         finally:
             transport.backend_loop.reset(token)
 
@@ -141,7 +150,7 @@ def test_execute_drop_payload_peer_send(monkeypatch):
         return 202, {}
 
     monkeypatch.setattr("twicc.peer.outbound.post_message", _fake_post)
-    status = asyncio.run(execute_drop_payload({"peer": peer.id, "text": "hi"}, "peer:send"))
+    status = asyncio.run(execute_drop_payload({"peer": peer.id, "title": "Subject", "text": "hi"}, "peer:send"))
     assert status["status"] == "sent"
     assert status["peer_id"] == peer.id
     assert status["peer_status"] == "pending"

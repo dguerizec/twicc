@@ -1,7 +1,7 @@
 ---
 name: twicc-peer-send
-description: Send a message (text + optional attachments) to a peer TwiCC instance — another user's installation. Delivery requires the REMOTE user's approval; the message must be fully self-contained.
-argument-hint: <peer> <prompt>
+description: Send a titled message (subject + text + optional attachments) to a peer TwiCC instance — another user's installation. Delivery requires the REMOTE user's approval; the message must be fully self-contained.
+argument-hint: <peer> <title> <prompt>
 ---
 
 # TwiCC Peer Send
@@ -29,13 +29,14 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (use `$TWICC args`, never 
 ## Usage
 
 ```bash
-$TWICC peer-send [OPTIONS] '<PEER>' '<PROMPT>'
+$TWICC peer-send [OPTIONS] '<PEER>' '<TITLE>' '<PROMPT>'
 ```
 
 ### Arguments
 
 - `PEER` — the peer's id (`peer_...`) or its exact local name — resolve with `$TWICC peers`.
-- `PROMPT` — message text, or a path to a UTF-8 file. Only the text and attachments travel — the remote agent has none of your context.
+- `TITLE` — required subject, shown prominently to the remote user (inbox, notification, delivery envelope). Write it like an email subject: short, specific, self-contained — aim for ~60 characters. Hard cap 100 characters (longer is rejected, not truncated). Always inline text, never a file path; newlines are flattened.
+- `PROMPT` — message text, or a path to a UTF-8 file. Only the title, text and attachments travel — the remote agent has none of your context.
 
 ### Options
 
@@ -49,6 +50,7 @@ $TWICC peer-send [OPTIONS] '<PEER>' '<PROMPT>'
 - Unknown peer — no peer matches by id or exact name.
 - Peer `broken` — the peer revoked the relationship or is unreachable; only the user can fix it in Settings › Peers.
 - Peer still pending — the pairing has not been accepted yet.
+- Invalid title — empty, or over 100 characters (`empty_title` / `title_too_long`); rewrite it shorter, it is never truncated for you.
 
 ### Server (exit 3)
 
@@ -80,8 +82,8 @@ Every server-side failure surfaces as `rejected` (exit 3); the distinction is in
 ## Examples
 
 ```bash
-$TWICC peer-send David 'Recap from Stephane'\''s instance, project TwiCC: the /peer API landed today; endpoints are documented in docs/plans/. Nothing needed on your side yet.'
-$TWICC peer-send peer_a1b2c3d4 --attach /tmp/front-screenshot.png 'Screenshot of the layout bug we discussed — top bar overlaps at <1200px.'
+$TWICC peer-send David 'TwiCC: /peer API landed' 'Recap from Stephane'\''s instance, project TwiCC: the /peer API landed today; endpoints are documented in docs/plans/. Nothing needed on your side yet.'
+$TWICC peer-send peer_a1b2c3d4 --attach /tmp/front-screenshot.png 'Layout bug screenshot' 'Screenshot of the layout bug we discussed — top bar overlaps at <1200px.'
 # → {"status":"sent","message_id":"pm_...","peer_id":"peer_a1b2c3d4","peer_status":"pending",...}
 ```
 

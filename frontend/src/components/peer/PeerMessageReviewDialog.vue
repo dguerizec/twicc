@@ -462,6 +462,11 @@ function onHide(event) {
                 </span>
             </div>
 
+            <!-- The sender-written subject, between who speaks (header) and
+                 what they say (quote) — the inbox row's reading order. Absent
+                 on rows stored before the title became required. -->
+            <h3 v-if="detail.title" class="pr-title">{{ detail.title }}</h3>
+
             <!-- Message body (markdown), quoted like the inbox preview: these
                  are someone else's words, not the app's. -->
             <div class="pr-quote">
@@ -695,6 +700,16 @@ function onHide(event) {
     font-size: 0.8rem;
     white-space: nowrap;
     flex-shrink: 0;
+}
+
+/* The subject: a heading of this dialog's content, not of the app chrome —
+   sized between the header line and the body text. Wraps freely: the full
+   title is the point of this surface (the inbox row ellipsizes it). */
+.pr-title {
+    margin: 0 0 var(--wa-space-s);
+    font-size: var(--wa-font-size-l);
+    line-height: var(--wa-line-height-condensed);
+    overflow-wrap: anywhere;
 }
 
 /* The quote recipe of the markdown renderer (MarkdownContent.vue): quiet

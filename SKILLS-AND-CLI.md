@@ -326,8 +326,8 @@ Cross-instance agent messages between two users' TwiCC installations. Pairing (a
 List peer instances as `{id, name, state, last_contact_at}` — `active` (messageable) and `broken` (revoked or unreachable, kept so a failing send can be explained). No arguments.
 - Skill: [`twicc-peers`](src/twicc/agent/plugin/twicc/skills/twicc-peers/SKILL.md).
 
-### `twicc peer-send <PEER> <PROMPT>`
-Send a message to a peer (id or exact local name). `PROMPT` is inline text or a file path; `--attach` (repeatable) like `send-message`; `--timeout`. Success returns `{status: "sent", message_id, peer_id, peer_status: "pending"}` — `pending` until the remote user delivers or refuses. Server failures land as `rejected` (exit 3) with the detail in the error code (`peer_broken`, `unreachable`, `send_failed`).
+### `twicc peer-send <PEER> <TITLE> <PROMPT>`
+Send a titled message to a peer (id or exact local name). `TITLE` is the required subject the remote user triages on — inline text only, one flattened line, 100 chars max (over-long is rejected, never truncated); `PROMPT` is inline text or a file path; `--attach` (repeatable) like `send-message`; `--timeout`. Success returns `{status: "sent", message_id, peer_id, peer_status: "pending"}` — `pending` until the remote user delivers or refuses. Server failures land as `rejected` (exit 3) with the detail in the error code (`peer_broken`, `unreachable`, `send_failed`).
 - Skill: [`twicc-peer-send`](src/twicc/agent/plugin/twicc/skills/twicc-peer-send/SKILL.md).
 
 ### `twicc peer-message <MESSAGE_ID>`

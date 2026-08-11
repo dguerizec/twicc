@@ -10,6 +10,14 @@ def peer_send_cmd(
         ...,
         help="Peer id (peer_...) or its exact local name — see `twicc peers`.",
     ),
+    title: str = typer.Argument(
+        ...,
+        help=(
+            "Required subject, shown prominently to the remote user (inbox, "
+            "notification, delivery). One line of text (never a file path), "
+            "100 characters max — aim shorter, like an email subject."
+        ),
+    ),
     prompt: str = typer.Argument(
         ...,
         help=(
@@ -38,9 +46,10 @@ def peer_send_cmd(
         ),
     ),
 ) -> None:
-    """Send a message to a peer TwiCC instance.
+    """Send a titled message to a peer TwiCC instance.
 
-    No confirmation on this side — but delivery requires the REMOTE user's
+    Every send carries a required TITLE — the subject the remote user triages
+    on. No confirmation on this side — but delivery requires the REMOTE user's
     approval: the returned peer_status stays "pending" until they deliver or
     refuse it. Re-check later with "twicc peer-message <MESSAGE_ID>".
     """
@@ -62,6 +71,7 @@ def peer_send_cmd(
     from twicc.cli._drop_request.whoami import resolve_current_session
     from twicc.cli._output import emit_error
     from twicc.core.models import Peer, PeerState
+    from twicc.core.services.peer_messages import validate_title
     from twicc.providers.helpers import get_provider_helpers
 
     try:
@@ -86,6 +96,14 @@ def peer_send_cmd(
         )
     if peer_row.state != PeerState.ACTIVE:
         emit_error("This peer relationship is still pending — it cannot receive messages yet.", code=1)
+
+    # Same normalization + cap as the watcher-side service (which re-validates):
+    # flattened to one line, stripped, 100 chars max — over-long is REJECTED,
+    # never truncated. TITLE is always inline text, never a file path.
+    clean_title, title_error = validate_title(title)
+    if title_error is not None:
+        emit_validation_errors([ValidationError("TITLE", title_error.code, title_error.message)])
+        raise typer.Exit(1)
 
     try:
         text = resolve_prompt(prompt)
@@ -121,6 +139,7 @@ def peer_send_cmd(
     # is simply null.
     payload = {
         "peer": peer_row.id,
+        "title": clean_title,
         "text": text,
         "images": attach_result.images,
         "documents": attach_result.documents,

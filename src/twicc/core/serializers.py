@@ -498,6 +498,9 @@ def serialize_peer_message(message, *, include_payload=False):
         "message_id": message.message_id,
         "peer_id": message.peer_id,
         "direction": message.direction,
+        # Required on every send since 2026-08-11; "" on older rows — the UI
+        # skips the line rather than inventing a subject.
+        "title": message.title,
         "status": message.status,
         "error": message.error,
         "text_preview": text[:300],

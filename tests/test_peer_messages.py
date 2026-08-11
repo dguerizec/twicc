@@ -112,6 +112,7 @@ def _image_block(data=b"png-bytes"):
 def _wire_body(**overrides):
     body = {
         "message_id": "pm_" + "a" * 16,
+        "title": "Recap of the day",
         "payload": {"text": "hello from alice", "images": [], "documents": []},
         "origin": {"sent_at": "2026-07-24T12:00:00+00:00"},
     }
@@ -143,6 +144,13 @@ def test_receive_invalid_payloads(client, transactional_db, peer_host):
         _wire_body(message_id=""),
         _wire_body(message_id="x" * 41),
         _wire_body(origin="not-a-dict"),
+        # The title is required on the wire: absent, blank, non-string or
+        # over the cap are all rejected.
+        {k: v for k, v in _wire_body().items() if k != "title"},
+        _wire_body(title=""),
+        _wire_body(title="   \n  "),
+        _wire_body(title=42),
+        _wire_body(title="x" * 101),
     ]
     for body in bad_bodies:
         res = _post(client, "/peer/messages/", body, bearer=peer.token_ours)
@@ -166,6 +174,7 @@ def test_receive_stores_pending_row(client, transactional_db, peer_host, broadca
     message = PeerMessage.objects.get()
     assert message.direction == PeerMessageDirection.IN
     assert message.status == PeerMessageStatus.PENDING
+    assert message.title == "Recap of the day"
     assert message.payload["text"] == "hello"
     assert message.attachments_meta[0]["kind"] == "image"
     assert message.attachments_meta[0]["media_type"] == "image/png"
@@ -234,10 +243,10 @@ def test_status_callback_idempotent_and_errors(client, transactional_db, peer_ho
 # ── send_peer_message_from_payload ──────────────────────────────────────────
 
 def _patch_post_message(monkeypatch, status=202, *, network_error=False, calls=None):
-    async def _fake(base_url, *, bearer, message_id, payload, origin):
+    async def _fake(base_url, *, bearer, message_id, title, payload, origin):
         if calls is not None:
-            calls.append({"base_url": base_url, "bearer": bearer,
-                          "message_id": message_id, "payload": payload, "origin": origin})
+            calls.append({"base_url": base_url, "bearer": bearer, "message_id": message_id,
+                          "title": title, "payload": payload, "origin": origin})
         if network_error:
             raise outbound.PeerOutboundError("ConnectError")
         return status, {}
@@ -248,18 +257,44 @@ def test_send_success(transactional_db, peer_host, broadcasts, monkeypatch):
     peer = _active_peer()
     calls = []
     _patch_post_message(monkeypatch, calls=calls)
-    result = _run(peer_messages.send_peer_message_from_payload({"peer": "alice", "text": "recap"}))
+    result = _run(peer_messages.send_peer_message_from_payload(
+        {"peer": "alice", "title": "Daily recap", "text": "recap"},
+    ))
     assert result.success
     assert result.status_extra == {"peer_status": "pending"}
     assert result.peer_id == peer.id
     message = PeerMessage.objects.get()
     assert message.direction == PeerMessageDirection.OUT
     assert message.status == PeerMessageStatus.PENDING
+    assert message.title == "Daily recap"
     assert calls[0]["bearer"] == peer.token_theirs
+    # The title rides the wire at the top level, next to message_id — never
+    # inside the SDK-shaped payload.
+    assert calls[0]["title"] == "Daily recap"
+    assert "title" not in calls[0]["payload"]
     assert calls[0]["payload"]["text"] == "recap"
     assert calls[0]["origin"]["sent_at"]
     peer.refresh_from_db()
     assert peer.last_contact_at is not None
+
+
+def test_send_title_validation(transactional_db, peer_host, monkeypatch):
+    _active_peer()
+    _patch_post_message(monkeypatch)
+    for bad_title in (None, "", "   \n ", "x" * 101):
+        result = _run(peer_messages.send_peer_message_from_payload(
+            {"peer": "alice", "title": bad_title, "text": "x"},
+        ))
+        assert not result.success, bad_title
+        assert result.errors[0].field == "title"
+    assert PeerMessage.objects.count() == 0  # rejected before any row exists
+
+    # Newlines are flattened, surrounding space stripped — then it passes.
+    result = _run(peer_messages.send_peer_message_from_payload(
+        {"peer": "alice", "title": "  Two\nlines  ", "text": "x"},
+    ))
+    assert result.success
+    assert PeerMessage.objects.get().title == "Two lines"
 
 
 def test_send_resolves_origin_session(transactional_db, peer_host, monkeypatch):
@@ -274,7 +309,7 @@ def test_send_resolves_origin_session(transactional_db, peer_host, monkeypatch):
     calls = []
     _patch_post_message(monkeypatch, calls=calls)
     result = _run(peer_messages.send_peer_message_from_payload(
-        {"peer": "alice", "text": "x", "origin_session_id": "sess-origin"},
+        {"peer": "alice", "title": "T", "text": "x", "origin_session_id": "sess-origin"},
     ))
     assert result.success
     message = PeerMessage.objects.get()
@@ -287,24 +322,24 @@ def test_send_resolves_origin_session(transactional_db, peer_host, monkeypatch):
 
 def test_send_peer_resolution_errors(transactional_db, peer_host, monkeypatch):
     _patch_post_message(monkeypatch)
-    result = _run(peer_messages.send_peer_message_from_payload({"peer": "ghost", "text": "x"}))
+    result = _run(peer_messages.send_peer_message_from_payload({"peer": "ghost", "title": "T", "text": "x"}))
     assert not result.success and result.errors[0].code == "not_found"
 
     _active_peer(name="broken-one", base_url="https://b.example.com", state=PeerState.BROKEN,
                  token_ours=mint_token())
-    result = _run(peer_messages.send_peer_message_from_payload({"peer": "broken-one", "text": "x"}))
+    result = _run(peer_messages.send_peer_message_from_payload({"peer": "broken-one", "title": "T", "text": "x"}))
     assert not result.success and result.errors[0].code == "peer_broken"
 
     _active_peer(name="pending-one", base_url="https://p.example.com", state=PeerState.PENDING_SENT,
                  token_ours=mint_token())
-    result = _run(peer_messages.send_peer_message_from_payload({"peer": "pending-one", "text": "x"}))
+    result = _run(peer_messages.send_peer_message_from_payload({"peer": "pending-one", "title": "T", "text": "x"}))
     assert not result.success and result.errors[0].code == "not_active"
 
 
 def test_send_403_marks_peer_broken(transactional_db, peer_host, broadcasts, monkeypatch):
     peer = _active_peer()
     _patch_post_message(monkeypatch, status=403)
-    result = _run(peer_messages.send_peer_message_from_payload({"peer": "alice", "text": "x"}))
+    result = _run(peer_messages.send_peer_message_from_payload({"peer": "alice", "title": "T", "text": "x"}))
     assert not result.success
     assert result.errors[0].code == "peer_broken"
     peer.refresh_from_db()
@@ -319,7 +354,7 @@ def test_send_403_marks_peer_broken(transactional_db, peer_host, broadcasts, mon
 def test_send_http_error(transactional_db, peer_host, monkeypatch):
     _active_peer()
     _patch_post_message(monkeypatch, status=500)
-    result = _run(peer_messages.send_peer_message_from_payload({"peer": "alice", "text": "x"}))
+    result = _run(peer_messages.send_peer_message_from_payload({"peer": "alice", "title": "T", "text": "x"}))
     assert not result.success and result.errors[0].code == "send_failed"
     message = PeerMessage.objects.get()
     assert message.status == PeerMessageStatus.FAILED
@@ -329,7 +364,7 @@ def test_send_http_error(transactional_db, peer_host, monkeypatch):
 def test_send_network_error(transactional_db, peer_host, monkeypatch):
     peer = _active_peer()
     _patch_post_message(monkeypatch, network_error=True)
-    result = _run(peer_messages.send_peer_message_from_payload({"peer": "alice", "text": "x"}))
+    result = _run(peer_messages.send_peer_message_from_payload({"peer": "alice", "title": "T", "text": "x"}))
     assert not result.success and result.errors[0].code == "unreachable"
     message = PeerMessage.objects.get()
     assert message.status == PeerMessageStatus.FAILED
@@ -343,6 +378,7 @@ def test_send_network_error(transactional_db, peer_host, monkeypatch):
 def _in_message(peer, **kw):
     defaults = dict(
         peer=peer, direction=PeerMessageDirection.IN, message_id="pm_" + "c" * 16,
+        title="The *subject*",
         payload={"text": "the message body", "images": [], "documents": []},
         origin={"sent_at": "2026-07-24T12:00:00+00:00"},
         status=PeerMessageStatus.PENDING,
@@ -383,7 +419,8 @@ def test_deliver_to_existing_envelope_exact(transactional_db, broadcasts, status
     ))
     assert success and errors == []
     expected = (
-        ":: peer message from **alice** (`https://alice.example.com`)"
+        # The sender-written title leads the header, markdown-escaped.
+        ":: peer message **“The \\*subject\\*”** from **alice** (`https://alice.example.com`)"
         # The wire says 12:00 UTC; the reader is in Paris (UTC+2 in July).
         ", sent Fri 24 Jul 2026 at 14:00 CEST; "
         "written by an agent on another TwiCC instance and forwarded by your user,"
@@ -407,7 +444,9 @@ def test_deliver_to_existing_envelope_exact(transactional_db, broadcasts, status
 
 def test_deliver_envelope_without_note(transactional_db, status_callbacks):
     peer = _active_peer()
-    message = _in_message(peer, origin={"sent_at": None})
+    # A pre-title row (title ""): the subject segment is omitted, never a
+    # blank pair of quotes.
+    message = _in_message(peer, title="", origin={"sent_at": None})
     _, session = _make_target_session()
     success, text, _errors = _run(peer_messages.mark_delivered(
         message, session_id=session.id, note="   ",
@@ -417,6 +456,7 @@ def test_deliver_envelope_without_note(transactional_db, status_callbacks):
     # Absent provenance parts are omitted, not rendered as "unknown".
     assert 'session "' not in text
     assert "sent " not in text
+    assert "“" not in text
     assert text.startswith(":: peer message from **alice** (`https://alice.example.com`)")
     # The `::` line block wraps nothing: the content stays top-level markdown.
     assert text.endswith("\n\nthe message body")
@@ -463,7 +503,7 @@ def test_mark_delivered_to_draft(transactional_db, broadcasts, status_callbacks)
     message = _in_message(peer)
     success, envelope, errors = _run(peer_messages.mark_delivered(message, note="check this"))
     assert success and errors == []
-    assert envelope.startswith(":: peer message from **alice**")
+    assert envelope.startswith(":: peer message **“The \\*subject\\*”** from **alice**")
     assert "the message body" in envelope
     assert "check this" in envelope  # note rides the envelope
     message.refresh_from_db()
@@ -495,6 +535,7 @@ def test_serializer_carries_live_session_titles(transactional_db, status_callbac
 
     message = PeerMessage.objects.select_related("delivered_to_session").get(pk=message.pk)
     data = serialize_peer_message(message)
+    assert data["title"] == "The *subject*"
     assert data["delivered_to_session"] == {
         "id": session.id, "title": session.title, "project_id": session.project_id,
     }

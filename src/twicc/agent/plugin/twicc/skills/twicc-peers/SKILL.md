@@ -58,7 +58,7 @@ $TWICC peers
 
 ## Related commands
 
-- `$TWICC peer-send <peer> '<text>'` — send a message to a peer instance. Skill: `twicc-peer-send`.
+- `$TWICC peer-send <peer> '<title>' '<text>'` — send a titled message to a peer instance. Skill: `twicc-peer-send`.
 - `$TWICC peer-message <message_id>` — re-check an outbound message's status. Skill: `twicc-peer-message`.
 
 ## How to present results

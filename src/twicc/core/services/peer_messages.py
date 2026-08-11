@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 from datetime import datetime, timezone
 from typing import NamedTuple
 
@@ -37,6 +38,34 @@ PEER_ATTACHMENT_MAX_FILES = 100
 # SDK block shape with claude_code's wider acceptance.
 
 _PAYLOAD_KEYS = frozenset({"text", "images", "documents"})
+
+# The required subject every send carries (decision of 2026-08-11): the
+# receiving human triages on it, so it is a hard cap the sender must meet —
+# an over-long title is REJECTED, never silently truncated into a broken
+# subject line. The CLI mirrors the number in its pre-check and help text.
+PEER_MESSAGE_TITLE_MAX_CHARS = 100
+
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
+
+
+def validate_title(value) -> tuple[str, PeerError | None]:
+    """Normalize the required message title: one flattened line, stripped.
+
+    Returns ``(clean_title, None)`` or ``("", PeerError)``. Shared by the send
+    path (agent input) and the inbound endpoint (arbitrary wire input) — the
+    two sides must agree on what a valid title is.
+    """
+    if value is not None and not isinstance(value, str):
+        return "", PeerError("title", "invalid", "title must be a string")
+    flat = _WHITESPACE_RUN_RE.sub(" ", value or "").strip()
+    if not flat:
+        return "", PeerError("title", "empty_title", "title is required")
+    if len(flat) > PEER_MESSAGE_TITLE_MAX_CHARS:
+        return "", PeerError(
+            "title", "title_too_long",
+            f"title exceeds {PEER_MESSAGE_TITLE_MAX_CHARS} characters",
+        )
+    return flat, None
 
 
 class PeerSendResult(NamedTuple):
@@ -189,13 +218,15 @@ def _validate_inbound_payload(payload) -> list[PeerError]:
 async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
     """Drop-request handler for ``kind="peer:send"``.
 
-    Payload: ``{peer: <peer_id or exact local name>, text, images, documents,
-    origin_session_id?}``. Attachments are already validated/encoded by the CLI.
+    Payload: ``{peer: <peer_id or exact local name>, title, text, images,
+    documents, origin_session_id?}``. Attachments are already
+    validated/encoded by the CLI.
     """
     from twicc.core.models import Peer, PeerMessage, PeerMessageDirection, PeerMessageStatus, PeerState, Session
     from twicc.peer import outbound
 
     peer_ref = (payload.get("peer") or "").strip()
+    title, title_error = validate_title(payload.get("title"))
     text = (payload.get("text") or "").strip()
     images = payload.get("images") or []
     documents = payload.get("documents") or []
@@ -203,6 +234,8 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
     errors: list[PeerError] = []
     if not peer_ref:
         errors.append(PeerError("peer", "missing", "peer is required"))
+    if title_error is not None:
+        errors.append(title_error)
     if not text:
         errors.append(PeerError("text", "empty_text", "text is required"))
     if errors:
@@ -255,6 +288,7 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
         peer=peer,
         direction=PeerMessageDirection.OUT,
         message_id=message_id,
+        title=title,
         payload=wire_payload,
         attachments_meta=_attachments_meta(wire_payload),
         origin=origin,
@@ -267,7 +301,7 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
     try:
         http_status, _body = await outbound.post_message(
             peer.base_url, bearer=peer.token_theirs,
-            message_id=message_id, payload=wire_payload, origin=origin,
+            message_id=message_id, title=title, payload=wire_payload, origin=origin,
         )
     except outbound.PeerOutboundError as exc:
         http_status, detail = None, str(exc)
@@ -333,6 +367,11 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
     message_id = body.get("message_id")
     if not isinstance(message_id, str) or not message_id or len(message_id) > 40:
         return 400, {"error": "invalid_payload"}
+    # Required on the wire too — both sides of this protocol are TwiCC, and a
+    # message without a subject would defeat the inbox triage it exists for.
+    title, title_error = validate_title(body.get("title"))
+    if title_error is not None:
+        return 400, {"error": "invalid_payload"}
     payload = body.get("payload")
     if _validate_inbound_payload(payload):
         return 400, {"error": "invalid_payload"}
@@ -355,6 +394,7 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
         peer=peer,
         direction=PeerMessageDirection.IN,
         message_id=message_id,
+        title=title,
         payload=clean_payload,
         attachments_meta=_attachments_meta(clean_payload),
         origin={"sent_at": sent_at},
@@ -459,19 +499,26 @@ def build_delivery_envelope(peer, message, note: str) -> str:
     the message.
 
     Only the APPLICATIVE text is generated; text typed by the interlocutors
-    (the message, the note) travels byte-for-byte. The peer name and base URL
-    are local values the owner chose, but they are still flattened to one line,
-    truncated and markdown-escaped, exactly like the sender header's title —
-    the header owns a single line whatever they contain.
+    (the message, the note) travels byte-for-byte. The message title, the peer
+    name and the base URL are one-liners by construction, but the title and
+    name are sender/owner-typed values, so they are still flattened, truncated
+    and markdown-escaped exactly like the sender header's title — the header
+    owns a single line whatever they contain.
 
     The sending session's title is NOT here: it never crosses the wire (see
-    ``send``). Nothing off the wire but the message body reaches this header.
+    ``send``). Off the wire, only the sender-written title and the message
+    body reach the receiving agent.
     """
     from twicc.cli._drop_request.sender_header import inline_md
 
     origin = message.origin or {}
     text = (message.payload or {}).get("text", "")
-    header = f":: peer message from **{inline_md(peer.name) or 'an unnamed peer'}** (`{inline_md(peer.base_url)}`)"
+    header = ":: peer message"
+    # Empty only on rows stored before the title became required — the segment
+    # is omitted, never rendered as a blank subject.
+    if title := inline_md(message.title, max_chars=PEER_MESSAGE_TITLE_MAX_CHARS):
+        header += f" **“{title}”**"
+    header += f" from **{inline_md(peer.name) or 'an unnamed peer'}** (`{inline_md(peer.base_url)}`)"
     if sent_at := _format_sent_at(origin.get("sent_at")):
         header += f", sent {sent_at}"
     header += (

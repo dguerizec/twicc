@@ -7,6 +7,10 @@
  * opens the inbox on that message, "Keep unread" only dismisses the toast.
  * Both dialogs are mounted once in App.vue and opened through window
  * CustomEvents, so the toast stays decoupled from them.
+ *
+ * mode 'message' reading order (decision of 2026-08-11): WHO speaks is the
+ * toast's own title ("Message from <peer>", set by the caller), then the
+ * sender-written message title, then the text preview.
  */
 const props = defineProps({
     /** 'request' | 'message' */
@@ -59,9 +63,12 @@ function later() {
             <span class="peer-toast-url">{{ peer.base_url }}</span>
             <span class="peer-toast-hint">Review the request to see its verification code.</span>
         </template>
-        <span v-else-if="mode === 'message' && message?.text_preview" class="peer-toast-detail">
-            {{ message.text_preview }}
-        </span>
+        <template v-else-if="mode === 'message' && message">
+            <span v-if="message.title" class="peer-toast-title">{{ message.title }}</span>
+            <span v-if="message.text_preview" class="peer-toast-detail">
+                {{ message.text_preview }}
+            </span>
+        </template>
         <div class="peer-toast-actions wa-light">
             <template v-if="mode === 'request'">
                 <wa-button
@@ -87,6 +94,15 @@ function later() {
     flex-direction: column;
     gap: var(--wa-space-xs);
     margin-top: var(--wa-space-xs);
+}
+
+/* The sender-written subject, between the toast title (the peer) and the
+   preview. One line — a toast has no room for a wrapping subject. */
+.peer-toast-title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .peer-toast-detail {
