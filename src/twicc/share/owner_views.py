@@ -20,7 +20,9 @@ async def _load(share_id):
     from twicc.core.models import Share
 
     share = await sync_to_async(
-        lambda: Share.objects.select_related("session", "artifact_bookmark").filter(id=share_id).first()
+        lambda: Share.objects.select_related(
+            "session", "artifact_bookmark", "created_by_session",
+        ).filter(id=share_id).first()
     )()
     if share is None:
         raise Http404("Share not found")
@@ -33,7 +35,9 @@ async def shares_list(request):
 
     if request.method == "GET":
         shares = await sync_to_async(list)(
-            Share.objects.select_related("session", "artifact_bookmark").all()
+            Share.objects.select_related(
+                "session", "artifact_bookmark", "created_by_session",
+            ).all()
         )
         return JsonResponse({"shares": [serialize_share(s) for s in shares]})
     if request.method == "POST":

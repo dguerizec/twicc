@@ -1648,6 +1648,16 @@ class Share(models.Model):
     view_count = models.PositiveIntegerField(default=0)
     last_viewed_at = models.DateTimeField(null=True, blank=True)
     notify_on_view = models.BooleanField(default=False)
+    # Agent provenance (agent-sharing design §9): the session whose agent
+    # created this share through the gated CLI/MCP surface. NULL = human-created
+    # or legacy/unattributed — pre-gate rows are unknowable, and NULL fails the
+    # §6 provenance test, so unattributed rows stay out of agent management
+    # (except revoke, A7). SET_NULL: attribution is metadata, never a lifecycle
+    # edge — a share must not die with its creator session.
+    created_by_session = models.ForeignKey(
+        Session, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="created_shares",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

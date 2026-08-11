@@ -171,3 +171,29 @@ def test_rest_patch_invalid_expiry_keeps_existing_raise(client, session, share_h
             data=orjson.dumps({"expires_at": "junk"}),
             content_type="application/json",
         ))
+
+
+def test_list_serializes_visible_creator_without_async_lazy_load(
+        client, session, share_host):
+    now = djtz.now()
+    creator = Session.objects.create(
+        id="agent-owner", project=session.project, provider="claude_code",
+        file_path="agent-owner.jsonl", type=SessionType.SESSION,
+        title="Creator", created_at=now, last_new_content_at=now,
+        user_message_count=1, last_line=4,
+    )
+    share = _share(session, created_by_session=creator)
+    response = _run(client.get("/api/shares/"))
+    assert response.status_code == 200
+    row = next(
+        item for item in orjson.loads(response.content)["shares"]
+        if item["id"] == share.id
+    )
+    assert row["created_by"] == {
+        "kind": "agent",
+        "session": {
+            "id": creator.id,
+            "title": "Creator",
+            "project_id": session.project_id,
+        },
+    }

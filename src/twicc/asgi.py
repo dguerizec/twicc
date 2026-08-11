@@ -601,7 +601,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             from twicc.core.models import Share
             from twicc.core.serializers import serialize_share
             shares = await sync_to_async(list)(
-                Share.objects.select_related("session", "artifact_bookmark").all()
+                Share.objects.select_related(
+                    "session", "artifact_bookmark", "created_by_session",
+                ).all()
             )
             await self.send_json({
                 "type": "shares_updated",

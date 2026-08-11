@@ -26,7 +26,9 @@ def list_main(*, kind: str | None = None, session: str | None = None,
     from twicc.core.serializers import serialize_share
     from twicc.core.services.share_url import build_share_url
 
-    qs = Share.objects.select_related("session", "artifact_bookmark").all()
+    qs = Share.objects.select_related(
+        "session", "artifact_bookmark", "created_by_session",
+    ).all()
     if kind is not None:
         qs = qs.filter(kind=kind)
     if session is not None:
@@ -56,7 +58,9 @@ def show_main(share_id: str) -> None:
     from twicc.core.serializers import serialize_share
     from twicc.core.services.share_url import build_share_url
 
-    s = Share.objects.select_related("session", "artifact_bookmark").filter(id=share_id).first()
+    s = Share.objects.select_related(
+        "session", "artifact_bookmark", "created_by_session",
+    ).filter(id=share_id).first()
     if s is None:
         emit_error(f"Error: share {share_id!r} not found.", code=1)
     data = serialize_share(s)

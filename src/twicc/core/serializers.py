@@ -381,6 +381,25 @@ def serialize_share(share):
             from twicc.core.services.share_mutation import source_updated_at
             src = source_updated_at(bm)
             data["source_updated_at"] = src.isoformat() if src else None
+    # Agent provenance (agent-sharing design §9). The created_by channel
+    # follows the frontend hidden rule: a hidden creator serializes as
+    # {"kind": "agent", "session": null} — never its id or title. The
+    # share's own target fields are deliberately NOT subject to this rule
+    # (a self-target share of a hidden session still shows session_id /
+    # target_title: the transcript it publishes reveals far more).
+    creator_id = share.created_by_session_id
+    if creator_id is None:
+        data["created_by"] = {"kind": "human_or_legacy", "session": None}
+    else:
+        creator = share.created_by_session
+        if creator.hidden:
+            data["created_by"] = {"kind": "agent", "session": None}
+        else:
+            data["created_by"] = {"kind": "agent", "session": {
+                "id": creator.id,
+                "title": creator.title,
+                "project_id": creator.project_id,
+            }}
     return data
 
 

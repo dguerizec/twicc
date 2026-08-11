@@ -1,10 +1,19 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
+import orjson
 import pytest
 from django.db import IntegrityError
 from django.utils import timezone as djtz
 
-from twicc.core.models import ArtifactBookmark, PinMode, Project, Session, SessionType, Share
+from twicc.core.models import (
+    ArtifactBookmark,
+    PinMode,
+    Project,
+    Session,
+    SessionType,
+    Share,
+)
 from twicc.core.serializers import serialize_share, serialize_share_public_meta
 from twicc.core.services.share_tokens import mint_token, resolve_share
 
@@ -30,6 +39,138 @@ def bookmark(session, project):
         session=session, project=project,
         relative_path="demo/index.html", name="Demo", scope=PinMode.PROJECT,
     )
+
+
+def _run(coro):
+    return asyncio.new_event_loop().run_until_complete(coro)
+
+
+def _creator(project, *, sid="agent-1", title="Agent one"):
+    now = djtz.now()
+    return Session.objects.create(
+        id=sid, project=project, provider="claude_code",
+        file_path=f"{sid}.jsonl", type=SessionType.SESSION, title=title,
+        created_at=now, last_new_content_at=now, user_message_count=1,
+        last_line=7,
+    )
+
+
+def _serialized(share):
+    loaded = Share.objects.select_related(
+        "session", "artifact_bookmark", "created_by_session",
+    ).get(id=share.id)
+    return serialize_share(loaded)
+
+
+def test_created_by_session_column_and_serializer_shapes(project, session):
+    legacy = Share.objects.create(
+        kind="session", token=mint_token(), session=session,
+    )
+    assert _serialized(legacy)["created_by"] == {
+        "kind": "human_or_legacy", "session": None,
+    }
+
+    creator = _creator(project)
+    attributed = Share.objects.create(
+        kind="session", token=mint_token(), session=session,
+        created_by_session=creator,
+    )
+    assert _serialized(attributed)["created_by"] == {
+        "kind": "agent",
+        "session": {
+            "id": "agent-1", "title": "Agent one", "project_id": project.id,
+        },
+    }
+
+    creator.hidden = True
+    creator.save(update_fields=["hidden"])
+    hidden = _serialized(attributed)["created_by"]
+    assert hidden == {"kind": "agent", "session": None}
+    assert "agent-1" not in orjson.dumps(hidden).decode()
+
+    creator.hidden = False
+    creator.title = ""
+    creator.save(update_fields=["hidden", "title"])
+    untitled = _serialized(attributed)["created_by"]
+    assert untitled == {
+        "kind": "agent",
+        "session": {"id": "agent-1", "title": "", "project_id": project.id},
+    }
+
+
+def test_self_target_by_hidden_creator_keeps_target_fields(project):
+    creator = _creator(project, sid="hidden-self", title="Published target")
+    creator.hidden = True
+    creator.save(update_fields=["hidden"])
+    share = Share.objects.create(
+        kind="session", token=mint_token(), session=creator,
+        created_by_session=creator,
+    )
+    data = _serialized(share)
+    assert data["created_by"] == {"kind": "agent", "session": None}
+    assert data["session_id"] == creator.id
+    assert data["target_title"] == "Published target"
+
+
+def test_created_by_absent_from_public_meta(project, session):
+    creator = _creator(project)
+    share = Share.objects.create(
+        kind="session", token=mint_token(), session=session,
+        created_by_session=creator,
+    )
+    assert "created_by" not in serialize_share_public_meta(share)
+
+
+def test_serialize_share_in_async_context_no_lazy_load(project, session):
+    creator = _creator(project)
+    share = Share.objects.create(
+        kind="session", token=mint_token(), session=session,
+        created_by_session=creator,
+    )
+    loaded = Share.objects.select_related(
+        "session", "artifact_bookmark", "created_by_session",
+    ).get(id=share.id)
+
+    async def go():
+        return serialize_share(loaded)
+
+    assert _run(go())["created_by"]["session"]["id"] == creator.id
+
+
+def test_hide_emits_no_share_event_and_next_snapshot_hides_creator(
+        project, session, monkeypatch):
+    from twicc.core.services import session_visibility
+
+    creator = _creator(project)
+    share = Share.objects.create(
+        kind="session", token=mint_token(), session=session,
+        created_by_session=creator,
+    )
+    assert _serialized(share)["created_by"]["session"]["id"] == creator.id
+
+    sent = []
+
+    class RecordingLayer:
+        async def group_send(self, group, payload):
+            assert group == "updates"
+            sent.append(payload["data"]["type"])
+
+    monkeypatch.setattr(session_visibility, "_check_hidden_invariants", lambda row: [])
+    # Keep the real _apply_flip path. The recording layer then observes any
+    # broadcast added anywhere in the full hide path. Stub only unrelated
+    # expensive work that happens after the hidden flag is saved.
+    monkeypatch.setattr(
+        "twicc.projects.update_project_metadata", lambda project_id: None,
+    )
+    monkeypatch.setattr(
+        "twicc.search.reindex_session", lambda session_id: None,
+    )
+    monkeypatch.setattr(session_visibility, "get_channel_layer", lambda: RecordingLayer())
+
+    result = _run(session_visibility.hide_session(creator))
+    assert result.success
+    assert sent == ["session_removed", "project_updated"]
+    assert _serialized(share)["created_by"] == {"kind": "agent", "session": None}
 
 
 def test_check_constraint_rejects_session_kind_without_session(project, bookmark):

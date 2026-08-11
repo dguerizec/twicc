@@ -218,6 +218,7 @@ async def create_share(
     password: str | None = None,
     expires_at: datetime | None = None,
     notify_on_view: bool = False,
+    created_by_session=None,
 ) -> ShareMutationResult:
     """Create a share. Validates options, snapshots the artifact (aborting on
     failure), freezes the session line for snapshot mode, then writes + broadcasts."""
@@ -261,6 +262,7 @@ async def create_share(
         expires_at=expires_at,
         options=opts,
         notify_on_view=notify_on_view,
+        created_by_session=created_by_session,
     )
 
     if kind == ShareKind.ARTIFACT.value:
@@ -439,7 +441,9 @@ async def _load_share_or_error(payload: dict):
 
     share_id = (payload.get("share_id") or "").strip()
     share = await sync_to_async(
-        lambda: Share.objects.select_related("session", "artifact_bookmark").filter(id=share_id).first()
+        lambda: Share.objects.select_related(
+            "session", "artifact_bookmark", "created_by_session",
+        ).filter(id=share_id).first()
     )()
     if share is None:
         return None, ShareMutationResult(False, None, [ShareError("share_id", "not_found", f"share {share_id!r} not found")])

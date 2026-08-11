@@ -152,7 +152,9 @@ async def start_share_view_flush_task(stop_event: asyncio.Event) -> None:
             updated = await asyncio.to_thread(_persist, snapshot)
             for share_id in updated:
                 share = await sync_to_async(
-                    lambda sid=share_id: Share.objects.select_related("session", "artifact_bookmark").filter(id=sid).first()
+                    lambda sid=share_id: Share.objects.select_related(
+                        "session", "artifact_bookmark", "created_by_session",
+                    ).filter(id=sid).first()
                 )()
                 if share is not None:
                     await broadcast_share_updated(share)
