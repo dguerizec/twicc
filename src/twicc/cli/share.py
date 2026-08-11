@@ -20,6 +20,8 @@ def list_main(*, kind: str | None = None, session: str | None = None,
     import django
     django.setup()
 
+    from django.db.models import Q
+
     from twicc.core.models import Share
     from twicc.core.serializers import serialize_share
     from twicc.core.services.share_url import build_share_url
@@ -28,10 +30,13 @@ def list_main(*, kind: str | None = None, session: str | None = None,
     if kind is not None:
         qs = qs.filter(kind=kind)
     if session is not None:
-        qs = qs.filter(session_id=session)
+        qs = qs.filter(Q(session_id=session) | Q(artifact_bookmark__session_id=session))
     if project is not None:
         from twicc.projects import project_scope_ids
-        qs = qs.filter(session__project_id__in=project_scope_ids(project))
+        ids = project_scope_ids(project)
+        # Both kinds: an artifact share has session NULL (CheckConstraint), its
+        # project comes from the bookmark's denormalised raw project FK.
+        qs = qs.filter(Q(session__project_id__in=ids) | Q(artifact_bookmark__project_id__in=ids))
     rows = list(qs[offset:offset + limit])
     base = _base_url()
     out = []
