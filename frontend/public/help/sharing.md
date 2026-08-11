@@ -46,6 +46,29 @@ links**), where each link also shows how many times it was opened:
   its view logs), so you can re-enable it later.
 - **Delete** removes it permanently, including its view logs.
 
+## Agents and share links
+
+By default, only you can create or manage share links — agents cannot.
+Two switches in **Settings → Sharing** change that, one per kind (session
+links, artifact links). Both are **off** until you enable them.
+
+Enabling **Session shares** lets agents create session links for their own
+session or any session in their spawn subtree. Enabling **Artifact shares**
+lets agents create artifact links for bookmarks owned by their own session
+or any session in their spawn subtree.
+
+For the enabled kind, agents can also:
+
+- **manage** (update, delete, re-publish) links created by themselves or by
+  agents in their spawn subtree;
+- **revoke** any existing link of that kind — including links you created
+  yourself (un-publishing is always considered safe);
+- **read the URL** of every existing link of that kind, including yours.
+
+Agents can never clear a link's password, never share with the `debug`
+display mode, and their new session links are frozen snapshots unless they
+explicitly ask for a live link.
+
 ## Artifacts and network access
 
 A shared artifact runs for the viewer with **no consent prompts**. If it

@@ -75,6 +75,9 @@ export const SETTINGS_SCHEMA = {
     peerBaseUrl: null,
     peerDisplayName: null,
     notifyOnExtraUsageStart: null,
+    // Agent-created shares (design 2026-08-10): opt-in gates, default off.
+    allowAgentSessionShares: null,
+    allowAgentArtifactShares: null,
     // Whether the user has seen the hybrid-mode explainer dialog (never shown
     // in the settings panel; gates the hybrid toggle's explainer).
     claudeHybridExplainerSeen: null,
@@ -120,6 +123,8 @@ const SETTINGS_VALIDATORS = {
     showCosts: (v) => typeof v === 'boolean',
     extraUsageOnlyWhenNeeded: (v) => typeof v === 'boolean',
     notifyOnExtraUsageStart: (v) => typeof v === 'boolean',
+    allowAgentSessionShares: (v) => typeof v === 'boolean',
+    allowAgentArtifactShares: (v) => typeof v === 'boolean',
     maxCachedSessions: (v) => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 50,
     autoUnpinOnArchive: (v) => typeof v === 'boolean',
     claudeHybridExplainerSeen: (v) => typeof v === 'boolean',
@@ -313,6 +318,8 @@ export const useSettingsStore = defineStore('settings', {
         shouldNotifyOnExtraUsageStart: (state) => state.notifyOnExtraUsageStart,
         getMaxCachedSessions: (state) => state.maxCachedSessions,
         isAutoUnpinOnArchive: (state) => state.autoUnpinOnArchive,
+        isAllowAgentSessionShares: (state) => state.allowAgentSessionShares === true,
+        isAllowAgentArtifactShares: (state) => state.allowAgentArtifactShares === true,
         // null (not yet loaded / never set) reads as "not seen".
         isClaudeHybridExplainerSeen: (state) => state.claudeHybridExplainerSeen === true,
         // Whether new Claude Code sessions should start in hybrid mode.
@@ -546,6 +553,18 @@ export const useSettingsStore = defineStore('settings', {
         setAutoUnpinOnArchive(enabled) {
             if (SETTINGS_VALIDATORS.autoUnpinOnArchive(enabled)) {
                 this.autoUnpinOnArchive = enabled
+            }
+        },
+
+        setAllowAgentSessionShares(enabled) {
+            if (SETTINGS_VALIDATORS.allowAgentSessionShares(enabled)) {
+                this.allowAgentSessionShares = enabled
+            }
+        },
+
+        setAllowAgentArtifactShares(enabled) {
+            if (SETTINGS_VALIDATORS.allowAgentArtifactShares(enabled)) {
+                this.allowAgentArtifactShares = enabled
             }
         },
 
@@ -1168,6 +1187,8 @@ export function initSettings() {
             externalNotificationTargets: store.externalNotificationTargets,
             publicBaseUrl: store.publicBaseUrl,
             shareBaseUrl: store.shareBaseUrl,
+            allowAgentSessionShares: store.allowAgentSessionShares,
+            allowAgentArtifactShares: store.allowAgentArtifactShares,
             peerBaseUrl: store.peerBaseUrl,
             peerDisplayName: store.peerDisplayName,
         }

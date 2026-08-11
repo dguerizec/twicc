@@ -455,6 +455,8 @@ const extraUsageOnlyWhenNeeded = computed(() => store.isExtraUsageOnlyWhenNeeded
 const notifyOnExtraUsageStart = computed(() => store.shouldNotifyOnExtraUsageStart)
 const maxCachedSessions = computed(() => store.getMaxCachedSessions)
 const autoUnpinOnArchive = computed(() => store.isAutoUnpinOnArchive)
+const allowAgentSessionShares = computed(() => store.isAllowAgentSessionShares)
+const allowAgentArtifactShares = computed(() => store.isAllowAgentArtifactShares)
 const titleGenerationEnabled = computed(() => store.isTitleGenerationEnabled)
 const titleAutoApply = computed(() => store.isTitleAutoApply)
 const titleSystemPrompt = computed(() => store.getTitleSystemPrompt)
@@ -1049,6 +1051,14 @@ function onAutoUnpinOnArchiveChange(event) {
     store.setAutoUnpinOnArchive(event.target.checked)
 }
 
+function onAllowAgentSessionSharesChange(event) {
+    store.setAllowAgentSessionShares(event.target.checked)
+}
+
+function onAllowAgentArtifactSharesChange(event) {
+    store.setAllowAgentArtifactShares(event.target.checked)
+}
+
 /**
  * Toggle title generation.
  */
@@ -1596,6 +1606,33 @@ function onChangelogClose() {
                             Dedicated share host — a hostname distinct from this app, pointing at the
                             same port (e.g. a second tunnel hostname). Required to create share links;
                             a different port on the same hostname is not enough. Leave empty to disable sharing.
+                        </span>
+                    </div>
+                    <div class="setting-group">
+                        <label class="setting-group-label">Agent sharing <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                        <wa-switch
+                            :checked="allowAgentSessionShares"
+                            @change="onAllowAgentSessionSharesChange"
+                            size="small"
+                        >Session shares</wa-switch>
+                        <span class="setting-group-hint">
+                            Allows agents to create session shares whose target belongs to their own
+                            spawn subtree, and to manage session shares created by agents in their own
+                            spawn subtree. When enabled, agents can also revoke any existing session
+                            share, including links created by you, and read the URL of every existing
+                            session share, including links created by you or by another agent.
+                        </span>
+                        <wa-switch
+                            :checked="allowAgentArtifactShares"
+                            @change="onAllowAgentArtifactSharesChange"
+                            size="small"
+                        >Artifact shares</wa-switch>
+                        <span class="setting-group-hint">
+                            Allows agents to create artifact shares whose target belongs to their own
+                            spawn subtree, and to manage artifact shares created by agents in their own
+                            spawn subtree. When enabled, agents can also revoke any existing artifact
+                            share, including links created by you, and read the URL of every existing
+                            artifact share, including links created by you or by another agent.
                         </span>
                     </div>
                     <div class="setting-group">

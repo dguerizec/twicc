@@ -210,6 +210,7 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     'waTheme', 'waBrand',
     'externalNotificationTargets', 'publicBaseUrl', 'shareBaseUrl', 'peerBaseUrl', 'peerDisplayName',
     'notifyOnExtraUsageStart',
+    'allowAgentSessionShares', 'allowAgentArtifactShares',
     // Synced but intentionally never shown in the settings panel: records that
     // the user has seen the hybrid-mode explainer dialog (so it stops gating
     // the toggle). Written only via the dialog's "don't show again" switch.
