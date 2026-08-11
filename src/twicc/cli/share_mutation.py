@@ -7,11 +7,15 @@ from twicc.cli.artifacts_mutation import _run_drop  # reuse the heartbeat + poll
 
 
 def run_create_session(*, session_id: str, label: str, password: str | None,
-                       expires_at: str | None, mode: str, options: dict, timeout: int) -> None:
+                       expires_at: str | None, mode: str | None, options: dict,
+                       timeout: int) -> None:
+    opts = dict(options)
+    if mode is not None:
+        opts["mode"] = mode
     _run_drop(
         {"kind_target": "session", "session_id": session_id, "label": label,
          "password": password, "expires_at": expires_at,
-         "options": {**options, "mode": mode}},
+         "options": opts},
         kind="share:create", success_status="created", timeout=timeout,
     )
 

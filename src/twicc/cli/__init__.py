@@ -644,7 +644,10 @@ def _share_create_session(
     label: str = typer.Option("", "--label"),
     password: str = typer.Option(None, "--password"),
     expires: str = typer.Option(None, "--expires", help="ISO 8601."),
-    live: bool = typer.Option(True, "--live/--frozen", help="Live-follow or snapshot."),
+    live: bool | None = typer.Option(
+        None, "--live/--frozen",
+        help="Live-follow or snapshot. Default: live for a human caller, frozen for an agent caller.",
+    ),
     max_display: str = typer.Option("normal", "--max-display"),
     include_subagents: bool = typer.Option(True, "--include-subagents/--no-subagents"),
     title: str = typer.Option(None, "--title", help="Public title shown to viewers (default: the session title). Ignored with --no-title."),
@@ -654,7 +657,7 @@ def _share_create_session(
     from twicc.cli.share_mutation import run_create_session
     run_create_session(
         session_id=session_id, label=label, password=password, expires_at=expires,
-        mode="live" if live else "snapshot",
+        mode=None if live is None else ("live" if live else "snapshot"),
         options={"max_display_mode": max_display, "include_subagents": include_subagents,
                  "show_title": show_title, "display_title": (title or "") if show_title else ""},
         timeout=timeout,
