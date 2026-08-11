@@ -217,22 +217,13 @@ def resolve_descendants_filter(value: str | None) -> set[str] | None:
     match against an empty pool (returns nothing), not as "no filter".
 
     Algorithm:
-    1. Resolve ``target_id`` and ``tree_key`` from ``value`` (the target
-       is the resolved session for ``"self"`` / an explicit id, or the
-       current session's spawner for ``"parent"``). ``tree_key`` is the
-       resolved session's ``spawn_root_id`` (with a defensive fallback
-       to the target's id).
-    2. Fetch the universe with a single ``filter(spawn_root_id=tree_key)``
-       projection on ``(id, spawned_by_id)``.
-    3. If ``tree_key == target_id`` (the target IS the tree root), every
-       row except the target itself is a descendant — shortcut, no BFS.
-    4. Otherwise, BFS the ``spawned_by_id`` edges from the target to
-       isolate its branch within the tree.
+    1. Resolve ``target_id`` from ``value``: the current session for
+       ``"self"``, its spawner for ``"parent"``, or the explicit value.
+    2. Delegate the common lookup and BFS to
+       ``core.services.spawn_scope.descendant_ids(target_id)``.
     """
     if value is None:
         return None
-
-    from twicc.core.models import Session
 
     if value in ("self", "parent"):
         try:
@@ -249,7 +240,6 @@ def resolve_descendants_filter(value: str | None) -> set[str] | None:
             )
         if value == "self":
             target_id = session.id
-            tree_key = session.spawn_root_id or session.id
         else:  # value == "parent"
             if session.spawned_by_id is None:
                 raise RuntimeError(
@@ -258,41 +248,12 @@ def resolve_descendants_filter(value: str | None) -> set[str] | None:
                     f"`twicc create-session` from a parent agent.",
                 )
             target_id = session.spawned_by_id
-            # The current session shares its spawn_root with its parent (the
-            # denormalization propagates at creation), so we can derive the
-            # tree key without loading the parent row.
-            tree_key = session.spawn_root_id or session.spawned_by_id
     else:
-        try:
-            session = Session.objects.only("id", "spawn_root_id").get(pk=value)
-        except Session.DoesNotExist:
-            return set()
-        target_id = session.id
-        tree_key = session.spawn_root_id or session.id
+        target_id = value
 
-    rows = list(
-        Session.objects.filter(spawn_root_id=tree_key).only("id", "spawned_by_id")
-    )
+    from twicc.core.services.spawn_scope import descendant_ids
 
-    if tree_key == target_id:
-        # Target is the tree root → every other row is a descendant.
-        return {r.id for r in rows if r.id != target_id}
-
-    # Target is mid-tree → BFS its branch to drop sibling/parent rows.
-    adj: dict[str, list[str]] = {}
-    for r in rows:
-        if r.spawned_by_id:
-            adj.setdefault(r.spawned_by_id, []).append(r.id)
-
-    out: set[str] = set()
-    stack = list(adj.get(target_id, ()))
-    while stack:
-        node = stack.pop()
-        if node in out:
-            continue
-        out.add(node)
-        stack.extend(adj.get(node, ()))
-    return out
+    return descendant_ids(target_id)
 
 
 def resolve_siblings_filter(value: str | None) -> set[str] | None:
