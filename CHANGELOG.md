@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **Artifacts can save data** — An interactive artifact can now remember your choices, and the agent can read them back.
+- **Buttons on code blocks** — In a conversation, each code block can be copied, or have its long lines wrapped. A Markdown block can also be shown rendered.
 - **Attachments on their own** — In an ongoing conversation, you can now send images or files without writing any text.
 
 ### Changed

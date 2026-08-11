@@ -1,7 +1,7 @@
 <script setup>
-import { ref, computed, inject, watch, onMounted } from 'vue'
+import { ref, computed, inject, watch, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { splitMarkdownBlocks, renderBlockToHtml, extractHeadings } from '../../utils/markdown.js'
+import { splitMarkdownBlocks, renderBlockToHtml, extractHeadings, hashString } from '../../utils/markdown.js'
 import { useSettingsStore } from '../../stores/settings'
 import { vHighlight } from '../../directives/vHighlight.js'
 import { toast } from '../../composables/useToast'
@@ -31,6 +31,14 @@ const props = defineProps({
     // Enabled by the file-preview panes (Files / Plan / Git .md diffs) where the
     // rendered document can be long; left off for chat, tips, changelog, etc.
     showToc: {
+        type: Boolean,
+        default: false
+    },
+    // Opt-in per-code-block toolbar (copy / wrap / render markdown). Reserved
+    // for the markdown of chat *messages* (text, thinking, compact summary):
+    // everywhere else the surrounding pane already carries its own tools, and
+    // tool results are not message content.
+    codeTools: {
         type: Boolean,
         default: false
     }
@@ -182,6 +190,180 @@ function rewriteContentMediaUrlsIn(root) {
     }
 }
 
+// --- Per-code-block tools (opt-in via the codeTools prop) -------------------
+//
+// Each rendered code block gets a small hover toolbar, injected into the block's
+// HTML during post-processing (same mechanism as the mermaid replacement above,
+// so it lands in the cached string and survives Vue's v-html diffing). The
+// buttons carry no listener of their own: clicks are caught by the container's
+// existing delegation, next to the link/media handling.
+
+// Fence languages whose blocks also get the "show rendered" toggle.
+const MARKDOWN_LANGS = new Set(['markdown', 'md'])
+
+// UI state per code block: `{ wrap?: boolean, rendered?: boolean }`, keyed by a
+// hash of the block's code. Content-keyed rather than positional, because the
+// block a user toggled keeps its identity as the message grows around it — and
+// the whole toolbar is recreated whenever v-html replaces the block (the
+// streaming one does, every frame). Two identical code blocks in one message
+// share an entry: they are indistinguishable by content, and the only cost is a
+// toggle applying to both. Non-reactive: the DOM it drives lives outside Vue.
+const codeToolsState = new Map()
+
+function codeToolsButton(action, icon, label) {
+    return `<button type="button" class="code-tools-btn" data-code-action="${action}"`
+        + ` title="${label}" aria-label="${label}"><wa-icon name="${icon}"></wa-icon></button>`
+}
+
+// Wrap every code block (inside the given root) in a `.code-tools` container
+// holding its toolbar. Runs after addLanguageLabelsIn, so `data-language` is
+// already set and the markdown-only button can be decided here.
+function addCodeToolsIn(root) {
+    for (const pre of root.querySelectorAll('pre')) {
+        // Already wrapped — happens when a nested render re-processes a subtree.
+        if (pre.parentElement?.classList.contains('code-tools')) continue
+        const code = pre.textContent ?? ''
+        if (!code.trim()) continue
+
+        const wrapper = document.createElement('div')
+        wrapper.className = 'code-tools'
+        wrapper.dataset.codeKey = hashString(code)
+
+        const bar = document.createElement('div')
+        bar.className = 'code-tools-bar'
+        bar.innerHTML = [
+            MARKDOWN_LANGS.has(pre.dataset.language ?? '')
+                ? codeToolsButton('view', 'eye', 'Show rendered markdown')
+                : '',
+            codeToolsButton('wrap', 'text-width', 'Toggle line wrapping'),
+            codeToolsButton('copy', 'copy', 'Copy code'),
+        ].join('')
+
+        pre.replaceWith(wrapper)
+        wrapper.append(bar, pre)
+    }
+}
+
+function codeToolsParts(wrapper) {
+    return {
+        pre: wrapper.querySelector(':scope > pre'),
+        wrapBtn: wrapper.querySelector(':scope > .code-tools-bar > [data-code-action="wrap"]'),
+        viewBtn: wrapper.querySelector(':scope > .code-tools-bar > [data-code-action="view"]'),
+        view: wrapper.querySelector(':scope > .code-tools-rendered'),
+    }
+}
+
+// Force line wrapping on or off for one block. Written as an inline style rather
+// than a class because the ambient rules differ per consumer (user messages wrap
+// their code blocks by default — see TextContent.vue), and an explicit toggle
+// must win over any of them in both directions. `code` is set alongside `pre`
+// for the same reason: an ambient rule targeting it would otherwise beat
+// inheritance when we switch wrapping off.
+function applyCodeWrap(wrapper, wrapped) {
+    const { pre, wrapBtn } = codeToolsParts(wrapper)
+    if (!pre) return
+    for (const el of [pre, ...pre.querySelectorAll('code')]) {
+        el.style.whiteSpace = wrapped ? 'pre-wrap' : 'pre'
+        el.style.overflowWrap = wrapped ? 'break-word' : ''
+    }
+    wrapBtn?.classList.toggle('is-active', wrapped)
+}
+
+// Render a nested markdown document (the content of a ```markdown block) with
+// the exact pipeline used for the outer content, tools included: a markdown
+// block inside a markdown block stays explorable all the way down.
+async function renderNestedMarkdown(source, theme) {
+    const tmp = document.createElement('div')
+    tmp.innerHTML = await renderBlockToHtml(source, {})
+    await postProcessIn(tmp, theme)
+    return tmp.innerHTML
+}
+
+// Show or hide the rendered view of a ```markdown block. The rendered HTML is
+// built once per wrapper and then kept in the DOM, so flipping back and forth
+// costs nothing. Returns false when the state could not be applied — the caller
+// then leaves (or drops) the remembered toggle rather than lying about it.
+async function applyCodeRendered(wrapper, rendered) {
+    const { pre, viewBtn } = codeToolsParts(wrapper)
+    if (!pre || !viewBtn) return false
+
+    if (rendered && !codeToolsParts(wrapper).view) {
+        let html
+        try {
+            html = await renderNestedMarkdown(pre.textContent ?? '', mermaidTheme())
+        } catch {
+            // Keep the raw block shown rather than swapping in an empty frame.
+            toast.error('Could not render this markdown block', { duration: 3000 })
+            return false
+        }
+        // The block may have been replaced (streaming) while the nested render
+        // was in flight, or another call may have won the race to build the view.
+        if (!wrapper.isConnected) return false
+        if (!codeToolsParts(wrapper).view) {
+            const view = document.createElement('div')
+            view.className = 'code-tools-rendered'
+            view.innerHTML = html
+            wrapper.append(view)
+        }
+    }
+
+    wrapper.classList.toggle('is-rendered', rendered)
+    viewBtn.querySelector('wa-icon')?.setAttribute('name', rendered ? 'code' : 'eye')
+    const label = rendered ? 'Show raw markdown' : 'Show rendered markdown'
+    viewBtn.setAttribute('title', label)
+    viewBtn.setAttribute('aria-label', label)
+    return true
+}
+
+async function handleCodeToolsAction(button) {
+    const wrapper = button.closest('.code-tools')
+    if (!wrapper) return
+    const { pre } = codeToolsParts(wrapper)
+    if (!pre) return
+
+    const key = wrapper.dataset.codeKey
+    const state = codeToolsState.get(key) ?? {}
+
+    switch (button.dataset.codeAction) {
+        case 'copy':
+            await copyText(pre.textContent ?? '', 'Code')
+            break
+        case 'wrap': {
+            // Read the effective value rather than our own state: with no
+            // explicit toggle yet, the ambient stylesheet decides, and the first
+            // click must flip what the user actually sees.
+            const wrapped = getComputedStyle(pre).whiteSpace !== 'pre'
+            codeToolsState.set(key, { ...state, wrap: !wrapped })
+            applyCodeWrap(wrapper, !wrapped)
+            break
+        }
+        case 'view': {
+            const next = !wrapper.classList.contains('is-rendered')
+            if (await applyCodeRendered(wrapper, next)) {
+                codeToolsState.set(key, { ...state, rendered: next })
+            }
+            break
+        }
+    }
+}
+
+// Re-apply the remembered toggles to the freshly rendered DOM. Only the block
+// that changed was replaced, so this is a no-op for every other wrapper.
+async function restoreCodeToolsState() {
+    const root = container.value
+    if (!root) return
+    for (const wrapper of root.querySelectorAll('.code-tools[data-code-key]')) {
+        const state = codeToolsState.get(wrapper.dataset.codeKey)
+        if (!state) continue
+        if (state.wrap !== undefined) applyCodeWrap(wrapper, state.wrap)
+        // A block whose nested render fails forgets the toggle, so the failure
+        // is reported once instead of on every subsequent render.
+        if (state.rendered && !await applyCodeRendered(wrapper, true) && wrapper.isConnected) {
+            codeToolsState.delete(wrapper.dataset.codeKey)
+        }
+    }
+}
+
 // Matches a fenced mermaid block (``` or ~~~) at the start of a line. No `g`
 // flag, so `.test()` stays stateless across calls.
 const MERMAID_FENCE_RE = /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[ \t]*mermaid\b/i
@@ -197,23 +379,30 @@ function cacheKeyFor(src, theme, slashTag = false) {
     return slashTag ? `\x00${key}` : key
 }
 
-// Render one block to its final HTML (post-mermaid), memoized by source (plus the
-// active theme for mermaid blocks). The whole post-process runs on a DETACHED
-// node, so the Mermaid SVG is inlined into the cached string before it reaches
-// the DOM — no flash, even on first paint.
+// Everything that turns freshly parsed markdown HTML into its final shape. Runs
+// on a DETACHED node, so the result is complete before it reaches the DOM — no
+// flash, even on first paint. Returns false if a mermaid diagram failed, which
+// makes the result unfit for caching.
+async function postProcessIn(root, theme) {
+    const mermaidOk = await renderMermaidIn(root, theme)
+    addLanguageLabelsIn(root)
+    annotateFileLinksIn(root)
+    if (rewriteContentMediaUrl) rewriteContentMediaUrlsIn(root)
+    if (props.codeTools) addCodeToolsIn(root)
+    return mermaidOk
+}
+
+// Render one block to its final HTML, memoized by source (plus the active theme
+// for mermaid blocks).
 async function renderOneBlock(src, env, theme, slashTag = false) {
     const key = cacheKeyFor(src, theme, slashTag)
     const cached = renderCache.get(key)
     if (cached !== undefined) return cached
 
-    let html = await renderBlockToHtml(src, slashTag ? { ...env, tagLeadingSlashCommand: true } : env)
     const tmp = document.createElement('div')
-    tmp.innerHTML = html
-    const mermaidOk = await renderMermaidIn(tmp, theme)
-    addLanguageLabelsIn(tmp)
-    annotateFileLinksIn(tmp)
-    if (rewriteContentMediaUrl) rewriteContentMediaUrlsIn(tmp)
-    html = tmp.innerHTML
+    tmp.innerHTML = await renderBlockToHtml(src, slashTag ? { ...env, tagLeadingSlashCommand: true } : env)
+    const mermaidOk = await postProcessIn(tmp, theme)
+    const html = tmp.innerHTML
 
     // Cache only a fully-successful render. A failed mermaid (incomplete block
     // mid-stream, or a transient during concurrent renders) must stay retryable,
@@ -270,6 +459,13 @@ async function render() {
         }
 
         blocks.value = result
+
+        // Re-apply the per-code-block toggles once the DOM catches up. Not
+        // awaited: a nested markdown render must not delay the `rendered` event
+        // consumers use for scroll anchoring.
+        if (codeToolsState.size > 0) {
+            nextTick(() => { if (mySeq === renderSeq) restoreCodeToolsState() })
+        }
     } finally {
         // Only the latest render owns the lifecycle flag and the event.
         if (mySeq === renderSeq) {
@@ -291,9 +487,35 @@ function toggleRaw() {
     showRaw.value = !showRaw.value
 }
 
+// Copy `text`, then report the outcome. `navigator.clipboard` only exists in a
+// secure context, and TwiCC is regularly reached over plain HTTP on a LAN, so a
+// hidden textarea + execCommand carries the fallback (same recipe as the
+// access-blocked screen in main.js).
+async function copyText(text, label) {
+    let ok = false
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text)
+            ok = true
+        } else {
+            const textarea = document.createElement('textarea')
+            textarea.value = text
+            textarea.style.position = 'fixed'
+            textarea.style.opacity = '0'
+            document.body.appendChild(textarea)
+            textarea.select()
+            ok = document.execCommand('copy')
+            textarea.remove()
+        }
+    } catch {
+        ok = false
+    }
+    if (ok) toast.success(`${label} copied to clipboard`, { duration: 2000 })
+    else toast.error(`Could not copy the ${label.toLowerCase()}`, { duration: 3000 })
+}
+
 function copySource() {
-    navigator.clipboard.writeText(props.source)
-    toast.success('Markdown copied to clipboard', { duration: 2000 })
+    copyText(props.source, 'Markdown')
 }
 
 // Selector for media that should open in MediaPreviewDialog when clicked:
@@ -379,7 +601,8 @@ function buildMediaItems(root, clickedEl) {
     return { items, clickedIndex }
 }
 
-// Route clicks on rendered <a> and media (<img>, Mermaid SVG) elements:
+// Route clicks on the rendered content:
+//   - data-code-action    → per-code-block toolbar (copy / wrap / render)
 //   - <img> or Mermaid SVG → open MediaPreviewDialog (wins over link nav,
 //                            but the wrapping <a href>'s URL is preserved
 //                            as an "Open link" affordance inside the dialog)
@@ -389,6 +612,17 @@ function buildMediaItems(root, clickedEl) {
 //   - anchor-only (#…)     → leave the browser to scroll
 //   - everything else      → SPA navigation via router.push
 function handleLinkClick(event) {
+    // Per-code-block toolbar (copy / wrap / render): checked first, since its
+    // buttons sit inside the rendered content and must never reach the link or
+    // media handling below.
+    const codeButton = event.target.closest('[data-code-action]')
+    if (codeButton && container.value?.contains(codeButton)) {
+        event.preventDefault()
+        event.stopPropagation()
+        handleCodeToolsAction(codeButton)
+        return
+    }
+
     // Image / Mermaid SVG: open the preview dialog and short-circuit. The
     // check runs first so an image wrapped in <a> still opens the dialog
     // (the link remains reachable via the dialog's "Open link" button).
@@ -762,6 +996,88 @@ function handleLinkClick(event) {
     color: #656d76;
     text-transform: uppercase;
     font-family: var(--wa-font-sans);
+}
+
+/* -- Per-code-block toolbar (opt-in via the codeTools prop) ----------- */
+/* The bar sits on the wrapper, never inside the <pre>: the block scrolls
+   horizontally, and buttons placed in it would scroll away with the code. */
+.markdown-body .code-tools {
+    position: relative;
+}
+/* The wrapper adds no box of its own, so the <pre>'s margins collapse through
+   it and keep the block's usual spacing. That also puts the <pre> one level
+   below the first/last-child resets above, hence these two: without them, a
+   message opening or closing on a code block gains a stray margin. */
+.markdown-body > .markdown-block:first-child > .code-tools:first-child > pre {
+    margin-top: 0 !important;
+}
+.markdown-body > .markdown-block:last-child > .code-tools:last-child > pre {
+    margin-bottom: 0 !important;
+}
+.markdown-body .code-tools-bar {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 2;
+}
+.markdown-body .code-tools:hover > .code-tools-bar,
+.markdown-body .code-tools-bar:focus-within {
+    opacity: 1;
+}
+/* No hover on touch: keep the bar visible but discreet. */
+@media (pointer: coarse) {
+    .markdown-body .code-tools-bar {
+        opacity: 0.55;
+    }
+}
+.markdown-body .code-tools-btn {
+    /* A global `button` rule forces a form-control height (~43px); an explicit
+       box is what keeps these compact. */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: 1px solid var(--wa-color-neutral-border-quiet);
+    border-radius: var(--wa-border-radius-s);
+    background: var(--wa-color-surface-default);
+    color: var(--wa-color-text-quiet);
+    font-size: 0.7rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.markdown-body .code-tools-btn:hover {
+    border-color: var(--wa-color-neutral-border-normal);
+    color: var(--wa-color-text-normal);
+}
+.markdown-body .code-tools-btn.is-active {
+    border-color: var(--wa-color-brand-border-quiet);
+    background: var(--wa-color-brand-fill-quiet);
+    color: var(--wa-color-brand-on-quiet);
+}
+/* The raw block stays in the DOM while its rendered view shows, so toggling
+   back is instant and the code remains the source for copy. */
+.markdown-body .code-tools.is-rendered > pre {
+    display: none;
+}
+/* A frame, so nested content never reads as part of the message around it. */
+.markdown-body .code-tools-rendered {
+    margin: 1em 0;
+    padding: 12px 16px;
+    border: 1px solid var(--wa-color-neutral-border-quiet);
+    border-radius: 6px;
+    background: var(--wa-color-surface-default);
+}
+.markdown-body .code-tools-rendered > :first-child {
+    margin-top: 0;
+}
+.markdown-body .code-tools-rendered > :last-child {
+    margin-bottom: 0;
 }
 
 /* -- Mermaid diagrams ------------------------------------------------ */

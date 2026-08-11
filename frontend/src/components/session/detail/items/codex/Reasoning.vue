@@ -116,7 +116,7 @@ function onHide() {
             <wa-spinner v-if="streaming"></wa-spinner>
         </span>
         <div v-if="isOpen" class="reasoning-body">
-            <MarkdownContent v-if="streaming || hasContent" :source="text" />
+            <MarkdownContent v-if="streaming || hasContent" :source="text" :code-tools="true" />
             <p v-else class="reasoning-placeholder">No thinking content was provided</p>
         </div>
     </wa-details>

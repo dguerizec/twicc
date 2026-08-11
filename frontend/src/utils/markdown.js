@@ -225,10 +225,13 @@ export async function renderMarkdown(source, env) {
     return DOMPurify.sanitize(rawHtml, DOMPURIFY_CONFIG)
 }
 
-// Small non-cryptographic string hash (FNV-1a, base36). Used to build compact,
-// stable Vue :key values per block. The render cache is keyed by the raw block
-// source (not this hash), so a hash collision can never serve the wrong HTML.
-function hashString(str) {
+/**
+ * Small non-cryptographic string hash (FNV-1a, base36). Used to build compact,
+ * stable Vue :key values per block, and to key per-code-block UI state in
+ * MarkdownContent. The render cache is keyed by the raw block source (not this
+ * hash), so a hash collision can never serve the wrong HTML.
+ */
+export function hashString(str) {
     let h = 0x811c9dc5
     for (let i = 0; i < str.length; i++) {
         h ^= str.charCodeAt(i)

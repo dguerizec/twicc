@@ -75,7 +75,7 @@ function onHide() {
             <strong class="items-details-summary-name">Session compacted</strong>
         </span>
         <div v-if="isOpen" class="compact-summary-body">
-            <MarkdownContent v-if="hasContent" :source="content" />
+            <MarkdownContent v-if="hasContent" :source="content" :code-tools="true" />
             <p v-else class="compact-summary-placeholder">{{ placeholder }}</p>
         </div>
     </wa-details>
