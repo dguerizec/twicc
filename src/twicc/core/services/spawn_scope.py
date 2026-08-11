@@ -8,6 +8,8 @@ proper-descendant contract; unknown ids return an empty set.
 
 from __future__ import annotations
 
+from collections import deque
+
 
 def descendant_ids(session_id: str) -> set[str]:
     """Proper spawn-tree descendants of ``session_id`` (the session itself is
@@ -37,11 +39,11 @@ def descendant_ids(session_id: str) -> set[str]:
             adj.setdefault(r.spawned_by_id, []).append(r.id)
 
     out: set[str] = set()
-    stack = list(adj.get(target_id, ()))
-    while stack:
-        node = stack.pop()
+    queue = deque(adj.get(target_id, ()))
+    while queue:
+        node = queue.popleft()
         if node in out:
             continue
         out.add(node)
-        stack.extend(adj.get(node, ()))
+        queue.extend(adj.get(node, ()))
     return out
