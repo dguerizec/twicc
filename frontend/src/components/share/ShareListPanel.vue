@@ -2,6 +2,7 @@
 import { ref, computed, useId } from 'vue'
 import { useSharesStore } from '../../stores/shares'
 import { shareAbsoluteUrl } from '../../utils/shareUrl'
+import { shareCreatorBadge } from '../../utils/shareCreatorBadge'
 import { isShareOutdated } from '../../utils/shareStatus'
 import { toast } from '../../composables/useToast'
 import AppTooltip from '../ui/AppTooltip.vue'
@@ -36,6 +37,9 @@ async function revokeAll() {
 
 // Per-share expanded "Recent views" panel: id -> accesses[] (null = loading).
 const accesses = ref({})
+function creatorBadge(share) {
+    return shareCreatorBadge(share.created_by)
+}
 function copy(s) {
     const url = shareAbsoluteUrl(s)
     if (!url) { toast.error?.('Configure a share host in Settings → Sharing first.'); return }
@@ -65,6 +69,13 @@ async function toggleViews(s) {
                     {{ s.status }}
                 </wa-tag>
                 <span class="share-label">{{ s.label || '(no label)' }}</span>
+                <wa-tag v-if="creatorBadge(s)" size="small" variant="brand" class="share-agent-badge">
+                    <wa-icon name="robot"></wa-icon>
+                    <router-link v-if="creatorBadge(s).to" :to="creatorBadge(s).to">
+                        {{ creatorBadge(s).label }}
+                    </router-link>
+                    <template v-else>{{ creatorBadge(s).label }}</template>
+                </wa-tag>
                 <wa-tag v-if="s.has_password" size="small" variant="neutral"><wa-icon name="lock"></wa-icon></wa-tag>
                 <wa-tag v-if="isShareOutdated(s)" size="small" variant="warning">outdated</wa-tag>
                 <button class="share-views" type="button" @click="toggleViews(s)">{{ s.view_count }} views</button>
@@ -99,6 +110,8 @@ async function toggleViews(s) {
 .share-row { padding: 0.5rem 0; border-bottom: 1px solid var(--wa-color-surface-border); }
 .share-row-main { display: flex; align-items: center; gap: 0.5rem; }
 .share-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-agent-badge { flex-shrink: 0; }
+.share-agent-badge a { color: inherit; }
 .share-views { background: none; border: none; color: var(--wa-color-text-quiet); cursor: pointer; font-size: 0.85rem; text-decoration: underline dotted; }
 .share-row-actions { display: flex; gap: 0.25rem; margin-top: 0.35rem; flex-wrap: wrap; }
 /* The fetched log is capped server-side (newest 200); AccessLogList itself
