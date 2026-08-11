@@ -101,7 +101,7 @@ AGENT_SETTINGS_DESCRIPTIONS: dict[str, dict] = {
         "yolo": "No restrictions.",
     },
     "fast_mode": {
-        True: "1.5x faster generation; uses credits at 2.5x on GPT-5.6/5.5 and 2x on GPT-5.4.",
+        True: "Faster generation — 2.5x on GPT-5.6, 1.5x before; uses credits at 2.5x.",
     },
 }
 
