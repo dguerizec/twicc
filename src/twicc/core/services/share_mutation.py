@@ -379,6 +379,65 @@ async def delete_share(share) -> ShareMutationResult:
     return ShareMutationResult(True, share_id, None)
 
 
+# ── Agent gate (agent-sharing design §7.1) ──────────────────────────────────
+
+async def _resolve_caller_session(payload: dict):
+    """§7.1 step 1: absent key → human (None). A well-typed but UNKNOWN id also
+    resolves to None → human, current behaviour. Type errors are caught by
+    ``share_agent_gate.caller_type_error`` BEFORE this runs (this lookup is
+    itself the first ORM access)."""
+    from twicc.core.models import Session
+
+    cid = payload.get("caller_session_id")
+    if not isinstance(cid, str):
+        return None
+    return await sync_to_async(lambda: Session.objects.filter(id=cid).first())()
+
+
+def _agent_disabled_error(kind: str) -> ShareError:
+    return ShareError(
+        "settings", "agent_sharing_disabled",
+        f"agent-created {kind} shares are disabled; ask the user to enable them "
+        f"in Settings → Sharing before retrying",
+    )
+
+
+def _kind_setting_on(kind: str) -> bool:
+    from twicc.core.services import share_agent_gate
+    from twicc.synced_settings import read_synced_settings
+
+    return bool(read_synced_settings().get(share_agent_gate.setting_key_for(kind), False))
+
+
+async def _caller_scope_ids(caller) -> set[str]:
+    from twicc.core.services.spawn_scope import descendant_ids
+
+    return {caller.id} | await sync_to_async(descendant_ids)(caller.id)
+
+
+async def _agent_gate_for_loaded_share(caller, share, *, check_provenance: bool) -> list[ShareError]:
+    """Steps 4-5 for the five share-loading ops. ``check_provenance=False`` is
+    revoke's A7 exception: any provenance, the kind setting still applies."""
+    if caller is None:
+        return []
+    if not _kind_setting_on(share.kind):
+        return [_agent_disabled_error(share.kind)]
+    if not check_provenance:
+        return []
+    allowed = await _caller_scope_ids(caller)
+    if share.created_by_session_id is None or share.created_by_session_id not in allowed:
+        # Provenance wording, never target wording: a descendant touching a
+        # parent-created share OF ITSELF fails here while the target is its
+        # own session (§7.5).
+        return [ShareError(
+            "share_id", "out_of_scope",
+            "this share was created outside your spawn subtree "
+            "(or by the user); you can manage only shares created by yourself "
+            "or any session in your spawn subtree",
+        )]
+    return []
+
+
 # ── Drop-request glue (kind="share:*") ──────────────────────────────────────
 
 async def _resolve_target_from_payload(payload: dict):
@@ -420,19 +479,71 @@ def _parse_expires(payload: dict) -> tuple[datetime | None, ShareError | None]:
 
 
 async def create_share_from_payload(payload: dict) -> ShareMutationResult:
+    from twicc.core.enums import ShareKind
+    from twicc.core.services import share_agent_gate
+
+    err = share_agent_gate.caller_type_error(payload)
+    if err:
+        return ShareMutationResult(False, None, [err])
+    caller = await _resolve_caller_session(payload)
+    if caller is not None:
+        shape_errors = share_agent_gate.validate_create(payload)
+        if shape_errors:
+            return ShareMutationResult(False, None, shape_errors)
+
     kind, session, bookmark, errors = await _resolve_target_from_payload(payload)
     if errors:
         return ShareMutationResult(False, None, errors)
-    expires_at, exp_err = _parse_expires(payload)
-    if exp_err:
-        return ShareMutationResult(False, None, [exp_err])
+
+    if caller is None:
+        # Preserve Task 5's human-path precedence: strict expiry is checked
+        # before create_share converts options to a dict.
+        expires_at, exp_err = _parse_expires(payload)
+        if exp_err:
+            return ShareMutationResult(False, None, [exp_err])
+        options = payload.get("options") or {}
+    else:
+        # Layer 1 established that options is an object before this copy.
+        options = dict(payload.get("options") or {})
+        if not _kind_setting_on(kind):
+            return ShareMutationResult(False, None, [_agent_disabled_error(kind)])
+        target_session_id = session.id if session is not None else bookmark.session_id
+        allowed = await _caller_scope_ids(caller)
+        if target_session_id not in allowed:
+            field = "session_id" if session is not None else "bookmark_id"
+            return ShareMutationResult(False, None, [ShareError(
+                field, "out_of_scope",
+                "the target belongs to another session, outside your own spawn "
+                "subtree; you can share only your own session or any session "
+                "in your spawn subtree",
+            )])
+        if options.get("max_display_mode") == "debug":
+            return ShareMutationResult(False, None, [ShareError(
+                "max_display_mode", "display_mode_forbidden",
+                "the debug display mode is not available to agents; allowed: "
+                "conversation, simplified, normal",
+            )])
+        from twicc.synced_settings import read_synced_settings
+        if not (read_synced_settings().get("shareBaseUrl") or "").strip():
+            return ShareMutationResult(False, None, [ShareError(
+                "share_base_url", "share_host_unset",
+                "no share host is configured, so the link would resolve nowhere; "
+                "ask the user to set one in Settings → Sharing first",
+            )])
+        if kind == ShareKind.SESSION.value and "mode" not in options:
+            # A9: the agent default is a frozen snapshot; --live stays explicit.
+            options["mode"] = "snapshot"
+        expires_at, exp_err = _parse_expires(payload)
+        if exp_err:
+            return ShareMutationResult(False, None, [exp_err])
     return await create_share(
         kind, session=session, bookmark=bookmark,
         label=payload.get("label") or "",
-        options=payload.get("options") or {},
+        options=options,
         password=payload.get("password") or None,
         expires_at=expires_at,
         notify_on_view=bool(payload.get("notify_on_view", False)),
+        created_by_session=caller,
     )
 
 
@@ -451,35 +562,114 @@ async def _load_share_or_error(payload: dict):
 
 
 async def update_share_from_payload(payload: dict) -> ShareMutationResult:
+    from twicc.core.services import share_agent_gate
+
+    err = share_agent_gate.caller_type_error(payload)
+    if err:
+        return ShareMutationResult(False, None, [err])
+    caller = await _resolve_caller_session(payload)
+    if caller is not None:
+        shape_errors = share_agent_gate.validate_update(payload)
+        if shape_errors:
+            return ShareMutationResult(False, None, shape_errors)
     share, err = await _load_share_or_error(payload)
     if err:
         return err
+    gate_errors = await _agent_gate_for_loaded_share(caller, share, check_provenance=True)
+    if gate_errors:
+        return ShareMutationResult(False, share.id, gate_errors)
+    if caller is not None and (payload.get("fields") or {}).get("password") == "":
+        return ShareMutationResult(False, share.id, [ShareError(
+            "password", "field_forbidden",
+            "agents may set or replace a share password, never clear it; "
+            "clearing is available from the human CLI or the owner UI",
+        )])
     return await patch_share(share, payload.get("fields") or {})
 
 
 async def revoke_share_from_payload(payload: dict) -> ShareMutationResult:
+    from twicc.core.services import share_agent_gate
+
+    err = share_agent_gate.caller_type_error(payload)
+    if err:
+        return ShareMutationResult(False, None, [err])
+    caller = await _resolve_caller_session(payload)
+    if caller is not None:
+        shape_errors = share_agent_gate.validate_simple(payload)
+        if shape_errors:
+            return ShareMutationResult(False, None, shape_errors)
     share, err = await _load_share_or_error(payload)
     if err:
         return err
+    gate_errors = await _agent_gate_for_loaded_share(
+        caller, share, check_provenance=False,
+    )
+    if gate_errors:
+        return ShareMutationResult(False, share.id, gate_errors)
     return await revoke_share(share, revoked=True)
 
 
 async def unrevoke_share_from_payload(payload: dict) -> ShareMutationResult:
+    from twicc.core.services import share_agent_gate
+
+    err = share_agent_gate.caller_type_error(payload)
+    if err:
+        return ShareMutationResult(False, None, [err])
+    caller = await _resolve_caller_session(payload)
+    if caller is not None:
+        shape_errors = share_agent_gate.validate_simple(payload)
+        if shape_errors:
+            return ShareMutationResult(False, None, shape_errors)
     share, err = await _load_share_or_error(payload)
     if err:
         return err
+    gate_errors = await _agent_gate_for_loaded_share(
+        caller, share, check_provenance=True,
+    )
+    if gate_errors:
+        return ShareMutationResult(False, share.id, gate_errors)
     return await revoke_share(share, revoked=False)
 
 
 async def delete_share_from_payload(payload: dict) -> ShareMutationResult:
+    from twicc.core.services import share_agent_gate
+
+    err = share_agent_gate.caller_type_error(payload)
+    if err:
+        return ShareMutationResult(False, None, [err])
+    caller = await _resolve_caller_session(payload)
+    if caller is not None:
+        shape_errors = share_agent_gate.validate_simple(payload)
+        if shape_errors:
+            return ShareMutationResult(False, None, shape_errors)
     share, err = await _load_share_or_error(payload)
     if err:
         return err
+    gate_errors = await _agent_gate_for_loaded_share(
+        caller, share, check_provenance=True,
+    )
+    if gate_errors:
+        return ShareMutationResult(False, share.id, gate_errors)
     return await delete_share(share)
 
 
 async def propagate_share_from_payload(payload: dict) -> ShareMutationResult:
+    from twicc.core.services import share_agent_gate
+
+    err = share_agent_gate.caller_type_error(payload)
+    if err:
+        return ShareMutationResult(False, None, [err])
+    caller = await _resolve_caller_session(payload)
+    if caller is not None:
+        shape_errors = share_agent_gate.validate_simple(payload)
+        if shape_errors:
+            return ShareMutationResult(False, None, shape_errors)
     share, err = await _load_share_or_error(payload)
     if err:
         return err
+    gate_errors = await _agent_gate_for_loaded_share(
+        caller, share, check_provenance=True,
+    )
+    if gate_errors:
+        return ShareMutationResult(False, share.id, gate_errors)
     return await propagate_share(share)

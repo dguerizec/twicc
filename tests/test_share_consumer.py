@@ -260,3 +260,80 @@ def test_unrelated_session_items_not_forwarded(session):
         await comm.disconnect()
 
     _run(scenario())
+
+
+def test_password_change_keeps_open_socket_streaming(session, monkeypatch):
+    """§14 Update shape / §8: replacing a password never cuts an open live WS —
+    the socket receives share_updated, then still streams later session items."""
+    from twicc.auth.hashers import hash_password
+    from twicc.core.services import share_mutation
+    from twicc.core.services.share_tokens import password_fingerprint
+    from twicc.share.resolver import SHARE_GRANTS_SESSION_KEY
+
+    async def _passthrough(coro_factory):
+        return await coro_factory()
+    monkeypatch.setattr(
+        "twicc.core.services.share_mutation.run_under_db_write_lock", _passthrough)
+
+    share = _share(session, options={"mode": "live"},
+                   password_hash=hash_password("old-pw"))
+
+    async def scenario():
+        comm = _communicator(share.token)
+        comm.scope["session"] = {
+            SHARE_GRANTS_SESSION_KEY: {share.id: password_fingerprint(share.password_hash)}}
+        connected, _ = await comm.connect()
+        assert connected
+        old_hash = share.password_hash
+        result = await share_mutation.patch_share(share, {"password": "new-pw"})
+        assert result.success
+        assert share.password_hash != old_hash          # grants invalidated
+        msg = await comm.receive_json_from(timeout=2)   # broadcast reached the socket
+        assert msg["type"] == "share_meta"
+        # Prove the separate item-streaming branch still works after the
+        # password update. Receiving share_meta alone does not prove this.
+        item = {
+            "line_num": 6, "display_level": 1, "content": "{}",
+            "kind": "assistant_message",
+        }
+        layer = get_channel_layer()
+        await layer.group_send("updates", {"type": "broadcast", "data": {
+            "type": "session_items_added", "session_id": session.id,
+            "items": [item],
+        }})
+        streamed = await comm.receive_json_from(timeout=2)
+        assert streamed == {
+            "type": "share_items_added", "session_id": session.id,
+            "items": [item],
+        }
+        await comm.disconnect()
+
+    _run(scenario())
+
+
+def test_password_change_gates_new_connects_on_new_fingerprint(session):
+    """§14 Update shape / §8: after a password change, a connect carrying the
+    OLD grant fingerprint is refused; one carrying the new fingerprint passes."""
+    from twicc.auth.hashers import hash_password
+    from twicc.core.services.share_tokens import password_fingerprint
+    from twicc.share.resolver import SHARE_GRANTS_SESSION_KEY
+
+    share = _share(session, options={"mode": "live"},
+                   password_hash=hash_password("old-pw"))
+    old_fp = password_fingerprint(share.password_hash)
+    share.password_hash = hash_password("new-pw")
+    share.save(update_fields=["password_hash"])
+    new_fp = password_fingerprint(share.password_hash)
+
+    async def scenario():
+        stale = _communicator(share.token)
+        stale.scope["session"] = {SHARE_GRANTS_SESSION_KEY: {share.id: old_fp}}
+        connected, _ = await stale.connect()
+        assert not connected                            # old grant is dead
+        fresh = _communicator(share.token)
+        fresh.scope["session"] = {SHARE_GRANTS_SESSION_KEY: {share.id: new_fp}}
+        connected2, _ = await fresh.connect()
+        assert connected2                               # new password's grant works
+        await fresh.disconnect()
+
+    _run(scenario())

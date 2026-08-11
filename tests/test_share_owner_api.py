@@ -197,3 +197,63 @@ def test_list_serializes_visible_creator_without_async_lazy_load(
             "project_id": session.project_id,
         },
     }
+
+
+def test_human_rest_patch_bypasses_agent_gate_for_options_and_password_clear(
+        client, session, share_host, monkeypatch):
+    from twicc.auth.hashers import hash_password
+
+    monkeypatch.setattr(
+        "twicc.synced_settings.read_synced_settings",
+        lambda: {
+            "shareBaseUrl": "share.example.com",
+            "allowAgentSessionShares": False,
+            "allowAgentArtifactShares": False,
+        },
+    )
+    share = _share(
+        session,
+        options={"mode": "live", "max_display_mode": "normal"},
+        password_hash=hash_password("old-password"),
+    )
+    response = _run(client.patch(
+        f"/api/shares/{share.id}/",
+        data=orjson.dumps({
+            "options": {"mode": "snapshot", "max_display_mode": "normal"},
+            "password": "",
+        }),
+        content_type="application/json",
+    ))
+    assert response.status_code == 200
+    share.refresh_from_db()
+    assert share.options["mode"] == "snapshot"
+    assert share.password_hash == ""
+
+
+def test_human_rest_create_drops_injected_caller_and_bypasses_agent_shape(
+        client, session, monkeypatch):
+    """The owner POST builds an explicit eight-key payload. Request-body
+    caller identity cannot turn this browser action into an agent call."""
+    monkeypatch.setattr(
+        "twicc.synced_settings.read_synced_settings",
+        lambda: {
+            "shareBaseUrl": "share.example.com",
+            "allowAgentSessionShares": False,
+            "allowAgentArtifactShares": False,
+        },
+    )
+    response = _run(client.post(
+        "/api/shares/",
+        data=orjson.dumps({
+            "kind": "session", "session_id": session.id,
+            "caller_session_id": session.id,
+            "notify_on_view": True,
+            "options": {"mode": "live", "max_display_mode": "debug"},
+        }),
+        content_type="application/json",
+    ))
+    assert response.status_code == 201
+    share = Share.objects.get(id=orjson.loads(response.content)["id"])
+    assert share.notify_on_view is True
+    assert share.options["max_display_mode"] == "debug"
+    assert share.created_by_session_id is None
