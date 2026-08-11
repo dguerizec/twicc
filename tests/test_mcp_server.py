@@ -92,3 +92,38 @@ def test_call_tool_normalizes_datetime_to_json_native(monkeypatch):
     # The SDK does exactly this on the returned dict; it must not raise.
     json.dumps(result)
     assert result["result"][0]["timestamp"] == "2026-07-06T19:14:24.421000+00:00"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_call_tool_share_create_returns_public_result_shape(
+        isolated_data_dir, monkeypatch):
+    from twicc.core.models import Project, Session
+
+    async def _passthrough(coro_factory):
+        return await coro_factory()
+
+    monkeypatch.setattr(
+        "twicc.core.services.share_mutation.run_under_db_write_lock", _passthrough,
+    )
+    project = Project.objects.create(id="-tmp-share", directory="/tmp/share", name="share")
+    session = Session.objects.create(
+        id="33333333-3333-3333-3333-333333333333", project=project,
+        provider="claude_code", file_path="share.jsonl", last_line=7,
+    )
+    monkeypatch.setattr(
+        "twicc.synced_settings.read_synced_settings",
+        lambda: {
+            "shareBaseUrl": "share.example.com",
+            "allowAgentSessionShares": True,
+            "allowAgentArtifactShares": False,
+        },
+    )
+    result = asyncio.run(mcp_server.dispatch_tool(
+        "share_create_session", {"session_id": session.id}, session_id=session.id,
+    ))
+    assert result["exit_code"] == 0
+    assert set(result["result"]) == {"status", "share_id", "request_uuid"}
+    assert result["result"]["status"] == "created"
+    assert result["result"]["share_id"].startswith("shr_")
+    assert "token" not in result["result"]
+    assert "url" not in result["result"]

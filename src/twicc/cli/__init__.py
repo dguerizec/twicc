@@ -658,8 +658,10 @@ def _share_show(share_id: str = typer.Argument(help="Share id (shr_…).")) -> N
     show_main(share_id)
 
 
-# ── Mutation commands (human-only: no skill, no MCP tool — O5) ──────────────
-share_create_app = typer.Typer(name="create", help="Create a share link.", invoke_without_command=True)
+# ── Mutation commands (agent-gated: two Settings → Sharing switches + the
+#    spawn-subtree scope — core/services/share_agent_gate.py; the human
+#    surfaces bypass the gate. Design: docs/plans/2026-08-10-agent-sharing-design.md) ──
+share_create_app = typer.Typer(name="create", help="Create a share link.")
 share_app.add_typer(share_create_app)
 
 

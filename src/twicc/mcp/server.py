@@ -56,8 +56,9 @@ need (`ToolSearch` on Claude Code, `ALL_TOOLS` on Codex) instead of falling back
 to the `twicc` shell CLI.
 
 Conventions:
-- Session-targeting arguments accept `self` (your own session) and `parent`
-  (the session that spawned you); your identity is carried by this connection,
+- Session-targeting parameters accept `self` (your own session) and/or
+  `parent` (the session that spawned you) where their parameter description
+  says so; the connection carries the identity needed to resolve them,
   so `whoami` works and `create_session` records you as the spawner.
 - Always pass absolute paths (directories, attachments): tools execute inside
   the TwiCC backend, whose working directory is not yours.

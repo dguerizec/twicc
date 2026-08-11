@@ -72,3 +72,12 @@ def test_human_payload_has_no_caller_key(captured_drop, monkeypatch):
     )
     _invoke(["share", "create", "session", "sess-1"])
     assert "caller_session_id" not in captured_drop[0]["payload"]
+
+
+def test_bare_share_create_is_a_usage_error_not_silent_success():
+    """§12: the group had invoke_without_command=True with no callback — a
+    silent no-op exit 0, and a phantom zero-arg MCP tool. Now: exit 2."""
+    from twicc.cli import app
+    result = runner.invoke(app, ["share", "create"])
+    assert result.exit_code == 2
+    assert "Missing command" in result.output

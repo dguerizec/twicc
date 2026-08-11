@@ -1,10 +1,11 @@
 """Derive the MCP tool list from the CLI's Click tree.
 
 Selection rule: the RPC registry (everything the CLI exposes minus
-local-only) minus the ``settings`` group (not skill-covered; agents must not
-mutate global settings) plus ``whoami`` (local-only for /rpc/ because PID
-ancestry is meaningless over HTTP — but the MCP dispatcher injects the caller
-identity, making it THE discovery primitive).
+local-only) minus the ``settings`` group (no skill and no MCP tool — though
+the CLI stays reachable from a session, an accepted property of the trust
+model; see the agent-sharing design §5.2/A17) plus ``whoami`` (local-only for
+/rpc/ because PID ancestry is meaningless over HTTP — but the MCP dispatcher
+injects the caller identity, making it THE discovery primitive).
 
 Naming: registry path with ``/`` and ``-`` mapped to ``_``
 (``update-session/settings`` → ``update_session_settings``). Claude prefixes
@@ -25,17 +26,18 @@ from twicc.rpc.permissions import COOKIE_READONLY_COMMANDS
 
 # The MCP surface: local-only minus whoami, plus the settings group.
 MCP_EXCLUDED_ROOTS: frozenset[str] = frozenset(
-    (set(LOCAL_ONLY_COMMANDS) - {"whoami"}) | {"settings", "share"}
+    (set(LOCAL_ONLY_COMMANDS) - {"whoami"}) | {"settings"}
 )
 
 # Read-only annotation source (metadata only — NOT used for availability).
 # Every tool is exposed in every mode (D9); `readOnlyHint` is honest metadata
 # for clients (and on Codex it feeds `requires_mcp_tool_approval`, though our
 # `default_tools_approval_mode="approve"` makes that moot). COOKIE_READONLY_COMMANDS
-# is the vetted fail-closed list; the session read subviews and whoami are pure
-# reads that were simply never needed on the cookie path.
+# is the vetted fail-closed list; the session read subviews, whoami, and share
+# list/show are pure reads. Share reads stay out of COOKIE_READONLY_COMMANDS:
+# the owner UI uses `/api/shares/`, and the cookie list remains fail-closed.
 MCP_READ_ONLY_PATHS: frozenset[str] = COOKIE_READONLY_COMMANDS | frozenset(
-    {"session/plan", "session/workflows", "session/workflow", "whoami"}
+    {"session/plan", "session/workflows", "session/workflow", "whoami", "share", "share/show"}
 )
 
 # Hot tools Claude should never defer (Tool Search loads names only for the

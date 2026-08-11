@@ -9,12 +9,14 @@ def test_selection_matches_the_skill_surface():
     paths = set(reg)
     assert "whoami" in paths                       # re-admitted local-only
     assert not any(p.split("/")[0] == "settings" for p in paths)
-    # ``share`` is human-only (O5): excluded from the MCP surface like ``settings``.
-    assert not any(p.split("/")[0] == "share" for p in paths)
+    # ``share`` is agent-gated server-side (agent-sharing design): the tools
+    # are ALWAYS exposed — a disabled setting rejects at call time (A4).
+    assert any(p.split("/")[0] == "share" for p in paths)
+    assert "share/create" not in paths  # the group is no longer callable (silent no-op fix)
     for banned in ("password", "token", "run", "claude", "codex"):
         assert not any(p.split("/")[0] == banned for p in paths)
     # Everything else from the RPC registry is present.
-    rpc_paths = {p for p in build_registry() if p.split("/")[0] not in ("settings", "share")}
+    rpc_paths = {p for p in build_registry() if p.split("/")[0] != "settings"}
     assert rpc_paths <= paths
 
 
@@ -27,6 +29,9 @@ def test_tool_names_are_mcp_safe_and_bijective():
     assert "create_session" in names
     assert "update_session_settings" in names
     assert "session_content" in names
+    assert "share_create_session" in names
+    assert "share_create_artifact" in names
+    assert "share_create" not in names
 
 
 def test_schemas_and_descriptions():
@@ -43,3 +48,15 @@ def test_annotations_and_always_load():
     assert by_name["create_session"].annotations.readOnlyHint is False
     assert (by_name["whoami"].meta or {}).get("anthropic/alwaysLoad") is True
     assert (by_name["update_workspace"].meta or {}).get("anthropic/alwaysLoad") is None
+    assert by_name["share"].annotations.readOnlyHint is True
+    assert by_name["share_show"].annotations.readOnlyHint is True
+    for name in (
+        "share_create_session",
+        "share_create_artifact",
+        "share_update",
+        "share_revoke",
+        "share_unrevoke",
+        "share_delete",
+        "share_propagate",
+    ):
+        assert by_name[name].annotations.readOnlyHint is False
