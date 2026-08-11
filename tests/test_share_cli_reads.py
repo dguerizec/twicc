@@ -246,3 +246,25 @@ def test_create_then_show_yields_url(session, as_human, settings_state):
     assert "url" not in status and "token" not in status
     data = _show(status["share_id"])
     assert data["url"] == "https://share.example.com" + data["url_path"]
+
+
+def test_session_self_finds_artifact_created_by_caller(
+        one_share_each, session, settings_state, monkeypatch):
+    """§14 List filters: --session self composes keyword resolution with
+    the real cross-kind filter and finds the caller's artifact share."""
+    from typer.testing import CliRunner
+
+    from twicc.cli import app
+    from twicc.core.models import Share
+
+    _session_share_id, artifact_share_id = one_share_each
+    Share.objects.filter(id=artifact_share_id).update(created_by_session=session)
+    monkeypatch.setattr(
+        "twicc.cli._drop_request.whoami.resolve_current_session", lambda: session,
+    )
+    settings_state["allowAgentArtifactShares"] = True
+    captured = []
+    monkeypatch.setattr("twicc.cli.share.emit_json", captured.append)
+    result = CliRunner().invoke(app, ["share", "--session", "self"])
+    assert result.exit_code == 0
+    assert any(row["id"] == artifact_share_id for row in captured[0])

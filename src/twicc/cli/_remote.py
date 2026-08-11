@@ -109,6 +109,8 @@ class Resolved(NamedTuple):
 #   plain ``session_ids`` too; including the name stays harmless there (they
 #   don't special-case ``self`` / ``parent``, so the value would never
 #   legitimately be either).
+# - ``session`` is the share list's ``--session`` filter (resolves both keywords
+#   since the agent-sharing lot).
 #
 # Only these specific params are inspected — never a blind argv scan — so a
 # free-text value (e.g. a message body that happens to be "self") is untouched.
@@ -119,6 +121,8 @@ HOST_BOUND_PARAMS: frozenset[str] = frozenset(
         "spawn_tree",
         "descendants",
         "siblings",
+        # session-id scalar options
+        "session",
         # session-id positionals (scalar)
         "session_id",
         # session-id positionals (variadic / mixed)

@@ -534,7 +534,7 @@ def _artifacts_default(
 
 @artifacts_app.command(name="bookmark")
 def _artifacts_bookmark(
-    session_id: str = typer.Argument(help="The session that owns the artifact."),
+    session_id: str = typer.Argument(help="The session that owns the artifact: a session id, 'self', or 'parent'."),
     path: str = typer.Argument(
         metavar="PATH",
         help=(
@@ -567,6 +567,14 @@ def _artifacts_bookmark(
     button + dialog. Requires the live TwiCC server: the write is broadcast so
     open UIs refresh.
     """
+    from twicc.cli._session_keywords import (
+        SELF_PARENT_KEYWORDS,
+        resolve_session_keyword,
+    )
+
+    session_id = resolve_session_keyword(
+        session_id, param_name="SESSION_ID", allowed=SELF_PARENT_KEYWORDS,
+    )
     _validate_artifact_scope(scope)
 
     from twicc.cli.artifacts_mutation import run_bookmark
@@ -576,7 +584,7 @@ def _artifacts_bookmark(
 
 @artifacts_app.command(name="unbookmark")
 def _artifacts_unbookmark(
-    session_id: str = typer.Argument(help="The session that owns the artifact."),
+    session_id: str = typer.Argument(help="The session that owns the artifact: a session id, 'self', or 'parent'."),
     path: str = typer.Argument(
         metavar="PATH",
         help=(
@@ -599,6 +607,14 @@ def _artifacts_unbookmark(
     Symmetric with ``bookmark`` — the artifact file need not still exist on
     disk. Requires the live TwiCC server.
     """
+    from twicc.cli._session_keywords import (
+        SELF_PARENT_KEYWORDS,
+        resolve_session_keyword,
+    )
+
+    session_id = resolve_session_keyword(
+        session_id, param_name="SESSION_ID", allowed=SELF_PARENT_KEYWORDS,
+    )
     from twicc.cli.artifacts_mutation import run_unbookmark
 
     run_unbookmark(session_id=session_id, path=path, timeout=timeout)
@@ -612,7 +628,7 @@ app.add_typer(share_app)
 def _share_default(
     ctx: typer.Context,
     kind: str = typer.Option(None, "--kind", help="Filter by kind: session | artifact."),
-    session: str = typer.Option(None, "--session", help="Filter by session id."),
+    session: str = typer.Option(None, "--session", help="Filter by session id; accepts 'self' and 'parent'."),
     project: str = typer.Option(None, "--project", help="Filter by project (worktrees included)."),
     include_revoked: bool = typer.Option(False, "--include-revoked", help="Include revoked shares."),
     limit: int = typer.Option(50), offset: int = typer.Option(0),
@@ -620,6 +636,15 @@ def _share_default(
     """List shares as JSON (default action; read-only, direct DB)."""
     if ctx.invoked_subcommand is not None:
         return
+    if session is not None:
+        from twicc.cli._session_keywords import (
+            SELF_PARENT_KEYWORDS,
+            resolve_session_keyword,
+        )
+
+        session = resolve_session_keyword(
+            session, param_name="--session", allowed=SELF_PARENT_KEYWORDS,
+        )
     from twicc.cli.share import list_main
     list_main(kind=kind, session=session,
               project=derive_project_id(project)[0] if project else None,
@@ -640,7 +665,7 @@ share_app.add_typer(share_create_app)
 
 @share_create_app.command(name="session")
 def _share_create_session(
-    session_id: str = typer.Argument(...),
+    session_id: str = typer.Argument(help="Session to share: a session id, 'self', or 'parent'."),
     label: str = typer.Option("", "--label"),
     password: str = typer.Option(None, "--password"),
     expires: str = typer.Option(None, "--expires", help="ISO 8601."),
@@ -654,6 +679,14 @@ def _share_create_session(
     show_title: bool = typer.Option(True, "--show-title/--no-title", help="Show a title to viewers; --no-title shows a generic label instead."),
     timeout: int = typer.Option(30, "--timeout"),
 ) -> None:
+    from twicc.cli._session_keywords import (
+        SELF_PARENT_KEYWORDS,
+        resolve_session_keyword,
+    )
+
+    session_id = resolve_session_keyword(
+        session_id, param_name="SESSION_ID", allowed=SELF_PARENT_KEYWORDS,
+    )
     from twicc.cli.share_mutation import run_create_session
     run_create_session(
         session_id=session_id, label=label, password=password, expires_at=expires,
