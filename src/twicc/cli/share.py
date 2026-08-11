@@ -14,6 +14,21 @@ def _base_url() -> str:
     return normalize_share_base(read_synced_settings().get("shareBaseUrl"))
 
 
+def _redacted_kinds() -> set[str]:
+    """Kinds whose token/url are redacted for THIS process's caller (§7.3):
+    empty for a human; for an agent, every kind whose gate setting is off.
+    The row itself is never dropped — a redacted row lets the agent say
+    'a share exists here, ask the user to enable the setting'."""
+    from twicc.cli._drop_request.whoami import resolve_current_session
+    from twicc.core.services.share_agent_gate import SETTING_KEYS
+    from twicc.synced_settings import read_synced_settings
+
+    if resolve_current_session() is None:
+        return set()
+    current = read_synced_settings()
+    return {kind for kind, key in SETTING_KEYS.items() if not current.get(key, False)}
+
+
 def list_main(*, kind: str | None = None, session: str | None = None,
               project: str | None = None, include_revoked: bool = False,
               limit: int = 50, offset: int = 0) -> None:
@@ -41,11 +56,18 @@ def list_main(*, kind: str | None = None, session: str | None = None,
         qs = qs.filter(Q(session__project_id__in=ids) | Q(artifact_bookmark__project_id__in=ids))
     rows = list(qs[offset:offset + limit])
     base = _base_url()
+    redacted_kinds = _redacted_kinds()
     out = []
     for s in rows:
         if include_revoked or s.status() != "revoked":
             data = serialize_share(s)
-            data["url"] = build_share_url(base, data["url_path"]) if base else data["url_path"]
+            if s.kind in redacted_kinds:
+                data["token"] = None
+                data["url_path"] = None
+                data["url"] = None
+                data["redacted"] = True
+            else:
+                data["url"] = build_share_url(base, data["url_path"]) if base else data["url_path"]
             out.append(data)
     emit_json(out)
 
@@ -65,5 +87,12 @@ def show_main(share_id: str) -> None:
         emit_error(f"Error: share {share_id!r} not found.", code=1)
     data = serialize_share(s)
     base = _base_url()
-    data["url"] = build_share_url(base, data["url_path"]) if base else data["url_path"]
+    redacted_kinds = _redacted_kinds()
+    if s.kind in redacted_kinds:
+        data["token"] = None
+        data["url_path"] = None
+        data["url"] = None
+        data["redacted"] = True
+    else:
+        data["url"] = build_share_url(base, data["url_path"]) if base else data["url_path"]
     emit_json(data)

@@ -73,6 +73,44 @@ def _list(**kwargs):
     return captured[0]
 
 
+def _show(share_id):
+    from twicc.cli import share as cli_share
+    captured = []
+    import twicc.cli.share
+    orig = twicc.cli.share.emit_json
+    twicc.cli.share.emit_json = captured.append
+    try:
+        cli_share.show_main(share_id)
+    finally:
+        twicc.cli.share.emit_json = orig
+    return captured[0]
+
+
+class _FakeCaller:
+    id = "agent-1"
+
+
+@pytest.fixture
+def as_agent(monkeypatch):
+    monkeypatch.setattr(
+        "twicc.cli._drop_request.whoami.resolve_current_session", lambda: _FakeCaller())
+
+
+@pytest.fixture
+def as_human(monkeypatch):
+    monkeypatch.setattr(
+        "twicc.cli._drop_request.whoami.resolve_current_session", lambda: None)
+
+
+@pytest.fixture
+def settings_state(monkeypatch):
+    state = {"allowAgentSessionShares": False, "allowAgentArtifactShares": False,
+             "shareBaseUrl": "share.example.com"}
+    monkeypatch.setattr("twicc.synced_settings.read_synced_settings",
+                        lambda: dict(state))
+    return state
+
+
 def test_session_filter_returns_both_kinds(one_share_each, session):
     rows = _list(session=session.id)
     assert {r["kind"] for r in rows} == {"session", "artifact"}
@@ -120,3 +158,59 @@ def test_project_filter_expands_downward_to_worktree_for_both_kinds(
 
 def test_unrelated_session_filter_returns_nothing(one_share_each):
     assert _list(session="other-session") == []
+
+
+def test_agent_list_redacts_kind_with_setting_off(one_share_each, as_agent, settings_state):
+    settings_state["allowAgentSessionShares"] = True   # artifact stays off
+    rows = _list()
+    by_kind = {r["kind"]: r for r in rows}
+    assert by_kind["session"]["token"] and by_kind["session"]["url"].startswith("https://")
+    assert "redacted" not in by_kind["session"]
+    art = by_kind["artifact"]
+    assert art["token"] is None and art["url"] is None and art["url_path"] is None
+    assert art["redacted"] is True
+    assert art["id"]  # the row itself is never dropped
+
+
+def test_agent_show_redacts_too(one_share_each, as_agent, settings_state):
+    _, artifact_share_id = one_share_each
+    data = _show(artifact_share_id)
+    assert data["id"] == artifact_share_id
+    assert data["token"] is None
+    assert data["url"] is None
+    assert data["url_path"] is None
+    assert data["redacted"] is True
+    settings_state["allowAgentArtifactShares"] = True
+    data = _show(artifact_share_id)
+    assert data["id"] == artifact_share_id
+    assert data["token"]
+    assert data["url"].startswith("https://")
+    assert data["url_path"].startswith("/share/")
+    assert "redacted" not in data
+
+
+def test_human_never_redacted(one_share_each, as_human, settings_state):
+    rows = _list()
+    assert all(r["token"] for r in rows)
+    assert not any("redacted" in r for r in rows)
+    shown = _show(one_share_each[1])
+    assert shown["token"]
+    assert shown["url"].startswith("https://")
+    assert shown["url_path"].startswith("/share/")
+    assert "redacted" not in shown
+
+
+def test_create_then_show_yields_url(session, as_human, settings_state):
+    """Service/read composition: a created share id can be passed to the real
+    CLI show path, which yields the absolute URL. Task 6 separately proves the
+    final CLI result formatter; Task 16 proves that formatter through MCP."""
+    from twicc.drop_requests_watcher import execute_drop_payload
+    status = _run(execute_drop_payload({
+        "kind": "share:create", "kind_target": "session", "session_id": session.id,
+        "label": "", "options": {}, "password": None, "expires_at": None,
+    }, "share:create"))
+    assert status["status"] == "created"
+    assert status["share_id"]
+    assert "url" not in status and "token" not in status
+    data = _show(status["share_id"])
+    assert data["url"] == "https://share.example.com" + data["url_path"]
