@@ -36,3 +36,39 @@ def test_explicit_live_and_frozen(captured_drop):
     _invoke(["share", "create", "session", "sess-1", "--frozen"])
     assert captured_drop[0]["payload"]["options"]["mode"] == "live"
     assert captured_drop[1]["payload"]["options"]["mode"] == "snapshot"
+
+
+@pytest.fixture(autouse=True)
+def _default_human_caller(monkeypatch):
+    """Keep Task 8's CLI-only tests out of the real ProcessRun query."""
+    monkeypatch.setattr(
+        "twicc.cli._drop_request.whoami.resolve_current_session", lambda: None,
+    )
+
+
+class _FakeSession:
+    id = "caller-1"
+
+
+def test_mutations_carry_caller_session_id(captured_drop, monkeypatch):
+    monkeypatch.setattr(
+        "twicc.cli._drop_request.whoami.resolve_current_session", lambda: _FakeSession(),
+    )
+    results = [
+        _invoke(["share", "create", "session", "sess-1"]),
+        _invoke(["share", "create", "artifact", "3", "--label", "x"]),
+        _invoke(["share", "update", "shr_1", "--label", "y"]),
+        _invoke(["share", "revoke", "shr_1"]),
+    ]
+    assert all(result.exit_code == 0 for result in results)
+    assert len(captured_drop) == 4
+    for call in captured_drop:
+        assert call["payload"]["caller_session_id"] == "caller-1"
+
+
+def test_human_payload_has_no_caller_key(captured_drop, monkeypatch):
+    monkeypatch.setattr(
+        "twicc.cli._drop_request.whoami.resolve_current_session", lambda: None,
+    )
+    _invoke(["share", "create", "session", "sess-1"])
+    assert "caller_session_id" not in captured_drop[0]["payload"]
