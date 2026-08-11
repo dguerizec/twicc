@@ -172,8 +172,8 @@ def copy_data_from_main() -> bool:
     """Copy the database, search index and user config from the main data directory to the worktree.
 
     Copies data.sqlite and any WAL/SHM files, the search-index/ directory, the
-    user preference files (settings, workspaces, presets, snippets, tips) and
-    the per-install secret-key.
+    project-icons/ directory, the user preference files (settings, workspaces,
+    presets, snippets, tips) and the per-install secret-key.
     Only called in worktree mode when the local database doesn't exist yet, so
     everything lands together on first setup. Existing local files are never
     overwritten.
@@ -215,6 +215,18 @@ def copy_data_from_main() -> bool:
     if source_search.exists() and not target_search.exists():
         print(f"  Copying search index from {source_search}...", end=" ", flush=True)
         shutil.copytree(source_search, target_search)
+        print("OK")
+
+    # Copy project icons. The copied database carries each project's icon state
+    # (a manual override names a file under its proj-<hash> bucket), so without
+    # the files the worktree serves a 404 for every manual icon. Auto-discovery
+    # only ever rebuilds the repo-<hash> buckets, never the overrides.
+    source_icons = DEFAULT_DATA_DIR / "project-icons"
+    target_icons = DATA_DIR / "project-icons"
+
+    if source_icons.exists() and not target_icons.exists():
+        print(f"  Copying project icons from {source_icons}...", end=" ", flush=True)
+        shutil.copytree(source_icons, target_icons)
         print("OK")
 
     # Copy user preference files (settings, workspaces, presets, snippets, tips).
@@ -272,10 +284,10 @@ def clear_local_data() -> None:
     """Delete the local database, search index and user config in the worktree.
 
     Removes data.sqlite and any WAL/SHM files, the search-index/ directory, the
-    user preference files (settings, workspaces, presets, snippets, tips) and the
-    per-install secret-key, so the next start creates a fresh empty database,
-    rebuilds the search index, and carries no config or key over from the main
-    data directory.
+    project-icons/ directory, the user preference files (settings, workspaces,
+    presets, snippets, tips) and the per-install secret-key, so the next start
+    creates a fresh empty database, rebuilds the search index, rediscovers the
+    icons, and carries no config or key over from the main data directory.
     """
     # Clear database
     target_db = DATA_DIR / "db" / "data.sqlite"
@@ -291,6 +303,13 @@ def clear_local_data() -> None:
     if target_search.exists():
         shutil.rmtree(target_search)
         print("  Cleared local search index")
+
+    # Clear project icons — the fresh database has no manual override left, and
+    # auto-discovery rebuilds the repo buckets on the first scan.
+    target_icons = DATA_DIR / "project-icons"
+    if target_icons.exists():
+        shutil.rmtree(target_icons)
+        print("  Cleared local project icons")
 
     # Clear user preference files (settings, workspaces, presets, snippets, tips).
     removed_config = []
@@ -826,7 +845,7 @@ DEV HOSTNAME:
 
 DATABASE, SEARCH INDEX & CONFIG (WORKTREE MODE):
     On start/restart in a worktree, devctl automatically copies the
-    database, search index, and user config (settings.json, workspaces.json,
+    database, search index, project icons, and user config (settings.json, workspaces.json,
     layouts.json, terminal-config.json, message-snippets.json, seen-tips.json,
     seen-help.json, and the *-settings-presets.json bundles) from ~/.twicc/ if no local data exists
     yet. It also symlinks artifacts/ and scratch/ to ~/.twicc/ so the worktree
@@ -850,6 +869,7 @@ FILES:
     <data_dir>/.env               Configuration (ports, password hash)
     <data_dir>/db/data.sqlite     SQLite database
     <data_dir>/search-index/      Tantivy full-text search index
+    <data_dir>/project-icons/     Project icon files (repo + per-project)
     <data_dir>/logs/backend.log   Backend application logs
     <data_dir>/logs/frontend.log  Frontend (Vite) process output
     <data_dir>/logs/sdk/          Raw SDK message logs (per session)

@@ -235,6 +235,12 @@ search-index/
 /scratch
 /shares
 
+# Another data-dir subdirectory surfacing at the worktree root when the data dir
+# is the worktree itself: the project icon files (a real per-worktree dir, never
+# symlinked — devctl copies it from the main data dir and icon discovery writes
+# into it). Root-anchored for the same reason as above.
+/project-icons/
+
 # SQLite database (legacy location, kept for safety)
 data.sqlite
 data.sqlite-wal

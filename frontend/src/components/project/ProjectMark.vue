@@ -4,23 +4,41 @@
 // duplicated `--dot-color` circle markup across the app. Size is driven by the
 // CSS var `--project-mark-size` (default `--wa-space-m`), overridable per call
 // site. See docs/plans/2026-07-17-project-icons-design.md.
-defineProps({
+import { computed, reactive } from 'vue'
+
+const props = defineProps({
     // Resolved icon URL (server-side, inheritance included) or null → color dot.
     iconUrl: { type: String, default: null },
     // Dot color used when there is no icon (null → the neutral empty dot).
     color: { type: String, default: null },
 })
+
+// Icon URLs whose image failed to load — a project row keeps a manual icon in
+// the database while the file is absent from the data dir (e.g. a worktree
+// instance whose project-icons/ was not carried over). Without this the browser
+// renders a broken-image box. Module-level and shared by every ProjectMark, so
+// one failure degrades all occurrences to the color dot at once and no other
+// instance re-requests the missing file. A replacement icon gets a new
+// content-hashed URL, so entries never go stale in a harmful way.
+const brokenIconUrls = reactive(new Set())
+
+const showIcon = computed(() => !!props.iconUrl && !brokenIconUrls.has(props.iconUrl))
+
+function onIconError() {
+    if (props.iconUrl) brokenIconUrls.add(props.iconUrl)
+}
 </script>
 
 <template>
     <span class="project-mark">
         <img
-            v-if="iconUrl"
+            v-if="showIcon"
             class="project-mark-icon"
             :src="iconUrl"
             alt=""
             loading="lazy"
             decoding="async"
+            @error="onIconError"
         />
         <span
             v-else
