@@ -1,11 +1,19 @@
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from django.utils import timezone as djtz
 
 from twicc import paths
-from twicc.core.models import ArtifactBookmark, PinMode, Project, Session, SessionType, Share
+from twicc.core.models import (
+    ArtifactBookmark,
+    PinMode,
+    Project,
+    Session,
+    SessionType,
+    Share,
+)
 from twicc.core.services import share_mutation
 from twicc.core.services.share_mutation import (
     _validate_artifact_options,
@@ -242,3 +250,95 @@ def test_create_artifact_share_and_propagate_resnapshot(session, bookmark, artif
     share.refresh_from_db()
     assert snap.read_bytes() == b"<html>v2</html>"
     assert share.options.get("snapshot_at")
+
+
+# ── Shared repairs (agent-sharing design §7.2 / §8) ─────────────────────────
+
+def test_artifact_create_preserves_title_options(session, bookmark, artifacts_root):
+    _write(artifacts_root, session.id, "demo/index.html", b"<html/>")
+    result = _run(share_mutation.create_share(
+        "artifact", bookmark=bookmark,
+        options={"show_title": False, "display_title": "Custom"},
+    ))
+    assert result.success
+    share = Share.objects.get(id=result.share_id)
+    assert share.options["show_title"] is False
+    assert share.options["display_title"] == "Custom"
+    assert "snapshot_at" in share.options
+    # Served by the public serializer: show_title off ⇒ no title at all.
+    from twicc.core.serializers import serialize_share_public_meta
+    assert "title" not in serialize_share_public_meta(share)
+
+
+def test_artifact_create_serves_custom_title(session, bookmark, artifacts_root):
+    _write(artifacts_root, session.id, "demo/index.html", b"<html/>")
+    result = _run(share_mutation.create_share(
+        "artifact", bookmark=bookmark,
+        options={"show_title": True, "display_title": "Custom"},
+    ))
+    assert result.success
+    share = Share.objects.get(id=result.share_id)
+    from twicc.core.serializers import serialize_share_public_meta
+    assert serialize_share_public_meta(share)["title"] == "Custom"
+
+
+def test_artifact_propagate_preserves_title_options(session, bookmark, artifacts_root):
+    _write(artifacts_root, session.id, "demo/index.html", b"<html/>")
+    result = _run(share_mutation.create_share(
+        "artifact", bookmark=bookmark,
+        options={"show_title": True, "display_title": "Kept"},
+    ))
+    share = Share.objects.get(id=result.share_id)
+    first_snapshot_at = share.options["snapshot_at"]
+    result2 = _run(share_mutation.propagate_share(share))
+    assert result2.success
+    share.refresh_from_db()
+    assert share.options["show_title"] is True
+    assert share.options["display_title"] == "Kept"
+    assert share.options["snapshot_at"] >= first_snapshot_at
+    from twicc.core.serializers import serialize_share_public_meta
+    assert serialize_share_public_meta(share)["title"] == "Kept"
+
+
+def test_create_invalid_expiry_is_rejected_not_silent(session):
+    """§7.2 expiry defect fix: a typo must NOT create a never-expiring link."""
+    result = _run(share_mutation.create_share_from_payload({
+        "kind_target": "session", "session_id": session.id,
+        "label": "", "options": {}, "password": None,
+        "expires_at": "not-a-date",
+    }))
+    assert not result.success
+    assert result.errors[0].field == "expires_at"
+    assert result.errors[0].code == "invalid"
+    assert Share.objects.count() == 0
+
+
+def test_update_invalid_expiry_preserves_existing(session):
+    result = _run(share_mutation.create_share_from_payload({
+        "kind_target": "session", "session_id": session.id,
+        "label": "", "options": {}, "password": None,
+        "expires_at": "2030-01-01T00:00:00+00:00",
+    }))
+    share = Share.objects.get(id=result.share_id)
+    upd = _run(share_mutation.update_share_from_payload({
+        "share_id": share.id, "fields": {"expires_at": "garbage"},
+    }))
+    assert not upd.success
+    assert upd.errors[0].code == "invalid"
+    share.refresh_from_db()
+    assert share.expires_at == datetime(2030, 1, 1, tzinfo=UTC)
+
+
+def test_valid_and_empty_expiry_unchanged(session):
+    ok = _run(share_mutation.create_share_from_payload({
+        "kind_target": "session", "session_id": session.id,
+        "label": "", "options": {}, "password": None,
+        "expires_at": "2030-06-01T12:00:00+00:00",
+    }))
+    assert ok.success
+    none1 = _run(share_mutation.create_share_from_payload({
+        "kind_target": "session", "session_id": session.id,
+        "label": "", "options": {}, "password": None, "expires_at": "",
+    }))
+    assert none1.success
+    assert Share.objects.get(id=none1.share_id).expires_at is None

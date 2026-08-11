@@ -268,7 +268,7 @@ async def create_share(
         err = await sync_to_async(snapshot_artifact_share)(share)
         if err:
             return ShareMutationResult(False, None, [ShareError("bookmark", "snapshot_failed", err)])
-        share.options = {"snapshot_at": _now().isoformat()}
+        share.options = {**opts, "snapshot_at": _now().isoformat()}
 
     await run_under_db_write_lock(lambda: share.asave(force_insert=True))
     await broadcast_share_updated(share)
@@ -291,11 +291,16 @@ async def patch_share(share, fields: dict) -> ShareMutationResult:
         update_fields.append("notify_on_view")
     if "expires_at" in fields:
         # REST passes a parsed datetime|None; the drop-request/CLI path passes a raw
-        # ISO string (JSON has no datetime). Coerce here — the single choke point both
-        # surfaces funnel through — so the in-memory value stays a datetime and the
-        # follow-up serialize_share (broadcast) never hits ``str.isoformat``.
+        # ISO string (JSON has no datetime). Strictly parse the raw string here so the
+        # in-memory value stays a datetime and serialize_share never hits ``str.isoformat``.
         raw_exp = fields["expires_at"]
-        share.expires_at = _parse_expires({"expires_at": raw_exp}) if isinstance(raw_exp, str) else raw_exp
+        if isinstance(raw_exp, str):
+            parsed, exp_err = _parse_expires({"expires_at": raw_exp})
+            if exp_err:
+                return ShareMutationResult(False, share.id, [exp_err])
+            share.expires_at = parsed
+        else:
+            share.expires_at = raw_exp
         update_fields.append("expires_at")
     if "password" in fields:
         pw = fields["password"]
@@ -347,7 +352,7 @@ async def propagate_share(share) -> ShareMutationResult:
         err = await sync_to_async(snapshot_artifact_share)(share)
         if err:
             return ShareMutationResult(False, share.id, [ShareError("bookmark", "snapshot_failed", err)])
-        share.options = {"snapshot_at": _now().isoformat()}
+        share.options = {**share.options, "snapshot_at": _now().isoformat()}
     await run_under_db_write_lock(lambda: share.asave(update_fields=["options", "updated_at"]))
     await broadcast_share_updated(share)
     return ShareMutationResult(True, share.id, None)
@@ -395,26 +400,36 @@ async def _resolve_target_from_payload(payload: dict):
     return kind, None, None, [ShareError("kind", "invalid", f"unknown kind {kind!r}")]
 
 
-def _parse_expires(payload: dict) -> datetime | None:
+def _parse_expires(payload: dict) -> tuple[datetime | None, ShareError | None]:
+    """Strict expiry parse (§7.2 defect fix): absent/None/"" → no expiry; a
+    non-empty value must parse under ``datetime.fromisoformat`` or the caller
+    gets ``expires_at``/``invalid`` — never a silently never-expiring link."""
     raw = payload.get("expires_at")
-    if not raw:
-        return None
+    if raw is None or raw == "":
+        return None, None
     try:
-        return datetime.fromisoformat(raw)
+        return datetime.fromisoformat(raw), None
     except (ValueError, TypeError):
-        return None
+        return None, ShareError(
+            "expires_at", "invalid",
+            f"invalid expires_at {raw!r}: use an ISO 8601 datetime, "
+            f"e.g. 2026-12-31T23:59:00+00:00",
+        )
 
 
 async def create_share_from_payload(payload: dict) -> ShareMutationResult:
     kind, session, bookmark, errors = await _resolve_target_from_payload(payload)
     if errors:
         return ShareMutationResult(False, None, errors)
+    expires_at, exp_err = _parse_expires(payload)
+    if exp_err:
+        return ShareMutationResult(False, None, [exp_err])
     return await create_share(
         kind, session=session, bookmark=bookmark,
         label=payload.get("label") or "",
         options=payload.get("options") or {},
         password=payload.get("password") or None,
-        expires_at=_parse_expires(payload),
+        expires_at=expires_at,
         notify_on_view=bool(payload.get("notify_on_view", False)),
     )
 

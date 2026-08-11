@@ -1,11 +1,21 @@
 import asyncio
+from pathlib import Path
 
 import orjson
 import pytest
 from django.test import AsyncClient
 from django.utils import timezone as djtz
 
-from twicc.core.models import Project, Session, SessionType, Share, ShareAccess
+from twicc import paths
+from twicc.core.models import (
+    ArtifactBookmark,
+    PinMode,
+    Project,
+    Session,
+    SessionType,
+    Share,
+    ShareAccess,
+)
 from twicc.core.services.share_tokens import mint_token
 
 
@@ -37,6 +47,29 @@ def _passthrough(monkeypatch):
 def share_host(monkeypatch):
     monkeypatch.setattr("twicc.synced_settings.read_synced_settings",
                         lambda: {"shareBaseUrl": "share.example.com"})
+
+
+@pytest.fixture
+def bookmark(session):
+    return ArtifactBookmark.objects.create(
+        session=session, project_id=session.project_id,
+        relative_path="demo/index.html", name="Demo", scope=PinMode.PROJECT,
+    )
+
+
+@pytest.fixture
+def artifacts_root(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(paths, "get_data_dir", lambda: data_dir)
+    return data_dir / "artifacts"
+
+
+def _write(artifacts_root: Path, session_id: str, name: str, payload: bytes) -> Path:
+    target = artifacts_root / session_id / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    return target
 
 
 def _run(coro):
@@ -94,3 +127,47 @@ def test_accesses_endpoint(client, session, share_host):
 
 def test_unknown_share_404(client, session, share_host):
     assert _run(client.get("/api/shares/shr_nope/")).status_code == 404
+
+
+@pytest.mark.parametrize("bad_expiry", ["junk", False, 0, [], {}])
+def test_rest_create_invalid_expiry_rejected(
+        bad_expiry, client, session, share_host):
+    body = {
+        "kind": "session", "session_id": session.id,
+        "options": {"mode": "live"}, "expires_at": bad_expiry,
+    }
+    res = _run(client.post(
+        "/api/shares/", data=orjson.dumps(body), content_type="application/json",
+    ))
+    assert res.status_code == 400
+    errors = orjson.loads(res.content)["errors"]
+    assert [(e["field"], e["code"]) for e in errors] == [("expires_at", "invalid")]
+    assert Share.objects.count() == 0
+
+
+def test_rest_artifact_create_preserves_title_options(
+        client, session, bookmark, artifacts_root, share_host):
+    _write(artifacts_root, session.id, "demo/index.html", b"<html/>")
+    body = {
+        "kind": "artifact", "bookmark_id": bookmark.id,
+        "options": {"show_title": False, "display_title": "Custom"},
+    }
+    res = _run(client.post(
+        "/api/shares/", data=orjson.dumps(body), content_type="application/json",
+    ))
+    assert res.status_code == 201
+    data = orjson.loads(res.content)
+    assert data["options"]["show_title"] is False
+    assert data["options"]["display_title"] == "Custom"
+    assert "snapshot_at" in data["options"]
+
+
+def test_rest_patch_invalid_expiry_keeps_existing_raise(client, session, share_host):
+    """Accepted §7.2 limitation: REST PATCH parses in-view and still raises."""
+    share = _share(session)
+    with pytest.raises(ValueError):
+        _run(client.patch(
+            f"/api/shares/{share.id}/",
+            data=orjson.dumps({"expires_at": "junk"}),
+            content_type="application/json",
+        ))
