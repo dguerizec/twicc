@@ -2,6 +2,14 @@ import pytest
 import twicc.synced_settings as ss
 
 
+def test_agent_share_settings_default_off():
+    """The two agent-sharing gate keys exist, default OFF (spec §4/A2)."""
+    from twicc.synced_settings import SYNCED_SETTINGS_DEFAULTS
+
+    assert SYNCED_SETTINGS_DEFAULTS["allowAgentSessionShares"] is False
+    assert SYNCED_SETTINGS_DEFAULTS["allowAgentArtifactShares"] is False
+
+
 @pytest.fixture
 def temp_settings(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"

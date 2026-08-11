@@ -105,6 +105,11 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # /share/ is gated to this host only (share/asgi_filter.py) and the Share UI is
     # disabled when empty. A bare hostname or a full URL; only the hostname matters.
     "shareBaseUrl": "",
+    # Let agents create and manage session shares (skill + MCP + CLI from inside a
+    # session). Off: those calls are refused with `agent_sharing_disabled`.
+    "allowAgentSessionShares": False,
+    # Same, for artifact shares. The two kinds are independent.
+    "allowAgentArtifactShares": False,
     # Public base URL advertised to peer instances (peer messaging). Empty
     # disables the feature entirely: /peer/ endpoints answer 404 and no
     # outbound handshake can be sent. Unlike shareBaseUrl it MAY be the

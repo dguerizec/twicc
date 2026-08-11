@@ -34,6 +34,8 @@ GENERIC_KEY_DESCRIPTIONS: dict[str, str] = {
     "notifyOnExtraUsageStart": "Master switch for the 'extra usage started' alert (in-app + external push).",
     "telemetryEnabled": "Send anonymous usage statistics (no content, ever).",
     "telemetryNoticeSeen": "One-time telemetry notice acknowledged.",
+    "allowAgentSessionShares": "Let agents create session shares in their own spawn subtree, revoke any session share, and read every session share URL.",
+    "allowAgentArtifactShares": "Let agents create artifact shares in their own spawn subtree, revoke any artifact share, and read every artifact share URL.",
 }
 
 
