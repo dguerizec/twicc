@@ -189,6 +189,38 @@ def test_agent_show_redacts_too(one_share_each, as_agent, settings_state):
     assert "redacted" not in data
 
 
+@pytest.mark.parametrize("operation", ["list", "show"])
+def test_read_uses_one_settings_snapshot_per_invocation(
+        operation, one_share_each, as_agent, monkeypatch):
+    reads = []
+
+    def read_settings():
+        reads.append(None)
+        if len(reads) == 1:
+            return {
+                "allowAgentSessionShares": True,
+                "allowAgentArtifactShares": False,
+                "shareBaseUrl": "first.example.com",
+            }
+        return {
+            "allowAgentSessionShares": False,
+            "allowAgentArtifactShares": False,
+            "shareBaseUrl": "second.example.com",
+        }
+
+    monkeypatch.setattr("twicc.synced_settings.read_synced_settings", read_settings)
+    session_share_id, _ = one_share_each
+
+    if operation == "list":
+        data = _list(kind="session")[0]
+    else:
+        data = _show(session_share_id)
+
+    assert len(reads) == 1
+    assert data["url"].startswith("https://first.example.com/share/")
+    assert "redacted" not in data
+
+
 def test_human_never_redacted(one_share_each, as_human, settings_state):
     rows = _list()
     assert all(r["token"] for r in rows)
