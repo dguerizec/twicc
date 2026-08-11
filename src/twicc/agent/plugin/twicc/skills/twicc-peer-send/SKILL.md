@@ -12,6 +12,7 @@ Send a message to a peer instance — another user's TwiCC installation, paired 
 
 - The user asks to send something to a colleague's instance ("send David's instance a recap of the API changes").
 - You need to hand off information, a screenshot, or a document to an agent working on another user's machine.
+- When a peer message needs a newly created share link, use the `twicc-share` skill and label the new link `peer <PEER_NAME>`; forwarding an existing share URL needs no relabelling.
 
 ## How to invoke
 

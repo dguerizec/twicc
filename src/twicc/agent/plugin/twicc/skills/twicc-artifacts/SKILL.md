@@ -45,12 +45,12 @@ Results are ordered by most recently updated. Read-only: works without the serve
 ### Bookmark
 
 ```bash
-$TWICC artifacts bookmark <SESSION_ID> <PATH> --name NAME [--scope SCOPE]
+$TWICC artifacts bookmark <SESSION_ID|self|parent> <PATH> --name NAME [--scope SCOPE]
 ```
 
 Creates the bookmark, or renames / re-scopes it if one already exists for that `(session, path)`. Requires the live server.
 
-- `SESSION_ID` — the session that owns the artifact.
+- `SESSION_ID` — the session that owns the artifact: a session id, `self`, or `parent`.
 - `PATH` — artifact path relative to the session's artifacts directory (the `relative_path` the listing prints, e.g. `demo/index.html`), or an absolute path confined to that directory.
 - `--name NAME` — bookmark name (**required**).
 - `--scope <project|workspace|all>` — visibility scope. On create, defaults to `project`. Omit when updating to keep the current scope.
@@ -59,7 +59,7 @@ Creates the bookmark, or renames / re-scopes it if one already exists for that `
 ### Unbookmark
 
 ```bash
-$TWICC artifacts unbookmark <SESSION_ID> <PATH>
+$TWICC artifacts unbookmark <SESSION_ID|self|parent> <PATH>
 ```
 
 Removes the bookmark for that `(session, path)`. Symmetric with `bookmark` — the artifact file need not still exist. Requires the live server.
@@ -70,6 +70,8 @@ Removes the bookmark for that `(session, path)`. Symmetric with `bookmark` — t
 
 ### Local (exit 1)
 
+- `session_context_not_found` — `self` or `parent` has no current TwiCC session context.
+- `parent_not_found` — `parent` was used from a root session.
 - `invalid_scope`
 
 ### Server (exit 3)
@@ -134,6 +136,8 @@ $TWICC artifacts --limit 50 --offset 20
 $TWICC artifacts bookmark 54b42b89-290a-4324-bf86-f636a048d23d demo/index.html --name "Demo"
 $TWICC artifacts bookmark 54b42b89-290a-4324-bf86-f636a048d23d report.md --name "Report" --scope all
 $TWICC artifacts unbookmark 54b42b89-290a-4324-bf86-f636a048d23d demo/index.html
+$TWICC artifacts bookmark self report.md --name "Report"
+$TWICC artifacts unbookmark self report.md
 ```
 
 ## Related commands

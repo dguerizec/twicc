@@ -35,8 +35,8 @@ Then run `$TWICC <args>` — **never quote `$TWICC`** (it may expand to multiple
 
 Commands that target a session accept two keywords resolved via PID ancestry, so an agent never needs to know its own id:
 
-- **`self`** — the current session. Accepted by `update-session`, `update-sessions` / `send-messages` (as an explicit id), `topology`, and the `--spawned-by` / `--spawn-tree` / `--descendants` / `--siblings` filters.
-- **`parent`** — the session that spawned the current one. Accepted by `send-message` and the filiation filters (except `--spawn-tree` and `--siblings`, which reject `parent`).
+- **`self`** — the current session. Accepted by `update-session`, `update-sessions` / `send-messages` (as an explicit id), `topology`, `artifacts bookmark` / `unbookmark`, `share create session`, the share list `--session`, and the `--spawned-by` / `--spawn-tree` / `--descendants` / `--siblings` filters.
+- **`parent`** — the session that spawned the current one. Accepted by `send-message`, `artifacts bookmark` / `unbookmark`, `share create session`, the share list `--session`, and the filiation filters (except `--spawn-tree` and `--siblings`, which reject `parent`).
 
 `twicc whoami` is the explicit way for an agent to discover its own `session_id`, working directories, settings, and live process row.
 
@@ -297,23 +297,26 @@ Apply the same update to several sessions at once — the batch sibling of `upda
 
 ## Artifacts
 
-### `twicc artifacts` / `twicc artifacts bookmark <SESSION_ID> <PATH>` / `twicc artifacts unbookmark <SESSION_ID> <PATH>`
+### `twicc artifacts` / `twicc artifacts bookmark <SESSION_ID|self|parent> <PATH>` / `twicc artifacts unbookmark <SESSION_ID|self|parent> <PATH>`
 List bookmarked artifacts (viewable files saved from a session's Artifacts tab), or add / rename / re-scope / remove a bookmark. A bookmark is keyed on `(session, relative_path)` and carries a name plus a visibility scope (`project`/`workspace`/`all`). The only artifacts TwiCC tracks are bookmarked ones.
 - Listing (read-only, no server needed): `--project TEXT` / `--workspace TEXT` (mutually exclusive; same worktree-aware scope helpers as `twicc sessions`), `--scope <project|workspace|all>` (filter on each bookmark's own scope, independent of project/workspace — e.g. `--scope all` for the ones bookmarked everywhere), `--limit` (default 20), `--offset`. Ordered by most recently updated; each row is `{id, name, scope, session_id, project_id, relative_path, root, file_ext, created_at, updated_at}`.
 - `bookmark` — upsert on `(session, path)`: create, or rename / re-scope an existing bookmark. `PATH` is relative to the session's artifacts directory (the listing's `relative_path`) or an absolute path confined to it. `--name` required; `--scope` defaults to `project` on create and is kept as-is on update when omitted.
 - `unbookmark` — remove the bookmark for `(session, path)` (symmetric with `bookmark`; the file need not still exist).
+- `self` or `parent` without a current session fails locally with `session_context_not_found`; `parent` from a root session fails with `parent_not_found`.
 - Both writes require the live server (broadcast so open UIs refresh) and take `--timeout`; shared mutation service with the REST endpoints (`core/services/artifact_bookmark_mutation.py`).
 - Skill: [`twicc-artifacts`](src/twicc/agent/plugin/twicc/skills/twicc-artifacts/SKILL.md).
 
 ## Sharing
 
-Read-only public links to a session transcript or a bookmarked artifact, served under `/share/<token>/` on a **dedicated share host** (a hostname distinct from the working origin; set it in Settings → Sharing — `shareBaseUrl`). **Human-only (O5): no skill and no MCP tool exist for `share`** — it is reachable over RPC with a full-scope Bearer token, but agents are never pointed at it. The token is the credential; per-link password / expiry / revoke are separate.
+Read-only public links to a session transcript or a bookmarked artifact, served under `/share/<token>/` on a **dedicated share host** (a hostname distinct from the working origin; set it in Settings → Sharing — `shareBaseUrl`). The token is the credential; per-link password / expiry / revoke are separate. Agents can use the full share surface (skill [`twicc-share`](src/twicc/agent/plugin/twicc/skills/twicc-share/SKILL.md) + MCP tools), gated by two synced settings, both off by default: `allowAgentSessionShares` / `allowAgentArtifactShares` (Settings → Sharing). With a kind enabled, an agent may create shares whose target is its own session or a spawn-tree descendant, manage shares created in its own subtree, revoke ANY share of that kind, and read every URL for shares of that kind; with that kind disabled, mutations are refused (`agent_sharing_disabled`) and reads return rows with `token`/`url` null (`"redacted": true`). Agent session shares default to frozen snapshots; `--max-display debug` and password clearing are refused to agents. This gate is a guardrail against an obedient agent, not a security boundary — the CLI, the DB file and the settings themselves are reachable from a session's shell (accepted trust model, design §5.2).
 
 ### `twicc share` / `twicc share show <ID>`
-List (read-only, direct DB — works with the server down) or show one share as JSON. Listing: `--kind <session|artifact>`, `--session ID`, `--project TEXT` (worktree-aware scope), `--include-revoked`, `--limit` (default 50), `--offset`. Each row is the owner serializer (`id`, `token`, `kind`, `label`, `status`, `options`, `view_count`, …) plus a resolved `url` (absolute when `shareBaseUrl` is set, else the relative `/share/<token>/` path).
+List (read-only, direct DB — works with the server down) or show one share as JSON. Listing: `--kind <session|artifact>`, `--session <ID|self|parent>`, `--project TEXT` (worktree-aware scope), `--include-revoked`, `--limit` (default 50), `--offset`. Each row is the owner serializer (`id`, `token`, `kind`, `label`, `status`, `options`, `view_count`, …) plus a resolved `url` (absolute when `shareBaseUrl` is set, else the relative `/share/<token>/` path).
 
-### `twicc share create session <SESSION_ID>` / `twicc share create artifact <BOOKMARK_ID>`
+### `twicc share create session <SESSION_ID|self|parent>` / `twicc share create artifact <BOOKMARK_ID>`
 Create a link (requires the live server). Session: `--label`, `--password`, `--expires ISO`, `--live/--frozen` (live-follow or snapshot), `--max-display <conversation|simplified|normal|debug>`, `--include-subagents/--no-subagents`, `--title` (public title; default = the session title), `--show-title/--no-title` (master switch; `--no-title` shows viewers a generic label and ignores `--title`). Artifact: `--label`, `--password`, `--expires`, `--title` (default = the bookmark name), `--show-title/--no-title` (same master switch); the artifact is snapshotted at creation (design D7).
+
+Creation returns `{status, share_id}`, not a token or URL. Use `twicc share show <SHARE_ID>` next to get the resolved URL.
 
 ### `twicc share update <ID>` / `revoke` / `unrevoke` / `delete` / `propagate <ID>`
 Manage an existing link (live server; broadcasts so open UIs refresh). `update` edits `--label` / `--password` / `--expires`. `revoke`/`unrevoke` toggle availability (row + counters kept). `delete` removes it (and its snapshot dir). `propagate` re-freezes a snapshot session share to the current line / re-snapshots an artifact share.

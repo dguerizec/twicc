@@ -101,9 +101,11 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # Empty = no link line.
     "publicBaseUrl": "",
     # Dedicated share origin (design §12): a hostname DISTINCT from the working
-    # origin, pointing at the same local port. Required to create/serve shares —
-    # /share/ is gated to this host only (share/asgi_filter.py) and the Share UI is
-    # disabled when empty. A bare hostname or a full URL; only the hostname matters.
+    # origin, pointing at the same local port. Serving links always requires it
+    # (/share/ is gated to this host — share/asgi_filter.py — and the Share UI
+    # is disabled when empty); creation requires it only on the REST path and
+    # for agent callers (share_host_unset) — the human CLI and full-token /rpc/
+    # stay permissive. A bare hostname or a full URL; only the hostname matters.
     "shareBaseUrl": "",
     # Let agents create and manage session shares (skill + MCP + CLI from inside a
     # session). Off: those calls are refused with `agent_sharing_disabled`.
