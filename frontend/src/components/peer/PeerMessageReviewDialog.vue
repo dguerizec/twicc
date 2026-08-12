@@ -729,10 +729,6 @@ function onHide(event) {
 
             <!-- Actions -->
             <template v-if="canDeliver">
-                <div v-if="showReplyTargetPreparation" class="pr-preparing" role="status" aria-live="polite">
-                    <wa-spinner></wa-spinner>
-                    <span>Preparing session selection…</span>
-                </div>
                 <wa-callout v-if="showReplyTargetWarning" variant="warning" size="small">
                     This message is part of a thread, but its session is not available for selection.
                     Choose another session, or deliver to a new one.
@@ -784,6 +780,11 @@ function onHide(event) {
                         :disabled="busy"
                         @click="confirmingRefuse = true"
                     >Refuse</wa-button>
+                </div>
+
+                <div v-if="showReplyTargetPreparation" class="pr-preparing" role="status" aria-live="polite">
+                    <wa-spinner></wa-spinner>
+                    <span>Preparing session selection…</span>
                 </div>
 
                 <div v-if="busy" class="pr-busy" role="status" aria-live="polite">
