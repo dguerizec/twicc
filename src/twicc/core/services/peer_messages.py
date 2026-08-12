@@ -565,6 +565,7 @@ def build_delivery_envelope(peer, message, note: str) -> str:
     body reach the receiving agent.
     """
     from twicc.cli._drop_request.sender_header import inline_md
+    from twicc.core.models import PeerMessageDirection
 
     origin = message.origin or {}
     text = (message.payload or {}).get("text", "")
@@ -573,7 +574,21 @@ def build_delivery_envelope(peer, message, note: str) -> str:
     # is omitted, never rendered as a blank subject.
     if title := inline_md(message.title, max_chars=PEER_MESSAGE_TITLE_MAX_CHARS):
         header += f" **“{title}”**"
+    if PEER_MESSAGE_ID_PATTERN.fullmatch(message.message_id) is not None:
+        header += f" (`{message.message_id}`)"
     header += f" from **{inline_md(peer.name) or 'an unnamed peer'}** (`{inline_md(peer.base_url)}`)"
+    if message.reply_to_message is not None:
+        parent_title = inline_md(
+            message.reply_to_message.title,
+            max_chars=PEER_MESSAGE_TITLE_MAX_CHARS,
+        )
+        if parent_title:
+            relation = (
+                "your"
+                if message.reply_to_message.direction == PeerMessageDirection.OUT
+                else "their"
+            )
+            header += f", in reply to {relation} **“{parent_title}”**"
     if sent_at := _format_sent_at(origin.get("sent_at")):
         header += f", sent {sent_at}"
     header += (
@@ -672,6 +687,12 @@ async def _mark_delivered(message, *, session_id: str, note: str) -> None:
 async def _notify_status(peer, message_id: str, status: str) -> None:
     """Best-effort status callback — failure never blocks local resolution
     (design §4.1)."""
+    if PEER_MESSAGE_ID_PATTERN.fullmatch(message_id) is None:
+        logger.info(
+            "[peer_status_callback] skipped unsafe legacy message id peer=%s",
+            peer.id,
+        )
+        return
     from twicc.peer import outbound
 
     try:

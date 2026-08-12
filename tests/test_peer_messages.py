@@ -796,7 +796,8 @@ def test_deliver_to_existing_envelope_exact(transactional_db, broadcasts, status
     assert success and errors == []
     expected = (
         # The sender-written title leads the header, markdown-escaped.
-        ":: peer message **“The \\*subject\\*”** from **alice** (`https://alice.example.com`)"
+        f":: peer message **“The \\*subject\\*”** (`{message.message_id}`)"
+        " from **alice** (`https://alice.example.com`)"
         # The wire says 12:00 UTC; the reader is in Paris (UTC+2 in July).
         ", sent Fri 24 Jul 2026 at 14:00 CEST; "
         "written by an agent on another TwiCC instance and forwarded by your user,"
@@ -833,9 +834,106 @@ def test_deliver_envelope_without_note(transactional_db, status_callbacks):
     assert 'session "' not in text
     assert "sent " not in text
     assert "“" not in text
-    assert text.startswith(":: peer message from **alice** (`https://alice.example.com`)")
+    assert text.startswith(
+        f":: peer message (`{message.message_id}`) from **alice** (`https://alice.example.com`)"
+    )
     # The `::` line block wraps nothing: the content stays top-level markdown.
     assert text.endswith("\n\nthe message body")
+
+
+@pytest.mark.parametrize(
+    ("parent_direction", "relation_text"),
+    [
+        (PeerMessageDirection.OUT, "in reply to your"),
+        (PeerMessageDirection.IN, "in reply to their"),
+    ],
+)
+def test_delivery_envelope_names_safe_handle_and_parent_direction(
+        transactional_db, status_callbacks, parent_direction, relation_text):
+    peer = _active_peer()
+    parent_factory = _out_message if parent_direction == PeerMessageDirection.OUT else _in_message
+    parent = parent_factory(
+        peer,
+        message_id="parent-safe",
+        thread_id="parent-safe",
+        title="Hostile\n*parent* `title`",
+    )
+    child = _in_message(
+        peer,
+        message_id="A._:-z",
+        reply_to=parent.message_id,
+        reply_to_message=parent,
+        thread_id=parent.thread_id,
+    )
+    _, session = _make_target_session()
+
+    success, envelope, errors = _run(peer_messages.mark_delivered(
+        child, session_id=session.id,
+    ))
+
+    assert success and errors == []
+    header = envelope.split("\n", 1)[0]
+    assert "`A._:-z`" in header
+    assert f"{relation_text} **“Hostile \\*parent\\* \\`title\\`”**" in header
+    assert "\n" not in header
+
+
+def test_delivery_envelope_omits_relation_when_legacy_parent_title_is_empty(
+        transactional_db, status_callbacks):
+    peer = _active_peer()
+    parent = _out_message(peer, message_id="parent", thread_id="parent", title="")
+    child = _in_message(
+        peer,
+        message_id="child",
+        reply_to=parent.message_id,
+        reply_to_message=parent,
+        thread_id=parent.thread_id,
+    )
+    _, session = _make_target_session()
+    success, envelope, errors = _run(peer_messages.mark_delivered(
+        child, session_id=session.id,
+    ))
+    assert success and errors == []
+    assert "in reply to" not in envelope.split("\n", 1)[0]
+
+
+@pytest.mark.parametrize("legacy_id", [".", "..", "A\n"])
+def test_legacy_unsafe_id_is_omitted_but_delivery_still_succeeds(
+        transactional_db, status_callbacks, legacy_id):
+    peer = _active_peer()
+    message = _in_message(
+        peer,
+        message_id=legacy_id,
+        thread_id=legacy_id,
+        payload={"text": "legacy body", "images": [_image_block()], "documents": []},
+    )
+    _, session = _make_target_session()
+
+    success, envelope, errors = _run(peer_messages.mark_delivered(
+        message, session_id=session.id,
+    ))
+
+    assert success and errors == []
+    assert "legacy body" in envelope
+    assert f"`{legacy_id}`" not in envelope.split("\n", 1)[0]
+    message.refresh_from_db()
+    assert message.status == PeerMessageStatus.DELIVERED
+    assert message.payload["images"]
+    assert status_callbacks == []
+
+
+@pytest.mark.parametrize("legacy_id", [".", "..", "A\n"])
+def test_legacy_unsafe_id_refusal_skips_callback_but_resolves_locally(
+        transactional_db, status_callbacks, legacy_id):
+    peer = _active_peer()
+    message = _in_message(peer, message_id=legacy_id, thread_id=legacy_id)
+
+    success, errors = _run(peer_messages.refuse_peer_message(message))
+
+    assert success and errors == []
+    message.refresh_from_db()
+    assert message.status == PeerMessageStatus.REFUSED
+    assert status_callbacks == []
 
 
 def test_envelope_sent_at_formatting(paris_tz):
@@ -879,7 +977,9 @@ def test_mark_delivered_to_draft(transactional_db, broadcasts, status_callbacks)
     message = _in_message(peer)
     success, envelope, errors = _run(peer_messages.mark_delivered(message, note="check this"))
     assert success and errors == []
-    assert envelope.startswith(":: peer message **“The \\*subject\\*”** from **alice**")
+    assert envelope.startswith(
+        f":: peer message **“The \\*subject\\*”** (`{message.message_id}`) from **alice**"
+    )
     assert "the message body" in envelope
     assert "check this" in envelope  # note rides the envelope
     message.refresh_from_db()
@@ -1238,9 +1338,13 @@ def test_purge_expired_attachment_bytes(transactional_db):
     now = djtz.now()
     old = now - timedelta(days=8)
     payload = {"text": "keep me", "images": [_image_block()], "documents": []}
+    parent = _out_message(peer, message_id="pm_parent", thread_id="pm_parent")
     resolved_old = _in_message(
         peer, message_id="pm_old", payload=payload,
         status=PeerMessageStatus.DELIVERED, resolved_at=old,
+        reply_to=parent.message_id,
+        reply_to_message=parent,
+        thread_id=parent.thread_id,
     )
     resolved_old.attachments_meta = [{"kind": "image", "media_type": "image/png", "bytes": 9}]
     resolved_old.save(update_fields=["attachments_meta"])
@@ -1263,6 +1367,9 @@ def test_purge_expired_attachment_bytes(transactional_db):
     assert resolved_old.payload["text"] == "keep me"  # text kept
     assert resolved_old.attachments_meta[0]["media_type"] == "image/png"  # meta kept
     assert resolved_old.purged_at is not None
+    assert resolved_old.reply_to == parent.message_id
+    assert resolved_old.reply_to_message_id == parent.pk
+    assert resolved_old.thread_id == parent.thread_id
 
     for untouched in (resolved_recent, still_pending, text_only_old):
         untouched.refresh_from_db()
