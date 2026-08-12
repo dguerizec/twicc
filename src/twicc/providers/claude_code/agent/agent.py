@@ -1378,6 +1378,28 @@ class ClaudeCodeAgent(BaseAgent):
         """Check if a message is an ack from a settings control request (not real assistant activity)."""
         return ClaudeCodeAgent._is_permission_mode_change_ack(msg) or ClaudeCodeAgent._is_model_change_ack(msg)
 
+    @staticmethod
+    def _is_turn_activity(msg: object) -> bool:
+        """Check if a message means the agent is producing a turn again.
+
+        Only conversation traffic qualifies: the model's own output
+        (``AssistantMessage``, ``StreamEvent``) and what is fed back to it
+        (``UserMessage`` — tool results, injected content). Everything else,
+        ``SystemMessage`` first of all, is a lifecycle marker the CLI may emit
+        at any moment, including seconds *after* the final ``ResultMessage``:
+        ``commands_changed`` (a skill or command file changed on disk, and it
+        reaches every live CLI process, not just the one that edited it),
+        ``mcp_status``, hook events, … Treating one of those as activity pins a
+        finished session in ASSISTANT_TURN forever — no further ``ResultMessage``
+        will ever come to release it. A whitelist keeps future subtypes harmless.
+        The ``set_model`` ack is a ``UserMessage``, so it still needs its own
+        exclusion.
+        """
+        return (
+            isinstance(msg, (AssistantMessage, UserMessage, StreamEvent))
+            and not ClaudeCodeAgent._is_settings_change_ack(msg)
+        )
+
     async def _update_live_background_tasks(self, msg: SystemMessage) -> None:
         """Track live background subagents from the CLI's task lifecycle events.
 
@@ -2056,13 +2078,12 @@ class ClaudeCodeAgent(BaseAgent):
                     # CLI is compacting context — notify frontend to show "compacting" label
                     await self._broadcast_process_label("compacting")
 
-                elif self.state != AgentState.ASSISTANT_TURN:
-                    # Enforce assistant state if another message came after the ResultMessage.
-                    # Skip ack messages from control requests (set_permission_mode, set_model)
-                    # as they don't represent real assistant activity.
-                    if not self._is_settings_change_ack(msg):
-                        self._set_state(AgentState.ASSISTANT_TURN)
-                        await self._notify_state_change()
+                elif self.state != AgentState.ASSISTANT_TURN and self._is_turn_activity(msg):
+                    # Enforce assistant state if real conversation traffic came
+                    # after the ResultMessage (a turn the CLI started on its own:
+                    # a cron firing, a background task notification, …).
+                    self._set_state(AgentState.ASSISTANT_TURN)
+                    await self._notify_state_change()
 
         except asyncio.CancelledError:
             # Normal cancellation during shutdown
