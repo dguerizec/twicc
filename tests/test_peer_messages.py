@@ -812,6 +812,23 @@ def _make_target_session(project_id="-tmp-deliver", directory="/tmp/deliver", ar
     return project, session
 
 
+def _make_internal_target_session():
+    project, parent = _make_target_session()
+    now = djtz.now()
+    internal = Session.objects.create(
+        id="sess-internal-target",
+        project=project,
+        provider="claude_code",
+        file_path="internal-target.jsonl",
+        type=SessionType.SUBAGENT,
+        parent_session=parent,
+        title="Internal target",
+        created_at=now,
+        last_new_content_at=now,
+    )
+    return internal
+
+
 @pytest.fixture
 def status_callbacks(monkeypatch):
     calls = []
@@ -1063,6 +1080,23 @@ def test_mark_delivered_to_draft_guards(transactional_db, status_callbacks):
     resolved = _in_message(peer, status=PeerMessageStatus.DELIVERED, resolved_at=djtz.now())
     success, envelope, errors = _run(peer_messages.mark_delivered(resolved))
     assert not success and envelope is None and errors[0].code == "bad_state"
+    assert status_callbacks == []
+
+
+def test_mark_delivered_rejects_internal_target(transactional_db, status_callbacks):
+    peer = _active_peer()
+    message = _in_message(peer, message_id="pm_internal_target")
+    internal = _make_internal_target_session()
+
+    success, envelope, errors = _run(peer_messages.mark_delivered(
+        message, session_id=internal.id, note="",
+    ))
+
+    assert not success and envelope is None
+    assert errors[0].code == "session_not_found"
+    message.refresh_from_db()
+    assert message.status == PeerMessageStatus.PENDING
+    assert message.delivered_to_session_id is None
     assert status_callbacks == []
 
 
@@ -1359,6 +1393,25 @@ def test_redeliver_never_reopens_a_refused_message(transactional_db, status_call
         message, session_id="s", redeliver=True,
     ))
     assert not success and errors[0].code == "bad_state"
+    assert status_callbacks == []
+
+
+def test_link_delivered_session_rejects_internal_target(transactional_db, status_callbacks):
+    peer = _active_peer()
+    message = _in_message(
+        peer,
+        message_id="pm_internal_link",
+        status=PeerMessageStatus.DELIVERED,
+        resolved_at=djtz.now(),
+    )
+    internal = _make_internal_target_session()
+
+    success, errors = _run(peer_messages.link_delivered_session(message, internal.id))
+
+    assert not success and errors[0].code == "session_not_found"
+    message.refresh_from_db()
+    assert message.status == PeerMessageStatus.DELIVERED
+    assert message.delivered_to_session_id is None
     assert status_callbacks == []
 
 

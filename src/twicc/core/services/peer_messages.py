@@ -735,7 +735,10 @@ async def mark_delivered(
             return False, None, guards
         if session_id:
             exists = await sync_to_async(
-                lambda: Session.objects.filter(id=session_id).exists()
+                lambda: Session.objects.filter(
+                    id=session_id,
+                    parent_session_id__isnull=True,
+                ).exists()
             )()
             if not exists:
                 return False, None, [PeerError("session_id", "session_not_found", "Target session not found.")]
@@ -774,7 +777,12 @@ async def link_delivered_session(message, session_id: str) -> tuple[bool, list[P
             # Already routed somewhere (a redelivery happened first): that
             # target is the current truth, this late link is stale.
             return True, []
-        exists = await sync_to_async(lambda: Session.objects.filter(id=session_id).exists())()
+        exists = await sync_to_async(
+            lambda: Session.objects.filter(
+                id=session_id,
+                parent_session_id__isnull=True,
+            ).exists()
+        )()
         if not exists:
             return False, [PeerError("session_id", "session_not_found", "Target session not found.")]
 

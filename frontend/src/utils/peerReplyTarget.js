@@ -15,6 +15,7 @@ export function chooseReplyTargetSource(sessionId, candidates) {
  */
 export function isReplyTargetPickerEligible(session, archivedProjectIds) {
     return !!session
+        && !session.parent_session_id
         && !session.hidden
         && !session.draft
         && !session.archived

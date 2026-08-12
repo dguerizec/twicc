@@ -13,6 +13,7 @@ function session(id, overrides = {}) {
     return {
         id,
         project_id: 'project-live',
+        parent_session_id: null,
         hidden: false,
         draft: false,
         archived: false,
@@ -49,6 +50,10 @@ test('matches the unpaged picker exclusions without a project-list rule', () => 
     ), true)
 
     assert.equal(isReplyTargetPickerEligible(null, archivedProjectIds), false)
+    assert.equal(isReplyTargetPickerEligible(
+        session('internal', { parent_session_id: 'parent-session' }),
+        archivedProjectIds,
+    ), false)
     assert.equal(isReplyTargetPickerEligible(session('hidden', { hidden: true }), archivedProjectIds), false)
     assert.equal(isReplyTargetPickerEligible(session('draft', { draft: true }), archivedProjectIds), false)
     assert.equal(isReplyTargetPickerEligible(session('archived', { archived: true }), archivedProjectIds), false)
@@ -94,6 +99,15 @@ test('leaves existing and ineligible candidate arrays unchanged', () => {
         recoverReplyTargetPagination(
             candidates,
             session('archived-project-target', { project_id: 'project-archived' }),
+            archivedProjectIds,
+            compareSessions,
+        ),
+        candidates,
+    )
+    assert.strictEqual(
+        recoverReplyTargetPagination(
+            candidates,
+            session('internal-target', { parent_session_id: 'parent-session' }),
             archivedProjectIds,
             compareSessions,
         ),
