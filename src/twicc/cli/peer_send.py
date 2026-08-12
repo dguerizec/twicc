@@ -26,6 +26,14 @@ def peer_send_cmd(
             "message must be fully self-contained."
         ),
     ),
+    reply_to: str | None = typer.Option(
+        None,
+        "--reply-to",
+        help=(
+            "The peer message this one answers (pm_…), taken from the "
+            "header of a delivered peer message."
+        ),
+    ),
     attach: list[str] = typer.Option(
         [],
         "--attach",
@@ -70,8 +78,8 @@ def peer_send_cmd(
     from twicc.cli._drop_request.validation import ValidationError
     from twicc.cli._drop_request.whoami import resolve_current_session
     from twicc.cli._output import emit_error
-    from twicc.core.models import Peer, PeerState
-    from twicc.core.services.peer_messages import validate_title
+    from twicc.core.models import Peer, PeerMessage, PeerState
+    from twicc.core.services.peer_messages import PEER_MESSAGE_ID_PATTERN, validate_title
     from twicc.providers.helpers import get_provider_helpers
 
     try:
@@ -103,6 +111,23 @@ def peer_send_cmd(
     clean_title, title_error = validate_title(title)
     if title_error is not None:
         emit_validation_errors([ValidationError("TITLE", title_error.code, title_error.message)])
+        raise typer.Exit(1)
+
+    clean_reply_to = reply_to or ""
+    if clean_reply_to and PEER_MESSAGE_ID_PATTERN.fullmatch(clean_reply_to) is None:
+        emit_validation_errors([ValidationError(
+            "--reply-to",
+            "invalid_reply_to",
+            "reply_to must be a valid peer message id",
+        )])
+        raise typer.Exit(1)
+    if clean_reply_to and not PeerMessage.objects.filter(
+            peer=peer_row, message_id=clean_reply_to).exists():
+        emit_validation_errors([ValidationError(
+            "--reply-to",
+            "unknown_reply_to",
+            "No message with this id exists for the selected peer.",
+        )])
         raise typer.Exit(1)
 
     try:
@@ -140,6 +165,7 @@ def peer_send_cmd(
     payload = {
         "peer": peer_row.id,
         "title": clean_title,
+        "reply_to": clean_reply_to,
         "text": text,
         "images": attach_result.images,
         "documents": attach_result.documents,
