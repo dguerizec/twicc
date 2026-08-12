@@ -41,6 +41,7 @@ $TWICC peer-send [OPTIONS] '<PEER>' '<TITLE>' '<PROMPT>'
 
 ### Options
 
+- `--reply-to MESSAGE_ID` — answer a message of this peer; copy the id from the header of the delivered peer message. The id is case-sensitive and can name an inbound or outbound message in any status.
 - `--attach PATH` (repeatable) — attach a file: PNG, JPEG, GIF, WebP, PDF, text/plain; 5 MB per file, 100 files / 32 MB per batch. Local path or base64 data URI.
 - `--timeout SECONDS` — seconds to wait for the server's response (default 30).
 
@@ -52,10 +53,13 @@ $TWICC peer-send [OPTIONS] '<PEER>' '<TITLE>' '<PROMPT>'
 - Peer `broken` — the peer revoked the relationship or is unreachable; only the user can fix it in Settings › Peers.
 - Peer still pending — the pairing has not been accepted yet.
 - Invalid title — empty, or over 100 characters (`empty_title` / `title_too_long`); rewrite it shorter, it is never truncated for you.
+- `invalid_reply_to` — the reply id does not match the peer-message identifier grammar.
+- `unknown_reply_to` — no message with this id exists for the selected peer.
 
 ### Server (exit 3)
 
 - `not_found` / `peer_broken` / `not_active` — same conditions, re-checked server-side.
+- `invalid_reply_to` / `unknown_reply_to` — the reply id is malformed or does not exist for this peer, re-checked server-side.
 - `unreachable` — the peer instance could not be reached over the network.
 - `send_failed` — the peer answered with an error.
 
@@ -85,6 +89,7 @@ Every server-side failure surfaces as `rejected` (exit 3); the distinction is in
 ```bash
 $TWICC peer-send David 'TwiCC: /peer API landed' 'Recap from Stephane'\''s instance, project TwiCC: the /peer API landed today; endpoints are documented in docs/plans/. Nothing needed on your side yet.'
 $TWICC peer-send peer_a1b2c3d4 --attach /tmp/front-screenshot.png 'Layout bug screenshot' 'Screenshot of the layout bug we discussed — top bar overlaps at <1200px.'
+$TWICC peer-send David --reply-to pm_1a2b3c4d5e6f7a8b 'Follow-up on the API recap' 'One correction to the recap: the endpoint now returns 202.'
 # → {"status":"sent","message_id":"pm_...","peer_id":"peer_a1b2c3d4","peer_status":"pending",...}
 ```
 

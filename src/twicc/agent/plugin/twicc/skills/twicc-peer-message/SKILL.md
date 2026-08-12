@@ -40,7 +40,10 @@ $TWICC peer-message <MESSAGE_ID>
 
 ```json
 {"id": 12, "message_id": "pm_1a2b3c4d5e6f7a8b", "peer_id": "peer_a1b2c3d4", "direction": "out",
- "title": "API changes recap", "status": "pending", "error": "", "text_preview": "Here is the recap...",
+ "thread_id": "pm_parent000000001", "reply_to": "pm_parent000000001",
+ "reply_to_ref": {"message_id": "pm_parent000000001", "title": "Original API question", "direction": "in", "status": "delivered"},
+ "reply_target": "session-receiver", "title": "API changes recap", "status": "pending", "error": "",
+ "text_preview": "Here is the recap...",
  "attachments_meta": [{"kind": "image", "media_type": "image/png", "bytes": 48211}],
  "origin": {"sent_at": "2026-07-24T12:00:00+00:00"},
  "recipient_note": "", "origin_session_id": "abc123", "delivered_to_session_id": null,
@@ -49,7 +52,11 @@ $TWICC peer-message <MESSAGE_ID>
  "created_at": "...", "resolved_at": null, "purged": false}
 ```
 
-- `status` — `pending` (awaiting the remote user), `delivered`, `refused`, or `failed` (never reached the peer; detail in `error`).
+- `status` — `pending` (awaiting the remote user), `delivered`, `refused`, or `failed`. For `failed`, the sender received no confirmed acceptance; the peer may still have stored the message. See `error` for the local failure detail.
+- `thread_id` — the local thread root id. Its complete local key includes `peer_id`; it never crosses the wire.
+- `reply_to` — the answered message id, or `""` for a root message.
+- `reply_to_ref` — summary of the resolved parent (`message_id`, `title`, `direction`, `status`), or `null`.
+- `reply_target` — id of the parent's local-end session, or `null`; it is not a delivery action or eligibility promise.
 - `title` — the required subject the send carried.
 - `origin_session` / `delivered_to_session` — the local session at each end (`null` when there is none), with its title read live. The peer receives neither: the wire carries the title, `sent_at` and the payload, nothing else.
 
@@ -73,5 +80,5 @@ $TWICC peer-message pm_1a2b3c4d5e6f7a8b
 
 ## How to present results
 
-1. Translate the status for the user: `pending` = "their user hasn't reviewed it yet", `delivered`/`refused` = their decision, `failed` = the send never reached the peer.
+1. Translate the status for the user: `pending` = "their user hasn't reviewed it yet"; `delivered`/`refused` = their decision; `failed` = "this sender received no confirmed acceptance, but the peer may still have stored it".
 2. There is no push on resolution — re-run this command when the user asks again.
