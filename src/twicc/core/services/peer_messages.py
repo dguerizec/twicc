@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import logging
 import re
 from datetime import datetime, timezone
@@ -157,15 +158,14 @@ async def broadcast_peer_message_updated(message) -> None:
 # ── Payload helpers ─────────────────────────────────────────────────────────
 
 def _block_decoded_size(block: dict) -> int:
-    """Byte size of one SDK block's content (decoded for base64 sources)."""
+    """Exact byte size after inbound validation accepted the SDK block."""
     source = block.get("source") or {}
     data = source.get("data") or ""
     if not isinstance(data, str):
         return 0
     if source.get("type") == "base64":
-        # 3/4 of the base64 length approximates the decoded size closely
-        # enough for cap enforcement without decoding megabytes.
-        return (len(data) * 3) // 4
+        padding = len(data) - len(data.rstrip("="))
+        return (len(data) // 4) * 3 - padding
     return len(data.encode("utf-8"))
 
 
@@ -192,23 +192,28 @@ def _attachments_meta(payload: dict) -> list:
     return meta
 
 
-def _valid_block(block) -> bool:
+def _validated_block_size(block) -> int | None:
     if not isinstance(block, dict):
-        return False
+        return None
     source = block.get("source")
     if not isinstance(source, dict):
-        return False
-    if source.get("type") not in ("base64", "text"):
-        return False
+        return None
+    source_type = source.get("type")
+    if source_type not in ("base64", "text"):
+        return None
     data = source.get("data")
     if not isinstance(data, str) or not data:
-        return False
-    if source.get("type") == "base64":
-        try:
-            base64.b64decode(data[:8] + "=" * (-len(data[:8]) % 4), validate=True)
-        except Exception:
-            return False
-    return True
+        return None
+    if source_type == "text":
+        return len(data.encode("utf-8"))
+
+    max_encoded_length = 4 * ((PEER_ATTACHMENT_MAX_BYTES_PER_FILE + 2) // 3)
+    if len(data) > max_encoded_length:
+        return PEER_ATTACHMENT_MAX_BYTES_PER_FILE + 1
+    try:
+        return len(base64.b64decode(data, validate=True))
+    except (binascii.Error, ValueError):
+        return None
 
 
 def _validate_inbound_payload(payload) -> list[PeerError]:
@@ -231,10 +236,10 @@ def _validate_inbound_payload(payload) -> list[PeerError]:
             errors.append(PeerError(key, "invalid", f"{key} must be a list"))
             continue
         for block in blocks:
-            if not _valid_block(block):
+            size = _validated_block_size(block)
+            if size is None:
                 errors.append(PeerError(key, "invalid_block", f"malformed attachment block in {key}"))
                 continue
-            size = _block_decoded_size(block)
             total_files += 1
             total_bytes += size
             if size > PEER_ATTACHMENT_MAX_BYTES_PER_FILE:

@@ -165,6 +165,84 @@ def test_receive_invalid_payloads(client, transactional_db, peer_host):
         assert res.status_code == 400, body
 
 
+def test_receive_rejects_invalid_base64_tail(client, transactional_db, peer_host):
+    peer = _active_peer()
+    block = _image_block()
+    block["source"]["data"] = "QUJDREVG!!!!"
+    body = _wire_body(payload={
+        "text": "x", "images": [block], "documents": [],
+    })
+
+    res = _post(client, "/peer/messages/", body, bearer=peer.token_ours)
+
+    assert res.status_code == 400
+    assert orjson.loads(res.content) == {"error": "invalid_payload"}
+    assert PeerMessage.objects.count() == 0
+
+
+def test_receive_accepts_valid_padded_base64(client, transactional_db, peer_host):
+    peer = _active_peer()
+    block = _image_block(b"a")
+    assert block["source"]["data"] == "YQ=="
+    body = _wire_body(payload={
+        "text": "x", "images": [block], "documents": [],
+    })
+
+    res = _post(client, "/peer/messages/", body, bearer=peer.token_ours)
+
+    assert res.status_code == 202
+    message = PeerMessage.objects.get()
+    assert message.attachments_meta[0]["bytes"] == 1
+
+
+@pytest.mark.parametrize(("size", "expected_status"), [(4, 202), (5, 400)])
+def test_receive_attachment_per_file_boundaries(
+        client, transactional_db, peer_host, monkeypatch, size, expected_status):
+    monkeypatch.setattr(peer_messages, "PEER_ATTACHMENT_MAX_BYTES_PER_FILE", 4)
+    peer = _active_peer()
+    body = _wire_body(payload={
+        "text": "x", "images": [_image_block(b"x" * size)], "documents": [],
+    })
+
+    res = _post(client, "/peer/messages/", body, bearer=peer.token_ours)
+
+    assert res.status_code == expected_status
+    assert PeerMessage.objects.count() == (1 if expected_status == 202 else 0)
+
+
+@pytest.mark.parametrize(("sizes", "expected_status"), [((3, 3), 202), ((3, 4), 400)])
+def test_receive_attachment_total_boundaries(
+        client, transactional_db, peer_host, monkeypatch, sizes, expected_status):
+    monkeypatch.setattr(peer_messages, "PEER_ATTACHMENT_MAX_TOTAL_BYTES", 6)
+    peer = _active_peer()
+    body = _wire_body(payload={
+        "text": "x",
+        "images": [_image_block(b"x" * size) for size in sizes],
+        "documents": [],
+    })
+
+    res = _post(client, "/peer/messages/", body, bearer=peer.token_ours)
+
+    assert res.status_code == expected_status
+    assert PeerMessage.objects.count() == (1 if expected_status == 202 else 0)
+
+
+@pytest.mark.parametrize(("count", "expected_status"), [(100, 202), (101, 400)])
+def test_receive_attachment_count_boundaries(
+        client, transactional_db, peer_host, count, expected_status):
+    peer = _active_peer()
+    body = _wire_body(payload={
+        "text": "x",
+        "images": [_image_block(b"x") for _ in range(count)],
+        "documents": [],
+    })
+
+    res = _post(client, "/peer/messages/", body, bearer=peer.token_ours)
+
+    assert res.status_code == expected_status
+    assert PeerMessage.objects.count() == (1 if expected_status == 202 else 0)
+
+
 def test_receive_oversized_attachment_rejected(client, transactional_db, peer_host, monkeypatch):
     monkeypatch.setattr(peer_messages, "PEER_ATTACHMENT_MAX_BYTES_PER_FILE", 4)
     peer = _active_peer()
