@@ -83,6 +83,16 @@ function shortTitle(title) {
 const routes = computed(() => {
     const message = props.message
     const lines = []
+    const reply = message.reply_to_ref
+    if (reply?.title) {
+        lines.push({
+            key: 'reply',
+            label: reply.direction === 'out' ? 'In reply to your' : 'In reply to their',
+            title: reply.title,
+            display: shortTitle(reply.title),
+            projectId: null,
+        })
+    }
     // The title and project come with the message, read live from the session
     // row server-side: they must not depend on what the front happens to have
     // loaded, and an id is never something a human can place. A row whose

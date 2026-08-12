@@ -1271,7 +1271,7 @@ export function useWebSocket() {
                     const peerName = peersStore.peerLabel(msg.message?.peer_id)
                     toast.custom(PeerToastContent, {
                         type: 'info',
-                        title: `Message from ${peerName}`,
+                        title: `${msg.message?.reply_to_ref ? 'Reply' : 'Message'} from ${peerName}`,
                         duration: Infinity,
                         props: { mode: 'message', message: msg.message },
                     })

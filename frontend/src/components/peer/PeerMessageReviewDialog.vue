@@ -147,6 +147,15 @@ const localRoute = computed(() => {
     }
 })
 
+const replyRoute = computed(() => {
+    const reply = detail.value?.reply_to_ref
+    if (!reply?.title) return null
+    return {
+        label: reply.direction === 'out' ? 'In reply to your' : 'In reply to their',
+        title: reply.title,
+    }
+})
+
 /** Open the session this message belongs to, exactly like clicking it in the
  *  sidebar: `sessionRouteLocation` keeps the current frame — the project
  *  filter and the active workspace — and changes only the session. */
@@ -624,8 +633,12 @@ function onHide(event) {
                 {{ detail.attachments_meta.length }} attachment(s) — bytes purged.
             </p>
 
-            <!-- Where it went / came from. The status tag above already names
-                 the state, so this line states the place, nothing else. -->
+            <!-- Which message this one answers, then where it went / came
+                 from. Both use the inbox row's label-then-value vocabulary. -->
+            <p v-if="replyRoute" class="pr-route">
+                <span class="pr-route__label">{{ replyRoute.label }}</span>
+                <span class="pr-route__title" :title="replyRoute.title">“{{ replyRoute.title }}”</span>
+            </p>
             <p v-if="localRoute" class="pr-route">
                 <span class="pr-route__label">{{ localRoute.label }}</span>
                 <!-- Clickable when the session is known: goes there like a
