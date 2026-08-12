@@ -31,6 +31,8 @@ uv + npm · Django 6 ASGI (Uvicorn, Python ≥ 3.13) · Channels + InMemoryChann
 
 Python: ruff (line-length=120). Tests: pytest + pytest-django. Frontend tests: `cd frontend && npm test` (node:test, auto-discovers `src/**/*.test.js`).
 
+**Python tool not installed in the env:** run it with `uvx <tool> …` (e.g. `uvx ruff check src/`) instead of reporting it as missing. Never install it into the project env (`uv add`) to make a command work.
+
 ## Architecture
 
 Entry: `run.py → cli.main()`.
