@@ -2,7 +2,6 @@
 
 import asyncio
 
-import pytest
 from channels.testing import WebsocketCommunicator
 from django.utils import timezone as djtz
 

@@ -79,7 +79,7 @@ def peer_send_cmd(
     from twicc.cli._drop_request.whoami import resolve_current_session
     from twicc.cli._output import emit_error
     from twicc.core.models import Peer, PeerMessage, PeerState
-    from twicc.core.services.peer_messages import PEER_MESSAGE_ID_PATTERN, validate_title
+    from twicc.core.services.peer_messages import validate_reply_to, validate_title
     from twicc.providers.helpers import get_provider_helpers
 
     try:
@@ -113,13 +113,13 @@ def peer_send_cmd(
         emit_validation_errors([ValidationError("TITLE", title_error.code, title_error.message)])
         raise typer.Exit(1)
 
-    clean_reply_to = reply_to or ""
-    if clean_reply_to and PEER_MESSAGE_ID_PATTERN.fullmatch(clean_reply_to) is None:
-        emit_validation_errors([ValidationError(
-            "--reply-to",
-            "invalid_reply_to",
-            "reply_to must be a valid peer message id",
-        )])
+    # Same grammar check as the watcher-side service (which re-validates),
+    # run BEFORE the lookup below. The lookup itself deliberately ignores
+    # direction and status: a failed or refused parent is still a valid
+    # reply target.
+    clean_reply_to, reply_to_error = validate_reply_to(reply_to)
+    if reply_to_error is not None:
+        emit_validation_errors([ValidationError("--reply-to", reply_to_error.code, reply_to_error.message)])
         raise typer.Exit(1)
     if clean_reply_to and not PeerMessage.objects.filter(
             peer=peer_row, message_id=clean_reply_to).exists():

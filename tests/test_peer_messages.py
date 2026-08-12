@@ -897,6 +897,36 @@ def test_delivery_envelope_omits_relation_when_legacy_parent_title_is_empty(
     assert "in reply to" not in envelope.split("\n", 1)[0]
 
 
+def test_delivery_envelope_renders_a_parent_resolved_by_the_real_receive_path(
+        client, transactional_db, peer_host, status_callbacks):
+    """No hand-built reply_to_message here: the FK is written by _store()
+    inside the real inbound receive path, re-read through _fresh_message's
+    select_related, and rendered by build_delivery_envelope — unlike the
+    neighbouring envelope tests, which construct the parent link by hand."""
+    peer = _active_peer()
+    parent = _out_message(peer, message_id="parent-real", thread_id="parent-real", title="Weekly recap")
+
+    res = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id="child-real", reply_to=parent.message_id),
+        bearer=peer.token_ours,
+    )
+    assert res.status_code == 202
+
+    child = PeerMessage.objects.get(message_id="child-real")
+    assert child.reply_to_message_id == parent.pk
+    assert child.thread_id == parent.thread_id
+
+    _, session = _make_target_session()
+    success, envelope, errors = _run(peer_messages.mark_delivered(
+        child, session_id=session.id,
+    ))
+
+    assert success and errors == []
+    header = envelope.split("\n", 1)[0]
+    assert "in reply to your **“Weekly recap”**" in header
+
+
 @pytest.mark.parametrize("legacy_id", [".", "..", "A\n"])
 def test_legacy_unsafe_id_is_omitted_but_delivery_still_succeeds(
         transactional_db, status_callbacks, legacy_id):
