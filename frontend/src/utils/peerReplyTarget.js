@@ -49,10 +49,11 @@ export function waitForNextPaint(
     })
 }
 
-/** Whether the dialog should explain the brief gap before target selection. */
-export function shouldShowReplyTargetPreparation(detail, settled) {
-    return !settled
-        && detail?.direction === 'in'
-        && detail?.status === 'pending'
-        && detail?.reply_target != null
+/** Toggle a delivery mode and identify the first existing-picker activation. */
+export function deliveryPickerTransition(currentMode, requestedMode, existingPickerMounted) {
+    const mode = currentMode === requestedMode ? null : requestedMode
+    return {
+        mode,
+        prepareExisting: mode === 'existing' && !existingPickerMounted,
+    }
 }

@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 
 import {
     chooseReplyTargetSource,
+    deliveryPickerTransition,
     isReplyTargetPickerEligible,
     recoverReplyTargetPagination,
-    shouldShowReplyTargetPreparation,
     waitForNextPaint,
 } from './peerReplyTarget.js'
 
@@ -138,24 +138,24 @@ test('waits until a browser paint can complete before continuing', async () => {
     assert.equal(settled, true)
 })
 
-test('shows preparation only for an unresolved inbound target', () => {
-    const pendingReply = {
-        direction: 'in',
-        status: 'pending',
-        reply_target: 'target-session',
-    }
-    assert.equal(shouldShowReplyTargetPreparation(pendingReply, false), true)
-    assert.equal(shouldShowReplyTargetPreparation(pendingReply, true), false)
-    assert.equal(shouldShowReplyTargetPreparation(
-        { ...pendingReply, reply_target: null },
-        false,
-    ), false)
-    assert.equal(shouldShowReplyTargetPreparation(
-        { ...pendingReply, direction: 'out' },
-        false,
-    ), false)
-    assert.equal(shouldShowReplyTargetPreparation(
-        { ...pendingReply, status: 'delivered' },
-        false,
-    ), false)
+test('prepares the first existing-session activation without thread state', () => {
+    assert.deepEqual(
+        deliveryPickerTransition(null, 'existing', false),
+        { mode: 'existing', prepareExisting: true },
+    )
+})
+
+test('keeps a mounted existing-session picker warm across mode switches', () => {
+    assert.deepEqual(
+        deliveryPickerTransition('existing', 'new', true),
+        { mode: 'new', prepareExisting: false },
+    )
+    assert.deepEqual(
+        deliveryPickerTransition('new', 'existing', true),
+        { mode: 'existing', prepareExisting: false },
+    )
+    assert.deepEqual(
+        deliveryPickerTransition('existing', 'existing', true),
+        { mode: null, prepareExisting: false },
+    )
 })

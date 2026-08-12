@@ -29,9 +29,9 @@ import { sessionRouteLocation } from '../../utils/sessionRoute'
 import { computeSidebarSessionBlocks } from '../../utils/sidebarSessions'
 import {
     chooseReplyTargetSource,
+    deliveryPickerTransition,
     isReplyTargetPickerEligible,
     recoverReplyTargetPagination,
-    shouldShowReplyTargetPreparation,
     waitForNextPaint,
 } from '../../utils/peerReplyTarget'
 import { dateBucketSeparator } from '../../utils/datePresets'
@@ -84,6 +84,8 @@ const confirmingRefuse = ref(false)
 const mode = ref(null)            // null | 'existing' | 'new'
 const pickedProjectId = ref('')   // 'new' mode: wa-select value
 const sessionFilter = ref('')
+const existingPickerMounted = ref(false)
+const existingPickerPreparing = ref(false)
 // 'existing' mode: the scope the session list is built from — the sidebar
 // frame by default, narrowable to one project (or the frame's workspace).
 const scopeId = ref(ALL_PROJECTS_ID)
@@ -96,6 +98,7 @@ const selectedSessionId = ref(null)
 // dialog before that result can write state.
 const targetHydrationSettled = ref(false)
 let openGeneration = 0
+let existingPickerMountPromise = null
 
 const peerName = computed(() => peersStore.peerLabel(detail.value?.peer_id))
 const origin = computed(() => detail.value?.origin || {})
@@ -309,15 +312,11 @@ const showReplyTargetWarning = computed(() =>
     && detail.value?.reply_to !== ''
     && !replyTargetPickerEligible.value,
 )
-const showReplyTargetPreparation = computed(() =>
-    shouldShowReplyTargetPreparation(detail.value, targetHydrationSettled.value),
-)
-
 // 'Existing session' picker: the sidebar's natural block, with the same
 // ordering, section labels and text matching. A hydrated target is inserted
 // only when the current page bound is the reason the normal rows omitted it.
 const sessionRows = computed(() => {
-    if (mode.value !== 'existing') return []
+    if (!existingPickerMounted.value) return []
     return buildSessionRows(scopeId.value, sessionFilter.value, replyTargetSession.value)
 })
 
@@ -329,6 +328,29 @@ function isCurrentOpen(generation, messageId) {
     return generation === openGeneration
         && props.open
         && props.messageId === messageId
+}
+
+/** Mount the expensive session page once, after the preparation state paints.
+ *  Later mode switches keep the same DOM and scroll position. */
+async function ensureExistingPickerMounted(generation, messageId) {
+    if (existingPickerMounted.value) return true
+    if (existingPickerMountPromise) return existingPickerMountPromise
+
+    existingPickerPreparing.value = true
+    const mountPromise = (async () => {
+        await waitForNextPaint()
+        if (!isCurrentOpen(generation, messageId)) return false
+        existingPickerMounted.value = true
+        await nextTick()
+        return isCurrentOpen(generation, messageId)
+    })()
+    existingPickerMountPromise = mountPromise
+    try {
+        return await mountPromise
+    } finally {
+        if (existingPickerMountPromise === mountPromise) existingPickerMountPromise = null
+        if (isCurrentOpen(generation, messageId)) existingPickerPreparing.value = false
+    }
 }
 
 async function renderDetailText(text, generation, messageId) {
@@ -398,6 +420,7 @@ async function initializeReplyTarget(loadedDetail, generation, messageId) {
     scopeId.value = target.project_id
     selectedSessionId.value = targetId
     mode.value = 'existing'
+    if (!await ensureExistingPickerMounted(generation, messageId)) return
     await scrollSeededTarget(generation, messageId, targetId)
 }
 
@@ -414,6 +437,9 @@ watch(() => [props.open, props.messageId], async ([open, messageId]) => {
     sessionFilter.value = ''
     scopeId.value = defaultScopeId()
     selectedSessionId.value = null
+    existingPickerMounted.value = false
+    existingPickerPreparing.value = false
+    existingPickerMountPromise = null
     targetHydrationSettled.value = false
     confirmingRefuse.value = false
 
@@ -438,31 +464,27 @@ watch(() => [props.open, props.messageId], async ([open, messageId]) => {
         return
     }
 
-    // Markdown and target hydration are independent. Each result carries the
-    // same generation guard, so neither stale branch can overwrite a reused
-    // dialog.
-    const markdownPromise = renderDetailText(
+    // Finish and paint the message before a reply target can mount the full
+    // session page. Manual Existing mode uses the same lazy-mount path later.
+    await renderDetailText(
         loadedDetail.payload?.text || '', generation, messageId,
     )
-    // Target resolution can lead directly to mounting one full session page.
-    // Finish the message, then paint it with the preparation state before any
-    // of that work starts.
-    if (showReplyTargetPreparation.value) {
-        await markdownPromise
-        if (!isCurrentOpen(generation, messageId)) return
-        await waitForNextPaint()
-        if (!isCurrentOpen(generation, messageId)) return
-    }
+    if (!isCurrentOpen(generation, messageId)) return
     await initializeReplyTarget(loadedDetail, generation, messageId)
-    await markdownPromise
 }, { immediate: true, flush: 'sync' })
 
-/** Toggle a delivery mode. Mode-specific controls reset; the ordinary session
- *  scope and selection survive and become actionable only when rendered. */
-function setMode(next) {
-    mode.value = mode.value === next ? null : next
-    pickedProjectId.value = ''
-    sessionFilter.value = ''
+/** Toggle a delivery mode. The existing picker mounts once per dialog and
+ *  keeps its scope, filter, selection, rows, and scroll while hidden. */
+async function setMode(next) {
+    const transition = deliveryPickerTransition(
+        mode.value,
+        next,
+        existingPickerMounted.value,
+    )
+    mode.value = transition.mode
+    if (transition.prepareExisting) {
+        await ensureExistingPickerMounted(openGeneration, props.messageId)
+    }
 }
 
 function errorText(payload) {
@@ -782,7 +804,10 @@ function onHide(event) {
                     >Refuse</wa-button>
                 </div>
 
-                <div v-if="showReplyTargetPreparation" class="pr-preparing" role="status" aria-live="polite">
+                <div
+                    v-if="existingPickerPreparing && mode === 'existing'"
+                    class="pr-preparing" role="status" aria-live="polite"
+                >
                     <wa-spinner></wa-spinner>
                     <span>Preparing session selection…</span>
                 </div>
@@ -836,7 +861,7 @@ function onHide(event) {
                 <!-- 'Existing session' mode: the sidebar's session list (same
                      order and blocks, compact rendering), minus archived and
                      drafts. Click selects; the button delivers. -->
-                <template v-if="mode === 'existing'">
+                <div v-if="existingPickerMounted" v-show="mode === 'existing'" class="pr-existing-session">
                     <!-- Two filters, coarse then fine: the project (the same
                          selector as 'new session', plus the current sidebar
                          frame's scopes) narrows the list, the text input
@@ -905,7 +930,7 @@ function onHide(event) {
                         <wa-icon name="pen-to-square" slot="start"></wa-icon>
                         Prefill session composer
                     </wa-button>
-                </template>
+                </div>
 
                 <wa-callout v-if="actionError" variant="danger" size="small">{{ actionError }}</wa-callout>
             </template>
