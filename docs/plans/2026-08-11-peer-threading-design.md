@@ -1,6 +1,6 @@
 # Peer Message Threading (`reply_to`) — Design
 
-**Status:** designed with the user 2026-08-11; every open question resolved the same day (§3); implementation not started
+**Status:** designed with the user 2026-08-11; Backend lot 1 and the amended production grammar are implemented at HEAD `8a84421f`; lots 1.1, 2, and 3 are not implemented
 **Date:** 2026-08-11
 **Scope:** let one peer message reference the message it answers, so an exchange between two sovereign TwiCC instances holds together — the receiving agent gets a handle it can reply with, the receiving human gets the target session proposed, and both inboxes show what answers what.
 
@@ -27,9 +27,9 @@ In scope:
 
 Out of scope: §13.
 
-## 2. Current behaviour — claims to verify
+## 2. Validated pre-implementation baseline
 
-Every statement in this section describes code as it stands on branch `peer-system`. Sections 3 and after state decisions.
+This section records the `peer-system` code baseline validated before Backend lot 1. It is a historical design input, not a current code inventory. Sections 3 and after state decisions. Section 18 states the current implementation status and lot order.
 
 ### 2.1 Model
 
@@ -55,7 +55,7 @@ The latest migration file is `src/twicc/core/migrations/0133_share_created_by_se
 
 ### 2.4 Receive path
 
-`core.services.peer_messages.receive_peer_message` rejects non-`active` peers with the same `403` as an unknown token, validates `message_id` (string, non-empty, ≤ 40) and `title` (`validate_title`) and `payload` (`_validate_inbound_payload`) with `400 invalid_payload`, accepts an absent or `null` `origin` as `{}`, otherwise requires a dict, and reads `sent_at` from it. It then rebuilds the stored `origin` as `{"sent_at": sent_at}`. Idempotency is re-checked inside the write lock; an existing `(peer, in, message_id)` row short-circuits to `202` with its current status.
+`core.services.peer_messages.receive_peer_message` rejects non-`active` peers with the same `403` as an unknown token. At that baseline, it accepts `message_id` only as a non-empty string of at most 40 characters. It has no `reply_to` handling and no token-pattern validation. It validates `title` through `validate_title` and validates `payload` through `_validate_inbound_payload`, with `400 invalid_payload` on failure. It accepts an absent or `null` `origin` as `{}`, otherwise requires a dict, and reads `sent_at` from it. It then rebuilds the stored `origin` as `{"sent_at": sent_at}`. Idempotency is re-checked inside the write lock; an existing `(peer, in, message_id)` row short-circuits to `202` with its current status.
 
 ### 2.5 Delivery, envelope, and the local end
 
@@ -102,7 +102,7 @@ Skills: `src/twicc/agent/plugin/twicc/skills/twicc-peer-send/SKILL.md`, `twicc-p
 | # | Decision | Defined in | Verified by |
 |---|---|---|---|
 | D1 | The wire carries `reply_to` as a top-level field, never a thread identifier | §4 | §15.1, outbound-wire and inbound resolution cases |
-| D2 | `message_id` and non-empty `reply_to` use the token grammar in §4; an unknown conforming `reply_to` becomes a root and a malformed identifier is a `400` | §4 | §15.1, identifier-validation and unknown-reply cases |
+| D2 | `message_id` and non-empty `reply_to` use the token grammar in §4; an unknown conforming `reply_to` becomes a root and a malformed identifier is a `400` | §4 | §15.1, identifier-validation and unknown-reply cases; §18, lot 1.1 boundary-vector closure |
 | D3 | Resolution is always scoped to the peer, and prefers the direction opposite to the new message when both directions share an id | §6 | §15.1, direction tie-break and cross-peer isolation cases |
 | D4 | `thread_id` is derived locally at row creation and never crosses the wire; the local thread key is `(peer_id, thread_id)` | §5 | §15.1, convergence and cross-peer isolation; §15.2, migration backfill |
 | D5 | `reply_to_message` is resolved once, at row creation; its local-end session id is resolved at each serialization or detail read, then held as the open dialog's snapshot while the hydrated session row stays live | §7 | §15.1, `reply_target` cases; §16.2, M11–M15 |
@@ -112,7 +112,7 @@ Skills: `src/twicc/agent/plugin/twicc/skills/twicc-peer-send/SKILL.md`, `twicc-p
 | D9 | After hydration settles, a pending inbound row with non-empty `reply_to` gets one generic warning when its target is not picker-eligible; the warning gives no reason | §9 | §16.1, M4–M9 |
 | D10 | The inbox keeps one row per message; a labelled line names the message answered | §10 | §16.3, M19 |
 | D11 | The envelope states a conforming message id as a fact, omits a legacy unsafe id, and never invites the agent to reply | §11 | §15.1, envelope and legacy-id cases |
-| D12 | `--reply-to` accepts any matching conforming message id of the target peer, in either direction and any status; §6 resolves a cross-direction id collision deterministically | §11 | §15.1, send-service cases; §15.4, CLI cases |
+| D12 | `--reply-to` accepts any matching conforming message id of the target peer, in either direction and any status; §6 resolves a cross-direction id collision deterministically | §11 | §15.1, send-service cases; §15.4, CLI cases; §18, lot 1.1 boundary-vector closure |
 | D13 | The human approval gate is untouched: no automatic delivery, no shortcut | §12 | §16.3, M20–M21 |
 
 ---
@@ -130,14 +130,16 @@ Skills: `src/twicc/agent/plugin/twicc/skills/twicc-peer-send/SKILL.md`, `twicc-p
 New non-empty wire identifiers use one exact token grammar:
 
 ```
-(?!\.{1,2}\Z)[A-Za-z0-9._:-]{1,40}
+[A-Za-z0-9_][A-Za-z0-9_-]{0,39}
 ```
 
-The grammar applies to `message_id` and non-empty `reply_to`. Every caller uses the compiled pattern's `fullmatch(value)` method. The pattern has no `^` or `$` anchors. This prevents Python's `$` behavior from accepting one final LF.
+The grammar applies identically to `message_id` and non-empty `reply_to`. Every caller uses the compiled pattern's `fullmatch(value)` method. The pattern has no `^` or `$` anchors. This prevents Python's `$` behavior from accepting one final LF.
 
-Values are opaque, case-sensitive and never trimmed. The grammar excludes standalone `.` and `..`. `httpx` normalizes those URL dot-segments in `peer.outbound.post_status`, which would send the status callback to another path. It also excludes whitespace, backticks, backslashes, stars and brackets that cannot round-trip safely through the delivery header. `core.services.peer_messages` owns the compiled pattern used by inbound validation, send-service validation, the CLI pre-check and the legacy-envelope check. `mint_message_id` already produces a conforming `pm_` plus 16 hexadecimal characters.
+The length is 1 through 40 characters. The first character is an ASCII letter, an ASCII digit or underscore. Each later character can also be a hyphen. A hyphen cannot be the first character, while an underscore can. Dot and colon are invalid everywhere. All other characters, including non-ASCII characters and whitespace, are invalid.
 
-Rows accepted before this grammar can contain unsafe ids. Local delivery and refusal remain available for those rows. `_notify_status` skips the outbound status callback when the stored `message_id` does not conform. It must not interpolate a legacy unsafe id into a callback URL.
+Values are opaque, case-sensitive and never trimmed. The restricted alphabet excludes every URL dot-segment and every colon. It also excludes whitespace, backticks, backslashes, stars and brackets that cannot round-trip safely through the delivery header. Rejecting a leading hyphen avoids ambiguity with CLI option syntax. `core.services.peer_messages` owns the compiled pattern used by inbound validation, send-service validation, the CLI pre-check, the legacy-envelope check and the status-callback check. `mint_message_id` stays unchanged and produces a conforming `pm_` plus 16 hexadecimal characters.
+
+Rows accepted before this grammar can contain unsafe ids. Examples include `.`, `..`, `a.b`, `a:b`, `-abc` and values containing a newline. Local delivery and refusal remain available for those rows. Their delivery envelope omits the unsafe handle. `_notify_status` skips the outbound status callback when the stored `message_id` does not conform. It must not interpolate a legacy unsafe id into a callback URL.
 
 **Top-level, not inside `origin` (D1).** `origin` is a blob the receiver stores as provenance; `reply_to` is message metadata that gets its own column, resolved and indexed — the same argument the `PeerMessage.title` comment makes for `title`. `origin` keeps `{sent_at}` as its only key on the wire and on the row.
 
@@ -480,9 +482,9 @@ Its command description changes the meaning of `failed` from "the send never rea
 - **Reply-target access stays on the owner side.** The serializer exposes only the local-end session id. When the fallback calls `dataStore.loadSessionById`, the loader returns a cached Pinia row when present. A cache miss uses the existing authenticated `/api/` route. The id and any fetched session response never cross the peer wire. This feature changes no owner session route.
 - **Thread grouping stays inside one relationship** because its key is `(peer_id, thread_id)` (§5). A sender-controlled root id can equal an id under another peer, but the peer component keeps the keys distinct.
 - **The parent title is escaped** by `inline_md`. A hostile title cannot break out of the header line.
-- **Incoming message ids are peer-controlled.** The accepted token grammar keeps them safe for verbatim code-span display. Locally minted ids encode 8 random bytes and conform to the same grammar.
-- **Standalone URL dot-segments are invalid ids.** `peer.outbound.post_status` inserts `message_id` into a path. Rejecting `.` and `..` prevents `httpx` from normalizing the callback to another route.
-- **Legacy unsafe ids never enter callback paths.** `_notify_status` skips the best-effort callback for a nonconforming stored id. The local human can still deliver or refuse the message.
+- **Incoming message ids are peer-controlled.** The accepted ASCII letter, digit, underscore and non-leading-hyphen grammar keeps them safe for verbatim code-span display. Locally minted ids encode 8 random bytes and conform to the same grammar.
+- **Dots, colons and leading hyphens are invalid.** `peer.outbound.post_status` inserts `message_id` into a path. Rejecting every dot prevents `httpx` from normalizing a dot-segment callback to another route. Rejecting a leading hyphen also avoids CLI option ambiguity.
+- **Legacy unsafe ids never enter envelopes or callback paths.** For `.`, `..`, `a.b`, `a:b`, `-abc`, newline-bearing values and any other nonconforming stored id, the envelope omits the handle and `_notify_status` skips the best-effort callback. The local human can still deliver or refuse the message.
 
 ## 13. Out of scope
 
@@ -523,7 +525,7 @@ Its command description changes the meaning of `failed` from "the send never rea
 | Same `thread_id` under two peers | The local keys remain distinct because `peer_id` is the other key component (§5). |
 | Old sender, new receiver | The absent field creates a root (§4.1). |
 | New sender, old receiver | The old receiver ignores `reply_to`, returns its normal `202`, and stores a root that remains a root after upgrade (§4.1). |
-| Pre-existing inbound row with a nonconforming `message_id`, including `.`, `..` or a final LF | Delivery remains available, but the envelope omits the unsafe reply handle and `--reply-to` rejects it (§4, §11). |
+| Pre-existing inbound row with a nonconforming `message_id`, including `.`, `..`, `a.b`, `a:b`, `-abc` or any newline-bearing value | Delivery remains available, but the envelope omits the unsafe reply handle and `--reply-to` rejects it (§4, §11). |
 | Delivery or refusal of a legacy row with a nonconforming id | The local resolution succeeds. `_notify_status` skips the unsafe callback, so the remote row can remain pending (§4, §12). |
 | Inbound row with status `failed` | Supported services do not create it; the dialog renders it read-only as a defensive case (§9.1). |
 | Two replies to the same parent, concurrently | Each computes its own `thread_id` from the parent; no shared mutable state. |
@@ -536,19 +538,19 @@ Its command description changes the meaning of `failed` from "the send never rea
 Extend `tests/test_peer_messages.py`:
 
 - inbound root and resolved-reply cases: absent, `null` and `""` `reply_to` store a root; a conforming reply resolves our outbound row or their inbound follow-up and inherits its `thread_id`;
-- identifier validation: accepted tokens, including the one-character `A` and `A._:-z`, round-trip byte-for-byte as `message_id` and non-empty `reply_to`; `.`, `..`, `"A\n"`, an internal newline, leading or trailing whitespace, backslash, backtick, `*`, `[` or `]`, over 40 characters and non-string values return `400` without a row;
+- identifier validation: run the accepted tokens `A`, `1abc`, `_abc`, `a-b`, `abc-` and `"x" * 40` independently through inbound `message_id` and non-empty inbound `reply_to`; every value round-trips byte-for-byte through both fields. The rejected strings leading hyphen `-abc`, dot `.`, standalone colon `:`, `..`, internal dot `a.b`, internal colon `a:b`, `"A\n"`, an internal newline, leading or trailing whitespace, backslash, backtick, `*`, `[` or `]` and `"x" * 41` return `400` without a row for both fields. Non-string `message_id` values and non-null non-string `reply_to` values also return `400` without a row;
 - unknown reply: a conforming unknown inbound `reply_to` stores a root, while the send service returns `unknown_reply_to`;
 - outbound wire: root and reply sends include the normalized `reply_to` value in `peer.outbound.post_message` and never send `thread_id`;
 - direction tie-break: an inbound and outbound row sharing a `message_id` selects the opposite direction; the same-direction row cannot be selected by id; two roots with that id share a local thread key;
 - cross-peer isolation: the same `message_id` and `thread_id` under two peers resolves within the peer, and the `(peer_id, thread_id)` keys differ;
 - convergence: a three-message exchange leaves one `thread_id` on its rows when both receivers support `reply_to` and agree on the parent's thread identity;
-- send-service validation: absent, `null` and `""` mean root; conforming 1- and 40-character ids resolve or return `unknown_reply_to`; `.`, `..`, `"A\n"`, other nonconforming strings and non-strings return `invalid_reply_to`; no value is trimmed;
+- send-service validation: absent, `null` and `""` mean root; conforming `A`, `1abc`, `_abc`, `a-b`, `abc-` and `"x" * 40` resolve or return `unknown_reply_to`; `-abc`, `.`, standalone colon `:`, `..`, `a.b`, `a:b`, whitespace or newline-bearing values, backslash, backtick, `*`, `[` or `]`, `"x" * 41` and non-string values return `invalid_reply_to`; no value is trimmed;
 - send-service scope and status: an id under another peer returns `unknown_reply_to`; a conforming `failed` outbound row remains an accepted target;
 - serializer contract: summary and detail output include `thread_id`, `reply_to`, `reply_to_ref` and `reply_target`; existing session-reference shapes stay unchanged;
 - `reply_target`: parent direction selects the id of `origin_session` or `delivered_to_session`; a parent without a local end yields null;
 - envelope: every conforming accepted id appears byte-for-byte in its code span; `in reply to your` / `in reply to their` follows parent direction; arbitrary parent-title Markdown and newlines stay inside the header line;
-- legacy envelope: pre-existing nonconforming message ids, including `.`, `..` and `"A\n"`, are omitted from the header while delivery text and attachments remain available;
-- legacy status callback: delivery and refusal succeed for legacy `.`, `..` and `"A\n"` ids, but `_notify_status` does not call `peer.outbound.post_status`;
+- legacy envelope: pre-existing nonconforming message ids, including `.`, `..`, `a.b`, `a:b`, `-abc` and newline-bearing values, are omitted from the header while delivery text and attachments remain available;
+- legacy status callback: delivery and refusal succeed for legacy `.`, `..`, `a.b`, `a:b`, `-abc` and newline-bearing ids, but `_notify_status` does not call `peer.outbound.post_status`;
 - purge leaves `reply_to`, `reply_to_message` and `thread_id` untouched;
 - version compatibility: a request without `reply_to` creates a root; an unknown top-level key is ignored; replaying an existing inbound root with the same `message_id` plus `reply_to` leaves the original row unchanged;
 - descendant divergence: A stores M2 under thread M1 while old B stores M2 as root M2; after both upgrade, B sends M3 with `reply_to=M2`; A derives M1 and B derives M2.
@@ -573,8 +575,8 @@ Extend `tests/test_peer_cli.py` for `peer-send`:
 
 - unknown id for this peer and an id under another peer: exit 1, `unknown_reply_to`;
 - omitted and empty `--reply-to`: root message;
-- conforming 1- and 40-character values: payload reaches the transport unchanged;
-- `.`, `..`, `"A\n"`, other whitespace or newline cases, backslash, backtick, `*`, `[` or `]`, and over 40 characters: exit 1, `invalid_reply_to`;
+- conforming `A`, `1abc`, `_abc`, `a-b`, `abc-` and `"x" * 40`: payload reaches the transport unchanged;
+- leading hyphen `-abc`, dot `.`, standalone colon `:`, `..`, internal dot `a.b`, internal colon `a:b`, whitespace or newline-bearing values, backslash, backtick, `*`, `[` or `]`, and `"x" * 41`: exit 1, `invalid_reply_to`;
 - a nonconforming legacy id: exit 1, `invalid_reply_to` before lookup.
 
 ### 15.5 Create the frontend helper tests
@@ -639,8 +641,13 @@ The delayed hydration check observes a late scroll after a delayed response. The
 
 ## 18. Lots
 
-Three lots, sequential: each depends on the previous one's contract, and each is coherent on its own.
+Four lots run sequentially as 1 → 1.1 → 2 → 3. Each depends on the previous one's contract, and each is coherent on its own.
 
-1. **Backend** — columns, migration, wire field and token grammar, resolution, `thread_id`, serializer, envelope, `--reply-to`, existing backend/CLI tests, and creation of `tests/test_peer_threading_migration.py` and `tests/test_peer_updates_consumer.py`. The agent surface works end to end; the UI shows nothing new.
-2. **Front** — create `peerReplyTarget.js` and `peerReplyTarget.test.js`; use its candidate-or-load decision; share its picker-eligibility predicate with `sessionRows`; factor the dialog's explicit-scope candidate builder; then wire generation guards, by-id fallback, pagination recovery, one generic callout, pre-selection, inbox and dialog lines, and toast wording.
-3. **Documentation and skills** — §17.
+The grammar amendment uses this gate: fix the spec → scoped spec amendment review → complete normal lot 1.1 plan-with-multi-review loop → complete normal lot 1.1 implementation loop → resume lot 2. The committed Backend plan remains a historical execution artifact. Lot 1.1 gets a separate plan and a separate review workspace.
+
+| Lot | Identity and scope |
+|---|---|
+| 1 | **Backend** — columns, migration, wire field and token grammar, resolution, `thread_id`, serializer, envelope, `--reply-to`, existing backend/CLI tests, and creation of `tests/test_peer_threading_migration.py` and `tests/test_peer_updates_consumer.py`. The agent surface works end to end; the UI shows nothing new. |
+| 1.1 | **Backend grammar verification** — add only the missing grammar-verification test vectors from §15.1 and §15.4. Add standalone `:` rejection to the four parametrizations for inbound `message_id`, non-empty inbound `reply_to`, send-service `reply_to` and CLI `--reply-to`. Add accepted `1abc` and `abc-` to the four corresponding acceptance parametrizations. This lot changes no production behavior. The UI still shows nothing new. |
+| 2 | **Front** — create `peerReplyTarget.js` and `peerReplyTarget.test.js`; use its candidate-or-load decision; share its picker-eligibility predicate with `sessionRows`; factor the dialog's explicit-scope candidate builder; then wire generation guards, by-id fallback, pagination recovery, one generic callout, pre-selection, inbox and dialog lines, and toast wording. |
+| 3 | **Documentation and skills** — §17. |
