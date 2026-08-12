@@ -14,10 +14,10 @@
  * The full payload (base64 blobs) is fetched from REST on open; the store
  * only ever holds summaries.
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { usePeersStore } from '../../stores/peers'
-import { useDataStore, ALL_PROJECTS_ID } from '../../stores/data'
+import { useDataStore, ALL_PROJECTS_ID, sessionSortComparator } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { SESSION_TIME_FORMAT } from '../../constants'
@@ -27,6 +27,11 @@ import { renderMarkdown } from '../../utils/markdown'
 import { sdkBlockToMediaItem } from '../../utils/fileUtils'
 import { sessionRouteLocation } from '../../utils/sessionRoute'
 import { computeSidebarSessionBlocks } from '../../utils/sidebarSessions'
+import {
+    chooseReplyTargetSource,
+    isReplyTargetPickerEligible,
+    recoverReplyTargetPagination,
+} from '../../utils/peerReplyTarget'
 import { dateBucketSeparator } from '../../utils/datePresets'
 import { matchQuery } from '../../utils/textFilter'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../../utils/workspaceIds'
@@ -83,6 +88,12 @@ const scopeId = ref(ALL_PROJECTS_ID)
 // 'existing' mode: a click only SELECTS (highlight); the explicit Deliver
 // button sends — no accidental one-click delivery.
 const selectedSessionId = ref(null)
+
+// Ordinary request-lifetime state. The boolean carries no target identity or
+// reason. The generation invalidates every result from a closed or reused
+// dialog before that result can write state.
+const targetHydrationSettled = ref(false)
+let openGeneration = 0
 
 const peerName = computed(() => peersStore.peerLabel(detail.value?.peer_id))
 const origin = computed(() => detail.value?.origin || {})
@@ -200,20 +211,33 @@ function defaultScopeId() {
 // shows the option's label as plain text, never its rendered content).
 const { iconUrl: scopeIconUrl, dotColor: scopeDotColor } = useProjectMark(scopeId)
 
-// 'Existing session' picker: the sidebar's session list — same order and
-// blocks (pinned/active/natural + date buckets) — minus archived (never a
-// delivery target here) and drafts (no real session to inject into).
-//
-// The sidebar's cross-filter blocks ("Pinned elsewhere", "Active elsewhere")
-// are deliberately dropped: they exist to keep out-of-scope sessions reachable
-// while browsing, which is exactly what a scope select must not do. Sessions
-// of another project are reached by picking that project.
-const sessionRows = computed(() => {
-    if (mode.value !== 'existing') return []
+// `computeSidebarSessionBlocks` already applies these project exclusions to
+// normal rows. The same set lets a hydrated page-omitted row use the exact
+// non-pagination rule instead of an eligibility override.
+const archivedProjectIds = computed(() => new Set(
+    dataStore.getProjects.filter(project => project.archived).map(project => project.id),
+))
+
+/** Whether a hydrated row belongs to the supplied picker scope before any
+ *  pagination bound. This checks scope only; eligibility stays in the shared
+ *  pure predicate. */
+function sessionBelongsToScope(session, projectScopeId) {
+    if (!session) return false
+    if (projectScopeId === ALL_PROJECTS_ID) return true
+    if (isWorkspaceProjectId(projectScopeId)) {
+        const workspaceId = extractWorkspaceId(projectScopeId)
+        return workspacesStore.getVisibleProjectIds(workspaceId).includes(session.project_id)
+    }
+    return dataStore.getProjectScopeIds(projectScopeId).includes(session.project_id)
+}
+
+/** Build the existing-session rows from explicit inputs. Initialization uses
+ *  the target's project and an empty filter without mutating live picker state. */
+function buildSessionRows(projectScopeId, textFilter, paginationTarget = null) {
     const blocks = computeSidebarSessionBlocks({
         data: dataStore,
         workspaces: workspacesStore,
-        effectiveProjectId: scopeId.value,
+        effectiveProjectId: projectScopeId,
         activeWorkspaceId: activeWorkspaceId.value,
         sessionId: null,
         showArchived: false,
@@ -221,23 +245,35 @@ const sessionRows = computed(() => {
         showActiveAcrossFilters: false,
     })
     const processStates = dataStore.processStates
+    const compareSessions = sessionSortComparator(processStates)
+    const normalCandidates = blocks.natural.filter(session =>
+        isReplyTargetPickerEligible(session, archivedProjectIds.value),
+    )
+    const recoveryTarget = sessionBelongsToScope(paginationTarget, projectScopeId)
+        ? paginationTarget
+        : null
+    const candidates = recoveryTarget
+        ? recoverReplyTargetPagination(
+            normalCandidates,
+            recoveryTarget,
+            archivedProjectIds.value,
+            compareSessions,
+        )
+        : normalCandidates
     const nowMs = Date.now()
-    const entries = []
-    const push = (session, sectionKey, separator) => {
-        if (session.draft || session.archived) return
-        entries.push({ session, sectionKey, separator })
-    }
-    for (const s of blocks.natural) {
-        if (s.pinned) push(s, 'n-pinned', { label: 'Pinned' })
-        else if (processStates[s.id] != null) push(s, 'n-active', { label: 'Active' })
-        else {
-            const bucket = dateBucketSeparator(s.mtime, nowMs)
-            push(s, `n-${bucket.key}`, bucket.entry)
+    const entries = candidates.map((session) => {
+        if (session.pinned) {
+            return { session, sectionKey: 'n-pinned', separator: { label: 'Pinned' } }
         }
-    }
+        if (processStates[session.id] != null) {
+            return { session, sectionKey: 'n-active', separator: { label: 'Active' } }
+        }
+        const bucket = dateBucketSeparator(session.mtime, nowMs)
+        return { session, sectionKey: `n-${bucket.key}`, separator: bucket.entry }
+    })
     // Same matching as the sidebar's filter: fuzzy by default, exact
     // substring when the query is wrapped/prefixed with a quote.
-    const query = sessionFilter.value.trim()
+    const query = textFilter.trim()
     const visible = query
         ? entries.filter(e => matchQuery(query, e.session.title || e.session.id))
         : entries
@@ -248,14 +284,109 @@ const sessionRows = computed(() => {
         prevSection = entry.sectionKey
         return { ...entry, separator: withSeparator ? entry.separator : null }
     })
+}
+
+const replyTargetSession = computed(() =>
+    dataStore.getSession(detail.value?.reply_target) || null,
+)
+const replyTargetPickerEligible = computed(() =>
+    isReplyTargetPickerEligible(replyTargetSession.value, archivedProjectIds.value),
+)
+const showReplyTargetWarning = computed(() =>
+    isPending.value
+    && targetHydrationSettled.value
+    && detail.value?.reply_to !== ''
+    && !replyTargetPickerEligible.value,
+)
+
+// 'Existing session' picker: the sidebar's natural block, with the same
+// ordering, section labels and text matching. A hydrated target is inserted
+// only when the current page bound is the reason the normal rows omitted it.
+const sessionRows = computed(() => {
+    if (mode.value !== 'existing') return []
+    return buildSessionRows(scopeId.value, sessionFilter.value, replyTargetSession.value)
 })
 
 const selectedSession = computed(() =>
     sessionRows.value.find(r => r.session.id === selectedSessionId.value)?.session || null
 )
 
-watch(() => [props.open, props.messageId], async ([open]) => {
-    if (!open || props.messageId == null) return
+function isCurrentOpen(generation, messageId) {
+    return generation === openGeneration
+        && props.open
+        && props.messageId === messageId
+}
+
+async function renderDetailText(text, generation, messageId) {
+    const rendered = await renderMarkdown(text)
+    if (!isCurrentOpen(generation, messageId)) return
+    renderedText.value = rendered
+}
+
+async function scrollSeededTarget(generation, messageId, targetId) {
+    await nextTick()
+    if (!isCurrentOpen(generation, messageId)) return
+    if (mode.value !== 'existing' || selectedSessionId.value !== targetId) return
+    const picker = dialogRef.value?.querySelector('.pr-picker')
+    if (!picker) return
+    const expectedId = `session-button-${targetId}`
+    const row = [...picker.querySelectorAll('.session-item')]
+        .find(candidate => candidate.id === expectedId)
+    row?.scrollIntoView({ block: 'nearest' })
+}
+
+async function initializeReplyTarget(loadedDetail, generation, messageId) {
+    if (!(loadedDetail.direction === 'in' && loadedDetail.status === 'pending')) {
+        if (isCurrentOpen(generation, messageId)) targetHydrationSettled.value = true
+        return
+    }
+    const targetId = loadedDetail.reply_target
+    if (targetId == null) {
+        if (isCurrentOpen(generation, messageId)) targetHydrationSettled.value = true
+        return
+    }
+
+    const current = dataStore.getSession(targetId)
+    const normalRows = current
+        ? buildSessionRows(current.project_id, '')
+        : []
+    const source = chooseReplyTargetSource(
+        targetId,
+        normalRows.map(row => row.session),
+    )
+    let target = null
+    let candidateRows = normalRows
+    if (source.kind === 'candidate') {
+        target = source.session
+    } else {
+        try {
+            target = await dataStore.loadSessionById(source.sessionId)
+        } catch {
+            target = null
+        }
+        if (!isCurrentOpen(generation, messageId)) return
+        if (isReplyTargetPickerEligible(target, archivedProjectIds.value)) {
+            candidateRows = buildSessionRows(target.project_id, '', target)
+        } else {
+            candidateRows = []
+        }
+    }
+
+    if (!isCurrentOpen(generation, messageId)) return
+    targetHydrationSettled.value = true
+    const targetIsCandidate = target
+        && candidateRows.some(row => row.session.id === targetId)
+    if (!targetIsCandidate) return
+
+    scopeId.value = target.project_id
+    selectedSessionId.value = targetId
+    mode.value = 'existing'
+    await scrollSeededTarget(generation, messageId, targetId)
+}
+
+watch(() => [props.open, props.messageId], async ([open, messageId]) => {
+    const generation = ++openGeneration
+    if (!open || messageId == null) return
     detail.value = null
     loadError.value = ''
     renderedText.value = ''
@@ -266,32 +397,46 @@ watch(() => [props.open, props.messageId], async ([open]) => {
     sessionFilter.value = ''
     scopeId.value = defaultScopeId()
     selectedSessionId.value = null
+    targetHydrationSettled.value = false
     confirmingRefuse.value = false
+
+    let loadedDetail
     try {
-        const response = await apiFetch(`/api/peer-messages/${props.messageId}/`)
+        const response = await apiFetch(`/api/peer-messages/${messageId}/`)
+        if (!isCurrentOpen(generation, messageId)) return
         if (!response.ok) {
             loadError.value = 'Could not load the message.'
             return
         }
-        detail.value = await response.json()
+        loadedDetail = await response.json()
+        if (!isCurrentOpen(generation, messageId)) return
+        detail.value = loadedDetail
         // Redelivery: bring back the note typed the first time (empty on a
         // never-delivered message).
-        note.value = detail.value?.recipient_note || ''
+        note.value = loadedDetail.recipient_note || ''
     } catch {
+        if (!isCurrentOpen(generation, messageId)) return
         // fetch rejects on network failure — never leave the dialog blank.
         loadError.value = 'Could not load the message — is the server reachable?'
         return
     }
-    renderedText.value = await renderMarkdown(detail.value?.payload?.text || '')
-}, { immediate: true })
 
-/** Toggle a delivery mode; every picker starts fresh on each switch. */
+    // Markdown and target hydration are independent. Each result carries the
+    // same generation guard, so neither stale branch can overwrite a reused
+    // dialog.
+    const markdownPromise = renderDetailText(
+        loadedDetail.payload?.text || '', generation, messageId,
+    )
+    await initializeReplyTarget(loadedDetail, generation, messageId)
+    await markdownPromise
+}, { immediate: true, flush: 'sync' })
+
+/** Toggle a delivery mode. Mode-specific controls reset; the ordinary session
+ *  scope and selection survive and become actionable only when rendered. */
 function setMode(next) {
     mode.value = mode.value === next ? null : next
     pickedProjectId.value = ''
     sessionFilter.value = ''
-    scopeId.value = defaultScopeId()
-    selectedSessionId.value = null
 }
 
 function errorText(payload) {
@@ -504,6 +649,10 @@ function onHide(event) {
 
             <!-- Actions -->
             <template v-if="canDeliver">
+                <wa-callout v-if="showReplyTargetWarning" variant="warning" size="small">
+                    This message is part of a thread, but its session is not available for selection.
+                    Choose another session, or deliver to a new one.
+                </wa-callout>
                 <div class="pr-note">
                     <label class="pr-note__label" for="pr-note-input">Add a message for your agent (optional)</label>
                     <wa-textarea
