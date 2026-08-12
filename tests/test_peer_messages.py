@@ -199,11 +199,185 @@ def test_receive_idempotent_replay(client, transactional_db, peer_host):
     assert PeerMessage.objects.count() == 1
 
 
+@pytest.mark.parametrize("wire_value", [None, ""])
+def test_receive_null_or_empty_reply_to_stores_root(
+        client, transactional_db, peer_host, wire_value):
+    peer = _active_peer()
+    res = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id=f"root-{wire_value is None}", reply_to=wire_value),
+        bearer=peer.token_ours,
+    )
+    assert res.status_code == 202
+    message = PeerMessage.objects.get()
+    assert message.reply_to == ""
+    assert message.reply_to_message_id is None
+    assert message.thread_id == message.message_id
+
+
+def test_receive_absent_reply_to_stores_root(client, transactional_db, peer_host):
+    peer = _active_peer()
+    body = _wire_body(message_id="root-absent")
+    body.pop("reply_to", None)
+    res = _post(client, "/peer/messages/", body, bearer=peer.token_ours)
+    assert res.status_code == 202
+    message = PeerMessage.objects.get()
+    assert (message.reply_to, message.reply_to_message_id, message.thread_id) == (
+        "", None, "root-absent",
+    )
+
+
+@pytest.mark.parametrize("token", ["A", "A._:-z", "x" * 40])
+def test_receive_message_id_tokens_round_trip_byte_for_byte(
+        client, transactional_db, peer_host, token):
+    peer = _active_peer()
+    res = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id=token),
+        bearer=peer.token_ours,
+    )
+    assert res.status_code == 202
+    message = PeerMessage.objects.get()
+    assert message.message_id == token
+
+
+@pytest.mark.parametrize("token", ["A", "A._:-z", "x" * 40])
+def test_receive_identifier_tokens_round_trip_byte_for_byte(
+        client, transactional_db, peer_host, token):
+    peer = _active_peer()
+    parent = _out_message(peer, message_id=token, thread_id=token)
+    child_id = "child-" + str(parent.pk)
+    res = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id=child_id, reply_to=token),
+        bearer=peer.token_ours,
+    )
+    assert res.status_code == 202
+    child = PeerMessage.objects.get(message_id=child_id)
+    assert child.reply_to == token
+    assert child.reply_to_message_id == parent.pk
+    assert child.thread_id == token
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [None, 7, "", ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]", "x" * 41],
+)
+def test_receive_rejects_nonconforming_message_id_without_row(
+        client, transactional_db, peer_host, bad_id):
+    peer = _active_peer()
+    res = _post(
+        client, "/peer/messages/", _wire_body(message_id=bad_id),
+        bearer=peer.token_ours,
+    )
+    assert res.status_code == 400
+    assert PeerMessage.objects.count() == 0
+
+
+@pytest.mark.parametrize(
+    "bad_reply",
+    [7, ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]", "x" * 41],
+)
+def test_receive_rejects_nonconforming_reply_to_without_child(
+        client, transactional_db, peer_host, bad_reply):
+    peer = _active_peer()
+    _out_message(peer, message_id="parent", thread_id="parent")
+    res = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id="child", reply_to=bad_reply),
+        bearer=peer.token_ours,
+    )
+    assert res.status_code == 400
+    assert list(PeerMessage.objects.values_list("message_id", flat=True)) == ["parent"]
+
+
+def test_receive_unknown_conforming_reply_becomes_root(client, transactional_db, peer_host):
+    peer = _active_peer()
+    res = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id="child", reply_to="unknown"),
+        bearer=peer.token_ours,
+    )
+    assert res.status_code == 202
+    child = PeerMessage.objects.get()
+    assert child.reply_to == "unknown"
+    assert child.reply_to_message_id is None
+    assert child.thread_id == "child"
+
+
+def test_receive_reply_prefers_opposite_direction_and_stays_peer_scoped(
+        client, transactional_db, peer_host):
+    peer = _active_peer()
+    other = _active_peer(
+        name="bob", base_url="https://bob.example.com", token_ours=mint_token(),
+    )
+    same_direction = _in_message(
+        peer, message_id="collision", thread_id="collision",
+    )
+    opposite_direction = _out_message(
+        peer, message_id="collision", thread_id="collision",
+    )
+    other_root = _out_message(other, message_id="collision", thread_id="collision")
+
+    res = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id="reply", reply_to="collision"),
+        bearer=peer.token_ours,
+    )
+    assert res.status_code == 202
+    reply = PeerMessage.objects.get(peer=peer, message_id="reply")
+    assert reply.reply_to_message_id == opposite_direction.pk
+    assert reply.reply_to_message_id != same_direction.pk
+    assert reply.thread_id == "collision"
+    assert (same_direction.peer_id, same_direction.thread_id) == (
+        opposite_direction.peer_id, opposite_direction.thread_id,
+    )
+    assert (reply.peer_id, reply.thread_id) != (other_root.peer_id, other_root.thread_id)
+
+
+def test_receive_reply_falls_back_to_same_direction_parent(
+        client, transactional_db, peer_host):
+    peer = _active_peer()
+    parent = _in_message(
+        peer, message_id="parent-in", thread_id="thread-root",
+    )
+
+    res = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id="child-in", reply_to=parent.message_id),
+        bearer=peer.token_ours,
+    )
+
+    assert res.status_code == 202
+    child = PeerMessage.objects.get(message_id="child-in")
+    assert child.reply_to_message_id == parent.pk
+    assert child.thread_id == parent.thread_id
+
+
+def test_replay_does_not_reconstruct_reply_from_new_wire_data(
+        client, transactional_db, peer_host):
+    peer = _active_peer()
+    _post(client, "/peer/messages/", _wire_body(message_id="legacy-root"), bearer=peer.token_ours)
+    parent = _out_message(peer, message_id="later-parent", thread_id="later-parent")
+    replay = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id="legacy-root", reply_to=parent.message_id, unknown_key=True),
+        bearer=peer.token_ours,
+    )
+    assert replay.status_code == 202
+    stored = PeerMessage.objects.get(direction=PeerMessageDirection.IN, message_id="legacy-root")
+    assert stored.reply_to == ""
+    assert stored.reply_to_message_id is None
+    assert stored.thread_id == "legacy-root"
+
+
 # ── Status callback ─────────────────────────────────────────────────────────
 
 def _out_message(peer, **kw):
+    message_id = kw.get("message_id", "pm_" + "b" * 16)
     defaults = dict(
-        peer=peer, direction=PeerMessageDirection.OUT, message_id="pm_" + "b" * 16,
+        peer=peer, direction=PeerMessageDirection.OUT, message_id=message_id,
+        thread_id=message_id,
         payload={"text": "hi", "images": [], "documents": []},
         origin={"sent_at": "2026-07-24T12:00:00+00:00"},
         status=PeerMessageStatus.PENDING,
@@ -243,10 +417,17 @@ def test_status_callback_idempotent_and_errors(client, transactional_db, peer_ho
 # ── send_peer_message_from_payload ──────────────────────────────────────────
 
 def _patch_post_message(monkeypatch, status=202, *, network_error=False, calls=None):
-    async def _fake(base_url, *, bearer, message_id, title, payload, origin):
+    async def _fake(base_url, *, bearer, message_id, title, reply_to, payload, origin):
         if calls is not None:
-            calls.append({"base_url": base_url, "bearer": bearer, "message_id": message_id,
-                          "title": title, "payload": payload, "origin": origin})
+            calls.append({
+                "base_url": base_url,
+                "bearer": bearer,
+                "message_id": message_id,
+                "title": title,
+                "reply_to": reply_to,
+                "payload": payload,
+                "origin": origin,
+            })
         if network_error:
             raise outbound.PeerOutboundError("ConnectError")
         return status, {}
@@ -373,11 +554,206 @@ def test_send_network_error(transactional_db, peer_host, monkeypatch):
     assert peer.state == PeerState.ACTIVE  # network errors do NOT break the peer
 
 
+def test_outbound_post_message_builds_exact_threading_wire(monkeypatch):
+    calls = []
+
+    async def _fake_post(base_url, path, json_body, *, bearer):
+        calls.append({
+            "base_url": base_url,
+            "path": path,
+            "json_body": json_body,
+            "bearer": bearer,
+        })
+        return 202, {}
+
+    monkeypatch.setattr("twicc.peer.outbound._post", _fake_post)
+    origin = {"sent_at": "2026-07-24T12:00:00+00:00"}
+    payload = {"text": "body", "images": [], "documents": []}
+
+    for reply_to in ("", "A._:-z"):
+        status, response = _run(outbound.post_message(
+            "https://alice.example.com",
+            bearer="their-token",
+            message_id="message-id",
+            title="Subject",
+            reply_to=reply_to,
+            payload=payload,
+            origin=origin,
+        ))
+        assert (status, response) == (202, {})
+
+    assert [call["path"] for call in calls] == ["/peer/messages/", "/peer/messages/"]
+    assert [call["json_body"]["reply_to"] for call in calls] == ["", "A._:-z"]
+    for call in calls:
+        assert call["base_url"] == "https://alice.example.com"
+        assert call["bearer"] == "their-token"
+        assert "thread_id" not in call["json_body"]
+        assert call["json_body"]["origin"] == {"sent_at": "2026-07-24T12:00:00+00:00"}
+
+
+@pytest.mark.parametrize(
+    ("include_reply_to", "reply_input"),
+    [(False, None), (True, None), (True, "")],
+)
+def test_send_root_normalizes_reply_to_and_never_sends_thread_id(
+        transactional_db, peer_host, monkeypatch, include_reply_to, reply_input):
+    _active_peer()
+    calls = []
+    _patch_post_message(monkeypatch, calls=calls)
+    payload = {"peer": "alice", "title": "Root", "text": "body"}
+    if include_reply_to:
+        payload["reply_to"] = reply_input
+    result = _run(peer_messages.send_peer_message_from_payload(payload))
+    assert result.success
+    message = PeerMessage.objects.get()
+    assert (message.reply_to, message.reply_to_message_id, message.thread_id) == (
+        "", None, message.message_id,
+    )
+    assert calls[0]["reply_to"] == ""
+    assert "thread_id" not in calls[0]
+
+
+@pytest.mark.parametrize("token", ["A", "x" * 40])
+def test_send_conforming_reply_resolves_and_reaches_wire_unchanged(
+        transactional_db, peer_host, monkeypatch, token):
+    peer = _active_peer()
+    parent = _in_message(peer, message_id=token, thread_id="thread-root")
+    calls = []
+    _patch_post_message(monkeypatch, calls=calls)
+    result = _run(peer_messages.send_peer_message_from_payload({
+        "peer": peer.id, "title": "Reply", "text": "body", "reply_to": token,
+    }))
+    assert result.success
+    child = PeerMessage.objects.exclude(pk=parent.pk).get()
+    assert child.reply_to == token
+    assert child.reply_to_message_id == parent.pk
+    assert child.thread_id == "thread-root"
+    assert calls[0]["reply_to"] == token
+    assert "thread_id" not in calls[0]
+
+
+@pytest.mark.parametrize(
+    "bad_reply",
+    [7, ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]", "x" * 41],
+)
+def test_send_service_rejects_nonconforming_reply_before_insert(
+        transactional_db, peer_host, monkeypatch, bad_reply):
+    _active_peer()
+    _patch_post_message(monkeypatch)
+    result = _run(peer_messages.send_peer_message_from_payload({
+        "peer": "alice", "title": "Reply", "text": "body", "reply_to": bad_reply,
+    }))
+    assert not result.success
+    assert result.errors[0].code == "invalid_reply_to"
+    assert PeerMessage.objects.count() == 0
+
+
+def test_send_service_rejects_unknown_and_cross_peer_reply_targets(
+        transactional_db, peer_host, monkeypatch):
+    peer = _active_peer()
+    other = _active_peer(
+        name="bob", base_url="https://bob.example.com", token_ours=mint_token(),
+    )
+    _in_message(other, message_id="other-message", thread_id="other-message")
+    _patch_post_message(monkeypatch)
+    for reply_to in ("unknown", "other-message"):
+        result = _run(peer_messages.send_peer_message_from_payload({
+            "peer": peer.id, "title": "Reply", "text": "body", "reply_to": reply_to,
+        }))
+        assert not result.success
+        assert result.errors[0].code == "unknown_reply_to"
+    assert PeerMessage.objects.filter(peer=peer).count() == 0
+
+
+def test_send_failed_parent_is_allowed_and_collision_prefers_inbound(
+        transactional_db, peer_host, monkeypatch):
+    peer = _active_peer()
+    outbound_parent = _out_message(
+        peer, message_id="collision", thread_id="out-root", status=PeerMessageStatus.FAILED,
+    )
+    inbound_parent = _in_message(
+        peer, message_id="collision", thread_id="in-root", status=PeerMessageStatus.REFUSED,
+    )
+    calls = []
+    _patch_post_message(monkeypatch, calls=calls)
+    result = _run(peer_messages.send_peer_message_from_payload({
+        "peer": peer.id, "title": "Reply", "text": "body", "reply_to": "collision",
+    }))
+    assert result.success
+    child = PeerMessage.objects.exclude(pk__in=[outbound_parent.pk, inbound_parent.pk]).get()
+    assert child.reply_to_message_id == inbound_parent.pk
+    assert child.thread_id == "in-root"
+    assert calls[0]["reply_to"] == "collision"
+    assert outbound_parent.thread_id != child.thread_id
+
+    failed_only = _out_message(
+        peer,
+        message_id="failed-only",
+        thread_id="failed-only",
+        status=PeerMessageStatus.FAILED,
+    )
+    second = _run(peer_messages.send_peer_message_from_payload({
+        "peer": peer.id,
+        "title": "Follow-up",
+        "text": "body",
+        "reply_to": failed_only.message_id,
+    }))
+    assert second.success
+    follow_up = PeerMessage.objects.get(message_id=second.message_id)
+    assert follow_up.reply_to_message_id == failed_only.pk
+    assert follow_up.thread_id == failed_only.thread_id
+
+
+def test_three_message_exchange_converges_on_one_local_thread(
+        client, transactional_db, peer_host, monkeypatch):
+    peer = _active_peer()
+    calls = []
+    _patch_post_message(monkeypatch, calls=calls)
+    root_result = _run(peer_messages.send_peer_message_from_payload({
+        "peer": peer.id, "title": "M1", "text": "one",
+    }))
+    root = PeerMessage.objects.get(message_id=root_result.message_id)
+    receive = _post(
+        client, "/peer/messages/",
+        _wire_body(message_id="M2", reply_to=root.message_id),
+        bearer=peer.token_ours,
+    )
+    assert receive.status_code == 202
+    reply_result = _run(peer_messages.send_peer_message_from_payload({
+        "peer": peer.id, "title": "M3", "text": "three", "reply_to": "M2",
+    }))
+    assert reply_result.success
+    assert set(PeerMessage.objects.values_list("thread_id", flat=True)) == {root.message_id}
+
+
+def test_descendants_keep_each_local_parents_thread_identity(
+        transactional_db, peer_host, monkeypatch):
+    peer_a = _active_peer()
+    peer_b = _active_peer(
+        name="bob", base_url="https://bob.example.com", token_ours=mint_token(),
+    )
+    _in_message(peer_a, message_id="M2", thread_id="M1")
+    _in_message(peer_b, message_id="M2", thread_id="M2")
+    _patch_post_message(monkeypatch)
+    for peer in (peer_a, peer_b):
+        result = _run(peer_messages.send_peer_message_from_payload({
+            "peer": peer.id, "title": "M3", "text": "three", "reply_to": "M2",
+        }))
+        assert result.success
+    child_a = PeerMessage.objects.get(peer=peer_a, direction=PeerMessageDirection.OUT, reply_to="M2")
+    child_b = PeerMessage.objects.get(peer=peer_b, direction=PeerMessageDirection.OUT, reply_to="M2")
+    assert child_a.thread_id == "M1"
+    assert child_b.thread_id == "M2"
+    assert (child_a.peer_id, child_a.thread_id) != (child_b.peer_id, child_b.thread_id)
+
+
 # ── Delivery & refusal (phase 7) ────────────────────────────────────────────
 
 def _in_message(peer, **kw):
+    message_id = kw.get("message_id", "pm_" + "c" * 16)
     defaults = dict(
-        peer=peer, direction=PeerMessageDirection.IN, message_id="pm_" + "c" * 16,
+        peer=peer, direction=PeerMessageDirection.IN, message_id=message_id,
+        thread_id=message_id,
         title="The *subject*",
         payload={"text": "the message body", "images": [], "documents": []},
         origin={"sent_at": "2026-07-24T12:00:00+00:00"},

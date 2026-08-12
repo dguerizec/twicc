@@ -1821,6 +1821,15 @@ class PeerMessage(models.Model):
     peer = models.ForeignKey(Peer, on_delete=models.CASCADE, related_name="messages")
     direction = models.CharField(max_length=3, choices=PeerMessageDirection.choices)
     message_id = models.CharField(max_length=40)
+    # Verbatim wire handle of the answered message. Empty means thread root.
+    reply_to = models.CharField(max_length=40, blank=True, default="")
+    # Resolved once at row creation, within this peer relationship. SET_NULL
+    # preserves a child if a single parent row is ever deleted independently.
+    reply_to_message = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="replies",
+    )
+    # Local thread root. The complete key is always (peer_id, thread_id).
+    thread_id = models.CharField(max_length=40)
     # Sender-written subject (required on every send since 2026-08-11; older
     # rows carry ""). A COLUMN, not a `payload` key: the payload is strictly
     # the provider-common SDK block shape `{text, images, documents}` that the
@@ -1865,6 +1874,7 @@ class PeerMessage(models.Model):
         ]
         indexes = [
             models.Index(fields=["status", "direction"], name="idx_peermessage_status"),
+            models.Index(fields=["peer", "thread_id"], name="idx_peermessage_peer_thread"),
         ]
 
     def __str__(self):

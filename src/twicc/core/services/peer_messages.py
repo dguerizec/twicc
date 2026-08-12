@@ -46,6 +46,7 @@ _PAYLOAD_KEYS = frozenset({"text", "images", "documents"})
 PEER_MESSAGE_TITLE_MAX_CHARS = 100
 
 _WHITESPACE_RUN_RE = re.compile(r"\s+")
+PEER_MESSAGE_ID_PATTERN = re.compile(r"(?!\.{1,2}\Z)[A-Za-z0-9._:-]{1,40}")
 
 
 def validate_title(value) -> tuple[str, PeerError | None]:
@@ -66,6 +67,33 @@ def validate_title(value) -> tuple[str, PeerError | None]:
             f"title exceeds {PEER_MESSAGE_TITLE_MAX_CHARS} characters",
         )
     return flat, None
+
+
+def validate_reply_to(value) -> tuple[str, PeerError | None]:
+    """Normalize root values and validate a non-empty opaque message id."""
+    if value is None or value == "":
+        return "", None
+    if not isinstance(value, str) or PEER_MESSAGE_ID_PATTERN.fullmatch(value) is None:
+        return "", PeerError(
+            "reply_to", "invalid_reply_to",
+            "reply_to must be a valid peer message id",
+        )
+    return value, None
+
+
+def _resolve_reply_to_message(peer, direction: str, reply_to: str):
+    """Resolve within one peer, preferring the direction opposite the new row."""
+    from twicc.core.models import PeerMessage, PeerMessageDirection
+
+    if not reply_to:
+        return None
+    opposite = (
+        PeerMessageDirection.OUT
+        if direction == PeerMessageDirection.IN
+        else PeerMessageDirection.IN
+    )
+    candidates = PeerMessage.objects.filter(peer=peer, message_id=reply_to)
+    return candidates.filter(direction=opposite).first() or candidates.first()
 
 
 class PeerSendResult(NamedTuple):
@@ -218,8 +246,8 @@ def _validate_inbound_payload(payload) -> list[PeerError]:
 async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
     """Drop-request handler for ``kind="peer:send"``.
 
-    Payload: ``{peer: <peer_id or exact local name>, title, text, images,
-    documents, origin_session_id?}``. Attachments are already
+    Payload: ``{peer: <peer_id or exact local name>, title, reply_to?, text,
+    images, documents, origin_session_id?}``. Attachments are already
     validated/encoded by the CLI.
     """
     from twicc.core.models import Peer, PeerMessage, PeerMessageDirection, PeerMessageStatus, PeerState, Session
@@ -227,6 +255,7 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
 
     peer_ref = (payload.get("peer") or "").strip()
     title, title_error = validate_title(payload.get("title"))
+    reply_to, reply_to_error = validate_reply_to(payload.get("reply_to"))
     text = (payload.get("text") or "").strip()
     images = payload.get("images") or []
     documents = payload.get("documents") or []
@@ -236,6 +265,8 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
         errors.append(PeerError("peer", "missing", "peer is required"))
     if title_error is not None:
         errors.append(title_error)
+    if reply_to_error is not None:
+        errors.append(reply_to_error)
     if not text:
         errors.append(PeerError("text", "empty_text", "text is required"))
     if errors:
@@ -263,6 +294,15 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
             "peer", "not_active", "This peer relationship is still pending.",
         )], {})
 
+    reply_to_message = await sync_to_async(
+        _resolve_reply_to_message
+    )(peer, PeerMessageDirection.OUT, reply_to)
+    if reply_to and reply_to_message is None:
+        return PeerSendResult(False, None, peer.id, [PeerError(
+            "reply_to", "unknown_reply_to",
+            "No message with this id exists for the selected peer.",
+        )], {})
+
     message_id = mint_message_id()
     origin_session = None
     origin_session_id = payload.get("origin_session_id")
@@ -288,6 +328,9 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
         peer=peer,
         direction=PeerMessageDirection.OUT,
         message_id=message_id,
+        reply_to=reply_to,
+        reply_to_message=reply_to_message,
+        thread_id=reply_to_message.thread_id if reply_to_message is not None else message_id,
         title=title,
         payload=wire_payload,
         attachments_meta=_attachments_meta(wire_payload),
@@ -301,7 +344,8 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
     try:
         http_status, _body = await outbound.post_message(
             peer.base_url, bearer=peer.token_theirs,
-            message_id=message_id, title=title, payload=wire_payload, origin=origin,
+            message_id=message_id, title=title, reply_to=reply_to,
+            payload=wire_payload, origin=origin,
         )
     except outbound.PeerOutboundError as exc:
         http_status, detail = None, str(exc)
@@ -365,7 +409,10 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
         return 403, {"error": "unknown_token"}
 
     message_id = body.get("message_id")
-    if not isinstance(message_id, str) or not message_id or len(message_id) > 40:
+    if not isinstance(message_id, str) or PEER_MESSAGE_ID_PATTERN.fullmatch(message_id) is None:
+        return 400, {"error": "invalid_payload"}
+    reply_to, reply_to_error = validate_reply_to(body.get("reply_to"))
+    if reply_to_error is not None:
         return 400, {"error": "invalid_payload"}
     # Required on the wire too — both sides of this protocol are TwiCC, and a
     # message without a subject would defeat the inbox triage it exists for.
@@ -394,6 +441,7 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
         peer=peer,
         direction=PeerMessageDirection.IN,
         message_id=message_id,
+        reply_to=reply_to,
         title=title,
         payload=clean_payload,
         attachments_meta=_attachments_meta(clean_payload),
@@ -411,6 +459,13 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
         ).first()
         if existing is not None:
             return existing.status
+        reply_to_message = _resolve_reply_to_message(
+            peer, PeerMessageDirection.IN, reply_to,
+        )
+        message.reply_to_message = reply_to_message
+        message.thread_id = (
+            reply_to_message.thread_id if reply_to_message is not None else message_id
+        )
         message.save(force_insert=True)
         peer.last_contact_at = now
         peer.save(update_fields=["last_contact_at"])

@@ -49,6 +49,7 @@ def test_peer_message_found_and_not_found():
     peer = _active_peer()
     PeerMessage.objects.create(
         peer=peer, direction=PeerMessageDirection.OUT, message_id="pm_cli1",
+        thread_id="pm_cli1",
         payload={"text": "hello", "images": [], "documents": []},
         origin={"sent_at": "2026-07-24T12:00:00+00:00"},
         status=PeerMessageStatus.PENDING,
@@ -93,8 +94,13 @@ def test_peer_send_end_to_end_in_process(monkeypatch):
     peer = _active_peer()
     calls = []
 
-    async def _fake_post(base_url, *, bearer, message_id, title, payload, origin):
-        calls.append({"bearer": bearer, "message_id": message_id, "title": title})
+    async def _fake_post(base_url, *, bearer, message_id, title, reply_to, payload, origin):
+        calls.append({
+            "bearer": bearer,
+            "message_id": message_id,
+            "title": title,
+            "reply_to": reply_to,
+        })
         return 202, {}
 
     monkeypatch.setattr("twicc.peer.outbound.post_message", _fake_post)
@@ -114,6 +120,7 @@ def test_peer_send_end_to_end_in_process(monkeypatch):
     assert res.result["peer_status"] == "pending"  # remote state via status_extra
     assert calls[0]["bearer"] == peer.token_theirs
     assert calls[0]["title"] == "Daily recap"
+    assert calls[0]["reply_to"] == ""
     message = PeerMessage.objects.get()
     assert message.direction == PeerMessageDirection.OUT
     assert message.status == PeerMessageStatus.PENDING

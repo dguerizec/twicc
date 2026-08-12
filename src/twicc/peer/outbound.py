@@ -54,12 +54,19 @@ async def post_handshake_accept(base_url: str, *, bearer: str, token: str, displ
 
 
 async def post_message(
-    base_url: str, *, bearer: str, message_id: str, title: str, payload: dict, origin: dict,
+    base_url: str, *, bearer: str, message_id: str, title: str,
+    reply_to: str, payload: dict, origin: dict,
 ) -> tuple[int, dict]:
     return await _post(
         base_url,
         "/peer/messages/",
-        {"message_id": message_id, "title": title, "payload": payload, "origin": origin},
+        {
+            "message_id": message_id,
+            "title": title,
+            "reply_to": reply_to,
+            "payload": payload,
+            "origin": origin,
+        },
         bearer=bearer,
     )
 
