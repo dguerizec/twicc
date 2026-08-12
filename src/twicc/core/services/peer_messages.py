@@ -46,7 +46,12 @@ _PAYLOAD_KEYS = frozenset({"text", "images", "documents"})
 PEER_MESSAGE_TITLE_MAX_CHARS = 100
 
 _WHITESPACE_RUN_RE = re.compile(r"\s+")
-PEER_MESSAGE_ID_PATTERN = re.compile(r"(?!\.{1,2}\Z)[A-Za-z0-9._:-]{1,40}")
+# Ruling of 2026-08-12 (supersedes the threading design/plan pattern): ASCII
+# letters, digits, underscore, hyphen only; a leading hyphen is rejected (the
+# CLI reads `--reply-to -abc` as an option, not a value), a leading underscore
+# is fine. Dot and colon are rejected outright, so the old bare-`.`/`..`
+# exclusion is no longer needed.
+PEER_MESSAGE_ID_PATTERN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,39}")
 
 
 def validate_title(value) -> tuple[str, PeerError | None]:

@@ -126,7 +126,10 @@ def test_peer_send_precheck_errors():
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "bad_reply",
-    [".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]", "x" * 41],
+    [
+        ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
+        "-abc", "a.b", "a:b", "x" * 41,
+    ],
 )
 def test_peer_send_reply_to_rejects_nonconforming_value_before_lookup(
         bad_reply, monkeypatch):
@@ -238,7 +241,7 @@ def test_peer_send_omitted_or_empty_reply_to_creates_root(monkeypatch, cli_args)
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("reply_to", ["A", "x" * 40])
+@pytest.mark.parametrize("reply_to", ["A", "_abc", "a-b", "x" * 40])
 def test_peer_send_conforming_reply_to_reaches_transport_unchanged(
         monkeypatch, reply_to):
     peer = _active_peer()

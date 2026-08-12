@@ -120,6 +120,14 @@ def _wire_body(**overrides):
     return body
 
 
+# ── Message id grammar ──────────────────────────────────────────────────────
+
+def test_mint_message_id_conforms_to_pattern():
+    from twicc.core.services.peer_tokens import mint_message_id
+
+    assert peer_messages.PEER_MESSAGE_ID_PATTERN.fullmatch(mint_message_id()) is not None
+
+
 # ── Inbound receive ─────────────────────────────────────────────────────────
 
 def test_receive_unknown_token(client, transactional_db, peer_host):
@@ -227,7 +235,7 @@ def test_receive_absent_reply_to_stores_root(client, transactional_db, peer_host
     )
 
 
-@pytest.mark.parametrize("token", ["A", "A._:-z", "x" * 40])
+@pytest.mark.parametrize("token", ["A", "_abc", "a-b", "A_-z", "x" * 40])
 def test_receive_message_id_tokens_round_trip_byte_for_byte(
         client, transactional_db, peer_host, token):
     peer = _active_peer()
@@ -241,7 +249,7 @@ def test_receive_message_id_tokens_round_trip_byte_for_byte(
     assert message.message_id == token
 
 
-@pytest.mark.parametrize("token", ["A", "A._:-z", "x" * 40])
+@pytest.mark.parametrize("token", ["A", "_abc", "a-b", "A_-z", "x" * 40])
 def test_receive_identifier_tokens_round_trip_byte_for_byte(
         client, transactional_db, peer_host, token):
     peer = _active_peer()
@@ -261,7 +269,10 @@ def test_receive_identifier_tokens_round_trip_byte_for_byte(
 
 @pytest.mark.parametrize(
     "bad_id",
-    [None, 7, "", ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]", "x" * 41],
+    [
+        None, 7, "", ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
+        "-abc", "a.b", "a:b", "x" * 41,
+    ],
 )
 def test_receive_rejects_nonconforming_message_id_without_row(
         client, transactional_db, peer_host, bad_id):
@@ -276,7 +287,10 @@ def test_receive_rejects_nonconforming_message_id_without_row(
 
 @pytest.mark.parametrize(
     "bad_reply",
-    [7, ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]", "x" * 41],
+    [
+        7, ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
+        "-abc", "a.b", "a:b", "x" * 41,
+    ],
 )
 def test_receive_rejects_nonconforming_reply_to_without_child(
         client, transactional_db, peer_host, bad_reply):
@@ -570,7 +584,7 @@ def test_outbound_post_message_builds_exact_threading_wire(monkeypatch):
     origin = {"sent_at": "2026-07-24T12:00:00+00:00"}
     payload = {"text": "body", "images": [], "documents": []}
 
-    for reply_to in ("", "A._:-z"):
+    for reply_to in ("", "A_-z"):
         status, response = _run(outbound.post_message(
             "https://alice.example.com",
             bearer="their-token",
@@ -583,7 +597,7 @@ def test_outbound_post_message_builds_exact_threading_wire(monkeypatch):
         assert (status, response) == (202, {})
 
     assert [call["path"] for call in calls] == ["/peer/messages/", "/peer/messages/"]
-    assert [call["json_body"]["reply_to"] for call in calls] == ["", "A._:-z"]
+    assert [call["json_body"]["reply_to"] for call in calls] == ["", "A_-z"]
     for call in calls:
         assert call["base_url"] == "https://alice.example.com"
         assert call["bearer"] == "their-token"
@@ -613,7 +627,7 @@ def test_send_root_normalizes_reply_to_and_never_sends_thread_id(
     assert "thread_id" not in calls[0]
 
 
-@pytest.mark.parametrize("token", ["A", "x" * 40])
+@pytest.mark.parametrize("token", ["A", "_abc", "a-b", "x" * 40])
 def test_send_conforming_reply_resolves_and_reaches_wire_unchanged(
         transactional_db, peer_host, monkeypatch, token):
     peer = _active_peer()
@@ -634,7 +648,10 @@ def test_send_conforming_reply_resolves_and_reaches_wire_unchanged(
 
 @pytest.mark.parametrize(
     "bad_reply",
-    [7, ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]", "x" * 41],
+    [
+        7, ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
+        "-abc", "a.b", "a:b", "x" * 41,
+    ],
 )
 def test_send_service_rejects_nonconforming_reply_before_insert(
         transactional_db, peer_host, monkeypatch, bad_reply):
@@ -860,7 +877,7 @@ def test_delivery_envelope_names_safe_handle_and_parent_direction(
     )
     child = _in_message(
         peer,
-        message_id="A._:-z",
+        message_id="A_-z",
         reply_to=parent.message_id,
         reply_to_message=parent,
         thread_id=parent.thread_id,
@@ -873,7 +890,7 @@ def test_delivery_envelope_names_safe_handle_and_parent_direction(
 
     assert success and errors == []
     header = envelope.split("\n", 1)[0]
-    assert "`A._:-z`" in header
+    assert "`A_-z`" in header
     assert f"{relation_text} **“Hostile \\*parent\\* \\`title\\`”**" in header
     assert "\n" not in header
 
@@ -927,7 +944,7 @@ def test_delivery_envelope_renders_a_parent_resolved_by_the_real_receive_path(
     assert "in reply to your **“Weekly recap”**" in header
 
 
-@pytest.mark.parametrize("legacy_id", [".", "..", "A\n"])
+@pytest.mark.parametrize("legacy_id", [".", "..", "A\n", "a.b", "a:b", "-abc"])
 def test_legacy_unsafe_id_is_omitted_but_delivery_still_succeeds(
         transactional_db, status_callbacks, legacy_id):
     peer = _active_peer()
@@ -952,7 +969,7 @@ def test_legacy_unsafe_id_is_omitted_but_delivery_still_succeeds(
     assert status_callbacks == []
 
 
-@pytest.mark.parametrize("legacy_id", [".", "..", "A\n"])
+@pytest.mark.parametrize("legacy_id", [".", "..", "A\n", "a.b", "a:b", "-abc"])
 def test_legacy_unsafe_id_refusal_skips_callback_but_resolves_locally(
         transactional_db, status_callbacks, legacy_id):
     peer = _active_peer()
