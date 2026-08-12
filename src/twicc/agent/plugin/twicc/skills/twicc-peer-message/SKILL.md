@@ -58,7 +58,8 @@ $TWICC peer-message <MESSAGE_ID>
 - `reply_to_ref` — summary of the resolved parent (`message_id`, `title`, `direction`, `status`), or `null`.
 - `reply_target` — id of the parent's local-end session, or `null`; it is not a delivery action or eligibility promise.
 - `title` — the required subject the send carried.
-- `origin_session` / `delivered_to_session` — the local session at each end (`null` when there is none), with its title read live. The peer receives neither: the wire carries the title, `sent_at` and the payload, nothing else.
+- `origin_session` / `delivered_to_session` — the local session at each end (`null` when there is none), with its title read live. The peer receives neither.
+- **Wire boundary** — the peer-message wire carries `message_id`, `title`, `reply_to`, `origin.sent_at`, and `payload`. A root message carries `reply_to` as `""`. `thread_id`, `reply_to_ref`, and `reply_target` are local serialization values, not wire fields.
 
 ### Exit codes
 
