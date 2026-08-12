@@ -74,7 +74,7 @@ function onHide() {
                 <strong class="items-details-summary-name">Proposed plan</strong>
             </span>
             <div v-if="isOpen" class="proposed-plan-body">
-                <MarkdownContent :source="segments.plan" :code-tools="true" />
+                <MarkdownContent :source="segments.plan" />
             </div>
         </wa-details>
         <TextContent v-if="segments.after" :text="segments.after" role="assistant" />

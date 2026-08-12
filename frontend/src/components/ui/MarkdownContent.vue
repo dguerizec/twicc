@@ -33,14 +33,6 @@ const props = defineProps({
     showToc: {
         type: Boolean,
         default: false
-    },
-    // Opt-in per-code-block toolbar (copy / wrap / render markdown). Reserved
-    // for the markdown of chat *messages* (text, thinking, compact summary):
-    // everywhere else the surrounding pane already carries its own tools, and
-    // tool results are not message content.
-    codeTools: {
-        type: Boolean,
-        default: false
     }
 })
 
@@ -190,13 +182,17 @@ function rewriteContentMediaUrlsIn(root) {
     }
 }
 
-// --- Per-code-block tools (opt-in via the codeTools prop) -------------------
+// --- Per-code-block tools ---------------------------------------------------
 //
-// Each rendered code block gets a small hover toolbar, injected into the block's
-// HTML during post-processing (same mechanism as the mermaid replacement above,
-// so it lands in the cached string and survives Vue's v-html diffing). The
-// buttons carry no listener of their own: clicks are caught by the container's
-// existing delegation, next to the link/media handling.
+// Every rendered code block gets a small hover toolbar, injected into the
+// block's HTML during post-processing (same mechanism as the mermaid
+// replacement above, so it lands in the cached string and survives Vue's v-html
+// diffing). The buttons carry no listener of their own: clicks are caught by
+// the container's existing delegation, next to the link/media handling.
+//
+// Part of the rendering engine, not an opt-in: wherever markdown is rendered —
+// conversation, Plan tab, file preview, changelog, share pages — a code block
+// is worth copying, and a markdown block is worth reading rendered.
 
 // Fence languages whose blocks also get the "show rendered" toggle.
 const MARKDOWN_LANGS = new Set(['markdown', 'md'])
@@ -388,7 +384,7 @@ async function postProcessIn(root, theme) {
     addLanguageLabelsIn(root)
     annotateFileLinksIn(root)
     if (rewriteContentMediaUrl) rewriteContentMediaUrlsIn(root)
-    if (props.codeTools) addCodeToolsIn(root)
+    addCodeToolsIn(root)
     return mermaidOk
 }
 

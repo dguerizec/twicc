@@ -31,7 +31,7 @@ const tagSlashCommand = computed(() =>
 
 <template>
     <div class="text-content" :role="role">
-        <MarkdownContent :source="displayText" :tag-slash-command="tagSlashCommand" :code-tools="true" />
+        <MarkdownContent :source="displayText" :tag-slash-command="tagSlashCommand" />
     </div>
 </template>
 
