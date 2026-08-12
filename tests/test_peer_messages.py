@@ -235,7 +235,13 @@ def test_receive_absent_reply_to_stores_root(client, transactional_db, peer_host
     )
 
 
-@pytest.mark.parametrize("token", ["A", "_abc", "a-b", "A_-z", "x" * 40])
+@pytest.mark.parametrize(
+    "token",
+    [
+        "A", pytest.param("1abc", id="leading-digit"), "_abc", "a-b",
+        pytest.param("abc-", id="trailing-hyphen"), "A_-z", "x" * 40,
+    ],
+)
 def test_receive_message_id_tokens_round_trip_byte_for_byte(
         client, transactional_db, peer_host, token):
     peer = _active_peer()
@@ -249,7 +255,13 @@ def test_receive_message_id_tokens_round_trip_byte_for_byte(
     assert message.message_id == token
 
 
-@pytest.mark.parametrize("token", ["A", "_abc", "a-b", "A_-z", "x" * 40])
+@pytest.mark.parametrize(
+    "token",
+    [
+        "A", pytest.param("1abc", id="leading-digit"), "_abc", "a-b",
+        pytest.param("abc-", id="trailing-hyphen"), "A_-z", "x" * 40,
+    ],
+)
 def test_receive_identifier_tokens_round_trip_byte_for_byte(
         client, transactional_db, peer_host, token):
     peer = _active_peer()
@@ -270,7 +282,8 @@ def test_receive_identifier_tokens_round_trip_byte_for_byte(
 @pytest.mark.parametrize(
     "bad_id",
     [
-        None, 7, "", ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
+        None, 7, "", ".", pytest.param(":", id="standalone-colon"), "..",
+        "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
         "-abc", "a.b", "a:b", "x" * 41,
     ],
 )
@@ -288,7 +301,8 @@ def test_receive_rejects_nonconforming_message_id_without_row(
 @pytest.mark.parametrize(
     "bad_reply",
     [
-        7, ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
+        7, ".", pytest.param(":", id="standalone-colon"), "..",
+        "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
         "-abc", "a.b", "a:b", "x" * 41,
     ],
 )
@@ -627,7 +641,13 @@ def test_send_root_normalizes_reply_to_and_never_sends_thread_id(
     assert "thread_id" not in calls[0]
 
 
-@pytest.mark.parametrize("token", ["A", "_abc", "a-b", "x" * 40])
+@pytest.mark.parametrize(
+    "token",
+    [
+        "A", pytest.param("1abc", id="leading-digit"), "_abc", "a-b",
+        pytest.param("abc-", id="trailing-hyphen"), "x" * 40,
+    ],
+)
 def test_send_conforming_reply_resolves_and_reaches_wire_unchanged(
         transactional_db, peer_host, monkeypatch, token):
     peer = _active_peer()
@@ -649,7 +669,8 @@ def test_send_conforming_reply_resolves_and_reaches_wire_unchanged(
 @pytest.mark.parametrize(
     "bad_reply",
     [
-        7, ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
+        7, ".", pytest.param(":", id="standalone-colon"), "..",
+        "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
         "-abc", "a.b", "a:b", "x" * 41,
     ],
 )

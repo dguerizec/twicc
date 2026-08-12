@@ -127,7 +127,8 @@ def test_peer_send_precheck_errors():
 @pytest.mark.parametrize(
     "bad_reply",
     [
-        ".", "..", "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
+        ".", pytest.param(":", id="standalone-colon"), "..",
+        "A\n", "A\nB", " A", "A ", r"A\B", "A`", "A*", "A[", "A]",
         "-abc", "a.b", "a:b", "x" * 41,
     ],
 )
@@ -241,7 +242,13 @@ def test_peer_send_omitted_or_empty_reply_to_creates_root(monkeypatch, cli_args)
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("reply_to", ["A", "_abc", "a-b", "x" * 40])
+@pytest.mark.parametrize(
+    "reply_to",
+    [
+        "A", pytest.param("1abc", id="leading-digit"), "_abc", "a-b",
+        pytest.param("abc-", id="trailing-hyphen"), "x" * 40,
+    ],
+)
 def test_peer_send_conforming_reply_to_reaches_transport_unchanged(
         monkeypatch, reply_to):
     peer = _active_peer()
