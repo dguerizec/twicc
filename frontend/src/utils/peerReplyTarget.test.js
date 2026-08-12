@@ -5,6 +5,8 @@ import {
     chooseReplyTargetSource,
     isReplyTargetPickerEligible,
     recoverReplyTargetPagination,
+    shouldShowReplyTargetPreparation,
+    waitForNextPaint,
 } from './peerReplyTarget.js'
 
 const archivedProjectIds = new Set(['project-archived'])
@@ -117,4 +119,43 @@ test('leaves existing and ineligible candidate arrays unchanged', () => {
         recoverReplyTargetPagination(candidates, null, archivedProjectIds, compareSessions),
         candidates,
     )
+})
+
+test('waits until a browser paint can complete before continuing', async () => {
+    const frames = []
+    let settled = false
+    const waiting = waitForNextPaint(callback => frames.push(callback))
+    waiting.then(() => { settled = true })
+
+    assert.equal(frames.length, 1)
+    frames.shift()(0)
+    await Promise.resolve()
+    assert.equal(settled, false)
+    assert.equal(frames.length, 1)
+
+    frames.shift()(16)
+    await waiting
+    assert.equal(settled, true)
+})
+
+test('shows preparation only for an unresolved inbound target', () => {
+    const pendingReply = {
+        direction: 'in',
+        status: 'pending',
+        reply_target: 'target-session',
+    }
+    assert.equal(shouldShowReplyTargetPreparation(pendingReply, false), true)
+    assert.equal(shouldShowReplyTargetPreparation(pendingReply, true), false)
+    assert.equal(shouldShowReplyTargetPreparation(
+        { ...pendingReply, reply_target: null },
+        false,
+    ), false)
+    assert.equal(shouldShowReplyTargetPreparation(
+        { ...pendingReply, direction: 'out' },
+        false,
+    ), false)
+    assert.equal(shouldShowReplyTargetPreparation(
+        { ...pendingReply, status: 'delivered' },
+        false,
+    ), false)
 })

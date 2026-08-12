@@ -31,6 +31,8 @@ import {
     chooseReplyTargetSource,
     isReplyTargetPickerEligible,
     recoverReplyTargetPagination,
+    shouldShowReplyTargetPreparation,
+    waitForNextPaint,
 } from '../../utils/peerReplyTarget'
 import { dateBucketSeparator } from '../../utils/datePresets'
 import { matchQuery } from '../../utils/textFilter'
@@ -307,6 +309,9 @@ const showReplyTargetWarning = computed(() =>
     && detail.value?.reply_to !== ''
     && !replyTargetPickerEligible.value,
 )
+const showReplyTargetPreparation = computed(() =>
+    shouldShowReplyTargetPreparation(detail.value, targetHydrationSettled.value),
+)
 
 // 'Existing session' picker: the sidebar's natural block, with the same
 // ordering, section labels and text matching. A hydrated target is inserted
@@ -382,11 +387,14 @@ async function initializeReplyTarget(loadedDetail, generation, messageId) {
     }
 
     if (!isCurrentOpen(generation, messageId)) return
-    targetHydrationSettled.value = true
     const targetIsCandidate = target
         && candidateRows.some(row => row.session.id === targetId)
-    if (!targetIsCandidate) return
+    if (!targetIsCandidate) {
+        targetHydrationSettled.value = true
+        return
+    }
 
+    targetHydrationSettled.value = true
     scopeId.value = target.project_id
     selectedSessionId.value = targetId
     mode.value = 'existing'
@@ -436,6 +444,15 @@ watch(() => [props.open, props.messageId], async ([open, messageId]) => {
     const markdownPromise = renderDetailText(
         loadedDetail.payload?.text || '', generation, messageId,
     )
+    // Target resolution can lead directly to mounting one full session page.
+    // Finish the message, then paint it with the preparation state before any
+    // of that work starts.
+    if (showReplyTargetPreparation.value) {
+        await markdownPromise
+        if (!isCurrentOpen(generation, messageId)) return
+        await waitForNextPaint()
+        if (!isCurrentOpen(generation, messageId)) return
+    }
     await initializeReplyTarget(loadedDetail, generation, messageId)
     await markdownPromise
 }, { immediate: true, flush: 'sync' })
@@ -712,6 +729,10 @@ function onHide(event) {
 
             <!-- Actions -->
             <template v-if="canDeliver">
+                <div v-if="showReplyTargetPreparation" class="pr-preparing" role="status" aria-live="polite">
+                    <wa-spinner></wa-spinner>
+                    <span>Preparing session selection…</span>
+                </div>
                 <wa-callout v-if="showReplyTargetWarning" variant="warning" size="small">
                     This message is part of a thread, but its session is not available for selection.
                     Choose another session, or deliver to a new one.
@@ -1005,14 +1026,16 @@ function onHide(event) {
 /* Refusing is a rare, destructive answer: kept away from the two delivery
    buttons so it is never the one clicked by reflex. */
 .pr-actions__refuse { margin-inline-start: auto; }
-.pr-busy {
+.pr-busy,
+.pr-preparing {
     display: flex;
     align-items: center;
     gap: var(--wa-space-xs);
     margin-bottom: var(--wa-space-s);
     color: var(--wa-color-text-quiet);
 }
-.pr-busy wa-spinner { font-size: 1rem; }
+.pr-busy wa-spinner,
+.pr-preparing wa-spinner { font-size: 1rem; }
 .pr-picker-filters {
     display: flex;
     gap: var(--wa-space-xs);

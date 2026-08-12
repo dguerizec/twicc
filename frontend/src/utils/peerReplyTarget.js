@@ -36,3 +36,23 @@ export function recoverReplyTargetPagination(
     if (candidates.some(candidate => candidate.id === target.id)) return candidates
     return [...candidates, target].sort(compareSessions)
 }
+
+/**
+ * Let one browser paint complete before mounting work that can block the main
+ * thread. The first frame paints; the second frame resumes the caller.
+ */
+export function waitForNextPaint(
+    scheduleFrame = callback => globalThis.requestAnimationFrame(callback),
+) {
+    return new Promise(resolve => {
+        scheduleFrame(() => scheduleFrame(resolve))
+    })
+}
+
+/** Whether the dialog should explain the brief gap before target selection. */
+export function shouldShowReplyTargetPreparation(detail, settled) {
+    return !settled
+        && detail?.direction === 'in'
+        && detail?.status === 'pending'
+        && detail?.reply_target != null
+}
