@@ -49,7 +49,7 @@ const props = defineProps({
     messageId: { type: [Number, String], default: null },
 })
 // `close` carries an optional reason: 'navigating' when the dialog closes
-// because the user is being sent to the delivery target (see prefillComposer).
+// because the user is being sent to the delivery target (see navigateToComposer).
 const emit = defineEmits(['close'])
 
 const peersStore = usePeersStore()
@@ -456,6 +456,37 @@ function errorText(payload) {
     return payload?.error || 'Request failed.'
 }
 
+const PEER_RESOLUTION_TIMEOUT_MS = 40_000
+const PEER_RESOLUTION_TIMEOUT_MESSAGE = 'The request did not complete in time. Refresh before trying again.'
+
+class PeerResolutionTimeoutError extends Error {}
+
+async function requestPeerResolution(url, options = {}) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), PEER_RESOLUTION_TIMEOUT_MS)
+    try {
+        const response = await apiFetch(url, { ...options, signal: controller.signal })
+        let payload = null
+        try {
+            payload = await response.json()
+        } catch (error) {
+            if (controller.signal.aborted) throw error
+        }
+        return { response, payload }
+    } catch (error) {
+        if (controller.signal.aborted) throw new PeerResolutionTimeoutError()
+        throw error
+    } finally {
+        clearTimeout(timeoutId)
+    }
+}
+
+function setActionFailure(error) {
+    actionError.value = error instanceof PeerResolutionTimeoutError
+        ? PEER_RESOLUTION_TIMEOUT_MESSAGE
+        : 'Network error — could not reach the server.'
+}
+
 /** Rebuild a File from an SDK attachment block so the normal draft-attachment
  *  pipeline (validation, resize, IndexedDB) processes it like a user upload. */
 function blockToFile(block, index) {
@@ -475,19 +506,20 @@ function blockToFile(block, index) {
 /** Ask the backend to resolve the message as delivered; returns the envelope
  *  text to prefill a composer with, or null on failure (actionError set). */
 async function markDelivered(sessionId) {
-    const response = await apiFetch(`/api/peer-messages/${props.messageId}/deliver/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            session_id: sessionId || undefined,
-            note: note.value,
-            // Opt-in server-side: an already-delivered message is only
-            // re-routed when the UI asks for it explicitly.
-            redeliver: isRedeliverable.value || undefined,
-        }),
-    })
-    let payload = null
-    try { payload = await response.json() } catch { /* empty */ }
+    const { response, payload } = await requestPeerResolution(
+        `/api/peer-messages/${props.messageId}/deliver/`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: sessionId || undefined,
+                note: note.value,
+                // Opt-in server-side: an already-delivered message is only
+                // re-routed when the UI asks for it explicitly.
+                redeliver: isRedeliverable.value || undefined,
+            }),
+        },
+    )
     if (!response.ok) {
         actionError.value = errorText(payload)
         return null
@@ -496,7 +528,7 @@ async function markDelivered(sessionId) {
 }
 
 /** Prefill a composer (existing session's draft, or a fresh draft session)
- *  with the envelope + the peer attachments, then jump to it. Nothing is
+ *  with the envelope + the peer attachments. Nothing is
  *  sent — the user reviews and sends through the normal pipeline. */
 async function prefillComposer(sessionId, projectId) {
     // Append — the target session may already carry a user-typed draft,
@@ -516,6 +548,9 @@ async function prefillComposer(sessionId, projectId) {
             console.warn('[peer] could not re-attach a peer file to the draft:', err)
         }
     }
+}
+
+function navigateToComposer(sessionId, projectId) {
     // 'navigating': the user leaves for the target session — the inbox must
     // NOT come back over the composer they are being sent to.
     emit('close', 'navigating')
@@ -526,16 +561,20 @@ let envelopeText = null
 
 async function deliverToSession(session) {
     actionError.value = ''
+    confirmingRefuse.value = false
     busy.value = true
+    let shouldNavigate = false
     try {
         envelopeText = await markDelivered(session.id)
         if (envelopeText == null) return
         await prefillComposer(session.id, session.project_id)
-    } catch {
-        actionError.value = 'Network error — could not reach the server.'
+        shouldNavigate = true
+    } catch (error) {
+        setActionFailure(error)
     } finally {
         busy.value = false
     }
+    if (shouldNavigate) navigateToComposer(session.id, session.project_id)
 }
 
 async function deliverToNewSession(projectId) {
@@ -543,46 +582,57 @@ async function deliverToNewSession(projectId) {
     const gate = await ensureProjectTrust(projectId)
     if (!gate) return
     actionError.value = ''
+    confirmingRefuse.value = false
     busy.value = true
+    let draftId = null
     try {
         envelopeText = await markDelivered(null)
         if (envelopeText == null) return
-        const draftId = dataStore.createDraftSession(projectId, gate.state)
+        draftId = dataStore.createDraftSession(projectId, gate.state)
         // The delivery was just recorded with NO target: the session does not
         // exist yet. Tie the message to the draft so the store can complete the
         // link once the provider creates the real session — that is what makes
         // the inbox row point at it later.
         dataStore.setDraftPeerMessage(draftId, props.messageId)
         await prefillComposer(draftId, projectId)
-    } catch {
-        actionError.value = 'Network error — could not reach the server.'
+    } catch (error) {
+        setActionFailure(error)
+        draftId = null
     } finally {
         busy.value = false
     }
+    if (draftId != null) navigateToComposer(draftId, projectId)
 }
 
 async function refuse() {
     actionError.value = ''
     busy.value = true
+    let shouldClose = false
     try {
-        const response = await apiFetch(`/api/peer-messages/${props.messageId}/refuse/`, { method: 'POST' })
-        let payload = null
-        try { payload = await response.json() } catch { /* empty */ }
+        const { response, payload } = await requestPeerResolution(
+            `/api/peer-messages/${props.messageId}/refuse/`,
+            { method: 'POST' },
+        )
         if (!response.ok) {
             actionError.value = errorText(payload)
             return
         }
-        emit('close')
-    } catch {
-        actionError.value = 'Network error — could not reach the server.'
+        shouldClose = true
+    } catch (error) {
+        setActionFailure(error)
     } finally {
         busy.value = false
         confirmingRefuse.value = false
     }
+    if (shouldClose) emit('close')
 }
 
 function onHide(event) {
     if (event.target !== dialogRef.value) return
+    if (busy.value) {
+        event.preventDefault()
+        return
+    }
     emit('close')
 }
 </script>
@@ -690,6 +740,7 @@ function onHide(event) {
                 <div class="pr-actions">
                     <wa-button
                         variant="brand" :appearance="mode === 'new' ? 'outlined' : 'accent'"
+                        :disabled="busy"
                         @click="setMode('existing')"
                     >
                         <wa-icon name="comments" slot="start"></wa-icon>
@@ -697,6 +748,7 @@ function onHide(event) {
                     </wa-button>
                     <wa-button
                         variant="brand" :appearance="mode === 'existing' ? 'outlined' : 'accent'"
+                        :disabled="busy"
                         @click="setMode('new')"
                     >
                         <wa-icon name="plus" slot="start"></wa-icon>
@@ -713,12 +765,20 @@ function onHide(event) {
                     >Refuse</wa-button>
                 </div>
 
+                <div v-if="busy" class="pr-busy" role="status" aria-live="polite">
+                    <wa-spinner></wa-spinner>
+                    <span>{{ confirmingRefuse ? 'Refusing…' : 'Delivering…' }}</span>
+                </div>
+
                 <wa-callout v-if="confirmingRefuse" variant="warning" size="small">
                     <div class="pr-confirm-body">
                         <span>Refuse this message? The sender will see it as refused.</span>
                         <span class="pr-confirm__actions">
                             <wa-button size="small" variant="danger" :disabled="busy" @click="refuse">Refuse</wa-button>
-                            <wa-button size="small" appearance="outlined" @click="confirmingRefuse = false">Keep</wa-button>
+                            <wa-button
+                                size="small" appearance="outlined" :disabled="busy"
+                                @click="confirmingRefuse = false"
+                            >Keep</wa-button>
                         </span>
                     </div>
                 </wa-callout>
@@ -830,7 +890,7 @@ function onHide(event) {
         </template>
 
         <div slot="footer" class="pr-footer">
-            <wa-button @click="emit('close')">Close</wa-button>
+            <wa-button :disabled="busy" @click="emit('close')">Close</wa-button>
         </div>
     </wa-dialog>
 </template>
@@ -945,6 +1005,14 @@ function onHide(event) {
 /* Refusing is a rare, destructive answer: kept away from the two delivery
    buttons so it is never the one clicked by reflex. */
 .pr-actions__refuse { margin-inline-start: auto; }
+.pr-busy {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    margin-bottom: var(--wa-space-s);
+    color: var(--wa-color-text-quiet);
+}
+.pr-busy wa-spinner { font-size: 1rem; }
 .pr-picker-filters {
     display: flex;
     gap: var(--wa-space-xs);
