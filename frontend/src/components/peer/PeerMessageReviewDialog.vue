@@ -28,10 +28,12 @@ import { sdkBlockToMediaItem } from '../../utils/fileUtils'
 import { sessionRouteLocation } from '../../utils/sessionRoute'
 import { computeSidebarSessionBlocks } from '../../utils/sidebarSessions'
 import {
+    activePeerResolutionAction,
     chooseReplyTargetSource,
     deliveryPickerTransition,
     isReplyTargetPickerEligible,
     recoverReplyTargetPagination,
+    shouldShowReplyTargetPreparation,
     waitForNextPaint,
 } from '../../utils/peerReplyTarget'
 import { dateBucketSeparator } from '../../utils/datePresets'
@@ -92,6 +94,9 @@ const scopeId = ref(ALL_PROJECTS_ID)
 // 'existing' mode: a click only SELECTS (highlight); the explicit Deliver
 // button sends — no accidental one-click delivery.
 const selectedSessionId = ref(null)
+const activeResolutionAction = computed(() =>
+    activePeerResolutionAction(busy.value, confirmingRefuse.value, mode.value),
+)
 
 // Ordinary request-lifetime state. The boolean carries no target identity or
 // reason. The generation invalidates every result from a closed or reused
@@ -312,6 +317,10 @@ const showReplyTargetWarning = computed(() =>
     && detail.value?.reply_to !== ''
     && !replyTargetPickerEligible.value,
 )
+const showReplyTargetPreparation = computed(() =>
+    shouldShowReplyTargetPreparation(detail.value, targetHydrationSettled.value)
+    || (existingPickerPreparing.value && mode.value === 'existing'),
+)
 // 'Existing session' picker: the sidebar's natural block, with the same
 // ordering, section labels and text matching. A hydrated target is inserted
 // only when the current page bound is the reason the normal rows omitted it.
@@ -481,6 +490,7 @@ async function setMode(next) {
         next,
         existingPickerMounted.value,
     )
+    if (transition.dismissRefusalConfirmation) confirmingRefuse.value = false
     mode.value = transition.mode
     if (transition.prepareExisting) {
         await ensureExistingPickerMounted(openGeneration, props.messageId)
@@ -805,23 +815,25 @@ function onHide(event) {
                 </div>
 
                 <div
-                    v-if="existingPickerPreparing && mode === 'existing'"
+                    v-if="showReplyTargetPreparation"
                     class="pr-preparing" role="status" aria-live="polite"
                 >
                     <wa-spinner></wa-spinner>
                     <span>Preparing session selection…</span>
                 </div>
 
-                <div v-if="busy" class="pr-busy" role="status" aria-live="polite">
-                    <wa-spinner></wa-spinner>
-                    <span>{{ confirmingRefuse ? 'Refusing…' : 'Delivering…' }}</span>
-                </div>
-
                 <wa-callout v-if="confirmingRefuse" variant="warning" size="small">
                     <div class="pr-confirm-body">
                         <span>Refuse this message? The sender will see it as refused.</span>
                         <span class="pr-confirm__actions">
-                            <wa-button size="small" variant="danger" :disabled="busy" @click="refuse">Refuse</wa-button>
+                            <wa-button
+                                size="small" variant="danger" :disabled="busy"
+                                :aria-busy="activeResolutionAction === 'refuse' ? 'true' : 'false'"
+                                @click="refuse"
+                            >
+                                <wa-spinner v-if="activeResolutionAction === 'refuse'" slot="start"></wa-spinner>
+                                {{ activeResolutionAction === 'refuse' ? 'Refusing…' : 'Refuse' }}
+                            </wa-button>
                             <wa-button
                                 size="small" appearance="outlined" :disabled="busy"
                                 @click="confirmingRefuse = false"
@@ -850,10 +862,12 @@ function onHide(event) {
                         <wa-button
                             size="small" variant="brand"
                             :disabled="!pickedProjectId || busy"
+                            :aria-busy="activeResolutionAction === 'new' ? 'true' : 'false'"
                             @click="deliverToNewSession(pickedProjectId)"
                         >
-                            <wa-icon name="pen-to-square" slot="start"></wa-icon>
-                            Create draft session
+                            <wa-spinner v-if="activeResolutionAction === 'new'" slot="start"></wa-spinner>
+                            <wa-icon v-else name="pen-to-square" slot="start"></wa-icon>
+                            {{ activeResolutionAction === 'new' ? 'Delivering…' : 'Create draft session' }}
                         </wa-button>
                     </div>
                 </template>
@@ -917,6 +931,7 @@ function onHide(event) {
                                 :active="selectedSessionId === row.session.id"
                                 compact-view
                                 show-project-name
+                                :show-title-tooltip="false"
                                 @select="selectedSessionId = row.session.id"
                             />
                         </template>
@@ -925,14 +940,21 @@ function onHide(event) {
                     <wa-button
                         size="small" variant="brand"
                         :disabled="!selectedSession || busy"
+                        :aria-busy="activeResolutionAction === 'existing' ? 'true' : 'false'"
                         @click="deliverToSession(selectedSession)"
                     >
-                        <wa-icon name="pen-to-square" slot="start"></wa-icon>
-                        Prefill session composer
+                        <wa-spinner v-if="activeResolutionAction === 'existing'" slot="start"></wa-spinner>
+                        <wa-icon v-else name="pen-to-square" slot="start"></wa-icon>
+                        {{ activeResolutionAction === 'existing' ? 'Delivering…' : 'Prefill session composer' }}
                     </wa-button>
                 </div>
 
-                <wa-callout v-if="actionError" variant="danger" size="small">{{ actionError }}</wa-callout>
+                <wa-callout
+                    v-if="actionError"
+                    variant="danger" size="small"
+                    class="pr-action-error"
+                    :class="{ 'pr-action-error--after-mode': mode !== null }"
+                >{{ actionError }}</wa-callout>
             </template>
         </template>
 
@@ -1052,7 +1074,6 @@ function onHide(event) {
 /* Refusing is a rare, destructive answer: kept away from the two delivery
    buttons so it is never the one clicked by reflex. */
 .pr-actions__refuse { margin-inline-start: auto; }
-.pr-busy,
 .pr-preparing {
     display: flex;
     align-items: center;
@@ -1060,7 +1081,6 @@ function onHide(event) {
     margin-bottom: var(--wa-space-s);
     color: var(--wa-color-text-quiet);
 }
-.pr-busy wa-spinner,
 .pr-preparing wa-spinner { font-size: 1rem; }
 .pr-picker-filters {
     display: flex;
@@ -1120,5 +1140,6 @@ function onHide(event) {
     display: flex;
     gap: var(--wa-space-s);
 }
+.pr-action-error--after-mode { margin-top: var(--wa-space-s); }
 .pr-footer { display: flex; justify-content: flex-end; width: 100%; }
 </style>

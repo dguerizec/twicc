@@ -49,11 +49,28 @@ export function waitForNextPaint(
     })
 }
 
+/** Whether a pending inbound reply still waits for its local target lookup. */
+export function shouldShowReplyTargetPreparation(detail, settled) {
+    return !settled
+        && detail?.direction === 'in'
+        && detail?.status === 'pending'
+        && detail?.reply_target != null
+}
+
 /** Toggle a delivery mode and identify the first existing-picker activation. */
 export function deliveryPickerTransition(currentMode, requestedMode, existingPickerMounted) {
     const mode = currentMode === requestedMode ? null : requestedMode
     return {
         mode,
         prepareExisting: mode === 'existing' && !existingPickerMounted,
+        dismissRefusalConfirmation: true,
     }
+}
+
+/** Identify the one resolution button that owns progress while an action runs. */
+export function activePeerResolutionAction(busy, confirmingRefuse, mode) {
+    if (!busy) return null
+    if (confirmingRefuse) return 'refuse'
+    if (mode === 'existing' || mode === 'new') return mode
+    return null
 }

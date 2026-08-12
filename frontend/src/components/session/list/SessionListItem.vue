@@ -52,6 +52,10 @@ const props = defineProps({
         type: Boolean,
         default: false
     },
+    showTitleTooltip: {
+        type: Boolean,
+        default: true
+    },
     // Natural scope project IDs for the current sidebar filter (single-project,
     // workspace, or all-projects). When non-null and the session's project is
     // not in this set, the session is "cross-filter" (e.g. deep-linked extra
@@ -585,7 +589,7 @@ function handleMenuSelect(event) {
                 <AppTooltip :for="`session-mtime-${session.id}`">{{ useRelativeTime ? `Last activity: ${formatDate(session.mtime, { smart: true })}` : 'Last activity' }}</AppTooltip>
             </div>
         </wa-button>
-        <AppTooltip :for="`session-button-${session.id}`" placement="right">{{ session.title || session.id }}</AppTooltip>
+        <AppTooltip v-if="showTitleTooltip" :for="`session-button-${session.id}`" placement="right">{{ session.title || session.id }}</AppTooltip>
         <!-- Session dropdown menu (outside button to avoid nesting issues) -->
         <wa-dropdown
             class="session-menu"

@@ -2,10 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+    activePeerResolutionAction,
     chooseReplyTargetSource,
     deliveryPickerTransition,
     isReplyTargetPickerEligible,
     recoverReplyTargetPagination,
+    shouldShowReplyTargetPreparation,
     waitForNextPaint,
 } from './peerReplyTarget.js'
 
@@ -141,21 +143,58 @@ test('waits until a browser paint can complete before continuing', async () => {
 test('prepares the first existing-session activation without thread state', () => {
     assert.deepEqual(
         deliveryPickerTransition(null, 'existing', false),
-        { mode: 'existing', prepareExisting: true },
+        {
+            mode: 'existing',
+            prepareExisting: true,
+            dismissRefusalConfirmation: true,
+        },
     )
 })
 
 test('keeps a mounted existing-session picker warm across mode switches', () => {
     assert.deepEqual(
         deliveryPickerTransition('existing', 'new', true),
-        { mode: 'new', prepareExisting: false },
+        {
+            mode: 'new',
+            prepareExisting: false,
+            dismissRefusalConfirmation: true,
+        },
     )
     assert.deepEqual(
         deliveryPickerTransition('new', 'existing', true),
-        { mode: 'existing', prepareExisting: false },
+        {
+            mode: 'existing',
+            prepareExisting: false,
+            dismissRefusalConfirmation: true,
+        },
     )
     assert.deepEqual(
         deliveryPickerTransition('existing', 'existing', true),
-        { mode: null, prepareExisting: false },
+        {
+            mode: null,
+            prepareExisting: false,
+            dismissRefusalConfirmation: true,
+        },
     )
+})
+
+test('shows preparation while an inbound reply target is unresolved', () => {
+    const pendingReply = {
+        direction: 'in',
+        status: 'pending',
+        reply_target: 'target-session',
+    }
+    assert.equal(shouldShowReplyTargetPreparation(pendingReply, false), true)
+    assert.equal(shouldShowReplyTargetPreparation(pendingReply, true), false)
+    assert.equal(shouldShowReplyTargetPreparation({ ...pendingReply, reply_target: null }, false), false)
+    assert.equal(shouldShowReplyTargetPreparation({ ...pendingReply, direction: 'out' }, false), false)
+    assert.equal(shouldShowReplyTargetPreparation({ ...pendingReply, status: 'delivered' }, false), false)
+})
+
+test('identifies the one resolution button that owns busy progress', () => {
+    assert.equal(activePeerResolutionAction(false, false, 'existing'), null)
+    assert.equal(activePeerResolutionAction(true, false, 'existing'), 'existing')
+    assert.equal(activePeerResolutionAction(true, false, 'new'), 'new')
+    assert.equal(activePeerResolutionAction(true, true, 'new'), 'refuse')
+    assert.equal(activePeerResolutionAction(true, false, null), null)
 })
