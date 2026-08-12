@@ -1849,7 +1849,7 @@ class PeerMessage(models.Model):
     # outbound rows either — a copied title goes stale on the next rename; the
     # sending session is `origin_session` below, whose title is read live.
     origin = models.JSONField(default=dict)
-    # LOCAL only, outbound rows: which local session sent it (deferred threading, design §8).
+    # LOCAL only, outbound rows: which local session sent it (peer threading design §7).
     origin_session = models.ForeignKey(
         Session, null=True, blank=True, on_delete=models.SET_NULL, related_name="peer_messages_sent",
     )

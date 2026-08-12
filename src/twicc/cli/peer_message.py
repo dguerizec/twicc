@@ -14,8 +14,9 @@ def peer_message_cmd(
     """Re-check the status of an outbound peer message.
 
     ``pending`` = awaiting the remote user's approval; ``delivered`` /
-    ``refused`` = their resolution; ``failed`` = the send never reached the
-    peer (detail in ``error``).
+    ``refused`` = their resolution; ``failed`` = the sender received no
+    confirmed acceptance, so the peer may still have stored the message
+    (detail in ``error``).
     """
     import os
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "twicc.settings")
