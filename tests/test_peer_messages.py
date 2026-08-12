@@ -923,6 +923,156 @@ def test_serializer_carries_live_session_titles(transactional_db, status_callbac
     assert serialize_peer_message(message)["delivered_to_session"]["title"] == "Renamed after the delivery"
 
 
+def test_serializer_carries_threading_contract_and_live_parent_local_end(transactional_db):
+    from twicc.core.serializers import serialize_peer_message
+
+    peer = _active_peer()
+    _, origin_session = _make_target_session()
+    _, delivered_session = _make_target_session(
+        project_id="-tmp-received", directory="/tmp/received",
+    )
+    outbound_parent = _out_message(
+        peer,
+        message_id="parent-out",
+        thread_id="thread-root",
+        title="Our parent",
+        origin_session=origin_session,
+        status=PeerMessageStatus.DELIVERED,
+    )
+    inbound_parent = _in_message(
+        peer,
+        message_id="parent-in",
+        thread_id="thread-root",
+        title="Their parent",
+        delivered_to_session=delivered_session,
+        status=PeerMessageStatus.DELIVERED,
+    )
+    reply_to_outbound = _in_message(
+        peer,
+        message_id="reply-in",
+        reply_to=outbound_parent.message_id,
+        reply_to_message=outbound_parent,
+        thread_id="thread-root",
+    )
+    reply_to_inbound = _out_message(
+        peer,
+        message_id="reply-out",
+        reply_to=inbound_parent.message_id,
+        reply_to_message=inbound_parent,
+        thread_id="thread-root",
+    )
+
+    rows = PeerMessage.objects.select_related("reply_to_message").filter(
+        pk__in=[reply_to_outbound.pk, reply_to_inbound.pk],
+    )
+    data = {
+        row.message_id: serialize_peer_message(row, include_payload=True)
+        for row in rows
+    }
+
+    inbound_data = data["reply-in"]
+    assert inbound_data["thread_id"] == "thread-root"
+    assert inbound_data["reply_to"] == "parent-out"
+    assert inbound_data["reply_to_ref"] == {
+        "message_id": "parent-out",
+        "title": "Our parent",
+        "direction": PeerMessageDirection.OUT,
+        "status": PeerMessageStatus.DELIVERED,
+    }
+    assert inbound_data["reply_target"] == origin_session.id
+    assert "payload" in inbound_data
+
+    outbound_data = data["reply-out"]
+    assert outbound_data["reply_to_ref"]["direction"] == PeerMessageDirection.IN
+    assert outbound_data["reply_target"] == delivered_session.id
+
+
+def test_serializer_root_and_parent_without_local_end_have_null_reply_data(transactional_db):
+    from twicc.core.serializers import serialize_peer_message
+
+    peer = _active_peer()
+    root = _in_message(peer, message_id="root", thread_id="root")
+    parent = _out_message(peer, message_id="parent", thread_id="parent")
+    child = _in_message(
+        peer,
+        message_id="child",
+        reply_to=parent.message_id,
+        reply_to_message=parent,
+        thread_id="parent",
+    )
+
+    root_data = serialize_peer_message(root)
+    assert root_data["thread_id"] == "root"
+    assert root_data["reply_to"] == ""
+    assert root_data["reply_to_ref"] is None
+    assert root_data["reply_target"] is None
+    assert "payload" not in root_data
+
+    child = PeerMessage.objects.select_related("reply_to_message").get(pk=child.pk)
+    child_data = serialize_peer_message(child)
+    assert child_data["reply_to_ref"]["message_id"] == "parent"
+    assert child_data["reply_target"] is None
+
+
+def _resolved_owner_reply():
+    peer = _active_peer()
+    _, origin_session = _make_target_session()
+    parent = _out_message(
+        peer,
+        message_id="owner-parent",
+        thread_id="owner-parent",
+        title="Owner parent",
+        origin_session=origin_session,
+        status=PeerMessageStatus.DELIVERED,
+    )
+    child = _in_message(
+        peer,
+        message_id="owner-child",
+        reply_to=parent.message_id,
+        reply_to_message=parent,
+        thread_id=parent.thread_id,
+    )
+    return parent, child, origin_session
+
+
+def _assert_owner_reply_contract(row, parent, child, origin_session):
+    assert row["thread_id"] == parent.thread_id
+    assert row["reply_to"] == parent.message_id
+    assert row["reply_to_ref"] == {
+        "message_id": parent.message_id,
+        "title": parent.title,
+        "direction": PeerMessageDirection.OUT,
+        "status": PeerMessageStatus.DELIVERED,
+    }
+    assert row["reply_target"] == origin_session.id
+    assert row["message_id"] == child.message_id
+
+
+def test_owner_message_list_serializes_resolved_reply_without_async_lazy_load(
+        client, transactional_db):
+    parent, child, origin_session = _resolved_owner_reply()
+
+    response = _run(client.get("/api/peer-messages/"))
+
+    assert response.status_code == 200
+    body = orjson.loads(response.content)
+    row = next(item for item in body["messages"] if item["id"] == child.pk)
+    _assert_owner_reply_contract(row, parent, child, origin_session)
+    assert "payload" not in row
+
+
+def test_owner_message_detail_serializes_resolved_reply_without_async_lazy_load(
+        client, transactional_db):
+    parent, child, origin_session = _resolved_owner_reply()
+
+    response = _run(client.get(f"/api/peer-messages/{child.pk}/"))
+
+    assert response.status_code == 200
+    row = orjson.loads(response.content)
+    _assert_owner_reply_contract(row, parent, child, origin_session)
+    assert row["payload"]["text"] == child.payload["text"]
+
+
 # ── Late link of a "delivered to a new session" ─────────────────────────────
 
 def test_link_delivered_session_fills_the_empty_target(transactional_db, broadcasts, status_callbacks):

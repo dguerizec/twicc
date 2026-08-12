@@ -135,7 +135,7 @@ async def _serialize_for_broadcast(message) -> dict:
 
     fresh = await sync_to_async(
         lambda: PeerMessage.objects
-        .select_related("peer", "origin_session", "delivered_to_session")
+        .select_related("peer", "origin_session", "delivered_to_session", "reply_to_message")
         .filter(pk=message.pk).first()
     )()
     return serialize_peer_message(fresh or message)
@@ -634,7 +634,7 @@ async def _fresh_message(pk: int):
 
     return await sync_to_async(
         lambda: PeerMessage.objects
-        .select_related("peer", "origin_session", "delivered_to_session")
+        .select_related("peer", "origin_session", "delivered_to_session", "reply_to_message")
         .filter(pk=pk).first()
     )()
 

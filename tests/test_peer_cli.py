@@ -65,6 +65,39 @@ def test_peer_message_found_and_not_found():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_peer_message_resolved_reply_uses_one_query(django_assert_num_queries):
+    peer = _active_peer()
+    parent = PeerMessage.objects.create(
+        peer=peer,
+        direction=PeerMessageDirection.IN,
+        message_id="cli-parent",
+        thread_id="cli-parent",
+        title="CLI parent",
+        payload={"text": "parent", "images": [], "documents": []},
+        status=PeerMessageStatus.DELIVERED,
+    )
+    child = PeerMessage.objects.create(
+        peer=peer,
+        direction=PeerMessageDirection.OUT,
+        message_id="cli-child",
+        reply_to=parent.message_id,
+        reply_to_message=parent,
+        thread_id=parent.thread_id,
+        payload={"text": "child", "images": [], "documents": []},
+        status=PeerMessageStatus.PENDING,
+    )
+
+    with django_assert_num_queries(1):
+        response = invoke(["peer-message", child.message_id])
+
+    assert response.exit_code == 0
+    assert response.result["thread_id"] == parent.thread_id
+    assert response.result["reply_to"] == parent.message_id
+    assert response.result["reply_to_ref"]["message_id"] == parent.message_id
+    assert response.result["reply_target"] is None
+
+
+@pytest.mark.django_db(transaction=True)
 def test_peer_send_precheck_errors():
     async def scenario(argv):
         token = transport.backend_loop.set(asyncio.get_running_loop())

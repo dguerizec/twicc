@@ -511,10 +511,31 @@ def serialize_peer_message(message, *, include_payload=False):
     """Peer-message serializer. Summary form by default — base64 blobs must never
     transit the channel layer; only the REST detail endpoint passes
     ``include_payload=True``."""
+    from twicc.core.models import PeerMessageDirection
+
+    reply_to_message = message.reply_to_message
+    reply_to_ref = None
+    reply_target = None
+    if reply_to_message is not None:
+        reply_to_ref = {
+            "message_id": reply_to_message.message_id,
+            "title": reply_to_message.title,
+            "direction": reply_to_message.direction,
+            "status": reply_to_message.status,
+        }
+        reply_target = (
+            reply_to_message.origin_session_id
+            if reply_to_message.direction == PeerMessageDirection.OUT
+            else reply_to_message.delivered_to_session_id
+        )
     text = (message.payload or {}).get("text", "") or ""
     data = {
         "id": message.pk,
         "message_id": message.message_id,
+        "thread_id": message.thread_id,
+        "reply_to": message.reply_to,
+        "reply_to_ref": reply_to_ref,
+        "reply_target": reply_target,
         "peer_id": message.peer_id,
         "direction": message.direction,
         # Required on every send since 2026-08-11; "" on older rows — the UI

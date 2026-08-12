@@ -41,7 +41,7 @@ async def _load_message(pk):
 
     message = await sync_to_async(
         lambda: PeerMessage.objects
-        .select_related("peer", "origin_session", "delivered_to_session")
+        .select_related("peer", "origin_session", "delivered_to_session", "reply_to_message")
         .filter(pk=pk).first()
     )()
     if message is None:
@@ -147,7 +147,9 @@ async def peer_messages_list(request):
     def _fetch():
         # The serializer reads each message's local session titles: one JOIN,
         # not one query per row.
-        rows = PeerMessage.objects.select_related("origin_session", "delivered_to_session")
+        rows = PeerMessage.objects.select_related(
+            "origin_session", "delivered_to_session", "reply_to_message",
+        )
         pending = list(rows.filter(
             direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
         ))

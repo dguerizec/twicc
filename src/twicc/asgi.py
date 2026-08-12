@@ -626,7 +626,9 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
             def _peer_messages_snapshot():
                 # The serializer reads each message's local session titles: one
                 # JOIN, not one query per row.
-                rows = PeerMessage.objects.select_related("origin_session", "delivered_to_session")
+                rows = PeerMessage.objects.select_related(
+                    "origin_session", "delivered_to_session", "reply_to_message",
+                )
                 pending = list(rows.filter(
                     direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
                 ))
