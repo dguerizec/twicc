@@ -26,19 +26,19 @@ def test_normalized_origin_exposes_metadata():
     assert result.port == 8443
 
 
-def test_usable_public_origin_fails_closed_for_invalid_legacy_value():
+def test_usable_public_origin_fails_closed_for_invalid_value():
     assert usable_public_origin("https://valid.example.com/") == "https://valid.example.com"
     assert usable_public_origin("ftp://unsafe.example.com") == ""
 
 
-def test_settings_read_migrates_all_repairable_public_origins(tmp_path, monkeypatch):
+def test_settings_read_only_migrates_deployed_public_origins(tmp_path, monkeypatch):
     import twicc.synced_settings as ss
 
     path = tmp_path / "settings.json"
     path.write_bytes(orjson.dumps({
         "publicBaseUrl": "public.example.com",
         "shareBaseUrl": "HTTPS://Share.Example.COM/",
-        "peerBaseUrl": "http://peer.example.com/base?x=1#part",
+        "peerBaseUrl": "peer.example.com",
     }))
     monkeypatch.setattr(ss, "get_synced_settings_path", lambda: path)
     ss._cache.clear()
@@ -46,11 +46,11 @@ def test_settings_read_migrates_all_repairable_public_origins(tmp_path, monkeypa
         settings = ss.read_synced_settings()
         assert settings["publicBaseUrl"] == "https://public.example.com"
         assert settings["shareBaseUrl"] == "https://share.example.com"
-        assert settings["peerBaseUrl"] == "http://peer.example.com"
+        assert settings["peerBaseUrl"] == "peer.example.com"
         persisted = orjson.loads(path.read_bytes())
         assert persisted["publicBaseUrl"] == "https://public.example.com"
         assert persisted["shareBaseUrl"] == "https://share.example.com"
-        assert persisted["peerBaseUrl"] == "http://peer.example.com"
+        assert persisted["peerBaseUrl"] == "peer.example.com"
     finally:
         ss._cache.clear()
 
@@ -68,7 +68,7 @@ def test_public_origin_migration_is_idempotent():
     assert settings == migrated
 
 
-@pytest.mark.parametrize("key", ["publicBaseUrl", "shareBaseUrl", "peerBaseUrl"])
+@pytest.mark.parametrize("key", ["publicBaseUrl", "shareBaseUrl"])
 def test_settings_read_retains_unsafe_public_origin(key, tmp_path, monkeypatch):
     import twicc.synced_settings as ss
 
@@ -87,11 +87,11 @@ def test_settings_read_retains_non_string_public_origin(tmp_path, monkeypatch):
     import twicc.synced_settings as ss
 
     path = tmp_path / "settings.json"
-    path.write_bytes(orjson.dumps({"peerBaseUrl": 42}))
+    path.write_bytes(orjson.dumps({"shareBaseUrl": 42}))
     monkeypatch.setattr(ss, "get_synced_settings_path", lambda: path)
     ss._cache.clear()
     try:
-        assert ss.read_synced_settings()["peerBaseUrl"] == 42
-        assert orjson.loads(path.read_bytes())["peerBaseUrl"] == 42
+        assert ss.read_synced_settings()["shareBaseUrl"] == 42
+        assert orjson.loads(path.read_bytes())["shareBaseUrl"] == 42
     finally:
         ss._cache.clear()

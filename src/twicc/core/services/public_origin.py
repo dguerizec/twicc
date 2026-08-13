@@ -13,6 +13,7 @@ from urllib.parse import SplitResult, urlsplit
 
 
 PUBLIC_ORIGIN_SETTING_KEYS = ("publicBaseUrl", "shareBaseUrl", "peerBaseUrl")
+LEGACY_PUBLIC_ORIGIN_SETTING_KEYS = ("publicBaseUrl", "shareBaseUrl")
 
 _TRIM_CHARS = "\t\n\x0b\x0c\r "
 _HTTP_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)

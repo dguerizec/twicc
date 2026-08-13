@@ -250,9 +250,12 @@ def _migrate_legacy_settings(file_data: dict) -> bool:
         file_data["worktreeDirectoryTemplate"] = f"{{git_root}}/{legacy_value}" if legacy_value else ""
         renamed.append("defaultWorktreeDirectory→worktreeDirectoryTemplate")
         changed = True
-    from twicc.core.services.public_origin import PUBLIC_ORIGIN_SETTING_KEYS, repair_legacy_public_origin
+    from twicc.core.services.public_origin import LEGACY_PUBLIC_ORIGIN_SETTING_KEYS, repair_legacy_public_origin
 
-    for key in PUBLIC_ORIGIN_SETTING_KEYS:
+    # Only settings present in released versions need legacy repair.
+    # peerBaseUrl belongs to the unreleased Peer System and must not acquire a
+    # migration or backward-compatibility contract before its first release.
+    for key in LEGACY_PUBLIC_ORIGIN_SETTING_KEYS:
         if key not in file_data:
             continue
         result = repair_legacy_public_origin(file_data[key])

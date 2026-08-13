@@ -8,8 +8,9 @@ TwiCC has three synced settings that identify public origins:
 - `shareBaseUrl`, shown as **Share host**;
 - `peerBaseUrl`, shown as **Your address** in the Peer settings.
 
-This design gives all three settings one input, normalization, validation, and
-legacy-migration contract. It does not add the planned peer-only host routing.
+This design gives all three settings one input, normalization, and validation
+contract. Legacy migration applies only to the deployed External and Share
+settings. It does not add the planned peer-only host routing.
 
 The setting names do not change. Existing code and persisted settings continue
 to use the `*BaseUrl` names.
@@ -89,7 +90,8 @@ An explicit scheme is authoritative. TwiCC never upgrades an explicit HTTP
 origin to HTTPS.
 
 This preserves the current working behavior of a bare public share hostname.
-It also repairs scheme-less External addresses and CLI-written Peer addresses.
+It also repairs scheme-less External addresses. New Peer writes use the common
+normalizer directly.
 
 ## Shared implementation
 
@@ -116,13 +118,13 @@ An invalid changed value rejects the settings update atomically with a field
 error. The WebSocket and CLI surfaces expose the same error.
 
 Settings clients can send a full snapshot rather than a narrow patch. An
-unchanged invalid legacy value must not block an unrelated settings update.
-Only a newly supplied or changed invalid value is rejected.
+unchanged invalid legacy External or Share value must not block an unrelated
+settings update. Only a newly supplied or changed invalid value is rejected.
 
 ## Legacy migration
 
-The first settings read applies a one-time, idempotent migration to all three
-keys. Empty values stay empty.
+The first settings read applies a one-time, idempotent migration to
+`publicBaseUrl` and `shareBaseUrl`. Empty values stay empty.
 
 The migration canonicalizes values that it can repair deterministically:
 
@@ -141,15 +143,26 @@ Examples:
 | `https://example.com/base?x=1#part` | `https://example.com` |
 
 The Share URL produced from a bare hostname does not change. External links
-become absolute. A scheme-less Peer address becomes usable.
+become absolute.
 
 The migration does not guess when repair is unsafe. It retains an existing
 value with an unsupported scheme, credentials, an invalid port, or no
 hostname. It logs only the affected setting key, never the value.
 
-The Settings UI keeps such a retained value visible and shows its validation
-error. Runtime consumers treat it as unset until the user corrects it. This
-preserves the user's input without using an unsafe or malformed origin.
+The Settings UI keeps such a retained External or Share value visible and shows
+its validation error. Runtime consumers treat it as unset until the user
+corrects it. This preserves the user's input without using an unsafe or
+malformed origin.
+
+### No Peer migration or backward compatibility
+
+The Peer System is new and has not shipped. `peerBaseUrl` therefore has no
+deployed values and no legacy contract.
+
+Settings reads never migrate `peerBaseUrl`. The implementation does not add
+legacy parsing, compatibility branches, or migration tests for old Peer
+formats. New Peer values use the same write-time validation as the other public
+origins. Development instances already use valid values and need no migration.
 
 ## Runtime consumers
 
@@ -167,8 +180,8 @@ whether the stored string is non-empty.
 - The peer display-name fallback uses the parsed peer hostname.
 
 The existing Share URL builder can retain scheme-less fallback support during
-the transition. Normal settings reads and writes nevertheless produce a
-canonical origin.
+the transition. Migrated External and Share reads, plus every new write,
+produce canonical origins.
 
 ## Error behavior
 
@@ -180,7 +193,7 @@ It can use a more specific message for an unsupported scheme or credentials
 when the common helper provides that error code.
 
 No invalid update partially changes settings. No runtime consumer uses an
-invalid retained legacy value.
+invalid retained External or Share value.
 
 ## Tests
 
@@ -188,8 +201,10 @@ The implementation requires:
 
 - shared Python and JavaScript fixture tests for every normalization case;
 - backend settings-mutation tests for corrections and atomic rejection;
-- migration tests for bare values, explicit schemes, suffix removal,
-  idempotence, and retained unsafe values;
+- migration tests for deployed External and Share values, including bare
+  values, explicit schemes, suffix removal, idempotence, and retained unsafe
+  values;
+- a scope regression test that settings reads never mutate `peerBaseUrl`;
 - frontend Settings tests for all three fields;
 - consumer tests for notifications, companion snippets, sharing, and peer
   feature gating with invalid stored values;
