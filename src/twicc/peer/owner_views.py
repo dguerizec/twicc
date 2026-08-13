@@ -163,11 +163,27 @@ async def peer_messages_list(request):
 
 
 async def peer_message_detail(request, pk):
-    """GET /api/peer-messages/<pk>/ — the full payload (the only surface that ships it)."""
+    """GET /api/peer-messages/<pk>/ — message detail, optionally without attachment bytes."""
     if request.method != "GET":
         return HttpResponseNotAllowed(["GET"])
     message = await _load_message(pk)
-    return JsonResponse(serialize_peer_message(message, include_payload=True))
+    return JsonResponse(serialize_peer_message(
+        message,
+        include_payload=True,
+        include_attachments=request.GET.get("include_attachments") != "0",
+    ))
+
+
+async def peer_message_attachments(request, pk):
+    """GET /api/peer-messages/<pk>/attachments/ — attachment blocks without message text."""
+    if request.method != "GET":
+        return HttpResponseNotAllowed(["GET"])
+    message = await _load_message(pk)
+    payload = message.payload or {}
+    return JsonResponse({
+        "images": payload.get("images") or [],
+        "documents": payload.get("documents") or [],
+    })
 
 
 async def peer_message_deliver(request, pk):

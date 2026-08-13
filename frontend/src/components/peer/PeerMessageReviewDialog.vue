@@ -11,8 +11,9 @@
  * history): an already-delivered one offers the delivery pickers again (wrong
  * target picked, draft cleared), a refused or outbound one is read-only.
  *
- * The full payload (base64 blobs) is fetched from REST on open; the store
- * only ever holds summaries.
+ * The store summary paints the reading shell immediately. REST then loads the
+ * full text without attachment bytes; attachment blocks have a separate,
+ * size-gated request so large peer content never arrives implicitly.
  */
 import { ref, computed, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
@@ -25,6 +26,14 @@ import { formatDate } from '../../utils/date'
 import { apiFetch } from '../../utils/api'
 import { renderMarkdown } from '../../utils/markdown'
 import { sdkBlockToMediaItem } from '../../utils/fileUtils'
+import {
+    formatPeerContentBytes,
+    mergePeerAttachments,
+    peerAttachmentBytes,
+    peerContentAllowsDelivery,
+    shouldConfirmPeerAttachments,
+    shouldConfirmPeerMarkdown,
+} from '../../utils/peerMessageContent'
 import { sessionRouteLocation } from '../../utils/sessionRoute'
 import { computeSidebarSessionBlocks } from '../../utils/sidebarSessions'
 import {
@@ -74,9 +83,13 @@ const relativeTimeFormat = computed(() =>
 )
 
 const dialogRef = ref(null)
-const detail = ref(null)          // full serialize_peer_message (with payload)
+const detail = ref(null)          // summary shell, then lightweight detail + approved attachments
+const detailReady = ref(false)
 const loadError = ref('')
 const renderedText = ref('')      // renderMarkdown is async — never bind the promise
+const markdownState = ref('loading')      // loading | confirm | rendering | declined | ready | error
+const attachmentsState = ref('unknown')  // unknown | confirm | loading | declined | ready | error
+const loadedAttachments = ref({ images: [], documents: [] })
 const note = ref('')
 const actionError = ref('')
 const busy = ref(false)
@@ -115,6 +128,19 @@ const isPending = computed(() => isInbound.value && detail.value?.status === 'pe
 // for them. A REFUSED one never reopens: that answer stands.
 const isRedeliverable = computed(() => isInbound.value && detail.value?.status === 'delivered')
 const canDeliver = computed(() => isPending.value || isRedeliverable.value)
+const contentAllowsDelivery = computed(() => peerContentAllowsDelivery(
+    detailReady.value,
+    markdownState.value,
+    attachmentsState.value,
+))
+const textSizeLabel = computed(() => formatPeerContentBytes(detail.value?.text_bytes || 0))
+const attachmentCount = computed(() => detail.value?.attachments_meta?.length || 0)
+const attachmentByteCount = computed(() => peerAttachmentBytes(detail.value?.attachments_meta))
+const attachmentSizeLabel = computed(() => formatPeerContentBytes(attachmentByteCount.value))
+const attachmentPrompt = computed(() => attachmentCount.value === 1
+    ? `This attachment is large (${attachmentSizeLabel.value}). Load it?`
+    : `These ${attachmentCount.value} attachments total ${attachmentSizeLabel.value}. Load them?`
+)
 // Attachment bytes are dropped 7 days after resolution — a late redelivery
 // carries the text only.
 const attachmentsLost = computed(() =>
@@ -179,6 +205,7 @@ function openLocalSession() {
 }
 
 const mediaItems = computed(() => {
+    if (attachmentsState.value !== 'ready') return []
     const payload = detail.value?.payload
     if (!payload) return []
     return [...(payload.images || []), ...(payload.documents || [])]
@@ -339,6 +366,24 @@ function isCurrentOpen(generation, messageId) {
         && props.messageId === messageId
 }
 
+function summaryForMessage(messageId) {
+    return peersStore.messages.find(message => String(message.id) === String(messageId)) || null
+}
+
+function summaryShell(summary) {
+    if (!summary) return null
+    return {
+        ...summary,
+        payload: { text: '', images: [], documents: [] },
+    }
+}
+
+function initialAttachmentsState(message) {
+    if (!message) return 'unknown'
+    if (message.purged || !(message.attachments_meta?.length)) return 'ready'
+    return shouldConfirmPeerAttachments(message.attachments_meta) ? 'confirm' : 'loading'
+}
+
 /** Mount the expensive session page once, after the preparation state paints.
  *  Later mode switches keep the same DOM and scroll position. */
 async function ensureExistingPickerMounted(generation, messageId) {
@@ -363,9 +408,63 @@ async function ensureExistingPickerMounted(generation, messageId) {
 }
 
 async function renderDetailText(text, generation, messageId) {
-    const rendered = await renderMarkdown(text)
+    markdownState.value = 'rendering'
+    await waitForNextPaint()
     if (!isCurrentOpen(generation, messageId)) return
-    renderedText.value = rendered
+    try {
+        const rendered = await renderMarkdown(text)
+        if (!isCurrentOpen(generation, messageId)) return
+        renderedText.value = rendered
+        markdownState.value = 'ready'
+    } catch {
+        if (!isCurrentOpen(generation, messageId)) return
+        markdownState.value = 'error'
+    }
+}
+
+function renderCurrentMessage() {
+    return renderDetailText(
+        detail.value?.payload?.text || '',
+        openGeneration,
+        props.messageId,
+    )
+}
+
+function declineMarkdown() {
+    markdownState.value = 'declined'
+}
+
+async function loadMessageAttachments(
+    generation = openGeneration,
+    messageId = props.messageId,
+) {
+    if (!attachmentCount.value || detail.value?.purged) {
+        attachmentsState.value = 'ready'
+        return
+    }
+    attachmentsState.value = 'loading'
+    await waitForNextPaint()
+    if (!isCurrentOpen(generation, messageId)) return
+    try {
+        const response = await apiFetch(`/api/peer-messages/${messageId}/attachments/`)
+        if (!isCurrentOpen(generation, messageId)) return
+        if (!response.ok) {
+            attachmentsState.value = 'error'
+            return
+        }
+        const attachments = await response.json()
+        if (!isCurrentOpen(generation, messageId)) return
+        loadedAttachments.value = attachments
+        detail.value = mergePeerAttachments(detail.value, attachments)
+        attachmentsState.value = 'ready'
+    } catch {
+        if (!isCurrentOpen(generation, messageId)) return
+        attachmentsState.value = 'error'
+    }
+}
+
+function declineAttachments() {
+    attachmentsState.value = 'declined'
 }
 
 async function scrollSeededTarget(generation, messageId, targetId) {
@@ -436,9 +535,14 @@ async function initializeReplyTarget(loadedDetail, generation, messageId) {
 watch(() => [props.open, props.messageId], async ([open, messageId]) => {
     const generation = ++openGeneration
     if (!open || messageId == null) return
-    detail.value = null
+    const summary = summaryForMessage(messageId)
+    loadedAttachments.value = { images: [], documents: [] }
+    detail.value = summaryShell(summary)
+    detailReady.value = false
     loadError.value = ''
     renderedText.value = ''
+    markdownState.value = 'loading'
+    attachmentsState.value = initialAttachmentsState(summary)
     note.value = ''
     actionError.value = ''
     mode.value = null
@@ -454,7 +558,9 @@ watch(() => [props.open, props.messageId], async ([open, messageId]) => {
 
     let loadedDetail
     try {
-        const response = await apiFetch(`/api/peer-messages/${messageId}/`)
+        const response = await apiFetch(
+            `/api/peer-messages/${messageId}/?include_attachments=0`,
+        )
         if (!isCurrentOpen(generation, messageId)) return
         if (!response.ok) {
             loadError.value = 'Could not load the message.'
@@ -462,7 +568,8 @@ watch(() => [props.open, props.messageId], async ([open, messageId]) => {
         }
         loadedDetail = await response.json()
         if (!isCurrentOpen(generation, messageId)) return
-        detail.value = loadedDetail
+        detail.value = mergePeerAttachments(loadedDetail, loadedAttachments.value)
+        detailReady.value = true
         // Redelivery: bring back the note typed the first time (empty on a
         // never-delivered message).
         note.value = loadedDetail.recipient_note || ''
@@ -473,11 +580,22 @@ watch(() => [props.open, props.messageId], async ([open, messageId]) => {
         return
     }
 
-    // Finish and paint the message before a reply target can mount the full
-    // session page. Manual Existing mode uses the same lazy-mount path later.
-    await renderDetailText(
-        loadedDetail.payload?.text || '', generation, messageId,
-    )
+    if (attachmentsState.value === 'unknown') {
+        attachmentsState.value = initialAttachmentsState(loadedDetail)
+    }
+    if (attachmentsState.value === 'loading') {
+        void loadMessageAttachments(generation, messageId)
+    }
+
+    // Large peer text needs an owner decision before any Markdown work. Small
+    // text paints its local progress state before the renderer can block.
+    if (shouldConfirmPeerMarkdown(loadedDetail.text_bytes)) {
+        markdownState.value = 'confirm'
+    } else {
+        await renderDetailText(
+            loadedDetail.payload?.text || '', generation, messageId,
+        )
+    }
     if (!isCurrentOpen(generation, messageId)) return
     await initializeReplyTarget(loadedDetail, generation, messageId)
 }, { immediate: true, flush: 'sync' })
@@ -723,12 +841,83 @@ function onHide(event) {
             <!-- Message body (markdown), quoted like the inbox preview: these
                  are someone else's words, not the app's. -->
             <div class="pr-quote">
-                <div class="pr-body markdown-body" v-html="renderedText"></div>
+                <div
+                    v-if="markdownState === 'ready'"
+                    class="pr-body markdown-body"
+                    v-html="renderedText"
+                ></div>
+                <div v-else class="pr-body pr-content-state">
+                    <template v-if="markdownState === 'loading' || markdownState === 'rendering'">
+                        <span class="pr-content-state__status" role="status" aria-live="polite">
+                            <wa-spinner></wa-spinner>
+                            {{ markdownState === 'rendering' ? 'Rendering message…' : 'Loading message…' }}
+                        </span>
+                    </template>
+                    <template v-else-if="markdownState === 'confirm'">
+                        <span>This message is large ({{ textSizeLabel }}). Render it?</span>
+                        <span class="pr-content-state__actions">
+                            <wa-button size="small" variant="brand" @click="renderCurrentMessage">
+                                Render message
+                            </wa-button>
+                            <wa-button size="small" appearance="outlined" @click="declineMarkdown">
+                                Do not render
+                            </wa-button>
+                        </span>
+                    </template>
+                    <template v-else-if="markdownState === 'declined'">
+                        <span>Message not rendered.</span>
+                        <wa-button size="small" variant="brand" @click="renderCurrentMessage">
+                            Render message
+                        </wa-button>
+                    </template>
+                    <template v-else>
+                        <span>Could not render the message.</span>
+                        <wa-button size="small" variant="brand" @click="renderCurrentMessage">
+                            Try again
+                        </wa-button>
+                    </template>
+                </div>
             </div>
 
             <!-- Attachments -->
-            <MediaThumbnailGroup v-if="mediaItems.length" :items="mediaItems" />
-            <p v-else-if="detail.purged && detail.attachments_meta?.length && !attachmentsLost" class="pr-purged">
+            <template v-if="attachmentCount && !detail.purged">
+                <MediaThumbnailGroup
+                    v-if="attachmentsState === 'ready' && mediaItems.length"
+                    :items="mediaItems"
+                />
+                <div v-else class="pr-attachments-state">
+                    <template v-if="attachmentsState === 'loading' || attachmentsState === 'unknown'">
+                        <span class="pr-content-state__status" role="status" aria-live="polite">
+                            <wa-spinner></wa-spinner>
+                            Loading attachments…
+                        </span>
+                    </template>
+                    <template v-else-if="attachmentsState === 'confirm'">
+                        <span>{{ attachmentPrompt }}</span>
+                        <span class="pr-content-state__actions">
+                            <wa-button size="small" variant="brand" @click="loadMessageAttachments()">
+                                Load attachments
+                            </wa-button>
+                            <wa-button size="small" appearance="outlined" @click="declineAttachments">
+                                Do not load
+                            </wa-button>
+                        </span>
+                    </template>
+                    <template v-else-if="attachmentsState === 'declined'">
+                        <span>Attachments not loaded.</span>
+                        <wa-button size="small" variant="brand" @click="loadMessageAttachments()">
+                            Load attachments
+                        </wa-button>
+                    </template>
+                    <template v-else-if="attachmentsState === 'error'">
+                        <span>Could not load attachments.</span>
+                        <wa-button size="small" variant="brand" @click="loadMessageAttachments()">
+                            Try again
+                        </wa-button>
+                    </template>
+                </div>
+            </template>
+            <p v-else-if="detail.purged && attachmentCount && !attachmentsLost" class="pr-purged">
                 {{ detail.attachments_meta.length }} attachment(s) — bytes purged.
             </p>
 
@@ -789,7 +978,7 @@ function onHide(event) {
                 <div class="pr-actions">
                     <wa-button
                         variant="brand" :appearance="mode === 'new' ? 'outlined' : 'accent'"
-                        :disabled="busy"
+                        :disabled="busy || !contentAllowsDelivery"
                         @click="setMode('existing')"
                     >
                         <wa-icon name="comments" slot="start"></wa-icon>
@@ -797,7 +986,7 @@ function onHide(event) {
                     </wa-button>
                     <wa-button
                         variant="brand" :appearance="mode === 'existing' ? 'outlined' : 'accent'"
-                        :disabled="busy"
+                        :disabled="busy || !contentAllowsDelivery"
                         @click="setMode('new')"
                     >
                         <wa-icon name="plus" slot="start"></wa-icon>
@@ -861,7 +1050,7 @@ function onHide(event) {
                         </wa-select>
                         <wa-button
                             size="small" variant="brand"
-                            :disabled="!pickedProjectId || busy"
+                            :disabled="!pickedProjectId || busy || !contentAllowsDelivery"
                             :aria-busy="activeResolutionAction === 'new' ? 'true' : 'false'"
                             @click="deliverToNewSession(pickedProjectId)"
                         >
@@ -939,7 +1128,7 @@ function onHide(event) {
                     </div>
                     <wa-button
                         size="small" variant="brand"
-                        :disabled="!selectedSession || busy"
+                        :disabled="!selectedSession || busy || !contentAllowsDelivery"
                         :aria-busy="activeResolutionAction === 'existing' ? 'true' : 'false'"
                         @click="deliverToSession(selectedSession)"
                     >
@@ -957,6 +1146,11 @@ function onHide(event) {
                 >{{ actionError }}</wa-callout>
             </template>
         </template>
+
+        <div v-else-if="!loadError" class="pr-dialog-loading" role="status" aria-live="polite">
+            <wa-spinner></wa-spinner>
+            Loading message…
+        </div>
 
         <div slot="footer" class="pr-footer">
             <wa-button :disabled="busy" @click="emit('close')">Close</wa-button>
@@ -1021,6 +1215,38 @@ function onHide(event) {
     overflow: auto;
     background: transparent;
     color: var(--wa-color-text-normal);
+}
+.pr-content-state,
+.pr-attachments-state {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--wa-space-s);
+    color: var(--wa-color-text-quiet);
+}
+.pr-content-state { min-height: 3rem; }
+.pr-content-state__status,
+.pr-content-state__actions {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--wa-space-xs);
+}
+.pr-content-state__status wa-spinner { font-size: 1rem; }
+.pr-dialog-loading {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    min-height: 4rem;
+    color: var(--wa-color-text-quiet);
+}
+.pr-dialog-loading wa-spinner { font-size: 1rem; }
+.pr-attachments-state {
+    padding: var(--wa-space-s) var(--wa-space-m);
+    margin-bottom: var(--wa-space-s);
+    border: 1px solid var(--wa-color-surface-border);
+    border-radius: var(--wa-border-radius-m);
+    background: var(--wa-color-surface-lowered);
 }
 /* First and last blocks of the markdown must not push the tint open. */
 .pr-body :deep(> :first-child) { margin-top: 0; }

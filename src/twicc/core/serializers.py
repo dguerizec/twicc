@@ -507,7 +507,7 @@ def peer_message_session_ref(session):
     return {"id": session.id, "title": session.title, "project_id": session.project_id}
 
 
-def serialize_peer_message(message, *, include_payload=False):
+def serialize_peer_message(message, *, include_payload=False, include_attachments=True):
     """Peer-message serializer. Summary form by default — base64 blobs must never
     transit the channel layer; only the REST detail endpoint passes
     ``include_payload=True``."""
@@ -544,6 +544,7 @@ def serialize_peer_message(message, *, include_payload=False):
         "status": message.status,
         "error": message.error,
         "text_preview": text[:300],
+        "text_bytes": len(text.encode("utf-8")),
         "attachments_meta": message.attachments_meta,
         "origin": message.origin,
         "recipient_note": message.recipient_note,
@@ -560,5 +561,10 @@ def serialize_peer_message(message, *, include_payload=False):
         "purged": message.purged_at is not None,
     }
     if include_payload:
-        data["payload"] = message.payload
+        payload = message.payload or {}
+        data["payload"] = payload if include_attachments else {
+            "text": text,
+            "images": [],
+            "documents": [],
+        }
     return data

@@ -194,6 +194,7 @@ urlpatterns = [
     path("api/peers/<str:peer_id>/refuse/", peer_owner_views.peer_refuse),
     path("api/peer-messages/", peer_owner_views.peer_messages_list),
     path("api/peer-messages/<int:pk>/", peer_owner_views.peer_message_detail),
+    path("api/peer-messages/<int:pk>/attachments/", peer_owner_views.peer_message_attachments),
     path("api/peer-messages/<int:pk>/deliver/", peer_owner_views.peer_message_deliver),
     path("api/peer-messages/<int:pk>/link-session/", peer_owner_views.peer_message_link_session),
     path("api/peer-messages/<int:pk>/refuse/", peer_owner_views.peer_message_refuse),

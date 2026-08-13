@@ -1353,6 +1353,73 @@ def test_owner_message_detail_serializes_resolved_reply_without_async_lazy_load(
     assert row["payload"]["text"] == child.payload["text"]
 
 
+def test_owner_message_summary_reports_utf8_text_size(client, transactional_db):
+    peer = _active_peer()
+    message = _in_message(
+        peer,
+        message_id="owner-sized-text",
+        payload={"text": "éx", "images": [], "documents": []},
+    )
+
+    response = _run(client.get("/api/peer-messages/"))
+
+    assert response.status_code == 200
+    body = orjson.loads(response.content)
+    row = next(item for item in body["messages"] if item["id"] == message.pk)
+    assert row["text_bytes"] == 3
+    assert "payload" not in row
+
+
+def test_owner_message_light_detail_keeps_full_text_without_attachment_bytes(
+        client, transactional_db):
+    peer = _active_peer()
+    image = _image_block(b"attachment-sentinel")
+    message = _in_message(
+        peer,
+        message_id="owner-light-detail",
+        payload={"text": "full **message**", "images": [image], "documents": []},
+    )
+
+    response = _run(client.get(
+        f"/api/peer-messages/{message.pk}/?include_attachments=0",
+    ))
+
+    assert response.status_code == 200
+    row = orjson.loads(response.content)
+    assert row["payload"] == {
+        "text": "full **message**",
+        "images": [],
+        "documents": [],
+    }
+    assert row["text_bytes"] == len("full **message**".encode())
+    assert image["source"]["data"].encode() not in response.content
+
+
+def test_owner_message_attachments_endpoint_returns_only_attachment_blocks(
+        client, transactional_db):
+    peer = _active_peer()
+    image = _image_block(b"image")
+    document = {
+        "type": "document",
+        "title": "note.txt",
+        "source": {"type": "text", "media_type": "text/plain", "data": "document"},
+    }
+    message = _in_message(
+        peer,
+        message_id="owner-attachments",
+        payload={"text": "must stay out", "images": [image], "documents": [document]},
+    )
+
+    response = _run(client.get(f"/api/peer-messages/{message.pk}/attachments/"))
+
+    assert response.status_code == 200
+    assert orjson.loads(response.content) == {
+        "images": [image],
+        "documents": [document],
+    }
+    assert b"must stay out" not in response.content
+
+
 # ── Late link of a "delivered to a new session" ─────────────────────────────
 
 def test_link_delivered_session_fills_the_empty_target(transactional_db, broadcasts, status_callbacks):
