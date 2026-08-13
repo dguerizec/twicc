@@ -59,6 +59,15 @@ const props = defineProps({
         type: Boolean,
         default: false
     },
+    sendingLockedReason: {
+        type: String,
+        default: 'Answer the pending request to send'
+    },
+    sendingLockedPresentation: {
+        type: String,
+        default: 'paused',
+        validator: value => ['paused', 'disabled'].includes(value)
+    },
     // When true, another panel (a pending request, the hybrid terminal block
     // and/or the goal bar) is rendered above the composer in the footer —
     // regardless of that panel's own expanded/collapsed state. Drives the top
@@ -2111,12 +2120,13 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     <span>{{ hasDropdownsChanged ? 'Reset' : 'Clear' }}</span>
                 </wa-button>
                 <!-- Send / Update button: dynamically labeled based on state.
-                     Hidden while a pending request locks sending (replaced by the
-                     indicator below). -->
+                     A pending request replaces it with the paused indicator. Session
+                     preparation keeps it visible but disabled. -->
                 <wa-button
-                    v-if="!sendingLocked"
+                    v-if="!sendingLocked || sendingLockedPresentation === 'disabled'"
+                    :id="sendingLocked ? sendingLockedId : undefined"
                     variant="brand"
-                    :disabled="isDisabled || (!messageText.trim() && !canSendAttachmentsOnly && !hasUnappliedChanges)"
+                    :disabled="sendingLocked || isDisabled || (!messageText.trim() && !canSendAttachmentsOnly && !hasUnappliedChanges)"
                     @click="handleSend"
                     size="small"
                     class="send-button"
@@ -2131,7 +2141,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
                     <wa-icon name="lock" variant="classic"></wa-icon>
                     <span>Sending paused</span>
                 </div>
-                <AppTooltip v-if="sendingLocked" :for="sendingLockedId">Answer the pending request to send</AppTooltip>
+                <AppTooltip v-if="sendingLocked" :for="sendingLockedId">{{ sendingLockedReason }}</AppTooltip>
             </div>
         </div>
 

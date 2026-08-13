@@ -9,6 +9,8 @@ import { toast } from '../../../composables/useToast'
 import { apiFetch } from '../../../utils/api'
 import { getParsedContent, hasContent } from '../../../utils/parsedContent'
 import { pendingSessionSearch } from '../../../utils/pendingSearch'
+import { createComputePendingHint } from '../../../utils/computePendingHint.js'
+import { resolveSessionComposerLock } from '../../../utils/sessionComposerLock.js'
 import { classifyHref } from '../../../utils/fileLinks.js'
 import { fileRootsFromStore } from '../../../utils/projectRoots'
 import VirtualScroller from '../../virtual-scroller/VirtualScroller.vue'
@@ -173,6 +175,10 @@ const isComputePending = computed(() => {
     const sess = store.getSession(props.sessionId)
     return sess && sess.compute_version_up_to_date === false
 })
+const computePendingHintPhase = ref(null)
+const computePendingHint = createComputePendingHint({
+    setPhase: phase => { computePendingHintPhase.value = phase },
+})
 
 // Loading and error states
 const isLoading = computed(() => store.areSessionItemsLoading(props.sessionId))
@@ -202,6 +208,10 @@ const hasPendingRequest = computed(() => pendingRequests.value.length > 0)
 const hasAnswerablePendingRequest = computed(() =>
     hasPendingRequest.value && pendingRequest.value.request_type !== 'hybrid_terminal'
 )
+const composerSendingLock = computed(() => resolveSessionComposerLock({
+    hasAnswerablePendingRequest: hasAnswerablePendingRequest.value,
+    isComputePending: isComputePending.value,
+}))
 
 // The session's current goal (last entry of the /goal lifecycle history, null
 // when none or when the user dismissed it) — drives the goal bar at the very
@@ -792,6 +802,12 @@ watch(() => session.value?.compute_version_up_to_date, (newValue, oldValue) => {
         onComputeCompleted()
     }
 })
+
+watch(
+    [() => props.sessionId, isComputePending],
+    ([, pending]) => computePendingHint.update(pending),
+    { immediate: true },
+)
 
 /**
  * Watch for new items being added to the session.
@@ -1447,6 +1463,7 @@ onMounted(() => {
     window.addEventListener('twicc:toggle-hybrid', toggleHybrid)
 })
 onBeforeUnmount(() => {
+    computePendingHint.dispose()
     window.removeEventListener('twicc:toggle-session-search', handleToggleSessionSearch)
     window.removeEventListener('keydown', handleSessionSearchKeydown)
     window.removeEventListener('twicc:goto-message-input', gotoMessageInput)
@@ -1709,7 +1726,16 @@ defineExpose({
         <div v-if="isComputePending" class="compute-pending-state">
             <wa-callout variant="warning">
                 <wa-icon slot="icon" name="hourglass"></wa-icon>
-                <span>Session is being prepared, please wait...</span>
+                <div class="compute-pending-copy">
+                    <span>Session is being prepared, please wait...</span>
+                    <span v-if="computePendingHintPhase">
+                        Preparation is taking longer than expected. An agent outside this TwiCC instance may still be
+                        updating this session. Preparation will resume automatically when the session becomes stable.
+                    </span>
+                    <span v-if="computePendingHintPhase === 'restart'">
+                        If this message remains after the agent finishes, restart this TwiCC instance.
+                    </span>
+                </div>
             </wa-callout>
         </div>
 
@@ -1910,20 +1936,20 @@ defineExpose({
                         re-enabled.
                     </wa-callout>
                 </div>
-                <!-- Message input (main sessions only). Always rendered so nothing the user
-                     is preparing is lost when a request appears or resolves. While the
-                     request form is displayed it is sending-locked: usable for preparing a
-                     message, but sending is blocked until the request is answered — hybrid
-                     or not. Opening it reduces the request (`@expand`); both can be reduced
-                     at once. On hybrid sessions only the degraded badge-only state (no form,
-                     answer happens inside the TUI) keeps sending possible: it would steer
-                     or queue in the TUI. -->
+                <!-- Message input (main sessions only). Always rendered so prepared text is
+                     preserved. Sending is locked while session computation is pending or an
+                     answerable request is open; the textarea remains usable. Opening it reduces
+                     the request (`@expand`); both can be reduced at once. On hybrid sessions only
+                     the degraded badge-only state (no form, answer happens inside the TUI) keeps
+                     sending possible: it would steer or queue in the TUI. -->
                 <MessageInput
                     v-if="!parentSessionId"
                     ref="messageInputRef"
                     :session-id="sessionId"
                     :project-id="projectId"
-                    :sending-locked="hasAnswerablePendingRequest"
+                    :sending-locked="composerSendingLock.locked"
+                    :sending-locked-reason="composerSendingLock.reason"
+                    :sending-locked-presentation="composerSendingLock.presentation"
                     :has-panel-above="hasAnswerablePendingRequest || hybridTerminalVisible || !!currentGoal"
                     :terminal-visible="hybridTerminalVisible"
                     :terminal-attention="hybridTerminalAttention"
@@ -2028,6 +2054,12 @@ defineExpose({
 
 .compute-pending-state wa-callout {
     max-width: 500px;
+}
+
+.compute-pending-copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-xs);
 }
 
 .session-footer {
