@@ -1,6 +1,7 @@
 """API views and SPA catch-all for serving the frontend."""
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -12,6 +13,8 @@ from django.conf import settings
 from django.db import IntegrityError
 from django.http import Http404, HttpResponse, HttpResponseNotAllowed, HttpResponseRedirect, JsonResponse
 from django.utils import timezone
+from django.utils.cache import get_conditional_response
+from django.utils.http import quote_etag
 
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
@@ -4156,4 +4159,9 @@ async def spa_index(request):
     index_path = settings.FRONTEND_DIST_DIR / "index.html"
     if not index_path.exists():
         raise Http404("Frontend not built. Run 'npm run build' in frontend/")
-    return HttpResponse(index_path.read_bytes(), content_type="text/html")
+    content = index_path.read_bytes()
+    etag = quote_etag(hashlib.sha256(content).hexdigest())
+    response = HttpResponse(content, content_type="text/html")
+    response["Cache-Control"] = "private, no-cache"
+    response["ETag"] = etag
+    return get_conditional_response(request, etag=etag, response=response)
