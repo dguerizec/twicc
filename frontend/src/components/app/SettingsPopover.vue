@@ -58,6 +58,10 @@ const availableHelp = computed(() => helpStore.getAvailableHelp({
 }))
 const hasHelp = computed(() => availableHelp.value.length > 0)
 
+// The divider separates actual settings from utility sections. Shortcuts is
+// unavailable on touch devices, but Tips or Help can still require the divider.
+const hasUtilitySections = computed(() => !store.isTouchDevice || hasTips.value || hasHelp.value)
+
 // Reactive set of currently enabled providers (derived from the settings store).
 const enabledProviders = computed(() => new Set(store.enabledProviders))
 
@@ -90,18 +94,18 @@ const providerSections = computed(() =>
 )
 
 const sections = computed(() => [
-    { id: 'general',                   label: 'General' },
-    { id: 'providers',                 label: 'Providers', synced: true },
+    { id: 'general',       label: 'General' },
+    { id: 'notifications', label: 'Notifications' },
+    { id: 'providers',     label: 'Providers', synced: true },
     ...providerSections.value.filter(s => s.enabled),
-    { id: 'notifications',             label: 'Notifications' },
-    { id: 'sharing',                   label: 'Sharing', synced: true },
-    { id: 'peers',                     label: 'Peers', synced: true },
     { id: 'sessions',      label: 'Sessions' },
     { id: 'layouts',       label: 'Layouts', synced: true },
     { id: 'title',         label: 'Title suggestion', navLabel: 'Titles', synced: true },
     { id: 'editor',        label: 'Editor' },
     { id: 'terminal',      label: 'Terminal' },
+    { id: 'sharing',       label: 'Sharing', synced: true },
     { id: 'usage',         label: 'Providers quotas/usage', navLabel: 'Usage' },
+    { id: 'peers',         label: 'Peers', synced: true },
 ])
 
 const activeSection = ref('general')
@@ -1289,7 +1293,7 @@ function onChangelogClose() {
                         {{ section.navLabel || section.label }}
                         <wa-icon v-if="section.synced" name="cloud" class="synced-icon"></wa-icon>
                     </button>
-                    <wa-divider class="settings-nav-divider shortcuts-nav-divider"></wa-divider>
+                    <wa-divider v-if="hasUtilitySections" class="settings-nav-divider"></wa-divider>
                     <button
                         class="settings-nav-item shortcuts-nav-item"
                         :class="{ active: activeSection === 'shortcuts' }"
@@ -2554,7 +2558,6 @@ function onChangelogClose() {
 
 /* Hide shortcuts entry on touch devices (no keyboard) */
 @media (pointer: coarse) {
-    .shortcuts-nav-divider,
     .shortcuts-nav-item {
         display: none;
     }
