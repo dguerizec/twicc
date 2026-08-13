@@ -31,9 +31,10 @@ def mint_verification_code() -> str:
 
 def peer_base_url() -> str:
     """Live-read the ``peerBaseUrl`` synced setting. Empty = feature disabled."""
+    from twicc.core.services.public_origin import usable_public_origin
     from twicc.synced_settings import read_synced_settings
 
-    return read_synced_settings().get("peerBaseUrl") or ""
+    return usable_public_origin(read_synced_settings().get("peerBaseUrl"))
 
 
 def resolve_peer(token: str):

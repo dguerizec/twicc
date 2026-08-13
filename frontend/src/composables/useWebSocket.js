@@ -1736,6 +1736,8 @@ export function useWebSocket() {
                 if (msg.code === 'provider_disabled') {
                     const providerLabel = getProviderLabel(msg.provider) || msg.provider
                     toast.error(`Cannot send to ${providerLabel}: it is disabled. Enable it from Settings → Providers.`)
+                } else if (msg.code === 'invalid_synced_settings') {
+                    toast.error(msg.message || 'A settings value is invalid.')
                 } else {
                     console.warn('[ws] Server error message:', msg)
                 }

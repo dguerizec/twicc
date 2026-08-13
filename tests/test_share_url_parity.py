@@ -24,3 +24,9 @@ def test_normalize_empty_stays_empty():
     assert normalize_share_base("") == ""
     assert normalize_share_base("   ") == ""
     assert normalize_share_base(None) == ""
+
+
+def test_normalize_invalid_share_base_fails_closed():
+    from twicc.core.services.share_url import normalize_share_base
+
+    assert normalize_share_base("ftp://share.example.com") == ""

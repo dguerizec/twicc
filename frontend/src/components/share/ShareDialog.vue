@@ -37,7 +37,7 @@ function openBookmarkDialog() {
     if (bm) bookmarkDialogRef.value?.open(bm)
 }
 
-const sharingEnabled = computed(() => !!settings.getShareBaseUrl)
+const sharingEnabled = computed(() => !!settings.getUsableShareBaseUrl)
 
 const form = reactive({
     label: '', display_title: '', password: '', expires_at: '', notify_on_view: false,

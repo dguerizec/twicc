@@ -22,3 +22,7 @@ test('empty base stays empty after normalization', () => {
     assert.equal(normalizeShareBase(''), '')
     assert.equal(normalizeShareBase('   '), '')
 })
+
+test('invalid share base fails closed after normalization', () => {
+    assert.equal(normalizeShareBase('ftp://share.example.com'), '')
+})

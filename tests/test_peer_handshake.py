@@ -89,6 +89,22 @@ def test_all_endpoints_404_when_feature_disabled(client, transactional_db, monke
         assert res.status_code == 404, path
 
 
+def test_all_endpoints_404_when_peer_origin_is_invalid(client, transactional_db, monkeypatch):
+    monkeypatch.setattr(
+        "twicc.synced_settings.read_synced_settings",
+        lambda: {"peerBaseUrl": "ftp://me.example.com"},
+    )
+    for path in (
+        "/peer/handshake/request/",
+        "/peer/handshake/verify/",
+        "/peer/handshake/accept/",
+        "/peer/messages/",
+        "/peer/messages/pm_x/status/",
+    ):
+        res = _post(client, path, {})
+        assert res.status_code == 404, path
+
+
 def test_authed_endpoints_403_on_bad_or_absent_bearer(client, transactional_db, peer_host):
     for path in ("/peer/handshake/accept/", "/peer/messages/", "/peer/messages/pm_x/status/"):
         res = _post(client, path, {"anything": 1})

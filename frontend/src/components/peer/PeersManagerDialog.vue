@@ -22,7 +22,7 @@ const peersStore = usePeersStore()
 const settingsStore = useSettingsStore()
 const dialogRef = ref(null)
 
-const peerBaseUrl = computed(() => settingsStore.getPeerBaseUrl || '')
+const peerBaseUrl = computed(() => settingsStore.getUsablePeerBaseUrl)
 const peerDisplayName = computed(() => settingsStore.getPeerDisplayName || '')
 const pendingReceived = computed(() => peersStore.peers.filter(p => p.state === 'pending_received'))
 const pendingSent = computed(() => peersStore.peers.filter(p => p.state === 'pending_sent'))

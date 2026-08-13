@@ -20,8 +20,6 @@ allow-list below, so it is never reachable on the share host.
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
-
 # Served on the share host. NOTE: /_twicc/artifact-shell/ and the broker shim are
 # shared with the working app's own artifact preview, so they are allowed on the
 # share host but must NOT be 404'd on the working origin — only /share/ and
@@ -42,12 +40,10 @@ def _share_only_allowed(path: str) -> bool:
 
 def _live_share_host() -> str:
     """Current share hostname from the synced settings (lower-case, no scheme/port)."""
+    from twicc.core.services.public_origin import normalize_public_origin
     from twicc.synced_settings import read_synced_settings  # cached in-memory dict
-    raw = (read_synced_settings().get("shareBaseUrl") or "").strip()
-    if not raw:
-        return ""
-    host = urlsplit(raw if "//" in raw else "//" + raw).hostname or ""
-    return host.lower()
+    result = normalize_public_origin(read_synced_settings().get("shareBaseUrl"))
+    return result.hostname or ""
 
 
 def _request_host(scope) -> str:

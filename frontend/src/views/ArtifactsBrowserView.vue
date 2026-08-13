@@ -49,7 +49,7 @@ const bookmark = computed(() =>
 // Share entry point — routes through the globally-mounted artifact ShareDialog
 // (ProjectView) so there's a single dialog instance. Disabled until a share host
 // is configured; badge mirrors the session header's active-link count.
-const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+const sharingEnabled = computed(() => !!settingsStore.getUsableShareBaseUrl)
 const activeShareCount = computed(() =>
     bookmark.value ? sharesStore.activeCountForBookmark(bookmark.value.id) : 0
 )

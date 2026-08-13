@@ -35,17 +35,18 @@ from twicc.synced_settings import (
 logger = logging.getLogger(__name__)
 
 
+class SettingsDropError(NamedTuple):
+    field: str
+    code: str
+    message: str
+
+
 class SettingsUpdateResult(NamedTuple):
     status: str  # "accepted" | "rejected"
     version: int
     corrections: dict
     clean: dict  # full clean settings (resync / CLI display)
-
-
-class SettingsDropError(NamedTuple):
-    field: str
-    code: str
-    message: str
+    errors: tuple[SettingsDropError, ...] = ()
 
 
 class SettingsDropResult(NamedTuple):
@@ -83,6 +84,46 @@ def _merge_and_write(patch: dict, base_version: int | None) -> dict:
             clean, ver = prepare_settings_for_client(existing_settings)
             return {"status": "rejected", "clean": clean, "version": ver}
 
+        from twicc.core.services.public_origin import PUBLIC_ORIGIN_SETTING_KEYS, normalize_public_origin
+
+        normalized_patch = dict(patch)
+        corrections: dict = {}
+        errors: list[SettingsDropError] = []
+        for key in PUBLIC_ORIGIN_SETTING_KEYS:
+            if key not in patch:
+                continue
+            value = patch[key]
+            # The frontend sends a full settings snapshot. Keep an unchanged
+            # malformed legacy value from blocking unrelated changes.
+            if value == existing_settings.get(key):
+                continue
+            if not isinstance(value, str):
+                errors.append(SettingsDropError(
+                    key,
+                    "invalid_origin_type",
+                    "Enter a hostname or an HTTP(S) origin without a path, query, or fragment.",
+                ))
+                continue
+            result = normalize_public_origin(value)
+            if result.error:
+                errors.append(SettingsDropError(
+                    key,
+                    f"invalid_origin_{result.error}",
+                    "Enter a hostname or an HTTP(S) origin without a path, query, or fragment.",
+                ))
+                continue
+            normalized_patch[key] = result.value
+            if result.value != value:
+                corrections[key] = result.value
+        if errors:
+            clean, version = prepare_settings_for_client(existing_settings)
+            return {
+                "status": "rejected",
+                "clean": clean,
+                "version": version,
+                "errors": tuple(errors),
+            }
+
         # Capture both the previous disabled set AND whether the key
         # was physically present in the file. The latter distinguishes
         # "running everything" from "running nothing because no
@@ -93,18 +134,17 @@ def _merge_and_write(patch: dict, base_version: int | None) -> dict:
         old_disabled = set(existing_settings.get("disabledProviders") or [])
 
         # Accepted — merge, then enforce per-provider consistency rules.
-        existing_settings.update(patch)
+        existing_settings.update(normalized_patch)
 
         # Let every provider enforce its own rules on the merged dict.
         # ``patch`` is the subset the client just sent, so
         # each provider can short-circuit when none of its keys changed.
         get_provider_helpers_registry().enforce_synced_settings_consistency(
-            existing_settings, patch,
+            existing_settings, normalized_patch,
         )
 
         # Self-healing: refuse to disable a provider that still has live agents.
         new_disabled_raw = existing_settings.get("disabledProviders")
-        corrections: dict = {}
         if isinstance(new_disabled_raw, list):
             new_disabled = set(new_disabled_raw)
             just_disabled = new_disabled - old_disabled
@@ -268,6 +308,7 @@ async def update_synced_settings(
         version=result["version"],
         corrections=result.get("corrections", {}),
         clean=clean,
+        errors=result.get("errors", ()),
     )
 
 
@@ -324,4 +365,8 @@ async def update_synced_settings_from_payload(payload: dict) -> SettingsDropResu
         broadcast=payload.get("broadcast", True),
     )
     extra = {"corrections": r.corrections} if r.corrections else {}
-    return SettingsDropResult(success=(r.status == "accepted"), status_extra=extra)
+    return SettingsDropResult(
+        success=(r.status == "accepted"),
+        errors=r.errors,
+        status_extra=extra,
+    )

@@ -88,6 +88,17 @@ def test_create_refused_without_share_host(client, session, monkeypatch):
     assert orjson.loads(res.content)["error"] == "share_host_unset"
 
 
+def test_create_refused_with_invalid_legacy_share_host(client, session, monkeypatch):
+    monkeypatch.setattr(
+        "twicc.synced_settings.read_synced_settings",
+        lambda: {"shareBaseUrl": "ftp://share.example.com"},
+    )
+    body = {"kind": "session", "session_id": "sess-owner", "options": {"mode": "live"}}
+    res = _run(client.post("/api/shares/", data=orjson.dumps(body), content_type="application/json"))
+    assert res.status_code == 400
+    assert orjson.loads(res.content)["error"] == "share_host_unset"
+
+
 def test_create_and_list(client, session, share_host):
     body = {"kind": "session", "session_id": "sess-owner", "label": "priv", "options": {"mode": "live"}}
     res = _run(client.post("/api/shares/", data=orjson.dumps(body), content_type="application/json"))

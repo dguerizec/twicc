@@ -1295,7 +1295,7 @@ export function initStaticCommands(router) {
             // ShareDialog in ProjectView via the shared window event.
             when: () => {
                 const sessionId = routeSessionId()
-                if (!sessionId || !settings.getShareBaseUrl) return false
+                if (!sessionId || !settings.getUsableShareBaseUrl) return false
                 const s = data.getSession(sessionId)
                 return !!s && !s.draft
             },
@@ -1310,7 +1310,7 @@ export function initStaticCommands(router) {
             category: 'ui',
             // Only when a share host is configured (no host → no links to manage).
             // Opens the globally-mounted ShareManagerDialog (App.vue) via event.
-            when: () => !!settings.getShareBaseUrl,
+            when: () => !!settings.getUsableShareBaseUrl,
             action: () => {
                 window.dispatchEvent(new CustomEvent('twicc:open-share-manager'))
             },

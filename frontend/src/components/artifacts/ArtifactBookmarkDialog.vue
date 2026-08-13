@@ -32,7 +32,7 @@ const settingsStore = useSettingsStore()
 const showShareDialog = ref(false)
 const existingAllowedHosts = ref({})
 const shareSessionGrants = ref({})
-const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+const sharingEnabled = computed(() => !!settingsStore.getUsableShareBaseUrl)
 function openShareDialog() {
     // Snapshot the artifact's session-only broker grants at open, like
     // ProjectView's global handler — the create dialog offers to promote them.

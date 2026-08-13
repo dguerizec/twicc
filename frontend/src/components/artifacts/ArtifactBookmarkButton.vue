@@ -71,7 +71,7 @@ function openDialog() {
 // artifact is bookmarked first (name = the suggested name, project scope) and
 // then shared. Routes through the globally-mounted artifact ShareDialog
 // (ProjectView) via the shared window event.
-const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+const sharingEnabled = computed(() => !!settingsStore.getUsableShareBaseUrl)
 const activeShareCount = computed(() =>
     bookmark.value ? sharesStore.activeCountForBookmark(bookmark.value.id) : 0
 )

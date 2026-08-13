@@ -39,7 +39,7 @@ const sharesStore = useSharesStore()
 // Routes through the globally-mounted dialogs in ProjectView (via the shared
 // window event) so an already-shared session opens the manager list first, exactly
 // like the artifact entry points — rather than jumping straight to create.
-const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+const sharingEnabled = computed(() => !!settingsStore.getUsableShareBaseUrl)
 const activeShareCount = computed(() => sharesStore.activeCountForSession(props.sessionId))
 function openShare() {
     if (!sharingEnabled.value) return

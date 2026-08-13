@@ -79,8 +79,9 @@ def own_display_name() -> str:
     name = (read_synced_settings().get("peerDisplayName") or "").strip()
     if name:
         return name
-    parsed = urlparse(peer_base_url())
-    return parsed.hostname or "twicc"
+    from twicc.core.services.public_origin import normalize_public_origin
+
+    return normalize_public_origin(peer_base_url()).hostname or "twicc"
 
 
 # ── Broadcasts ──────────────────────────────────────────────────────────────

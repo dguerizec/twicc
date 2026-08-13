@@ -23,6 +23,7 @@ import time
 
 from twicc import presence
 from twicc.agent.states import AgentInfo, AgentState
+from twicc.core.services.public_origin import usable_public_origin
 from twicc.providers.helpers import get_provider_helpers
 from twicc.synced_settings import read_synced_settings
 from twicc.usage import format_extra_usage_amount
@@ -69,7 +70,7 @@ def _build_body(
 
 
 def _build_session_url(settings: dict, project_id: str, session_id: str) -> str | None:
-    base = (settings.get("publicBaseUrl") or "").strip().rstrip("/")
+    base = usable_public_origin(settings.get("publicBaseUrl"))
     if not base:
         return None
     return f"{base}/project/{project_id}/session/{session_id}"
@@ -248,7 +249,7 @@ def _send_extra_usage_started(provider, snapshot, settings: dict) -> None:
     title = f"{label} — Extra usage started"
     # No session to deep-link to: append the bare public base URL when set,
     # matching the same publicBaseUrl handling as the process-state push.
-    base_url = (settings.get("publicBaseUrl") or "").strip().rstrip("/") or None
+    base_url = usable_public_origin(settings.get("publicBaseUrl")) or None
     body = _build_extra_usage_body(snapshot, label, base_url)
 
     present = presence.is_user_present()
@@ -323,7 +324,7 @@ async def test_notification_urls(urls: list[str]) -> list[dict]:
     # Shape the test like a real TwiCC notification (same body format,
     # including the deep link when a public base URL is configured).
     settings = read_synced_settings()
-    base = (settings.get("publicBaseUrl") or "").strip().rstrip("/")
+    base = usable_public_origin(settings.get("publicBaseUrl"))
     body = _build_body(
         f"Test sent at {time.strftime('%Y-%m-%d %H:%M:%S')}",
         "TwiCC",

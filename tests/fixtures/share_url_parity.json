@@ -7,16 +7,16 @@
         {"name": "https origin", "stored": "https://share.example.com", "expected": "https://share.example.com/share/tok123/"},
         {"name": "http origin with port", "stored": "http://share.example.com:3500", "expected": "http://share.example.com:3500/share/tok123/"},
         {"name": "trailing slash", "stored": "share.example.com/", "expected": "https://share.example.com/share/tok123/"},
-        {"name": "many trailing slashes", "stored": "https://share.example.com///", "expected": "https://share.example.com/share/tok123/"},
+        {"name": "many trailing slashes are invalid at runtime", "stored": "https://share.example.com///", "expected": null},
         {"name": "ascii whitespace trimmed", "stored": "\t share.example.com \r\n", "expected": "https://share.example.com/share/tok123/"},
         {"name": "raw CLI-written value trimmed", "stored": "  share.example.com  ", "expected": "https://share.example.com/share/tok123/"},
-        {"name": "U+FEFF not trimmed (JS trim would)", "stored": "\ufeffshare.example.com", "expected": "https://\ufeffshare.example.com/share/tok123/"},
-        {"name": "U+001C not trimmed (Python strip would)", "stored": "\u001cshare.example.com", "expected": "https://\u001cshare.example.com/share/tok123/"},
-        {"name": "path kept", "stored": "https://share.example.com/base", "expected": "https://share.example.com/base/share/tok123/"},
-        {"name": "query kept", "stored": "https://share.example.com?x=1", "expected": "https://share.example.com?x=1/share/tok123/"},
-        {"name": "credentials kept", "stored": "https://u:p@share.example.com", "expected": "https://u:p@share.example.com/share/tok123/"},
-        {"name": "mixed case preserved", "stored": "Share.Example.COM", "expected": "https://Share.Example.COM/share/tok123/"},
-        {"name": "exotic scheme passes through", "stored": "ftp://share.example.com", "expected": "ftp://share.example.com/share/tok123/"},
-        {"name": "pathological ://x passes through, no absoluteness promised", "stored": "://x", "expected": "://x/share/tok123/"}
+        {"name": "U+FEFF is parser-normalized", "stored": "\ufeffshare.example.com", "expected": "https://share.example.com/share/tok123/"},
+        {"name": "U+001C is invalid", "stored": "\u001cshare.example.com", "expected": null},
+        {"name": "path is invalid", "stored": "https://share.example.com/base", "expected": null},
+        {"name": "query is invalid", "stored": "https://share.example.com?x=1", "expected": null},
+        {"name": "credentials are invalid", "stored": "https://u:p@share.example.com", "expected": null},
+        {"name": "mixed case is canonical", "stored": "Share.Example.COM", "expected": "https://share.example.com/share/tok123/"},
+        {"name": "exotic scheme is invalid", "stored": "ftp://share.example.com", "expected": null},
+        {"name": "pathological value is invalid", "stored": "://x", "expected": null}
     ]
 }

@@ -166,7 +166,7 @@ function handleClick(event, b) {
 // Share is gated on a configured share host, and routes through the
 // globally-mounted artifact ShareDialog (ProjectView) via the shared window
 // event, so the list never mounts a share dialog per row.
-const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+const sharingEnabled = computed(() => !!settingsStore.getUsableShareBaseUrl)
 function openShare(b) {
     window.dispatchEvent(new CustomEvent('twicc:open-share-dialog', {
         detail: { bookmarkId: b.id, allowedHosts: b.allowed_hosts || {}, title: b.name || '' },

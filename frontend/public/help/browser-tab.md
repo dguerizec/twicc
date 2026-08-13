@@ -88,7 +88,7 @@ You don't have to type the URL by hand: when the embedded page has no
 companion, a banner in the tab (and the **plug** button) offers this exact
 snippet — already filled in with the right host — ready to copy. If you
 access TwiCC from another machine, configure the
-[external URL](help/external-url) so that copied snippet points at an address
+[External address](help/external-url) so that copied snippet points at an address
 your browser can reach.
 
 The **plug** button shows the companion status: brand-colored when

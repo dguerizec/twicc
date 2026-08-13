@@ -27,7 +27,7 @@ GENERIC_KEY_DESCRIPTIONS: dict[str, str] = {
     "worktreeDirectoryTemplate": "Template for the base dir of new git worktrees; placeholders {git_root} {project_name} {project_basedir} (empty = none).",
     "terminalUseTmux": "Wrap terminal sessions in tmux by default.",
     "terminalTmuxConfigPath": "Path to a custom tmux config for terminal sessions (empty = default).",
-    "publicBaseUrl": "Public URL where you reach TwiCC, appended as a deep link to external notifications (empty = no link).",
+    "publicBaseUrl": "External address where you reach TwiCC, appended as a deep link to external notifications (empty = no link).",
     "shareBaseUrl": "Dedicated share host — a hostname distinct from this app, pointing at the same port — where read-only /share/ links are served (empty = sharing disabled).",
     "peerBaseUrl": "Public base URL advertised to peer instances for cross-instance messaging; may be the working origin, but must be reachable machine-to-machine — no tunnel-level auth gate (empty = peer messaging disabled).",
     "peerDisplayName": "Display name sent to peer instances in pairing handshakes (empty = the hostname of peerBaseUrl).",

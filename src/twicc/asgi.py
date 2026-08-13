@@ -1513,6 +1513,13 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 "settings": result.clean,
                 "version": result.version,
             })
+            if result.errors:
+                await self.send_json({
+                    "type": "error",
+                    "code": "invalid_synced_settings",
+                    "message": result.errors[0].message,
+                    "errors": [error._asdict() for error in result.errors],
+                })
             return
 
     async def _handle_validate_usage_dump_path(self, content: dict) -> None:

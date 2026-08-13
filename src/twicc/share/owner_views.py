@@ -10,6 +10,7 @@ from django.http import Http404, HttpResponseNotAllowed, JsonResponse
 
 from twicc.core.serializers import serialize_share
 from twicc.core.services import share_mutation
+from twicc.core.services.public_origin import usable_public_origin
 
 
 def _err_response(result):
@@ -49,7 +50,7 @@ async def shares_list(request):
         # unset, /share/ 404s everywhere, so a fresh link would be dead. Refuse up
         # front — the UI already gates on this; this is the server-side backstop.
         from twicc.synced_settings import read_synced_settings
-        if not (read_synced_settings().get("shareBaseUrl") or "").strip():
+        if not usable_public_origin(read_synced_settings().get("shareBaseUrl")):
             return JsonResponse(
                 {"error": "share_host_unset",
                  "reason": "Configure a share host in Settings → Sharing first."},

@@ -28,6 +28,7 @@ import { useWorkspacesStore } from '../../stores/workspaces'
 import { apiFetch } from '../../utils/api'
 import { resolveProjectBrowserUrl } from '../../utils/browserDefaults'
 import { normalizeBrowserUrl } from '../../utils/browserUrl'
+import { usablePublicOrigin } from '../../utils/publicOrigin'
 import {
     addBrowserUrlEntry,
     defaultBrowserUrlEntry,
@@ -536,11 +537,11 @@ watch(
 // ── Companion hint: snippet banner + status icon --------------------------
 const snippetDismissed = ref(false)
 const snippetCopied = ref(false)
-// Prefer the configured External URL (publicBaseUrl) so the snippet stays
+// Prefer the configured External address (publicBaseUrl) so the snippet stays
 // reachable from wherever the dev page runs — a `localhost` src only resolves
-// on this machine. Falls back to the current origin when no External URL is set.
+// on this machine. Falls back to the current origin when no External address is set.
 const companionSnippet = computed(() => {
-    const origin = settingsStore.getPublicBaseUrl || window.location.origin
+    const origin = usablePublicOrigin(settingsStore.getPublicBaseUrl) || window.location.origin
     return `<script src="${origin}/_twicc/browser-companion.js" defer><\/script>`
 })
 // Nag on any loaded page without a companion, unless the user dismissed it

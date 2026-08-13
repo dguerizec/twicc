@@ -12,6 +12,7 @@ import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegistered
 import ProviderIcon from '../ui/ProviderIcon.vue'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
 import { validateWorktreeTemplate } from '../../utils/worktreePath'
+import { normalizePublicOrigin, usablePublicOrigin } from '../../utils/publicOrigin'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, SPONSOR_URL } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
@@ -166,12 +167,15 @@ function selectSection(id) {
     if (id === 'general') {
         worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
         publicBaseUrlInput.value = store.getPublicBaseUrl || ''
+        publicBaseUrlError.value = storedPublicOriginError(publicBaseUrlInput.value)
     }
     if (id === 'sharing') {
         shareBaseUrlInput.value = store.getShareBaseUrl || ''
+        shareBaseUrlError.value = storedPublicOriginError(shareBaseUrlInput.value)
     }
     if (id === 'peers') {
         peerBaseUrlInput.value = store.getPeerBaseUrl || ''
+        peerBaseUrlError.value = storedPublicOriginError(peerBaseUrlInput.value)
         peerDisplayNameInput.value = store.getPeerDisplayName || ''
     }
     if (id === 'notifications') {
@@ -630,12 +634,29 @@ const worktreeDirApplyIcon = computed(() => {
     return worktreeDirModified.value ? 'triangle-exclamation' : 'check'
 })
 
-// External URL (stored as `publicBaseUrl`) — local input, committed to the store
-// on Apply only (like the worktree template above). The store setter trims and
-// strips trailing slashes, so `modified` compares against that same normalization.
+const PUBLIC_ORIGIN_ERROR = 'Enter a hostname or an HTTP(S) origin without a path, query, or fragment.'
+
+function publicOriginErrorMessage(error) {
+    if (error === 'scheme') return 'The address must use HTTP or HTTPS.'
+    if (error === 'credentials') return 'The address must not contain a username or password.'
+    return PUBLIC_ORIGIN_ERROR
+}
+
+function normalizedInputValue(value) {
+    return normalizePublicOrigin(value).value ?? value.trim()
+}
+
+function storedPublicOriginError(value) {
+    const result = normalizePublicOrigin(value)
+    return result.error ? publicOriginErrorMessage(result.error) : ''
+}
+
+// External address (stored as `publicBaseUrl`) — local input, committed to the
+// store on Apply only.
 const publicBaseUrlInput = ref('')
 const publicBaseUrlInputRef = ref(null)
-const publicBaseUrlNormalized = computed(() => publicBaseUrlInput.value.trim().replace(/\/+$/, ''))
+const publicBaseUrlError = ref('')
+const publicBaseUrlNormalized = computed(() => normalizedInputValue(publicBaseUrlInput.value))
 const publicBaseUrlModified = computed(() => publicBaseUrlNormalized.value !== (store.getPublicBaseUrl || ''))
 const publicBaseUrlApplyIcon = computed(() => (publicBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
 
@@ -645,7 +666,7 @@ const publicBaseUrlApplyIcon = computed(() => (publicBaseUrlModified.value ? 'tr
 const shareBaseUrlInput = ref('')
 const shareBaseUrlInputRef = ref(null)
 const shareBaseUrlError = ref('')
-const shareBaseUrlNormalized = computed(() => shareBaseUrlInput.value.trim().replace(/\/+$/, ''))
+const shareBaseUrlNormalized = computed(() => normalizedInputValue(shareBaseUrlInput.value))
 const shareBaseUrlModified = computed(() => shareBaseUrlNormalized.value !== (store.getShareBaseUrl || ''))
 const shareBaseUrlApplyIcon = computed(() => (shareBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
 const showShareManager = ref(false)
@@ -657,7 +678,7 @@ const peerBaseUrlInput = ref('')
 const peerBaseUrlInputRef = ref(null)
 const peerBaseUrlError = ref('')
 const peerBaseUrlWarning = ref('')
-const peerBaseUrlNormalized = computed(() => peerBaseUrlInput.value.trim().replace(/\/+$/, ''))
+const peerBaseUrlNormalized = computed(() => normalizedInputValue(peerBaseUrlInput.value))
 const peerBaseUrlModified = computed(() => peerBaseUrlNormalized.value !== (store.getPeerBaseUrl || ''))
 const peerBaseUrlApplyIcon = computed(() => (peerBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
 
@@ -827,12 +848,17 @@ function onWaBrandChange(event) {
 
 function onPublicBaseUrlInputChange(event) {
     publicBaseUrlInput.value = event.target.value
+    publicBaseUrlError.value = ''
 }
 
 function onPublicBaseUrlApply() {
-    store.setPublicBaseUrl(publicBaseUrlInput.value)
-    // Reflect the store's normalization (trim + trailing-slash strip) back into
-    // the field so the Apply icon settles to its "saved" state.
+    publicBaseUrlError.value = ''
+    const result = normalizePublicOrigin(publicBaseUrlInput.value)
+    if (result.error) {
+        publicBaseUrlError.value = publicOriginErrorMessage(result.error)
+        return
+    }
+    store.setPublicBaseUrl(result.value)
     publicBaseUrlInput.value = store.getPublicBaseUrl || ''
 }
 
@@ -843,21 +869,18 @@ function onShareBaseUrlInputChange(event) {
 
 function onShareBaseUrlApply() {
     shareBaseUrlError.value = ''
-    const raw = shareBaseUrlInput.value.trim()
-    if (raw) {
-        let host
-        try {
-            host = new URL(raw.includes('//') ? raw : `https://${raw}`).hostname
-        } catch {
-            shareBaseUrlError.value = 'Enter a valid hostname or URL.'
-            return
-        }
-        if (host && host.toLowerCase() === window.location.hostname.toLowerCase()) {
+    const result = normalizePublicOrigin(shareBaseUrlInput.value)
+    if (result.error) {
+        shareBaseUrlError.value = publicOriginErrorMessage(result.error)
+        return
+    }
+    if (result.hostname) {
+        if (result.hostname.toLowerCase() === window.location.hostname.toLowerCase()) {
             shareBaseUrlError.value = 'The share host must be a different hostname from this app.'
             return
         }
     }
-    store.setShareBaseUrl(shareBaseUrlInput.value)
+    store.setShareBaseUrl(result.value)
     shareBaseUrlInput.value = store.getShareBaseUrl || ''
 }
 
@@ -870,41 +893,28 @@ function onPeerBaseUrlInputChange(event) {
 function onPeerBaseUrlApply() {
     peerBaseUrlError.value = ''
     peerBaseUrlWarning.value = ''
-    const raw = peerBaseUrlInput.value.trim()
-    if (raw) {
-        let parsed
-        try {
-            parsed = new URL(raw)
-        } catch {
-            peerBaseUrlError.value = 'Enter a full absolute URL (https://…).'
-            return
-        }
-        if (!['http:', 'https:'].includes(parsed.protocol)) {
-            peerBaseUrlError.value = 'The peer address must use http or https.'
-            return
-        }
-        if (parsed.protocol === 'http:') {
-            // Non-fatal (design §4.3): warn, still apply.
-            peerBaseUrlWarning.value = 'Plain http — tokens travel unencrypted. HTTPS is strongly recommended.'
-        }
+    const result = normalizePublicOrigin(peerBaseUrlInput.value)
+    if (result.error) {
+        peerBaseUrlError.value = publicOriginErrorMessage(result.error)
+        return
     }
-    store.setPeerBaseUrl(peerBaseUrlInput.value)
+    if (result.scheme === 'http') {
+        // Non-fatal (design §4.3): warn, still apply.
+        peerBaseUrlWarning.value = 'Plain HTTP — tokens travel unencrypted. HTTPS is strongly recommended.'
+    }
+    store.setPeerBaseUrl(result.value)
     peerBaseUrlInput.value = store.getPeerBaseUrl || ''
 }
 
-// One-click prefill from the notifications' External URL (typically the same
-// tunnel address). Adds a scheme when the stored value is a bare hostname —
-// peerBaseUrl must be an absolute URL.
+// One-click prefill from the External address, when it is usable.
 const canPrefillPeerBaseUrl = computed(() => {
-    const pub = (store.getPublicBaseUrl || '').trim()
+    const pub = usablePublicOrigin(store.getPublicBaseUrl)
     if (!pub) return false
-    const candidate = pub.includes('//') ? pub : `https://${pub}`
-    return candidate.replace(/\/+$/, '') !== peerBaseUrlNormalized.value
+    return pub !== peerBaseUrlNormalized.value
 })
 
 function prefillPeerBaseUrlFromPublic() {
-    const pub = (store.getPublicBaseUrl || '').trim()
-    peerBaseUrlInput.value = pub.includes('//') ? pub : `https://${pub}`
+    peerBaseUrlInput.value = usablePublicOrigin(store.getPublicBaseUrl)
     peerBaseUrlError.value = ''
     peerBaseUrlWarning.value = ''
 }
@@ -918,7 +928,7 @@ function openPeerInbox() {
 }
 
 // Called when the Notifications section's callout is clicked: jump to General and
-// focus the External URL field.
+// focus the External address field.
 function goToPublicBaseUrl() {
     selectSection('general')
     nextTick(() => publicBaseUrlInputRef.value?.focus())
@@ -1225,6 +1235,8 @@ function onPopoverShow() {
     worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
     publicBaseUrlInput.value = store.getPublicBaseUrl || ''
     shareBaseUrlInput.value = store.getShareBaseUrl || ''
+    publicBaseUrlError.value = storedPublicOriginError(publicBaseUrlInput.value)
+    shareBaseUrlError.value = storedPublicOriginError(shareBaseUrlInput.value)
     if (activeSection.value === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
     }
@@ -1342,7 +1354,7 @@ function onChangelogClose() {
                 <section v-if="activeSection === 'general'" class="settings-section">
                     <h3 class="settings-section-title">General</h3>
                     <div class="setting-group">
-                        <label class="setting-group-label">External URL <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
+                        <label class="setting-group-label">External address <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
                         <div class="setting-input-apply-row">
                             <wa-input
                                 ref="publicBaseUrlInputRef"
@@ -1361,6 +1373,7 @@ function onChangelogClose() {
                                 Apply
                             </wa-button>
                         </div>
+                        <wa-callout v-if="publicBaseUrlError" variant="danger" size="small">{{ publicBaseUrlError }}</wa-callout>
                         <span class="setting-group-hint">
                             Where you reach TwiCC from your devices — used to build links back to
                             your sessions (e.g. in notifications). Leave empty to omit those links.
@@ -1702,7 +1715,7 @@ function onChangelogClose() {
                             @click="prefillPeerBaseUrlFromPublic"
                         >
                             <wa-icon name="arrow-down" slot="start"></wa-icon>
-                            Use the external URL from Global settings
+                            Use the External address from Global settings
                         </wa-button>
                         <span class="setting-group-hint">
                             Your address, advertised to peers. Empty disables peer messaging.

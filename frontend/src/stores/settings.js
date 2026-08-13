@@ -9,6 +9,7 @@ import { getProviderHelpers, getRegisteredProviders } from '../providers'
 // Note: useDataStore is imported lazily to avoid circular dependency (settings.js ↔ data.js)
 import { setColorScheme as setColorSchemeOnDom, setWaTheme, setWaBrand } from '../utils/theme'
 import { validateWorktreeTemplate } from '../utils/worktreePath'
+import { normalizePublicOrigin, usablePublicOrigin } from '../utils/publicOrigin'
 
 const STORAGE_KEY = 'twicc-settings'
 
@@ -359,6 +360,9 @@ export const useSettingsStore = defineStore('settings', {
         getPublicBaseUrl: (state) => state.publicBaseUrl,
         getShareBaseUrl: (state) => state.shareBaseUrl,
         getPeerBaseUrl: (state) => state.peerBaseUrl,
+        getUsablePublicBaseUrl: (state) => usablePublicOrigin(state.publicBaseUrl),
+        getUsableShareBaseUrl: (state) => usablePublicOrigin(state.shareBaseUrl),
+        getUsablePeerBaseUrl: (state) => usablePublicOrigin(state.peerBaseUrl),
         getPeerDisplayName: (state) => state.peerDisplayName,
         /**
          * Whether the ``disabledProviders`` key is physically present in settings.json.
@@ -918,36 +922,38 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
-         * Set the public base URL used for deep links in external notifications.
+         * Set the External address used for remote access and deep links.
          * @param {string} url
          */
         setPublicBaseUrl(url) {
             if (SETTINGS_VALIDATORS.publicBaseUrl(url)) {
-                this.publicBaseUrl = url.trim().replace(/\/+$/, '')
+                const result = normalizePublicOrigin(url)
+                if (!result.error) this.publicBaseUrl = result.value
             }
         },
 
         /**
-         * Set the dedicated share host (design §12). A bare hostname or full URL;
-         * trimmed and stripped of trailing slashes. Empty disables sharing.
+         * Set the dedicated Share address (design §12). Empty disables sharing.
          * @param {string} url
          */
         setShareBaseUrl(url) {
             if (SETTINGS_VALIDATORS.shareBaseUrl(url)) {
-                this.shareBaseUrl = url.trim().replace(/\/+$/, '')
+                const result = normalizePublicOrigin(url)
+                if (!result.error) this.shareBaseUrl = result.value
             }
         },
 
         /**
          * Set the peer messaging base URL (the address advertised to peer
          * instances). Unlike shareBaseUrl it MAY be the working origin —
-         * /peer/ is a same-origin carve-out, not a dedicated host. Trimmed
-         * and stripped of trailing slashes. Empty disables peer messaging.
+         * /peer/ is a same-origin carve-out, not a dedicated host. Empty
+         * disables peer messaging.
          * @param {string} url
          */
         setPeerBaseUrl(url) {
             if (SETTINGS_VALIDATORS.peerBaseUrl(url)) {
-                this.peerBaseUrl = url.trim().replace(/\/+$/, '')
+                const result = normalizePublicOrigin(url)
+                if (!result.error) this.peerBaseUrl = result.value
             }
         },
 

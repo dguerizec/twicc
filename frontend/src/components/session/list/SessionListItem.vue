@@ -127,7 +127,7 @@ const providerIcon = computed(() => getProviderIcon(props.session.provider))
 
 /** Whether a share host is configured — gates the "Share" menu action (drafts
  *  have no transcript to share, so they're excluded too). Mirrors SessionHeader. */
-const sharingEnabled = computed(() => !!settingsStore.getShareBaseUrl)
+const sharingEnabled = computed(() => !!settingsStore.getUsableShareBaseUrl)
 
 /** Whether this session has any pending request waiting for user response. */
 const pendingRequest = computed(() => store.getPendingRequests(props.session.id).length > 0)

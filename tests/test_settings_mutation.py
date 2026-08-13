@@ -68,6 +68,39 @@ def test_base_version_stale_is_rejected(temp_settings):
     assert ss.read_synced_settings()["autoUnpinOnArchive"] is False  # unchanged
 
 
+def test_public_origin_patch_is_normalized_and_returned_as_correction(temp_settings):
+    r = _update({"publicBaseUrl": " Public.Example.COM/", "shareBaseUrl": "localhost:3501"})
+    assert r.status == "accepted"
+    assert r.corrections == {
+        "publicBaseUrl": "https://public.example.com",
+        "shareBaseUrl": "http://localhost:3501",
+    }
+    settings = ss.read_synced_settings()
+    assert settings["publicBaseUrl"] == "https://public.example.com"
+    assert settings["shareBaseUrl"] == "http://localhost:3501"
+
+
+def test_invalid_public_origin_rejects_the_whole_patch(temp_settings):
+    before = ss.read_synced_settings()
+    r = _update({"autoUnpinOnArchive": False, "peerBaseUrl": "ftp://peer.example.com"})
+    assert r.status == "rejected"
+    assert [(error.field, error.code) for error in r.errors] == [("peerBaseUrl", "invalid_origin_scheme")]
+    after = ss.read_synced_settings()
+    assert after["autoUnpinOnArchive"] == before["autoUnpinOnArchive"]
+    assert after["peerBaseUrl"] == before["peerBaseUrl"]
+    assert after["_version"] == before["_version"]
+
+
+def test_unchanged_invalid_legacy_origin_does_not_block_full_snapshot(temp_settings):
+    seeded = ss.read_synced_settings()
+    seeded["publicBaseUrl"] = "ftp://legacy.example.com"
+    ss.write_synced_settings(seeded)
+    r = _update({"publicBaseUrl": "ftp://legacy.example.com", "terminalUseTmux": False})
+    assert r.status == "accepted"
+    assert ss.read_synced_settings()["publicBaseUrl"] == "ftp://legacy.example.com"
+    assert ss.read_synced_settings()["terminalUseTmux"] is False
+
+
 def test_update_from_payload_applies_patch(temp_settings):
     from twicc.core.services.settings_mutation import update_synced_settings_from_payload
 
@@ -76,6 +109,16 @@ def test_update_from_payload_applies_patch(temp_settings):
     )
     assert res.success is True
     assert ss.read_synced_settings()["terminalUseTmux"] is False
+
+
+def test_update_from_payload_returns_public_origin_validation_error(temp_settings):
+    from twicc.core.services.settings_mutation import update_synced_settings_from_payload
+
+    res = async_to_sync(update_synced_settings_from_payload)(
+        {"kind": "settings:update", "patch": {"shareBaseUrl": "https://share.example.com/path"}, "broadcast": False},
+    )
+    assert res.success is False
+    assert [(error.field, error.code) for error in res.errors] == [("shareBaseUrl", "invalid_origin_path")]
 
 
 def test_notification_test_persists_tested(temp_settings, monkeypatch):

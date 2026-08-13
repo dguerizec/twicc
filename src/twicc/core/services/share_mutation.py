@@ -21,6 +21,7 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
 from twicc.auth.hashers import hash_password
+from twicc.core.services.public_origin import usable_public_origin
 from twicc.core.services.share_tokens import mint_share_id, mint_token
 from twicc.paths import get_share_snapshot_dir
 from twicc.providers.db_writer import run_under_db_write_lock
@@ -524,7 +525,7 @@ async def create_share_from_payload(payload: dict) -> ShareMutationResult:
                 "conversation, simplified, normal",
             )])
         from twicc.synced_settings import read_synced_settings
-        if not (read_synced_settings().get("shareBaseUrl") or "").strip():
+        if not usable_public_origin(read_synced_settings().get("shareBaseUrl")):
             return ShareMutationResult(False, None, [ShareError(
                 "share_base_url", "share_host_unset",
                 "no share host is configured, so the link would resolve nowhere; "

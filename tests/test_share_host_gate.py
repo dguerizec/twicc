@@ -98,6 +98,14 @@ def test_unset_host_serves_working_app(set_share_host):
     assert full.called
 
 
+def test_invalid_host_disables_sharing(set_share_host):
+    set_share_host("ftp://share.example.com")
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/share/tok/", "share.example.com")))
+    assert _status(sent) == 404
+    assert not full.called
+
+
 # ── On the share host → only the share surface ──────────────────────────────
 
 def test_share_host_serves_share(set_share_host):

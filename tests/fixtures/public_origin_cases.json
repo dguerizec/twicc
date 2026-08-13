@@ -1,0 +1,39 @@
+{
+    "cases": [
+        {"name": "empty", "input": "", "value": "", "error": null},
+        {"name": "ascii whitespace", "input": "\t public.example.com \r\n", "value": "https://public.example.com", "error": null},
+        {"name": "public bare host", "input": "public.example.com", "value": "https://public.example.com", "error": null},
+        {"name": "public bare host and port", "input": "public.example.com:8443", "value": "https://public.example.com:8443", "error": null},
+        {"name": "explicit https", "input": "HTTPS://Public.Example.COM/", "value": "https://public.example.com", "error": null},
+        {"name": "explicit http stays http", "input": "http://public.example.com", "value": "http://public.example.com", "error": null},
+        {"name": "default https port", "input": "https://public.example.com:443", "value": "https://public.example.com", "error": null},
+        {"name": "default http port", "input": "http://public.example.com:80/", "value": "http://public.example.com", "error": null},
+        {"name": "localhost", "input": "localhost:3501", "value": "http://localhost:3501", "error": null},
+        {"name": "localhost explicit https", "input": "https://localhost:3501", "value": "https://localhost:3501", "error": null},
+        {"name": "ipv4", "input": "192.168.1.42:3501", "value": "http://192.168.1.42:3501", "error": null},
+        {"name": "ipv6 loopback", "input": "[::1]:3501", "value": "http://[::1]:3501", "error": null},
+        {"name": "local suffix", "input": "twicc.local:3501", "value": "http://twicc.local:3501", "error": null},
+        {"name": "test suffix", "input": "twicc.test", "value": "http://twicc.test", "error": null},
+        {"name": "localhost suffix", "input": "twicc.localhost", "value": "http://twicc.localhost", "error": null},
+        {"name": "dotless host with port", "input": "devbox:3501", "value": "http://devbox:3501", "error": null},
+        {"name": "dotless host without port", "input": "devbox", "value": "https://devbox", "error": null},
+        {"name": "non-root path", "input": "https://public.example.com/base", "value": null, "error": "path"},
+        {"name": "query", "input": "https://public.example.com?x=1", "value": null, "error": "query"},
+        {"name": "fragment", "input": "https://public.example.com#part", "value": null, "error": "fragment"},
+        {"name": "credentials", "input": "https://user:secret@public.example.com", "value": null, "error": "credentials"},
+        {"name": "unsupported scheme", "input": "ftp://public.example.com", "value": null, "error": "scheme"},
+        {"name": "scheme-like input", "input": "javascript:alert(1)", "value": null, "error": "scheme"},
+        {"name": "protocol relative", "input": "//public.example.com", "value": null, "error": "scheme"},
+        {"name": "non-string value", "input": 42, "value": null, "error": "type"},
+        {"name": "missing host", "input": "https://", "value": null, "error": "host"},
+        {"name": "invalid ipv4", "input": "999.999.999.999:3501", "value": null, "error": "host"},
+        {"name": "invalid port", "input": "https://public.example.com:bad", "value": null, "error": "port"}
+    ],
+    "repair_cases": [
+        {"name": "remove path", "input": "https://public.example.com/base", "value": "https://public.example.com", "error": null},
+        {"name": "remove query and fragment", "input": "public.example.com?x=1#part", "value": "https://public.example.com", "error": null},
+        {"name": "retain non-string value", "input": 42, "value": null, "error": "type"},
+        {"name": "retain unsafe credentials", "input": "https://user:secret@public.example.com", "value": null, "error": "credentials"},
+        {"name": "retain unsupported scheme", "input": "ftp://public.example.com/base", "value": null, "error": "scheme"}
+    ]
+}

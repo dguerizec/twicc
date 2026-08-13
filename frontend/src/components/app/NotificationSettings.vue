@@ -13,10 +13,10 @@ const store = useSettingsStore()
 
 const emit = defineEmits(['go-to-public-base-url'])
 
-// The External URL setting (stored as `publicBaseUrl`) lives in the Global
+// The External address setting (stored as `publicBaseUrl`) lives in the Global
 // section; here we only surface a callout inviting the user to set it when it's
 // missing (so notification links aren't silently omitted).
-const hasPublicBaseUrl = computed(() => !!(store.getPublicBaseUrl || '').trim())
+const hasPublicBaseUrl = computed(() => !!store.getUsablePublicBaseUrl)
 
 // Sound options for selects
 const soundOptions = getAvailableSoundOptions()
@@ -362,7 +362,7 @@ defineExpose({ sync })
             </p>
             <wa-callout v-if="!hasPublicBaseUrl" variant="neutral" size="small" class="public-base-url-callout">
                 <wa-icon slot="icon" name="link"></wa-icon>
-                No <strong>External URL</strong> is set, so these notifications won't link back
+                No <strong>External address</strong> is set, so these notifications won't link back
                 to the session.
                 <a href="#" @click.prevent="emit('go-to-public-base-url')">Set it in General settings</a>.
             </wa-callout>

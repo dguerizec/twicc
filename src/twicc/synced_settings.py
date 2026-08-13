@@ -100,12 +100,12 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     # used to append a session deep link to external notifications.
     # Empty = no link line.
     "publicBaseUrl": "",
-    # Dedicated share origin (design §12): a hostname DISTINCT from the working
-    # origin, pointing at the same local port. Serving links always requires it
-    # (/share/ is gated to this host — share/asgi_filter.py — and the Share UI
-    # is disabled when empty); creation requires it only on the REST path and
+    # Dedicated share origin (design §12): an origin with a hostname DISTINCT
+    # from the working origin, pointing at the same local port. Serving links
+    # always requires it. The share host gate lives in share/asgi_filter.py,
+    # and the Share UI is disabled when empty. Creation requires it only on the REST path and
     # for agent callers (share_host_unset) — the human CLI and full-token /rpc/
-    # stay permissive. A bare hostname or a full URL; only the hostname matters.
+    # stay permissive. Stored as a canonical HTTP origin.
     "shareBaseUrl": "",
     # Let agents create and manage session shares (skill + MCP + CLI from inside a
     # session). Off: those calls are refused with `agent_sharing_disabled`.
@@ -250,6 +250,18 @@ def _migrate_legacy_settings(file_data: dict) -> bool:
         file_data["worktreeDirectoryTemplate"] = f"{{git_root}}/{legacy_value}" if legacy_value else ""
         renamed.append("defaultWorktreeDirectory→worktreeDirectoryTemplate")
         changed = True
+    from twicc.core.services.public_origin import PUBLIC_ORIGIN_SETTING_KEYS, repair_legacy_public_origin
+
+    for key in PUBLIC_ORIGIN_SETTING_KEYS:
+        if key not in file_data:
+            continue
+        result = repair_legacy_public_origin(file_data[key])
+        if result.value is not None and result.value != file_data[key]:
+            file_data[key] = result.value
+            renamed.append(f"{key}→canonical-origin")
+            changed = True
+        elif result.error:
+            logger.warning("Retained invalid legacy public origin setting: key=%s error=%s", key, result.error)
     if changed:
         logger.info(
             "Migrated synced settings: dropped=%s renamed=%s",
