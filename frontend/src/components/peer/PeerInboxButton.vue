@@ -34,18 +34,31 @@ function openInbox() {
             @click="openInbox"
         >
             <wa-icon name="envelope"></wa-icon>
-            <wa-badge v-if="count > 0" variant="brand" attention="pulse" class="peer-inbox-badge">{{ count }}</wa-badge>
+            <wa-badge v-if="count > 0" variant="brand" class="peer-inbox-badge">{{ count }}</wa-badge>
         </wa-button>
         <AppTooltip :for="buttonId">Peer inbox</AppTooltip>
     </template>
 </template>
 
 <style scoped>
-.peer-inbox-button { position: relative; }
+.peer-inbox-button {
+    position: relative;
+}
+.peer-inbox-button::part(base) {
+    inline-size: var(--wa-form-control-height);
+    padding-inline: 0;
+}
 .peer-inbox-badge {
     position: absolute;
-    top: -0.4rem;
-    right: -0.4rem;
+    inset-block-start: 0;
+    inset-inline-end: 0;
+    translate: 30% -30%;
+    box-sizing: border-box;
+    inline-size: 1.4rem;
+    block-size: 1.4rem;
+    padding: 0;
+    border-radius: 50%;
+    font-variant-numeric: tabular-nums;
     pointer-events: none;
 }
 

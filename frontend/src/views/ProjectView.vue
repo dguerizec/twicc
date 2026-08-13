@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDataStore, ALL_PROJECTS_ID } from '../stores/data'
 import { useSettingsStore } from '../stores/settings'
 import { useSharesStore } from '../stores/shares'
+import { usePeersStore } from '../stores/peers'
 import { useHelpStore } from '../stores/help'
 import { useWorkspacesStore } from '../stores/workspaces'
 import { SESSION_TIME_FORMAT } from '../constants'
@@ -68,6 +69,7 @@ const router = useRouter()
 const store = useDataStore()
 const settingsStore = useSettingsStore()
 const sharesStore = useSharesStore()
+const peersStore = usePeersStore()
 const helpStore = useHelpStore()
 const { registerCommands, unregisterCommands } = useCommandRegistry()
 
@@ -2588,7 +2590,10 @@ function updateSidebarClosedClass(closed) {
 
                 <wa-divider></wa-divider>
 
-                <div class="sidebar-footer-buttons">
+                <div
+                    class="sidebar-footer-buttons"
+                    :class="{ 'sidebar-footer-buttons--with-inbox': peersStore.inboxCount >= 1 }"
+                >
                     <!-- Sidebar Toggle button (label for hidden checkbox, wa-button inside for styling) -->
                     <label for="sidebar-toggle-state" class="sidebar-toggle" id="sidebar-toggle-label">
                         <span class="sidebar-backdrop"></span>
@@ -3556,6 +3561,36 @@ html.wa-dark .usage-lane-time {
     padding: var(--wa-space-s);
     position: relative;
     background: var(--main-header-footer-bg-color);
+}
+
+/* Inbox adds a fourth footer action. These reductions only apply while that
+   conditional action exists; the historical three-action footer is unchanged. */
+@container sidebar (width <= 19rem) {
+    .sidebar-footer-buttons--with-inbox {
+        gap: var(--wa-space-xs);
+        padding: var(--wa-space-xs);
+    }
+    .sidebar-footer-buttons--with-inbox .sidebar-toggle {
+        bottom: var(--wa-space-xs);
+        left: var(--wa-space-xs);
+    }
+}
+
+@container sidebar (width <= 17rem) {
+    .sidebar-footer-buttons--with-inbox :deep(#settings-trigger) {
+        &::part(base) {
+            padding: var(--wa-space-s);
+        }
+        & > span {
+            display: none;
+        }
+    }
+}
+
+@container sidebar (width <= 13rem) {
+    .sidebar-footer-buttons--with-inbox :deep(.command-palette-button) {
+        display: none;
+    }
 }
 
 /* Sidebar toggle label */
