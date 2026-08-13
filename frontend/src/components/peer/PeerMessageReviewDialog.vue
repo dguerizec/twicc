@@ -40,6 +40,7 @@ import {
     activePeerResolutionAction,
     chooseReplyTargetSource,
     deliveryPickerTransition,
+    existingSessionActionLabel,
     isReplyTargetPickerEligible,
     recoverReplyTargetPagination,
     shouldShowReplyTargetPreparation,
@@ -359,6 +360,10 @@ const sessionRows = computed(() => {
 const selectedSession = computed(() =>
     sessionRows.value.find(r => r.session.id === selectedSessionId.value)?.session || null
 )
+const existingSessionActionText = computed(() => existingSessionActionLabel(
+    !!selectedSession.value,
+    activeResolutionAction.value === 'existing',
+))
 
 function isCurrentOpen(generation, messageId) {
     return generation === openGeneration
@@ -1065,6 +1070,23 @@ function onHide(event) {
                      order and blocks, compact rendering), minus archived and
                      drafts. Click selects; the button delivers. -->
                 <div v-if="existingPickerMounted" v-show="mode === 'existing'" class="pr-existing-session">
+                    <div class="pr-existing-action">
+                        <wa-button
+                            size="small" variant="brand"
+                            :disabled="!selectedSession || busy || !contentAllowsDelivery"
+                            :aria-busy="activeResolutionAction === 'existing' ? 'true' : 'false'"
+                            @click="deliverToSession(selectedSession)"
+                        >
+                            <wa-spinner v-if="activeResolutionAction === 'existing'" slot="start"></wa-spinner>
+                            <wa-icon v-else name="pen-to-square" slot="start"></wa-icon>
+                            {{ existingSessionActionText }}
+                        </wa-button>
+                        <wa-callout
+                            v-if="actionError"
+                            variant="danger" size="small"
+                            class="pr-action-error"
+                        >{{ actionError }}</wa-callout>
+                    </div>
                     <!-- Two filters, coarse then fine: the project (the same
                          selector as 'new session', plus the current sidebar
                          frame's scopes) narrows the list, the text input
@@ -1126,20 +1148,10 @@ function onHide(event) {
                         </template>
                         <p v-if="!sessionRows.length" class="pr-empty">No matching session.</p>
                     </div>
-                    <wa-button
-                        size="small" variant="brand"
-                        :disabled="!selectedSession || busy || !contentAllowsDelivery"
-                        :aria-busy="activeResolutionAction === 'existing' ? 'true' : 'false'"
-                        @click="deliverToSession(selectedSession)"
-                    >
-                        <wa-spinner v-if="activeResolutionAction === 'existing'" slot="start"></wa-spinner>
-                        <wa-icon v-else name="pen-to-square" slot="start"></wa-icon>
-                        {{ activeResolutionAction === 'existing' ? 'Delivering…' : 'Prefill session composer' }}
-                    </wa-button>
                 </div>
 
                 <wa-callout
-                    v-if="actionError"
+                    v-if="actionError && (mode !== 'existing' || !existingPickerMounted)"
                     variant="danger" size="small"
                     class="pr-action-error"
                     :class="{ 'pr-action-error--after-mode': mode !== null }"
@@ -1308,6 +1320,14 @@ function onHide(event) {
     color: var(--wa-color-text-quiet);
 }
 .pr-preparing wa-spinner { font-size: 1rem; }
+.pr-existing-action {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--wa-space-xs);
+    margin-bottom: var(--wa-space-s);
+}
+.pr-existing-action .pr-action-error { align-self: stretch; }
 .pr-picker-filters {
     display: flex;
     gap: var(--wa-space-xs);

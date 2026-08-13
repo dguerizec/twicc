@@ -74,3 +74,9 @@ export function activePeerResolutionAction(busy, confirmingRefuse, mode) {
     if (mode === 'existing' || mode === 'new') return mode
     return null
 }
+
+/** Label the existing-session action from its selection and progress state. */
+export function existingSessionActionLabel(hasSelectedSession, isPrefilling) {
+    if (isPrefilling) return 'Prefilling…'
+    return hasSelectedSession ? 'Prefill session composer' : 'Select a session below'
+}

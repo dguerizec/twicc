@@ -5,6 +5,7 @@ import {
     activePeerResolutionAction,
     chooseReplyTargetSource,
     deliveryPickerTransition,
+    existingSessionActionLabel,
     isReplyTargetPickerEligible,
     recoverReplyTargetPagination,
     shouldShowReplyTargetPreparation,
@@ -197,4 +198,10 @@ test('identifies the one resolution button that owns busy progress', () => {
     assert.equal(activePeerResolutionAction(true, false, 'new'), 'new')
     assert.equal(activePeerResolutionAction(true, true, 'new'), 'refuse')
     assert.equal(activePeerResolutionAction(true, false, null), null)
+})
+
+test('labels the existing-session action before selection and while prefilling', () => {
+    assert.equal(existingSessionActionLabel(false, false), 'Select a session below')
+    assert.equal(existingSessionActionLabel(true, false), 'Prefill session composer')
+    assert.equal(existingSessionActionLabel(true, true), 'Prefilling…')
 })
