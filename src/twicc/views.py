@@ -36,6 +36,7 @@ from twicc.core.session_queries import (
     serialize_agent_links,
     tool_results_payload,
 )
+from twicc.core.text_filter import match_text_query
 from twicc.core.services.project_mutation import clean_project_agent_defaults
 from twicc.paths import path_to_project_id
 from twicc.projects import register_project
@@ -1213,44 +1214,6 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
     return JsonResponse(serialize_session(session))
 
 
-def _match_subsequence(query: str, text: str) -> bool:
-    """Case-insensitive subsequence match: every char of ``query`` appears in
-    ``text`` in order (not necessarily contiguous). Mirrors the frontend
-    ``matchSubsequence`` in ``SessionList.vue``.
-    """
-    lower_query = query.lower()
-    lower_text = text.lower()
-    qi = 0
-    for ch in lower_text:
-        if qi >= len(lower_query):
-            break
-        if ch == lower_query[qi]:
-            qi += 1
-    return qi == len(lower_query)
-
-
-def _match_session_query(query: str, text: str) -> bool:
-    """Resolve a sidebar filter query against a display string.
-
-    - Queries starting with ``"`` or ``'`` switch to case-insensitive
-      substring matching. An optional trailing matching quote is stripped,
-      so both ``"foo`` and ``"foo"`` look for the literal substring ``foo``.
-    - Anything else uses the default subsequence (fuzzy) matching.
-
-    Mirrors ``matchSessionQuery`` in ``SessionList.vue`` so the bulk-archive
-    scope matches the sidebar exactly.
-    """
-    if query and query[0] in ('"', "'"):
-        first = query[0]
-        needle = query[1:]
-        if needle.endswith(first):
-            needle = needle[:-1]
-        if not needle:
-            return True
-        return needle.lower() in text.lower()
-    return _match_subsequence(query, text)
-
-
 async def bulk_archive_sessions(request):
     """POST /api/sessions/bulk-archive/ - Archive multiple sessions in one shot.
 
@@ -1350,7 +1313,7 @@ async def bulk_archive_sessions(request):
     )
 
     if title_query:
-        rows = [r for r in rows if _match_session_query(title_query, r[1] or r[0])]
+        rows = [r for r in rows if match_text_query(title_query, r[1] or r[0])]
 
     # Used by the dialog to decide whether the "Include archived projects"
     # switch is meaningful. Only relevant for workspace/all — a project scope

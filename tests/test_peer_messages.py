@@ -81,7 +81,7 @@ def broadcasts(monkeypatch):
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _post(client, path, body, *, bearer=None):
@@ -1339,6 +1339,104 @@ def test_owner_message_list_serializes_resolved_reply_without_async_lazy_load(
     row = next(item for item in body["messages"] if item["id"] == child.pk)
     _assert_owner_reply_contract(row, parent, child, origin_session)
     assert "payload" not in row
+
+
+def test_owner_message_list_searches_title_and_complete_text(client, transactional_db):
+    peer = _active_peer()
+    title_match = _in_message(
+        peer,
+        message_id="owner-search-title",
+        title="Release planning",
+        payload={"text": "ordinary body", "images": [], "documents": []},
+    )
+    body_match = _in_message(
+        peer,
+        message_id="owner-search-body",
+        title="Ordinary title",
+        payload={
+            "text": "x" * 350 + " deep archive phrase",
+            "images": [_image_block(b"attachment-search-sentinel")],
+            "documents": [],
+        },
+    )
+    split_only = _in_message(
+        peer,
+        message_id="owner-search-split",
+        title="alpha",
+        payload={"text": "beta", "images": [], "documents": []},
+    )
+
+    fuzzy = _run(client.get("/api/peer-messages/", {"q": "rlspln"}))
+    literal = _run(client.get("/api/peer-messages/", {"q": '"deep archive phrase"'}))
+    split = _run(client.get("/api/peer-messages/", {"q": "abt"}))
+
+    assert fuzzy.status_code == 200
+    assert [row["id"] for row in orjson.loads(fuzzy.content)["messages"]] == [title_match.pk]
+    assert [row["id"] for row in orjson.loads(literal.content)["messages"]] == [body_match.pk]
+    assert orjson.loads(split.content)["messages"] == []
+    assert split_only.pk not in [row["id"] for row in orjson.loads(split.content)["messages"]]
+    assert b"attachment-search-sentinel" not in literal.content
+    assert all("payload" not in row for row in orjson.loads(literal.content)["messages"])
+
+
+def test_owner_message_list_combines_peer_and_text_filters(client, transactional_db):
+    first_peer = _active_peer(name="first")
+    second_peer = _active_peer(
+        name="second",
+        base_url="https://second.example.com",
+        token_ours=mint_token(),
+        token_theirs="second-" + "s" * 30,
+    )
+    expected = _in_message(
+        first_peer, message_id="owner-search-first", title="Shared needle",
+    )
+    _in_message(second_peer, message_id="owner-search-second", title="Shared needle")
+    _in_message(first_peer, message_id="owner-search-other", title="Different subject")
+
+    response = _run(client.get("/api/peer-messages/", {
+        "peer_id": first_peer.pk,
+        "q": '"shared needle"',
+    }))
+    peer_only = _run(client.get("/api/peer-messages/", {
+        "peer_id": second_peer.pk,
+    }))
+
+    assert response.status_code == 200
+    assert [row["id"] for row in orjson.loads(response.content)["messages"]] == [expected.pk]
+    assert [row["peer_id"] for row in orjson.loads(peer_only.content)["messages"]] == [second_peer.pk]
+
+
+def test_owner_message_list_keeps_all_matching_pending_and_caps_history(client, transactional_db):
+    peer = _active_peer()
+    for index in range(2):
+        _in_message(
+            peer,
+            message_id=f"owner-search-pending-{index}",
+            title="Cap match pending",
+        )
+    PeerMessage.objects.bulk_create([
+        PeerMessage(
+            peer=peer,
+            direction=PeerMessageDirection.IN,
+            message_id=f"owner-search-history-{index}",
+            thread_id=f"owner-search-history-{index}",
+            title="Cap match history",
+            payload={"text": "capmatch", "images": [], "documents": []},
+            origin={"sent_at": "2026-07-24T12:00:00+00:00"},
+            status=PeerMessageStatus.DELIVERED,
+            resolved_at=djtz.now(),
+        )
+        for index in range(201)
+    ])
+
+    response = _run(client.get("/api/peer-messages/", {"q": "capmatch", "limit": 200}))
+
+    assert response.status_code == 200
+    body = orjson.loads(response.content)
+    assert len(body["messages"]) == 202
+    assert sum(row["status"] == PeerMessageStatus.PENDING for row in body["messages"]) == 2
+    assert sum(row["status"] != PeerMessageStatus.PENDING for row in body["messages"]) == 200
+    assert body["history_has_more"] is True
 
 
 def test_owner_message_detail_serializes_resolved_reply_without_async_lazy_load(

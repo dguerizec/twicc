@@ -9,23 +9,119 @@
  * Mounted once in App.vue, opened by `twicc:open-peer-inbox` (optionally with
  * `detail.messageId` → App.vue opens the review dialog directly).
  */
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { usePeersStore } from '../../stores/peers'
+import { apiFetch } from '../../utils/api'
+import { debounce } from '../../utils/debounce'
+import {
+    buildPeerInboxSearchUrl,
+    peerInboxFiltersActive,
+    peerInboxSelectablePeers,
+    peerInboxView,
+} from '../../utils/peerInboxFilter'
 import PeerInboxRow from './PeerInboxRow.vue'
 
-defineProps({ open: Boolean })
+const props = defineProps({ open: Boolean })
 const emit = defineEmits(['close', 'review'])
 
 const peersStore = usePeersStore()
 const dialogRef = ref(null)
+const selectedPeerId = ref('')
+const textFilter = ref('')
+const filteredMessages = ref([])
+const searching = ref(false)
+const searchError = ref('')
+const historyHasMore = ref(false)
+let searchGeneration = 0
+let searchController = null
 
 const pendingRequests = computed(() => peersStore.pendingRequests)
-const pendingMessages = computed(() => peersStore.pendingInboundMessages)
-const history = computed(() =>
-    peersStore.messages
-        .filter(m => !(m.direction === 'in' && m.status === 'pending'))
-        .slice(0, 50)
+const selectablePeers = computed(() =>
+    peerInboxSelectablePeers(peersStore.peers, peersStore.messages)
 )
+const filtersActive = computed(() =>
+    peerInboxFiltersActive(selectedPeerId.value, textFilter.value)
+)
+const activeMessages = computed(() =>
+    filtersActive.value ? filteredMessages.value : peersStore.messages
+)
+const inboxView = computed(() => peerInboxView(activeMessages.value, filtersActive.value))
+const receivedMessages = computed(() => inboxView.value.received)
+const history = computed(() => inboxView.value.history)
+const emptyMessage = computed(() => inboxView.value.emptyMessage)
+
+function invalidateSearch() {
+    searchGeneration += 1
+    searchController?.abort()
+    searchController = null
+}
+
+async function searchMessages(generation) {
+    if (!props.open || !filtersActive.value || generation !== searchGeneration) return
+    const controller = new AbortController()
+    searchController = controller
+    try {
+        const response = await apiFetch(
+            buildPeerInboxSearchUrl(selectedPeerId.value, textFilter.value),
+            { signal: controller.signal },
+        )
+        if (!response.ok) throw new Error(`Search failed with status ${response.status}`)
+        const payload = await response.json()
+        if (generation !== searchGeneration || controller.signal.aborted) return
+        filteredMessages.value = payload.messages || []
+        historyHasMore.value = !!payload.history_has_more
+    } catch (error) {
+        if (controller.signal.aborted || generation !== searchGeneration) return
+        searchError.value = 'Could not search peer messages.'
+    } finally {
+        if (generation === searchGeneration) {
+            searching.value = false
+            searchController = null
+        }
+    }
+}
+
+const debouncedSearch = debounce(() => searchMessages(searchGeneration), 300)
+
+function prepareSearch(immediate) {
+    debouncedSearch.cancel()
+    invalidateSearch()
+    filteredMessages.value = []
+    historyHasMore.value = false
+    searchError.value = ''
+    if (!props.open || !filtersActive.value) {
+        searching.value = false
+        return
+    }
+    searching.value = true
+    if (immediate) searchMessages(searchGeneration)
+    else debouncedSearch()
+}
+
+watch(selectedPeerId, () => prepareSearch(true))
+watch(textFilter, () => prepareSearch(false))
+watch(() => props.open, (open) => {
+    if (open) {
+        if (filtersActive.value) prepareSearch(true)
+        return
+    }
+    debouncedSearch.cancel()
+    invalidateSearch()
+    searching.value = false
+})
+watch(
+    () => peersStore.messages.map(message =>
+        `${message.id}:${message.status}:${message.title}:${message.text_preview}`
+    ).join('|'),
+    () => {
+        if (props.open && filtersActive.value) prepareSearch(true)
+    },
+)
+
+onBeforeUnmount(() => {
+    debouncedSearch.cancel()
+    invalidateSearch()
+})
 
 function openManager() {
     emit('close')
@@ -48,6 +144,30 @@ function onHide(event) {
         style="--width: min(680px, calc(100vw - 2rem))"
         @wa-hide="onHide"
     >
+        <div class="pi-filters">
+            <wa-select v-model="selectedPeerId" size="small" class="pi-filter-peer">
+                <wa-option value="">All peers</wa-option>
+                <wa-option
+                    v-for="peer in selectablePeers" :key="peer.id"
+                    :value="peer.id" :label="peersStore.peerLabel(peer.id)"
+                >{{ peersStore.peerLabel(peer.id) }}</wa-option>
+            </wa-select>
+            <wa-input
+                size="small" class="pi-filter-text" placeholder="Filter messages…"
+                with-clear
+                :value="textFilter"
+                @input="textFilter = $event.target.value"
+            ></wa-input>
+        </div>
+
+        <div v-if="searching" class="pi-searching" role="status" aria-live="polite">
+            <wa-spinner></wa-spinner>
+            <span>Searching…</span>
+        </div>
+        <wa-callout v-else-if="searchError" variant="danger" size="small" class="pi-search-error">
+            {{ searchError }}
+        </wa-callout>
+
         <template v-if="pendingRequests.length">
             <h4 class="pi-section-title">Pending requests</h4>
             <button
@@ -62,23 +182,31 @@ function onHide(event) {
             </button>
         </template>
 
-        <h4 class="pi-section-title">Pending messages</h4>
-        <p v-if="!pendingMessages.length" class="pi-empty">No pending message.</p>
-        <PeerInboxRow
-            v-for="message in pendingMessages" :key="message.id"
-            :message="message" :show-status="false"
-            @click="review(message)"
-        />
+        <template v-if="!searching && !searchError">
+            <template v-if="receivedMessages.length">
+                <h4 class="pi-section-title">Received messages awaiting review</h4>
+                <PeerInboxRow
+                    v-for="message in receivedMessages" :key="message.id"
+                    :message="message" :show-status="false"
+                    @click="review(message)"
+                />
+            </template>
 
-        <template v-if="history.length">
-            <h4 class="pi-section-title">History</h4>
-            <!-- Re-openable: a resolved message stays readable, and a delivered
-                 one can be routed again (wrong session picked, draft cleared). -->
-            <PeerInboxRow
-                v-for="message in history" :key="message.id"
-                :message="message"
-                @click="review(message)"
-            />
+            <template v-if="history.length">
+                <h4 class="pi-section-title">History</h4>
+                <!-- Re-openable: a resolved message stays readable, and a delivered
+                     one can be routed again (wrong session picked, draft cleared). -->
+                <PeerInboxRow
+                    v-for="message in history" :key="message.id"
+                    :message="message"
+                    @click="review(message)"
+                />
+                <wa-callout v-if="historyHasMore" variant="neutral" size="small" class="pi-limit">
+                    Showing the first 200 results. Refine your filters to narrow the search.
+                </wa-callout>
+            </template>
+
+            <p v-if="emptyMessage" class="pi-empty">{{ emptyMessage }}</p>
         </template>
 
         <div slot="footer" class="pi-footer">
@@ -92,6 +220,23 @@ function onHide(event) {
 </template>
 
 <style scoped>
+.pi-filters {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    margin-bottom: var(--wa-space-s);
+}
+.pi-filter-peer { flex: 0 1 40%; min-width: 0; }
+.pi-filter-text { flex: 1 1 auto; min-width: 0; }
+.pi-searching {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-xs);
+    min-height: 2.5rem;
+    color: var(--wa-color-text-quiet);
+}
+.pi-searching wa-spinner { font-size: 1rem; }
+.pi-search-error { margin-bottom: var(--wa-space-s); }
 .pi-section-title {
     margin: var(--wa-space-l) 0 var(--wa-space-s);
     border-bottom: 2px solid var(--wa-color-surface-border);
@@ -99,6 +244,7 @@ function onHide(event) {
 }
 .pi-section-title:first-of-type { margin-top: 0; }
 .pi-empty { color: var(--wa-color-text-quiet); }
+.pi-limit { margin-top: var(--wa-space-s); }
 
 .pi-row {
     display: flex;
@@ -136,5 +282,11 @@ function onHide(event) {
     justify-content: flex-end;
     gap: var(--wa-space-s);
     width: 100%;
+}
+
+@media (max-width: 520px) {
+    .pi-filters { align-items: stretch; flex-direction: column; }
+    .pi-filter-peer,
+    .pi-filter-text { width: 100%; }
 }
 </style>

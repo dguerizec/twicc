@@ -13,6 +13,7 @@ from django.http import Http404, HttpResponseNotAllowed, JsonResponse
 
 from twicc.core.serializers import serialize_peer, serialize_peer_message
 from twicc.core.services import peer_messages, peer_mutation
+from twicc.core.text_filter import match_text_query
 
 
 def _err_response(errors) -> JsonResponse:
@@ -134,7 +135,7 @@ async def peer_refuse(request, peer_id):
 
 
 async def peer_messages_list(request):
-    """GET /api/peer-messages/?limit=50 — summaries, pending inbound first."""
+    """GET peer-message summaries, optionally filtered by peer and full text."""
     from twicc.core.models import PeerMessage, PeerMessageDirection, PeerMessageStatus
 
     if request.method != "GET":
@@ -143,23 +144,59 @@ async def peer_messages_list(request):
         limit = min(max(int(request.GET.get("limit", 50)), 1), 200)
     except ValueError:
         limit = 50
+    peer_id = (request.GET.get("peer_id") or "").strip()
+    query = (request.GET.get("q") or "").strip()
 
     def _fetch():
         # The serializer reads each message's local session titles: one JOIN,
         # not one query per row.
-        rows = PeerMessage.objects.select_related(
+        rows = PeerMessage.objects.all()
+        if peer_id:
+            rows = rows.filter(peer_id=peer_id)
+
+        if query:
+            pending_ids = []
+            history_ids = []
+            history_has_more = False
+            candidates = rows.values_list(
+                "pk", "title", "payload__text", "direction", "status",
+            )
+            for pk, title, text, direction, status in candidates.iterator():
+                if not (
+                    match_text_query(query, title or "")
+                    or match_text_query(query, text or "")
+                ):
+                    continue
+                if direction == PeerMessageDirection.IN and status == PeerMessageStatus.PENDING:
+                    pending_ids.append(pk)
+                elif len(history_ids) < limit:
+                    history_ids.append(pk)
+                else:
+                    history_has_more = True
+
+            ordered_ids = pending_ids + history_ids
+            selected = PeerMessage.objects.select_related(
+                "origin_session", "delivered_to_session", "reply_to_message",
+            ).filter(pk__in=ordered_ids)
+            by_id = {message.pk: message for message in selected}
+            return [by_id[pk] for pk in ordered_ids], history_has_more
+
+        rows = rows.select_related(
             "origin_session", "delivered_to_session", "reply_to_message",
         )
         pending = list(rows.filter(
             direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
         ))
-        rest = list(rows.exclude(
+        history = list(rows.exclude(
             direction=PeerMessageDirection.IN, status=PeerMessageStatus.PENDING,
-        )[:limit])
-        return pending + rest
+        )[:limit + 1])
+        return pending + history[:limit], len(history) > limit
 
-    messages = await sync_to_async(_fetch)()
-    return JsonResponse({"messages": [serialize_peer_message(m) for m in messages]})
+    messages, history_has_more = await sync_to_async(_fetch)()
+    return JsonResponse({
+        "messages": [serialize_peer_message(message) for message in messages],
+        "history_has_more": history_has_more,
+    })
 
 
 async def peer_message_detail(request, pk):
