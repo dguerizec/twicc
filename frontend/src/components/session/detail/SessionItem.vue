@@ -768,6 +768,26 @@ wa-details.item-details {
         flex-wrap: wrap;
         gap: var(--wa-space-xs);
         max-width: 100%; /* Constrain to parent width so text can wrap */
+        /* Without this, `min-width: auto` floors the block at its min-content
+           width — and a `nowrap` summary (DescriptionSummary's `truncate`
+           mode) contributes its FULL text width there, whatever its own
+           `overflow: hidden` / `min-width: 0`. Clamped by `max-width: 100%`,
+           that floor becomes the whole row, leaving nothing for the right
+           block: the spinner then renders outside the card while the text
+           still ellipsises, hiding the cause. */
+        min-width: 0;
+    }
+    /* Compact right-hand indicators (running spinner, diff stats, error icon)
+       must share the summary's first line. With the default `flex-basis: auto`
+       the left block's hypothetical size fills the whole row, so the narrow
+       container's `flex-wrap: wrap` (see the container query below) breaks the
+       line and drops them underneath. A zero basis keeps the line unbroken and
+       lets the left block take whatever is left. Rows whose right block holds a
+       button keep the historical wrapping — the `row-gap` rule below styles it. */
+    &:not(:has(.items-details-summary-right wa-button)) {
+        .items-details-summary-left {
+            flex: 1 1 0;
+        }
     }
     &:has(.items-details-summary-right > wa-button) {
         .items-details-summary {
@@ -783,6 +803,7 @@ wa-details.item-details {
         display: flex;
         align-items: center;
         column-gap: var(--wa-space-xs);
+        flex-shrink: 0; /* Indicators and buttons keep their place; the left block shrinks */
 
         & > :not(wa-button, wa-icon, wa-spinner):last-child {
             margin-right: var(--spacing);
