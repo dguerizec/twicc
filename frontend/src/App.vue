@@ -833,6 +833,12 @@ body {
     padding: 0;
 }
 
+/* Web Awesome removes the footer's block-start padding. Restore the dialog's
+   configured spacing so scrolling content does not touch fixed actions. */
+wa-dialog::part(footer) {
+    padding-block-start: var(--spacing, var(--wa-space-m));
+}
+
 /* Clearance the closed-sidebar floating reopen toggle (bottom-left) needs from nearby content — the
    single source of these values. SessionLayout refines them per dock context on .session-layout (see
    there). Consumers, no fallback: the composer (MessageInput toolbar + CollapsedBar) reads -x; the
