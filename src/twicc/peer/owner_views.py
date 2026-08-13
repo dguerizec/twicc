@@ -72,7 +72,7 @@ async def peers_list(request):
 
 
 async def peer_detail(request, peer_id):
-    """GET / PATCH {name?, base_url?} / DELETE (silent revoke) /api/peers/<id>/."""
+    """GET / PATCH {name?} / DELETE (silent revoke) /api/peers/<id>/."""
     peer = await _load_peer(peer_id)
     if request.method == "GET":
         return JsonResponse(serialize_peer(peer))
@@ -80,12 +80,14 @@ async def peer_detail(request, peer_id):
         data = _parse_body(request)
         if data is None:
             return JsonResponse({"error": "Invalid JSON"}, status=400)
+        if "base_url" in data:
+            return _err_response([peer_mutation.PeerError(
+                "base_url",
+                "immutable",
+                "A peer address cannot be changed. Create a new peering for the new address.",
+            )])
         if "name" in data:
             result = await peer_mutation.rename_peer(peer, data.get("name") or "")
-            if not result.success:
-                return _err_response(result.errors)
-        if "base_url" in data:
-            result = await peer_mutation.update_peer_base_url(peer, data.get("base_url") or "")
             if not result.success:
                 return _err_response(result.errors)
         return JsonResponse(serialize_peer(await _load_peer(peer_id)))

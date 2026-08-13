@@ -669,6 +669,32 @@ def test_owner_rest_accept_refuse_rename_delete(client, transactional_db, peer_h
     assert not Peer.objects.filter(pk=peer.pk).exists()
 
 
+def test_owner_rest_rejects_peer_address_changes_without_partial_rename(client, transactional_db, peer_host):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.ACTIVE,
+        token_ours=mint_token(),
+        token_theirs=mint_token(),
+    )
+
+    response = _run(client.patch(
+        f"/api/peers/{peer.id}/",
+        data=orjson.dumps({"name": "renamed", "base_url": "https://mallory.example.com"}),
+        content_type="application/json",
+    ))
+
+    assert response.status_code == 400
+    assert orjson.loads(response.content)["errors"] == [{
+        "field": "base_url",
+        "code": "immutable",
+        "message": "A peer address cannot be changed. Create a new peering for the new address.",
+    }]
+    peer.refresh_from_db()
+    assert peer.name == "alice"
+    assert peer.base_url == "https://alice.example.com"
+
+
 def test_outbound_request_carries_configured_display_name(transactional_db, monkeypatch):
     monkeypatch.setattr(
         "twicc.synced_settings.read_synced_settings",

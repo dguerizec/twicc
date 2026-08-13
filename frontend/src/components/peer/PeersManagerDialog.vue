@@ -41,8 +41,6 @@ const verifyCodes = ref({})
 const rowErrors = ref({})
 const busy = ref({})
 const confirmingRemoval = ref(null)
-const editingUrl = ref(null)
-const editUrlValue = ref('')
 const renaming = ref(null)
 const renameValue = ref('')
 
@@ -58,7 +56,6 @@ const addBusy = ref(false)
 watch(() => props.open, (open) => {
     if (!open) return
     confirmingRemoval.value = null
-    editingUrl.value = null
     renaming.value = null
     rowErrors.value = {}
     addError.value = ''
@@ -193,19 +190,6 @@ async function applyRename(peer) {
     renaming.value = null
     if (!name || name === peer.name) return
     await _patch(peer, { name })
-}
-
-function startEditUrl(peer) {
-    editingUrl.value = peer.id
-    editUrlValue.value = peer.base_url
-}
-
-async function applyEditUrl(peer) {
-    rowErrors.value = { ...rowErrors.value, [peer.id]: '' }
-    const url = editUrlValue.value.trim()
-    editingUrl.value = null
-    if (!url || url === peer.base_url) return
-    await _patch(peer, { base_url: url })
 }
 
 function openInbox() {
@@ -378,19 +362,10 @@ function onHide(event) {
                 </template>
             </div>
             <div class="pm-peer__url-row">
-                <template v-if="editingUrl === peer.id">
-                    <wa-input
-                        size="small" :value="editUrlValue"
-                        @input="editUrlValue = $event.target.value"
-                        @keydown.enter="applyEditUrl(peer)"
-                    ></wa-input>
-                    <wa-button size="small" @click="applyEditUrl(peer)">OK</wa-button>
-                </template>
-                <span v-else class="pm-peer__url">{{ peer.base_url }}</span>
+                <span class="pm-peer__url">{{ peer.base_url }}</span>
             </div>
             <div class="pm-peer__actions">
                 <wa-button size="small" appearance="plain" @click="startRename(peer)">Rename</wa-button>
-                <wa-button size="small" appearance="plain" @click="startEditUrl(peer)">Edit URL</wa-button>
                 <wa-button
                     size="small" variant="danger" appearance="plain"
                     @click="confirmingRemoval = peer.id"

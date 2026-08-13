@@ -368,18 +368,6 @@ async def rename_peer(peer, name: str) -> PeerMutationResult:
     return PeerMutationResult(True, peer.id, None)
 
 
-async def update_peer_base_url(peer, base_url: str) -> PeerMutationResult:
-    base_url = normalize_base_url(base_url)
-    if not valid_base_url(base_url):
-        return PeerMutationResult(False, peer.id, [PeerError(
-            "base_url", "invalid_url", "The peer address must be an absolute http(s) URL.",
-        )])
-    peer.base_url = base_url
-    await run_under_db_write_lock(lambda: peer.asave(update_fields=["base_url"]))
-    await broadcast_peer_updated(peer)
-    return PeerMutationResult(True, peer.id, None)
-
-
 async def delete_peer(peer) -> PeerMutationResult:
     """Silent revocation, any state. The CASCADE deletes the peer's message
     history with it — a recorded decision (design §3.2): "history forever" holds
