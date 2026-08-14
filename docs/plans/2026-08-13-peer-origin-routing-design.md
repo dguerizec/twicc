@@ -79,11 +79,11 @@ remaining port.
 settings inside `_merge_and_write`. It rejects malformed changes atomically.
 It does not reject an unchanged malformed value during an unrelated update.
 
-`frontend/src/utils/publicOrigin.js` mirrors most of the Python origin parser,
-but the current IPv6 and IDNA behavior diverges. Python preserves an expanded
-IPv6 spelling, while the JavaScript `URL` parser compresses it. Python's
-built-in IDNA codec maps some Unicode hostnames differently from the browser
-parser.
+`frontend/src/utils/publicOrigin.js` currently validates and normalizes origin
+input in JavaScript. Its IPv6 and IDNA behavior diverges from Python. Python
+preserves an expanded IPv6 spelling, while the JavaScript `URL` parser
+compresses it. Python's built-in IDNA codec maps some Unicode hostnames
+differently from the browser parser.
 
 `frontend/src/components/app/SettingsPopover.vue` applies these additional UI
 rules:
@@ -126,7 +126,7 @@ Current coverage lives in:
 - Keep the complete application on the External address.
 - Permit local and LAN access without exposing `/peer/` there.
 - Apply setting changes without a server restart.
-- Validate relationships between all three stored addresses.
+- Validate each changed address and every relationship that contains it.
 
 ## 4. Out of scope
 
@@ -156,8 +156,8 @@ has not shipped. No deployed `peerBaseUrl` requires compatibility or repair.
 A normalized origin contains a scheme, hostname, and optional non-default
 port. The common normalizer produces this value.
 
-This design adds one strict hostname contract for settings, frontend
-validation, and request routing. A hostname spelling must contain unescaped
+This design adds one strict hostname contract. Backend settings parsing and
+request routing apply every rule. A hostname spelling must contain unescaped
 ASCII only. A percent escape is invalid, even when it decodes to ASCII.
 Unicode hostname input is invalid.
 
@@ -178,16 +178,48 @@ The hostname classes have these rules:
   leading or trailing dot are invalid. Canonical DNS hostname case is
   lower-case.
 - For each DNS label, first apply ASCII lower-casing to the whole candidate
-  label. If the lower-cased label's first four ASCII characters are `xn--`,
-  the label must be a valid IDNA2008 A-label. Use the lower-cased label for
-  Punycode decoding. Its payload must decode to a valid U-label. Use the same
-  lower-cased label for IDNA2008 round-trip comparison. Re-encoding must
-  produce that label. A malformed label with that prefix in any ASCII case is
-  invalid and is never a generic DNS label. Explicit valid A-label input stays
-  an ASCII A-label with lower-case canonical output.
+  label. If the lower-cased label starts with `xn--`, the backend must validate
+  it as an IDNA2008 A-label. It uses the lower-cased label for Punycode
+  decoding. The payload must decode to a valid U-label. Re-encoding must
+  produce the same lower-cased label. A malformed A-label is invalid. Explicit
+  valid A-label input stays an ASCII A-label with lower-case canonical output.
 
-Settings parsing, frontend validation, and request parsing apply these rules to
-the raw hostname token. They do not use percent decoding or Unicode-to-IDNA
+The JavaScript input check is a simple subset of the Python check. It is not a
+second origin parser. It rejects only these inputs:
+
+- a non-string value;
+- a protocol-relative value or an unsupported explicit scheme;
+- a value without an apparent authority;
+- an authority with credentials;
+- a raw authority with non-ASCII data, a control character, or a percent sign;
+- a trailing colon without a port.
+
+The JavaScript check submits every other input unchanged after the normative
+outer trim. It does not validate DNS label details, an A-label verdict, a port
+range, a path, a query, a fragment, or IPv6 canonical form. Python returns the
+authoritative verdict and canonical value after Apply.
+
+This subset has one safety rule. JavaScript must never reject an input that
+Python accepts. JavaScript can accept an input that Python rejects. Such an
+input shows its error after Apply. The backend validates every changed setting.
+The runtime gate also uses the Python validator. An invalid input never enters
+routing.
+
+Browsers expose UTS #46 through the URL parser. They do not expose IDNA2008.
+UTS #46 is more permissive for some A-labels. JavaScript therefore makes no
+IDNA2008 A-label verdict. It also does not use the browser parser to decide
+whether an input is valid.
+
+Stored values have a separate JavaScript consumer guard. Backend writes store
+canonical values. The guard accepts only a value that has the recognizable
+shape of a canonical stored origin. It does not normalize input or return a
+validation verdict. Browser and Share URL consumers treat every other stored
+value as unset. An A-label can satisfy lexical canonical shape. The guard does
+not decide its IDNA2008 validity. The Python runtime gate remains authoritative
+for routing.
+
+Backend settings parsing and request parsing apply every hostname rule above
+to the raw hostname token. They do not use percent decoding or Unicode-to-IDNA
 conversion to make an invalid token valid.
 
 Examples:
@@ -271,22 +303,20 @@ Examples:
 
 ## 7. Common settings validation
 
-The backend must validate the merged final settings under the settings lock.
-An **origin-setting patch** is a patch that changes at least one of
-`publicBaseUrl`, `shareBaseUrl`, or `peerBaseUrl`. For an origin-setting patch,
-the backend parses every merged non-empty origin before it validates any
-relationship.
+The backend validates each settings patch under the settings lock. An
+**origin-setting patch** changes at least one of `publicBaseUrl`,
+`shareBaseUrl`, or `peerBaseUrl`.
 
-An invalid merged non-empty origin rejects the whole origin-setting patch,
-including when the invalid origin was already stored and was not changed by
-that patch. The user must repair that origin in the same patch or in an
-earlier origin-setting patch. A patch that changes no origin remains allowed,
-even when stored origin state is invalid.
+The backend validates only the origin fields that the patch changes. It also
+validates each relationship that contains at least one changed field. An
+unchanged invalid stored origin does not reject the patch. It contributes no
+relationship operand until it becomes valid. This rule lets a user repair
+several invalid stored origins one field at a time.
 
 The backend applies these rules:
 
 1. Empty values are valid.
-2. Every merged non-empty value must satisfy the common origin syntax and the
+2. Every changed non-empty value must satisfy the common origin syntax and the
    ASCII hostname contract in section 5.1.
 3. Share and External cannot use the same non-empty hostname.
 4. Share and Peer cannot use the same non-empty hostname.
@@ -297,22 +327,40 @@ The backend applies these rules:
 The update is atomic. A rejected update changes no setting and increments no
 settings version.
 
-Errors identify each invalid merged field and every field that participates in
-a relationship conflict. A multi-field patch can return more than one field
-error.
+Errors identify each invalid changed field. They also identify every field in
+a checked relationship conflict. A multi-field patch can return more than one
+field error.
 
-Settings must let the user retain staged corrections in all three origin
-fields. One Apply submits every staged origin correction in one atomic
-origin-setting patch. Settings must not commit any corrected origin
-optimistically before the backend accepts the complete patch.
+Each Settings section keeps its own Apply action. One Apply submits only that
+section's origin field. The stored value changes only after the backend accepts
+the patch and broadcasts the authoritative value. A rejected patch retains the
+field input. The UI shows only errors for the applied field in the active
+section. It discards the symmetric error copies for fields in other sections.
 
-An accepted patch commits all corrected origins together and increments the
-settings version once. A rejected patch retains every staged input and maps
-every returned field error to its origin field. This behavior lets the user
-recover when two or three stored origins are invalid at the same time.
+Each visible relationship-conflict message names the other participating
+address. Use these exact messages:
 
-The JavaScript mirror provides immediate errors in Settings. The backend stays
-authoritative for the UI, WebSocket writes, and CLI writes.
+- Share and External:
+  `The Share host must use a different hostname from the External address.`
+- Share and Peer:
+  `The Share host must use a different hostname from the Peer address.`
+- Peer and External ambiguity:
+  `The Peer and External addresses must be the same origin or use different authorities.`
+
+This display rule loses no write-path error. A patch checks only relationships
+that contain a changed field. The applied field is therefore one operand in
+every relationship conflict that its write can report. The edit creates every
+checked conflict. A conflict between two untouched stored values is not a
+write-path concern. An unchanged invalid operand is also outside write-path
+relationship checks. The runtime gate in section 11 neutralizes both states.
+
+The WebSocket and CLI can still send several origin fields in one patch. The
+backend validates every changed field and every relationship that contains a
+changed field. It accepts or rejects that patch as one atomic update. An
+accepted patch increments the settings version once.
+
+The JavaScript subset provides immediate errors for its small rejection set.
+The backend stays authoritative for the UI, WebSocket writes, and CLI writes.
 
 The frontend must continue to compare Share with `window.location.hostname`.
 This rule protects an active working hostname when the External address is
@@ -342,9 +390,8 @@ The parser:
 - returns no authority for invalid input.
 
 Expanded and compressed spellings of the same IPv6 address produce one
-compressed routing authority. Python origin normalization, JavaScript origin
-normalization, and request parsing must produce the same hostname
-representation.
+compressed routing authority. Python origin normalization and request parsing
+must produce the same hostname representation.
 
 A scope with no valid request authority rejects the whole request. HTTP
 returns the plain `404 Not found` response. A WebSocket closes with `4404`.
@@ -421,8 +468,13 @@ files, `/mcp`, `/api/`, `/rpc/`, artifacts, and every other route.
 
 ## 11. Runtime invalid settings
 
-Normal write paths prevent every defined conflict. Manual file changes can
-still create invalid stored state.
+Normal write paths validate each changed field and each relationship that
+contains it. They exclude every unchanged invalid stored field from those
+relationship checks. Such a field can remain while the user repairs another
+field. A changed field can therefore create a runtime conflict with it when
+the runtime gate recognizes its hostname or authority. The runtime gate treats
+the stored field as invalid and applies every rule below. Manual file changes
+can also create active invalid stored state after restart.
 
 The live policy builder fails closed for each affected public surface. It also
 quarantines every recognizable Share hostname or Peer routing authority whose
@@ -430,6 +482,23 @@ public classification is invalid. A quarantined authority serves no HTTP or
 WebSocket route. HTTP returns the plain `404 Not found` response without
 calling the inner application. A WebSocket closes with `4404` without calling
 the inner application.
+
+At startup, a missing settings file and an empty JSON object activate valid
+default settings. An unreadable file, malformed JSON, or a non-object JSON root
+makes web routing unavailable. Concurrent startup requests use one consistent
+settings result. They never combine default values with an available routing
+state after a failed startup read.
+
+A later manual edit to `settings.json` has no effect until TwiCC restarts.
+Until restart, TwiCC continues the routing state established at startup.
+
+After an unavailable startup, the owner can repair the file and restart TwiCC,
+or use the settings CLI. The settings CLI remains usable while web routes are
+unavailable. A successful CLI update restores routing without a restart.
+
+A policy-build failure makes routing unavailable for that request. When routing
+is unavailable, the gate rejects every HTTP request and WebSocket without
+calling an inner application.
 
 Runtime relationship checks use both valid and recognizable invalid settings.
 A valid setting contributes its normalized hostname and routing authority. A
@@ -442,9 +511,9 @@ is corrected. Recognition never makes the invalid setting valid and never
 enables its surface. Shared Peer routing still requires two valid equal
 normalized origins.
 
-The runtime-invalid states have these results:
+The per-setting disabled and runtime-invalid states have these results:
 
-| Invalid state | Disabled public surface | Quarantine candidate |
+| Stored state | Disabled public surface | Quarantine candidate |
 |---|---|---|
 | Empty Share address | Share | None |
 | Invalid Share address with a recognizable ASCII hostname | Share | That Share hostname |
@@ -494,55 +563,66 @@ Rejected WebSockets close with code `4404`.
 
 ## 12. Live changes
 
-The gate reads settings on every request. A successful Apply changes routing
-for the next request without a restart.
+A successful per-field Apply changes routing for the next request without a
+restart.
 
 The routing change itself has no confirmation and no warning. Relationship
 side effects remain unspecified and outside this work.
 
 ## 13. Verification
 
-### 13.1 Origin and settings parity
+### 13.1 Origin and settings validation
 
-The shared JSON cases used by `tests/test_public_origin.py` and
-`frontend/src/utils/publicOrigin.test.js` must cover routing authorities and
-cross-address outcomes. These cases catch Python and JavaScript disagreement.
-A broken mirror produces different classifications or errors for one case.
+The shared JSON fixture separates backend cases from frontend cases. Python
+alone consumes the backend normalization, routing-authority, A-label, and
+cross-address sections. These sections cover backend normalization,
+routing-authority, A-label, relationship-classification, and pure
+settings-validation cases from sections 5 through 7. The settings-mutation
+tests below cover patch scope, atomicity, and version behavior.
 
-The shared cases must reject Unicode hostnames and accept explicit ASCII
-A-labels. They must include expanded and compressed spellings of one IPv6
-address and require the same RFC 5952 hostname, normalized origin, routing
-authority, and cross-address classification.
+The backend cases must reject Unicode hostnames and exercise explicit ASCII
+A-label spellings. They must include expanded and compressed spellings of one
+IPv6 address. Those spellings must produce the same RFC 5952 hostname,
+normalized origin, routing authority, and cross-address classification.
 
-The shared settings cases must cover `localhost`, canonical IPv4, every DNS
-label and hostname length boundary, label-edge hyphens, empty labels, and a
-trailing dot. They must reject a percent escape such as
-`https://%65xample.com` and malformed A-labels such as
-`https://xn--.example`. Python and JavaScript must produce the same result for
-each raw hostname spelling.
+The backend cases must cover `localhost`, canonical IPv4, every DNS label and
+hostname length boundary, label-edge hyphens, empty labels, and a trailing dot.
+They must reject a percent escape such as `https://%65xample.com`.
 
-The shared settings cases must require `HTTPS://XN--FA-HIA.DE` to normalize to
+The backend A-label cases must require `HTTPS://XN--FA-HIA.DE` to normalize to
 origin `https://xn--fa-hia.de`, hostname `xn--fa-hia.de`, and routing authority
-`xn--fa-hia.de`. They must reject `https://XN--.example`. A defect appears as
-rejection of the valid uppercase A-label, acceptance of the malformed
-uppercase A-label, or a different canonical authority.
+`xn--fa-hia.de`. They must reject malformed A-labels in any ASCII case. One
+case must show an A-label that UTS #46 accepts and IDNA2008 rejects.
+
+JavaScript consumes only the fixture sections for its input subset and stored
+consumer guard. The input cases assert each rejection that the subset keeps.
+They also assert representative deferred inputs. The stored cases assert that
+recognized canonical backend output is usable. They assert that non-canonical
+stored text fails closed. The JavaScript suite names the backend-only sections
+and does not consume their verdicts.
+
+Every JavaScript rejection case must also be a Python rejection. Tests must
+enforce this one direction. They must not compare error codes, error order, or
+canonical output between the two languages.
 
 `tests/test_settings_mutation.py` and
 `frontend/src/stores/publicOriginSettings.test.js` must cover atomic conflict
 rejection, multi-field changes, and unrelated updates. These tests catch a
-partial write or a frontend-only restriction. A defect changes one setting or
-lets one write surface accept a conflict.
+partial write, a missed conflict that section 7 requires the patch to check, or
+a frontend-only restriction. A defect changes one setting after rejection or
+lets one write surface accept a checked relationship conflict.
 
-The settings-mutation coverage must prove that an origin-setting patch rejects
-an unchanged invalid merged origin. It must also prove that a patch which
-changes no origin remains allowed with the same stored invalid state.
+The settings-mutation coverage must prove that an unchanged invalid stored
+origin does not block a patch for another origin. It must prove that the user
+can repair two invalid stored origins in either order. It must also prove that
+a multi-field patch stays atomic and reports every error for its changed
+fields and checked relationships.
 
 Frontend Settings coverage must start with two invalid stored origins. It must
-stage valid corrections for both fields and prove that one Apply sends one
-atomic origin-setting patch with both corrections. Acceptance must commit both
-values together, increment the settings version once, and make no partial
-optimistic commit. A rejection must retain both staged inputs and show every
-returned field error on its matching field.
+repair either field first while the other stays invalid. Each Apply must send
+only its field. The store must change only through the authoritative backend
+broadcast. A rejection must retain the field input. It must show only the
+returned errors for the active field and discard copies for other sections.
 
 ### 13.2 ASGI routing
 
@@ -570,13 +650,24 @@ The suite must cover every request-authority boundary from section 8:
 - an explicit scheme-default request port that does not match a portless
   configured authority.
 
+The suite must also cover routing-settings availability. A missing file and an
+empty JSON object must use the valid default policy. An unreadable file,
+malformed JSON, a non-object JSON root, a settings-read exception, or a
+policy-build exception must reject without calling either inner application.
+Concurrent startup requests must use one startup settings result. They must not
+serve either inner application from fallback defaults after a failed startup
+read. The suite must prove that a later manual file edit has no effect until
+restart. It must prove recovery after a repaired file plus restart. It must also
+prove that a successful settings write restores routing without restart.
+
 The uppercase `Host` cases catch a case-sensitive A-label prefix test and a
 case-sensitive round-trip comparison. A defect appears as rejection of the
 valid uppercase `Host`, acceptance of the malformed uppercase `Host`, or a
 different canonical authority.
 
-The suite must cover every runtime-invalid state in section 11. It must replace
-a single compound invalid state with this interaction basis:
+The suite must cover every per-setting disabled and runtime-invalid state in
+section 11. It must replace a single compound invalid state with this
+interaction basis:
 
 1. Configure valid External `https://app.example`, recognizable invalid Share
    `ftp://share.example`, and recognizable invalid Peer

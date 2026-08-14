@@ -8,9 +8,10 @@ TwiCC has three synced settings that identify public origins:
 - `shareBaseUrl`, shown as **Share host**;
 - `peerBaseUrl`, shown as **Your address** in the Peer settings.
 
-This design gives all three settings one input, normalization, and validation
-contract. Legacy migration applies only to the deployed External and Share
-settings. It does not add the planned peer-only host routing.
+This design gives `publicBaseUrl`, `shareBaseUrl`, and `peerBaseUrl` one input,
+normalization, and validation contract. Legacy migration applies only to the
+deployed External and Share settings. It does not add the planned peer-only
+host routing.
 
 The setting names do not change. Existing code and persisted settings continue
 to use the `*BaseUrl` names.
@@ -42,8 +43,9 @@ The settings currently have three different contracts:
 | `shareBaseUrl` | Bare hostname or URL | Stored bare; share URL builders add `https://` |
 | `peerBaseUrl` | Absolute HTTP(S) URL | Rejected by the UI; a CLI-written value later fails in `httpx` |
 
-The generic settings CLI accepts any string for all three settings. Backend
-settings writes do not validate them.
+The generic settings CLI accepts any string for `publicBaseUrl`,
+`shareBaseUrl`, and `peerBaseUrl`. Backend settings writes do not validate
+them.
 
 ## Common input contract
 
@@ -98,9 +100,32 @@ normalizer directly.
 The backend is authoritative. A pure Python module owns parsing,
 normalization, validation, scheme inference, and origin metadata extraction.
 
-A dependency-free JavaScript mirror provides immediate form validation. Both
-implementations consume one JSON fixture. The fixture covers valid,
-normalizable, local, public, IPv4, IPv6, port, and invalid inputs.
+A dependency-free JavaScript check provides a small set of immediate form
+errors. It rejects fewer inputs than the Python check. It must never reject an
+input that Python accepts. It can accept an input that Python later rejects.
+
+The JavaScript check rejects only a non-string value, a protocol-relative
+value, an unsupported explicit scheme, a missing apparent authority,
+credentials, invalid raw authority characters, and a trailing colon without a
+port. Invalid raw authority characters are non-ASCII data, control characters,
+and percent signs. The check submits every other input unchanged after the
+normative outer trim.
+
+The JavaScript check does not validate DNS label details, an A-label verdict, a
+port range, a path, a query, a fragment, or IPv6 canonical form. Browsers expose
+UTS #46, which is not equivalent to IDNA2008. No browser exposes IDNA2008. The
+JavaScript check does not use the browser URL parser for a validation verdict.
+
+JavaScript has a separate stored-value consumer guard. Backend writes produce
+canonical origins. The guard accepts only the recognizable shape of canonical
+backend output. It does not normalize input. It treats every other stored value
+as unset. An A-label can satisfy lexical canonical shape. The guard does not
+decide its IDNA2008 validity.
+
+The JSON fixture contains separate backend and frontend sections. Backend
+sections cover valid, normalizable, local, public, IPv4, IPv6, port, A-label,
+relationship, and invalid cases. Frontend sections cover the input subset and
+the stored-value consumer guard.
 
 The three Settings fields use the same JavaScript helper. Setting-specific UI
 rules remain separate. For example, the Share address must still differ from
@@ -150,9 +175,12 @@ value with an unsupported scheme, credentials, an invalid port, or no
 hostname. It logs only the affected setting key, never the value.
 
 The Settings UI keeps such a retained External or Share value visible and shows
-its validation error. Runtime consumers treat it as unset until the user
-corrects it. This preserves the user's input without using an unsafe or
-malformed origin.
+its validation error. Backend non-routing consumers treat every parser-invalid
+value as unset. Frontend URL consumers treat a value without recognizable
+canonical shape as unset. The lexical frontend guard does not detect an
+IDNA2008-invalid A-label. `PublicOriginGate` follows section 11 of the Peer
+Origin Routing design. It can recognize an invalid hostname or authority only
+to disable or quarantine a public surface.
 
 ### No Peer migration or backward compatibility
 
@@ -166,22 +194,23 @@ origins. Development instances already use valid values and need no migration.
 
 ## Runtime consumers
 
-All runtime consumers use the authoritative parser instead of checking only
-whether the stored string is non-empty.
+Backend runtime consumers use the authoritative parser instead of checking
+only whether the stored string is non-empty. Frontend URL consumers use the
+canonical stored-value guard from the Shared implementation section.
 
 - External notifications omit links for an invalid `publicBaseUrl`.
-- The Browser companion snippet falls back to the current origin for an
-  invalid `publicBaseUrl`.
-- Share URL builders and the share host gate treat an invalid `shareBaseUrl`
-  as unset.
+- The Browser companion snippet falls back to the current origin when the
+  stored External value does not have recognizable canonical shape.
+- Frontend Share URL builders treat a stored Share value without recognizable
+  canonical shape as unset. The backend share host gate uses Python.
 - Share creation guards treat an invalid `shareBaseUrl` as unset.
-- Peer messaging and the future peer host gate treat an invalid
-  `peerBaseUrl` as unset.
+- Peer messaging treats an invalid `peerBaseUrl` as unset.
+- `PublicOriginGate` can recognize an invalid hostname or authority only to
+  fail closed, as section 11 of the Peer Origin Routing design defines.
 - The peer display-name fallback uses the parsed peer hostname.
 
-The existing Share URL builder can retain scheme-less fallback support during
-the transition. Migrated External and Share reads, plus every new write,
-produce canonical origins.
+Migrated External and Share reads, plus every new write, produce canonical
+origins. Frontend URL builders do not retain a second scheme-less parser.
 
 ## Error behavior
 
@@ -192,25 +221,37 @@ The UI uses one stable message for structural errors:
 It can use a more specific message for an unsupported scheme or credentials
 when the common helper provides that error code.
 
-No invalid update partially changes settings. No runtime consumer uses an
-invalid retained External or Share value.
+No invalid update partially changes settings. No backend consumer treats an
+invalid retained value as a valid origin. `PublicOriginGate` can recognize its
+hostname or authority only to fail closed under section 11 of the Peer Origin
+Routing design. Frontend consumers do not use a stored value without
+recognizable canonical shape.
 
 ## Tests
 
 The implementation requires:
 
-- shared Python and JavaScript fixture tests for every normalization case;
+- Python fixture tests for every backend normalization, A-label, authority, and
+  relationship case;
+- JavaScript fixture tests for the input subset and stored-value consumer guard;
+- a test that each JavaScript rejection case is also a Python rejection;
+- an explicit JavaScript assertion that names and excludes all backend-only
+  fixture sections;
 - backend settings-mutation tests for corrections and atomic rejection;
 - migration tests for deployed External and Share values, including bare
   values, explicit schemes, suffix removal, idempotence, and retained unsafe
   values;
 - a scope regression test that settings reads never mutate `peerBaseUrl`;
-- frontend Settings tests for all three fields;
+- frontend Settings tests for `publicBaseUrl`, `shareBaseUrl`, and
+  `peerBaseUrl`;
 - consumer tests for notifications, companion snippets, sharing, and peer
   feature gating with invalid stored values;
 - regression tests that an explicit HTTP origin remains HTTP;
-- regression tests that a bare Share address still produces the same HTTPS
-  share link.
+- a regression test that migration of a bare Share address still produces the
+  same HTTPS share link.
+
+The tests do not compare Python and JavaScript error codes, error order, or
+canonical output. JavaScript can defer any backend rejection until Apply.
 
 ## Deferred work
 
