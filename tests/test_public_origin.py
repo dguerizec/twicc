@@ -236,3 +236,35 @@ def test_validate_origin_settings():
         ("shareBaseUrl", "origin_conflict_share_peer_hostname"),
         ("peerBaseUrl", "origin_conflict_share_peer_hostname"),
     ]
+
+
+def test_authority_cases_match_backend_contract():
+    for case in CASES["authority_cases"]:
+        result = normalize_public_origin(case["input"])
+        assert (result.hostname, result.authority) == (case["hostname"], case["authority"]), case["name"]
+
+
+def test_cross_cases_match_backend_contract():
+    from twicc.core.services.public_origin import classify_peer_external, validate_origin_settings
+
+    for case in CASES["cross_cases"]:
+        errors = validate_origin_settings(
+            case["publicBaseUrl"], case["shareBaseUrl"], case["peerBaseUrl"],
+            changed_fields=set(case["changed_fields"]),
+        )
+        assert [{"field": error.field, "code": error.code} for error in errors] == case["errors"], case["name"]
+        if case["peer_routing"] is not None:
+            routing = classify_peer_external(
+                normalize_public_origin(case["peerBaseUrl"]),
+                normalize_public_origin(case["publicBaseUrl"]),
+            )
+            assert routing == case["peer_routing"], case["name"]
+
+
+def test_every_frontend_rejection_is_also_a_backend_rejection():
+    backend = {case["input"]: case for case in CASES["cases"]}
+    for case in CASES["frontend_input_cases"]:
+        if case["error"] is None:
+            continue
+        assert case["input"] in backend, case["name"]
+        assert backend[case["input"]]["error"] is not None, case["name"]

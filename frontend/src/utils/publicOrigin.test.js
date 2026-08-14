@@ -1,11 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import {
     checkPublicOriginInput,
     isRecognizablyCanonicalPublicOrigin,
     usablePublicOrigin,
 } from './publicOrigin.js'
+
+const cases = JSON.parse(
+    readFileSync(new URL('../../../tests/fixtures/public_origin_cases.json', import.meta.url), 'utf8'),
+)
 
 test('the form check keeps only the safe hard rejections', () => {
     for (const [input, error] of [
@@ -95,4 +100,40 @@ test('the stored guard is separate from the permissive form check', () => {
         assert.equal(checkPublicOriginInput(value).error, null, value)
         assert.equal(isRecognizablyCanonicalPublicOrigin(value), false, value)
     }
+})
+
+test('frontend input cases match the safe subset', () => {
+    for (const item of cases.frontend_input_cases) {
+        const result = checkPublicOriginInput(item.input)
+        assert.deepEqual(
+            { value: result.value, error: result.error },
+            { value: item.value, error: item.error },
+            item.name,
+        )
+    }
+})
+
+test('frontend stored cases fail closed outside canonical shape', () => {
+    for (const item of cases.frontend_stored_cases) {
+        assert.equal(usablePublicOrigin(item.input), item.usable, item.name)
+        assert.equal(isRecognizablyCanonicalPublicOrigin(item.input), Boolean(item.usable), item.name)
+    }
+})
+
+test('backend verdict sections stay explicitly backend-only', () => {
+    assert.deepEqual(cases.backend_only_sections, [
+        'cases',
+        'repair_cases',
+        'authority_cases',
+        'cross_cases',
+    ])
+    assert.deepEqual(cases.backend_a_label_cases, [
+        'valid a-label',
+        'uppercase a-label',
+        'malformed a-label',
+        'malformed uppercase a-label',
+        'malformed a-label payload',
+        'idna2008-disallowed a-label',
+        'a-label authority',
+    ])
 })
