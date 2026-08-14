@@ -67,10 +67,6 @@ export function checkPublicOriginInput(value) {
     }
 }
 
-// Temporary compatibility for the callers replaced in Task 11. Despite the
-// historical name, this is the subset check above. It does not normalize.
-export const normalizePublicOrigin = checkPublicOriginInput
-
 function canonicalIpv4(value) {
     const parts = value.split('.')
     return parts.length === 4 && parts.every(part => {

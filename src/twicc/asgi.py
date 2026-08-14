@@ -1490,37 +1490,49 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         acceptance, applies the orchestrator transitions and broadcasts
         ``synced_settings_updated`` to every client.
 
-        This wrapper only adds the WS-specific reject path: a stale
-        ``baseVersion`` rejects the write, so this single client is resynced
-        with the authoritative clean settings. An accepted write needs nothing
-        here — the service already broadcast to all clients (including this one).
+        This wrapper adds the WS-specific result path. A rejected write first
+        resyncs this client. A request with a correlation ID then receives one
+        direct result after the accepted broadcast or rejected resync.
         """
         synced_settings = content.get("settings")
         if not isinstance(synced_settings, dict):
             return
         base_version = content.get("baseVersion")  # None for old clients
+        request_id = content.get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            request_id = None
 
-        # Delegate to the shared service (merge + orchestrator transitions +
-        # all-clients broadcast). Only a rejection (stale ``baseVersion``) is
-        # handled here: a targeted resync of this client.
+        # The service broadcasts every accepted write. This wrapper sends a
+        # rejected resync and one direct result for a correlated request.
         from twicc.core.services.settings_mutation import update_synced_settings
 
         result = await update_synced_settings(synced_settings, base_version=base_version)
         if result.status == "rejected":
-            # Stale write rejected — resync only this client, then stop.
+            # Resync this client before its direct verdict. The request ID makes
+            # the result independent of this frame order.
             await self.send_json({
                 "type": "synced_settings_updated",
                 "settings": result.clean,
                 "version": result.version,
             })
-            if result.errors:
-                await self.send_json({
-                    "type": "error",
-                    "code": "invalid_synced_settings",
-                    "message": result.errors[0].message,
-                    "errors": [error._asdict() for error in result.errors],
-                })
+        if request_id:
+            await self.send_json({
+                "type": "synced_settings_result",
+                "request_id": request_id,
+                "status": result.status,
+                "settings": {key: result.clean.get(key) for key in synced_settings},
+                "version": result.version,
+                "errors": [error._asdict() for error in result.errors],
+            })
             return
+        if result.errors:
+            # Keep the existing fallback for old clients without correlation.
+            await self.send_json({
+                "type": "error",
+                "code": "invalid_synced_settings",
+                "message": result.errors[0].message,
+                "errors": [error._asdict() for error in result.errors],
+            })
 
     async def _handle_validate_usage_dump_path(self, content: dict) -> None:
         """Validate a usage dump file path and return the result to the client.

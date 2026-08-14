@@ -497,13 +497,16 @@ export function clearUserTurnToast(sessionId) {
 
 /**
  * Send synced settings to the backend for persistence in settings.json.
- * The backend will broadcast the updated settings to all connected clients.
+ * The backend broadcasts an accepted update to all connected clients.
  * @param {Object} settings - The synced settings key-value pairs
- * @param {number} baseVersion - The current settings version (for optimistic concurrency)
+ * @param {number} baseVersion - The current settings version
+ * @param {string} [requestId] - Correlation ID for one direct result
  * @returns {boolean} - True if message was sent, false if not connected
  */
-export function sendSyncedSettings(settings, baseVersion) {
-    return sendWsMessage({ type: 'update_synced_settings', settings, baseVersion })
+export function sendSyncedSettings(settings, baseVersion, requestId) {
+    return sendWsMessage({
+        type: 'update_synced_settings', settings, baseVersion, request_id: requestId,
+    })
 }
 
 /**
@@ -1568,6 +1571,11 @@ export function useWebSocket() {
                 import('../stores/settings').then(({ useSettingsStore }) => {
                     useSettingsStore().applySyncedSettings(msg.settings, msg.version)
                 })
+                break
+            case 'synced_settings_result':
+                window.dispatchEvent(new CustomEvent('twicc:origin-settings-result', {
+                    detail: msg,
+                }))
                 break
             case 'provider_state_changed':
                 // Live transition of a provider's lifecycle state (stopped /

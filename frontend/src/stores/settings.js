@@ -9,7 +9,8 @@ import { getProviderHelpers, getRegisteredProviders } from '../providers'
 // Note: useDataStore is imported lazily to avoid circular dependency (settings.js ↔ data.js)
 import { setColorScheme as setColorSchemeOnDom, setWaTheme, setWaBrand } from '../utils/theme'
 import { validateWorktreeTemplate } from '../utils/worktreePath'
-import { normalizePublicOrigin, usablePublicOrigin } from '../utils/publicOrigin'
+import { usablePublicOrigin } from '../utils/publicOrigin'
+import { ORIGIN_SETTING_KEYS } from '../utils/originSettingsForm'
 
 const STORAGE_KEY = 'twicc-settings'
 
@@ -922,39 +923,19 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         /**
-         * Set the External address used for remote access and deep links.
-         * @param {string} url
+         * Send one raw origin field to the backend.
+         * The authoritative synced_settings_updated broadcast performs the
+         * store mutation. This action never commits optimistically.
+         * @param {string} field - One origin setting key
+         * @param {string} value - The trimmed raw field value
+         * @param {string} requestId - The Apply correlation ID
+         * @returns {Promise<boolean>} whether the WebSocket accepted the send
          */
-        setPublicBaseUrl(url) {
-            if (SETTINGS_VALIDATORS.publicBaseUrl(url)) {
-                const result = normalizePublicOrigin(url)
-                if (!result.error) this.publicBaseUrl = result.value
-            }
-        },
-
-        /**
-         * Set the dedicated Share address (design §12). Empty disables sharing.
-         * @param {string} url
-         */
-        setShareBaseUrl(url) {
-            if (SETTINGS_VALIDATORS.shareBaseUrl(url)) {
-                const result = normalizePublicOrigin(url)
-                if (!result.error) this.shareBaseUrl = result.value
-            }
-        },
-
-        /**
-         * Set the peer messaging base URL (the address advertised to peer
-         * instances). Unlike shareBaseUrl it MAY be the working origin —
-         * /peer/ is a same-origin carve-out, not a dedicated host. Empty
-         * disables peer messaging.
-         * @param {string} url
-         */
-        setPeerBaseUrl(url) {
-            if (SETTINGS_VALIDATORS.peerBaseUrl(url)) {
-                const result = normalizePublicOrigin(url)
-                if (!result.error) this.peerBaseUrl = result.value
-            }
+        async sendOriginSetting(field, value, requestId) {
+            if (!ORIGIN_SETTING_KEYS.includes(field)) return false
+            // Lazy import avoids the settings.js ↔ useWebSocket.js cycle.
+            const { sendSyncedSettings } = await import('../composables/useWebSocket')
+            return sendSyncedSettings({ [field]: value }, _settingsVersion, requestId)
         },
 
         /**

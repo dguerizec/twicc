@@ -12,7 +12,15 @@ import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegistered
 import ProviderIcon from '../ui/ProviderIcon.vue'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
 import { validateWorktreeTemplate } from '../../utils/worktreePath'
-import { normalizePublicOrigin, usablePublicOrigin } from '../../utils/publicOrigin'
+import { checkPublicOriginInput, usablePublicOrigin } from '../../utils/publicOrigin'
+import { generateUUID } from '../../utils/crypto'
+import {
+    discardOriginSettingWrites,
+    originSettingErrorMessage,
+    refreshOriginInput,
+    resolveOriginSettingResult,
+    validateOriginSetting,
+} from '../../utils/originSettingsForm'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, SPONSOR_URL } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
@@ -637,18 +645,22 @@ const worktreeDirApplyIcon = computed(() => {
 const PUBLIC_ORIGIN_ERROR = 'Enter a hostname or an HTTP(S) origin without a path, query, or fragment.'
 
 function publicOriginErrorMessage(error) {
-    if (error === 'scheme') return 'The address must use HTTP or HTTPS.'
-    if (error === 'credentials') return 'The address must not contain a username or password.'
+    const code = error?.replace(/^invalid_origin_/, '')
+    if (code === 'scheme') return 'The address must use HTTP or HTTPS.'
+    if (code === 'credentials') return 'The address must not contain a username or password.'
+    if (code === 'location_hostname') return 'The share host must be a different hostname from this app.'
+    if (code === 'origin_conflict_share_external_hostname') return 'The Share host must use a different hostname from the External address.'
+    if (code === 'origin_conflict_share_peer_hostname') return 'The Share host must use a different hostname from the Peer address.'
+    if (code === 'origin_conflict_ambiguous_authority') return 'The Peer and External addresses must be the same origin or use different authorities.'
     return PUBLIC_ORIGIN_ERROR
 }
 
 function normalizedInputValue(value) {
-    return normalizePublicOrigin(value).value ?? value.trim()
+    return checkPublicOriginInput(value).value ?? value.trim()
 }
 
 function storedPublicOriginError(value) {
-    const result = normalizePublicOrigin(value)
-    return result.error ? publicOriginErrorMessage(result.error) : ''
+    return usablePublicOrigin(value) || !value ? '' : PUBLIC_ORIGIN_ERROR
 }
 
 // External address (stored as `publicBaseUrl`) — local input, committed to the
@@ -846,65 +858,127 @@ function onWaBrandChange(event) {
     store.setWaBrand(event.target.value)
 }
 
+const pendingOriginWrites = new Map()
+
 function onPublicBaseUrlInputChange(event) {
+    discardOriginSettingWrites(pendingOriginWrites, 'publicBaseUrl')
     publicBaseUrlInput.value = event.target.value
     publicBaseUrlError.value = ''
 }
 
-function onPublicBaseUrlApply() {
-    publicBaseUrlError.value = ''
-    const result = normalizePublicOrigin(publicBaseUrlInput.value)
-    if (result.error) {
-        publicBaseUrlError.value = publicOriginErrorMessage(result.error)
-        return
-    }
-    store.setPublicBaseUrl(result.value)
-    publicBaseUrlInput.value = store.getPublicBaseUrl || ''
-}
-
 function onShareBaseUrlInputChange(event) {
+    discardOriginSettingWrites(pendingOriginWrites, 'shareBaseUrl')
     shareBaseUrlInput.value = event.target.value
     shareBaseUrlError.value = ''
 }
 
-function onShareBaseUrlApply() {
-    shareBaseUrlError.value = ''
-    const result = normalizePublicOrigin(shareBaseUrlInput.value)
-    if (result.error) {
-        shareBaseUrlError.value = publicOriginErrorMessage(result.error)
-        return
-    }
-    if (result.hostname) {
-        if (result.hostname.toLowerCase() === window.location.hostname.toLowerCase()) {
-            shareBaseUrlError.value = 'The share host must be a different hostname from this app.'
-            return
-        }
-    }
-    store.setShareBaseUrl(result.value)
-    shareBaseUrlInput.value = store.getShareBaseUrl || ''
-}
-
 function onPeerBaseUrlInputChange(event) {
+    discardOriginSettingWrites(pendingOriginWrites, 'peerBaseUrl')
     peerBaseUrlInput.value = event.target.value
     peerBaseUrlError.value = ''
     peerBaseUrlWarning.value = ''
 }
 
-function onPeerBaseUrlApply() {
-    peerBaseUrlError.value = ''
-    peerBaseUrlWarning.value = ''
-    const result = normalizePublicOrigin(peerBaseUrlInput.value)
-    if (result.error) {
-        peerBaseUrlError.value = publicOriginErrorMessage(result.error)
-        return
-    }
-    if (result.scheme === 'http') {
-        // Non-fatal (design §4.3): warn, still apply.
+const originErrorRefs = {
+    publicBaseUrl: publicBaseUrlError,
+    shareBaseUrl: shareBaseUrlError,
+    peerBaseUrl: peerBaseUrlError,
+}
+
+const originInputRefs = {
+    publicBaseUrl: publicBaseUrlInput,
+    shareBaseUrl: shareBaseUrlInput,
+    peerBaseUrl: peerBaseUrlInput,
+}
+
+function setOriginError(field, errors) {
+    originErrorRefs[field].value = originSettingErrorMessage(errors, field, publicOriginErrorMessage)
+}
+
+async function applyOriginSetting(field, inputRef) {
+    originErrorRefs[field].value = ''
+    if (field === 'peerBaseUrl') peerBaseUrlWarning.value = ''
+    const result = validateOriginSetting({
+        field,
+        input: inputRef.value,
+        stored: {
+            publicBaseUrl: store.getPublicBaseUrl || '',
+            shareBaseUrl: store.getShareBaseUrl || '',
+            peerBaseUrl: store.getPeerBaseUrl || '',
+        },
+        locationHostname: window.location.hostname,
+    })
+    setOriginError(field, result.errors)
+    if (result.errors.length || !Object.keys(result.patch).length) return
+    if (result.warning === 'http') {
         peerBaseUrlWarning.value = 'Plain HTTP — tokens travel unencrypted. HTTPS is strongly recommended.'
     }
-    store.setPeerBaseUrl(result.value)
-    peerBaseUrlInput.value = store.getPeerBaseUrl || ''
+    const value = result.patch[field]
+    const requestId = generateUUID()
+    pendingOriginWrites.set(requestId, { field, input: inputRef.value })
+    if (!await store.sendOriginSetting(field, value, requestId)) {
+        const pending = pendingOriginWrites.get(requestId)
+        pendingOriginWrites.delete(requestId)
+        if (pending && inputRef.value === pending.input) {
+            originErrorRefs[field].value = 'Not connected to the server — try again.'
+        }
+    }
 }
+
+function onPublicBaseUrlApply() {
+    applyOriginSetting('publicBaseUrl', publicBaseUrlInput)
+}
+
+function onShareBaseUrlApply() {
+    applyOriginSetting('shareBaseUrl', shareBaseUrlInput)
+}
+
+function onPeerBaseUrlApply() {
+    applyOriginSetting('peerBaseUrl', peerBaseUrlInput)
+}
+
+function onOriginSettingsResult(event) {
+    const payload = event.detail
+    const pending = pendingOriginWrites.get(payload?.request_id)
+    if (!pending) return
+    const result = resolveOriginSettingResult(
+        pendingOriginWrites, payload, originInputRefs[pending.field].value,
+    )
+    if (!result) return
+    if (result.status === 'accepted') {
+        originErrorRefs[result.field].value = ''
+        originInputRefs[result.field].value = result.value
+        return
+    }
+    setOriginError(result.field, result.errors)
+}
+
+onMounted(() => {
+    window.addEventListener('twicc:origin-settings-result', onOriginSettingsResult)
+})
+
+onBeforeUnmount(() => {
+    window.removeEventListener('twicc:origin-settings-result', onOriginSettingsResult)
+    pendingOriginWrites.clear()
+})
+
+// Broadcasts update the store. They do not resolve correlated writes.
+function refreshOriginField(inputRef, value, oldValue) {
+    inputRef.value = refreshOriginInput(inputRef.value, oldValue, value)
+}
+
+watch(() => store.getPublicBaseUrl, (value, oldValue) => {
+    refreshOriginField(publicBaseUrlInput, value, oldValue)
+})
+watch(() => store.getShareBaseUrl, (value, oldValue) => {
+    refreshOriginField(shareBaseUrlInput, value, oldValue)
+})
+watch(() => store.getPeerBaseUrl, (value, oldValue) => {
+    refreshOriginField(peerBaseUrlInput, value, oldValue)
+})
+watch(() => dataStore.wsConnected, connected => {
+    if (!connected) pendingOriginWrites.clear()
+})
 
 // One-click prefill from the External address, when it is usable.
 const canPrefillPeerBaseUrl = computed(() => {
