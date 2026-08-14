@@ -484,14 +484,19 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         registry = get_agent_manager_registry()
         registry.set_broadcast_callback(broadcast_process_state)
 
-        # Send current active processes to the connecting client,
-        # enriched with session titles, project names, and active crons.
-        if self._should_send("active_processes"):
-            processes = registry.get_active_agents()
+        # Hidden sessions. Read once for the two consumers below: filtering the
+        # active-process list, and telling the client which rows to drop.
+        hidden_session_ids: set[str] = set()
+        if self._should_send("active_processes") or self._should_send("hidden_sessions"):
             from twicc.core.models import Session
             hidden_session_ids = await sync_to_async(
                 lambda: set(Session.objects.filter(hidden=True).values_list("id", flat=True))
             )()
+
+        # Send current active processes to the connecting client,
+        # enriched with session titles, project names, and active crons.
+        if self._should_send("active_processes"):
+            processes = registry.get_active_agents()
             serialized = [serialize_agent_info(p) for p in processes if p.session_id not in hidden_session_ids]
             if serialized:
                 display_info = await get_bulk_session_and_project_display(serialized)
@@ -513,6 +518,29 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
                 {
                     "type": "active_processes",
                     "processes": serialized,
+                }
+            )
+
+        # Tell the client which sessions it must drop.
+        #
+        # Hiding a session emits one ``session_removed`` frame and nothing else
+        # ever again: the archive broadcast, the process states and the watcher
+        # all fall silent for a hidden session, and no REST listing returns one.
+        # So a client that missed that single frame — a full WebSocket queue, a
+        # dropped connection — keeps the row forever. Reconciliation cannot help
+        # either: it merges what the API returns and never removes what it
+        # omits, and "absent from a listing" means a dozen things besides
+        # hidden (a subagent, a draft, a session with no user message yet, the
+        # next page…).
+        #
+        # Stating the fact positively removes all of that reasoning: these are
+        # hidden, drop them. Sent on every connect, so a reload or any
+        # reconnection heals the row.
+        if self._should_send("hidden_sessions"):
+            await self.send_json(
+                {
+                    "type": "hidden_sessions",
+                    "session_ids": sorted(hidden_session_ids),
                 }
             )
 

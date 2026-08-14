@@ -1185,6 +1185,17 @@ export function useWebSocket() {
                 // lives in utils/resync.js.
                 handleResyncRequired(msg.reason)
                 break
+            case 'hidden_sessions':
+                // Sent on every connect: the full set of hidden session ids.
+                // Hiding a session emits a single `session_removed` frame and
+                // then nothing — no REST listing returns a hidden session, so a
+                // client that missed that one frame would keep the row forever,
+                // reconciliation included. This is the server stating the fact
+                // rather than the client inferring it from an absence.
+                for (const id of msg.session_ids || []) {
+                    if (store.getSession(id)) store.removeSession(id)
+                }
+                break
             case 'session_removed':
                 store.removeSession(msg.session_id)
                 break
