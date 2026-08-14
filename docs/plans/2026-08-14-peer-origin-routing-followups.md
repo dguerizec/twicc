@@ -1,8 +1,7 @@
 # Peer Origin Routing — deferred follow-ups
 
-**Status:** open list, nothing blocking. Every contained item is closed (see **Resolved**) and
-every performance item is decided against (see **Do NOT act**). What remains is one cross-language
-test investment and one entry blocked on missing information.
+**Status:** every actionable item is closed (see **Resolved**) and every performance item is
+decided against (see **Do NOT act**). ONE entry remains, blocked on missing information.
 **Source:** the implementation of `docs/plans/2026-08-13-peer-origin-routing-plan.md`,
 commit range `3584afc8..6a478a4c` on branch `peer-system`
 
@@ -14,14 +13,6 @@ Items already closed move to the **Resolved** section, which keeps what each one
 Items triaged as **non-defects** are recorded at the end, so nobody re-opens them.
 
 ---
-
-## Open — needs tooling
-
-- **No generative one-way check that the JavaScript subset never rejects what Python accepts.**
-  The property is verified today by a fixed case list and by 1,548 adversarial inputs tried during
-  plan review, not by a generator. A generator would keep the property honest as both parsers
-  evolve. It needs both parsers over the same random inputs, so a cross-language runner and `node`
-  in the Python test environment — no such precedent exists in `tests/`.
 
 ## Open — blocked on missing information
 
@@ -69,6 +60,19 @@ Items triaged as **non-defects** are recorded at the end, so nobody re-opens the
 Closed on 2026-08-14, after a review of the whole list. Each was contained, fully covered by an
 existing or added test, and carried no behavioural risk.
 
+- **The one-way property — the JavaScript subset never rejects what Python accepts — was checked
+  once, by hand.** It is now enforced on every run, WITHOUT a generator or a cross-language runner:
+  the shared fixture carries `one_way_accepted_inputs`, a frozen list of adversarial inputs the
+  backend accepts, and each side reads it with its own parser. `tests/test_public_origin.py` owns
+  the list — it re-derives it from the same dimensions and fails if it drifts, so a Python contract
+  change is caught there first and the fixture is regenerated from the builder's output.
+  `frontend/src/utils/publicOrigin.test.js` asserts the property itself.
+  The full product is ~300k inputs / ~28k accepted, too many to freeze; three bounded coverage sets
+  replace it (every accepted host×port pair, every PAIR of decoration values on two structurally
+  different hosts, one decoration at a time on each representative host) for 757 entries. The
+  property was verified against the FULL 28k set once while building this, with zero violations.
+  Both halves were mutation-tested: rejecting uppercase hosts in the JS subset fails the frontend
+  test, dropping one fixture entry fails the Python one.
 - **The popover Apply/result wiring was covered by source regexes, not by executed code.** The
   wiring now lives in `frontend/src/composables/useOriginSettingsForm.js`, driven by 16 executed
   tests. No new dependency: Vue's reactivity (`ref` / `computed` / `watch` / `nextTick`) runs as-is

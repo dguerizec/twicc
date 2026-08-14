@@ -120,6 +120,21 @@ test('frontend stored cases fail closed outside canonical shape', () => {
     }
 })
 
+test('the form check never rejects an input the backend accepts', () => {
+    // The one-way property, over a frozen list of adversarial inputs the
+    // backend accepts (see tests/test_public_origin.py: it owns the list and
+    // re-derives it, so a Python contract change fails there first). The
+    // frontend may DEFER a verdict, never hard-reject one of these.
+    const inputs = cases.one_way_accepted_inputs
+    assert.ok(inputs.length > 500, 'the frozen list must stay broad')
+    const rejected = inputs.filter(input => checkPublicOriginInput(input).error !== null)
+    assert.deepEqual(
+        rejected.map(input => [input, checkPublicOriginInput(input).error]),
+        [],
+        'the safe subset must not hard-reject a backend-accepted input',
+    )
+})
+
 test('backend verdict sections stay explicitly backend-only', () => {
     assert.deepEqual(cases.backend_only_sections, [
         'cases',

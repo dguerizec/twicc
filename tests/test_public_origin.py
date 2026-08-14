@@ -311,3 +311,140 @@ def test_settings_read_preserves_invalid_peer_base_url(tmp_path, monkeypatch):
         assert orjson.loads(path.read_bytes())["peerBaseUrl"] == "ftp://peer.example/forbidden"
     finally:
         ss._cache.clear()
+
+
+# ── One-way property: the JS subset never rejects what Python accepts ────────
+# The two parsers are checked against the SAME frozen list of adversarial
+# inputs: Python must still accept every one of them (below), and the frontend
+# must not reject any (frontend/src/utils/publicOrigin.test.js). No generator
+# runs at test time and no cross-language runner is needed — the list IS the
+# shared observation.
+#
+# To regenerate after an intentional Python change, run
+# ``test_one_way_fixture_is_the_current_accepted_set`` and follow its failure:
+# the expected list it builds is the new fixture content.
+
+_ONE_WAY_SCHEMES = ["", "http://", "https://", "HTTP://", "HtTpS://", "hTTps://"]
+
+_ONE_WAY_HOSTS = [
+    "localhost", "LOCALHOST", "LocalHost",
+    "127.0.0.1", "127.000.000.001", "0.0.0.0", "192.168.1.42", "10.0.0.1", "255.255.255.255",
+    "[::1]", "[::]", "[0:0:0:0:0:0:0:1]", "[2001:db8::1]", "[2001:DB8::1]",
+    "[::ffff:1.2.3.4]", "[fe80::1]", "[fd00:ec2::254]",
+    "example.com", "EXAMPLE.COM", "Example.Com",
+    "sub.example.com", "a.b.c.d.e.example.com",
+    "xn--fa-hia.de", "XN--FA-HIA.DE", "xn--e28h.example",
+    "twicc.local", "twicc.test", "twicc.localhost", "TWICC.LOCAL",
+    "devbox", "single", "x", "0", "9",
+    "a-b.example.com", "a--b.example.com", "1a.example.com", "a1.example.com",
+    "9lives.example", "123.example",
+    "a" * 63 + ".example.com",
+    ".".join(["a" * 49] * 5),                       # 253 characters exactly
+    "xn--fa-hia.xn--fa-hia.de",
+    "under_score.example.com", "-lead.example.com", "trail-.example.com",
+    "a..example.com", "example.com.", ".example.com",
+    "exa mple.com", "exämple.com", "%65xample.com", "[xyz]", "[]", "",
+    "user@example.com", "example.com:extra",
+]
+
+_ONE_WAY_PORTS = [
+    "", ":0", ":00", ":80", ":443", ":8443", ":3501", ":65535", ":65536", ":00080",
+    ":000000000080", ":", ":bad", ":-1", ":99999",
+]
+
+_ONE_WAY_SUFFIXES = ["", "/", "//", "/base", "?x=1", "#frag", "?", "#", "/?x=1", "/#f"]
+
+_ONE_WAY_WRAPS = ["{}", " {} ", "\t{}", "{}\r\n", "\n\t {} \r ", "\x0b{}\x0c"]
+
+# One host per family, for the decoration sweeps.
+_ONE_WAY_REPRESENTATIVES = [
+    "example.com",          # plain DNS, https default
+    "EXAMPLE.COM",          # case folding
+    "localhost",            # local name, http default
+    "192.168.1.42",         # IPv4
+    "[2001:db8::1]",        # IPv6, compressed
+    "[0:0:0:0:0:0:0:1]",    # IPv6, expanded then compressed
+    "xn--fa-hia.de",        # IDNA a-label
+    "twicc.local",          # local suffix
+    "devbox",               # dotless
+]
+
+
+def _one_way_accepted(raw):
+    result = normalize_public_origin(raw)
+    return result.error is None and bool(result.value)
+
+
+def build_one_way_accepted_inputs() -> list[str]:
+    """The frozen list: adversarial inputs Python accepts.
+
+    The full product is ~300k inputs / ~28k accepted, far too many to freeze.
+    Three bounded coverage sets replace it, in this order:
+
+      A. every accepted (host, port) pair, in its plainest spelling;
+      B. every PAIR of decoration values, on two structurally different hosts;
+      C. one decoration at a time, on every representative host.
+    """
+    import itertools
+
+    kept: list[str] = []
+    seen: set[str] = set()
+
+    def keep(raw: str) -> None:
+        if raw not in seen and _one_way_accepted(raw):
+            seen.add(raw)
+            kept.append(raw)
+
+    for host, port in itertools.product(_ONE_WAY_HOSTS, _ONE_WAY_PORTS):
+        for scheme in ("", "https://", "http://"):
+            before = len(kept)
+            keep(f"{scheme}{host}{port}")
+            if len(kept) != before:
+                break
+
+    dimensions = {
+        "scheme": _ONE_WAY_SCHEMES,
+        "port": _ONE_WAY_PORTS,
+        "suffix": _ONE_WAY_SUFFIXES,
+        "wrap": _ONE_WAY_WRAPS,
+    }
+    base = {"scheme": "", "port": "", "suffix": "", "wrap": "{}"}
+
+    def spelling(host: str, spec: dict) -> str:
+        return spec["wrap"].format(f"{spec['scheme']}{host}{spec['port']}{spec['suffix']}")
+
+    for host in ("example.com", "[2001:db8::1]"):
+        for left, right in itertools.combinations(dimensions, 2):
+            for left_value, right_value in itertools.product(dimensions[left], dimensions[right]):
+                keep(spelling(host, {**base, left: left_value, right: right_value}))
+
+    for host in _ONE_WAY_REPRESENTATIVES:
+        for name, values in dimensions.items():
+            for value in values:
+                keep(spelling(host, {**base, name: value}))
+
+    return kept
+
+
+def test_one_way_fixture_is_the_current_accepted_set():
+    """The frozen list must stay exactly what Python accepts today.
+
+    A failure here is not a defect on its own: it means the backend contract
+    moved. Replace ``one_way_accepted_inputs`` in the fixture with the list
+    this builder returns, then re-run the frontend suite — that is where the
+    one-way property is actually enforced.
+    """
+    assert CASES["one_way_accepted_inputs"] == build_one_way_accepted_inputs()
+
+
+def test_one_way_fixture_covers_every_host_family():
+    inputs = CASES["one_way_accepted_inputs"]
+    assert len(inputs) > 500
+    for host in _ONE_WAY_REPRESENTATIVES:
+        assert any(host.lower() in raw.lower() for raw in inputs), host
+
+
+def test_one_way_fixture_inputs_are_all_accepted():
+    for raw in CASES["one_way_accepted_inputs"]:
+        result = normalize_public_origin(raw)
+        assert result.error is None and result.value, repr(raw)
