@@ -671,3 +671,225 @@ def test_live_setting_change_routes_next_request(monkeypatch):
     sent = _run(_drive(gate, _http("/peer/messages/", "peer.example")))
     assert _status(sent) == 200
     assert full.called
+
+
+# ── Request-authority boundaries (§8, §13.2) ────────────────────────────────
+
+def test_missing_host_rejects_whole_request(set_origins):
+    set_origins(public="https://app.example")
+    gate, full = _gate()
+    sent = _run(_drive(gate, {"type": "http", "path": "/api/sessions/", "headers": []}))
+    _assert_plain_404(sent)
+    assert not full.called
+    gate, full = _gate()
+    sent = _run(_drive(gate, {"type": "websocket", "path": "/ws/", "headers": []}))
+    assert _ws_close_code(sent) == 4404
+    assert not full.called
+
+
+def test_duplicate_host_rejects_whole_request(set_origins):
+    set_origins(public="https://app.example")
+    scope = {"type": "http", "path": "/api/sessions/",
+             "headers": [(b"host", b"app.example"), (b"host", b"app.example")]}
+    gate, full = _gate()
+    sent = _run(_drive(gate, scope))
+    _assert_plain_404(sent)
+    assert not full.called
+    ws_scope = {"type": "websocket", "path": "/ws/",
+                "headers": [(b"host", b"app.example"), (b"host", b"app.example")]}
+    gate, full = _gate()
+    sent = _run(_drive(gate, ws_scope))
+    assert _ws_close_code(sent) == 4404
+    assert not full.called
+
+
+@pytest.mark.parametrize("host", [
+    "",
+    "app example",
+    "exämple.com",
+    "%65xample.com",
+    "xn--.example",
+    "XN--.example",
+    "xn--a-ecp.example",
+    "xn--e28h.example",
+    "a..example",
+    "app.example.",
+    "-a.example",
+    "a-.example",
+    "my_host.example",
+    "999.1.2.3",
+    "1.2.3",
+    "192.168.001.1",
+    "::1",
+    "[::1",
+    "[1.2.3.4]",
+    "[fe80::1%eth0]",
+    "[fe80::1%25eth0]",
+    "app.example:",
+    "app.example:bad",
+    "app.example:70000",
+    "exa\tmple.com",
+    "app.example:8\t0",
+    "app.example\n",
+    f"app.example:{'9' * 5000}",
+])
+def test_malformed_host_rejects_whole_request(set_origins, host):
+    set_origins(public="https://app.example")
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/api/sessions/", host)))
+    _assert_plain_404(sent, host)
+    assert not full.called, host
+    gate, full = _gate()
+    sent = _run(_drive(gate, _ws("/ws/", host)))
+    assert _ws_close_code(sent) == 4404, host
+    assert not full.called, host
+
+
+def test_uppercase_and_alabel_hosts_canonicalize(set_origins):
+    set_origins(public="https://app.example", peer="https://xn--fa-hia.de")
+    gate, full = _gate()
+    # `Host: XN--FA-HIA.DE` is accepted as routing authority `xn--fa-hia.de`.
+    sent = _run(_drive(gate, _http("/peer/messages/", "XN--FA-HIA.DE")))
+    assert _status(sent) == 200
+    assert full.called
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/api/sessions/", "APP.example")))
+    assert _status(sent) == 200
+    assert full.called
+
+
+def test_dns_length_boundaries_in_host(set_origins):
+    set_origins(public="https://app.example")
+    label63 = "a" * 63
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/api/sessions/", f"{label63}.example")))
+    assert _status(sent) == 200
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/api/sessions/", f"{'a' * 64}.example")))
+    _assert_plain_404(sent)
+    host253 = ".".join([label63] * 3 + ["a" * 61])
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/api/sessions/", host253)))
+    assert _status(sent) == 200
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/api/sessions/", host253 + "a")))
+    _assert_plain_404(sent)
+
+
+def test_ipv6_host_spellings_canonicalize_to_one_authority(set_origins):
+    set_origins(public="https://app.example", peer="https://[::1]:8443")
+    for host in ("[::1]:8443", "[0:0:0:0:0:0:0:1]:8443"):
+        gate, full = _gate()
+        sent = _run(_drive(gate, _http("/peer/messages/", host)))
+        assert _status(sent) == 200, host
+        assert full.called, host
+
+
+def test_explicit_request_port_is_preserved(set_origins):
+    set_origins(public="https://app.example", peer="https://peer.example:8443")
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/peer/messages/", "peer.example:8443")))
+    assert _status(sent) == 200
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/peer/messages/", "peer.example:8444")))
+    _assert_plain_404(sent)
+
+
+# ── Runtime-invalid interaction basis (§11, §13.2) ──────────────────────────
+
+def _assert_quarantined(gate_factory, host):
+    """Every HTTP request → plain 404, every WebSocket → 4404, no inner call."""
+    for path in ("/", "/api/sessions/", "/share/tok/", "/peer/messages/", "/static/assets/app.js"):
+        gate, full = gate_factory()
+        sent = _run(_drive(gate, _http(path, host)))
+        _assert_plain_404(sent, (host, path))
+        assert not full.called, (host, path)
+    gate, full = gate_factory()
+    sent = _run(_drive(gate, _ws("/ws/", host)))
+    assert _ws_close_code(sent) == 4404, host
+    assert not full.called, host
+
+
+def _assert_serves_app(gate_factory, host):
+    gate, full = gate_factory()
+    sent = _run(_drive(gate, _http("/api/sessions/", host)))
+    assert _status(sent) == 200, host
+    assert full.called, host
+    gate, full = gate_factory()
+    _run(_drive(gate, _ws("/ws/", host)))
+    assert full.called, host
+
+
+def _assert_disabled_surfaces(gate_factory, host):
+    """Share-exclusive and /peer/ paths answer their defined gate responses."""
+    for path in ("/share/tok/", "/_twicc/share/x.js", "/peer/messages/"):
+        gate, full = gate_factory()
+        sent = _run(_drive(gate, _http(path, host)))
+        _assert_plain_404(sent, (host, path))
+        assert not full.called, (host, path)
+    gate, full = gate_factory()
+    sent = _run(_drive(gate, _ws("/ws/share/tok/", host)))
+    assert _ws_close_code(sent) == 4404, host
+    assert not full.called, host
+
+
+def test_interaction_case_1_valid_external_invalid_share_invalid_peer(set_origins):
+    # Disabled: Share and Peer. Surviving quarantine: share.example and
+    # peer.example. Exact External exception: app.example.
+    set_origins(public="https://app.example", share="ftp://share.example",
+                peer="https://peer.example/forbidden")
+    _assert_quarantined(_gate, "share.example")
+    _assert_quarantined(_gate, "peer.example")
+    _assert_serves_app(_gate, "app.example")
+    _assert_disabled_surfaces(_gate, "app.example")
+    _assert_serves_app(_gate, "other.example")
+    _assert_disabled_surfaces(_gate, "other.example")
+
+
+def test_interaction_case_2_invalid_external_valid_share_conflicting_peer(set_origins):
+    # The recognizable invalid Peer operand joins the Share-and-Peer conflict
+    # and disables the otherwise valid Share. Disabled: Share and Peer
+    # (including Peer classification). Surviving quarantine: share.example.
+    # No External exception (External is invalid).
+    set_origins(public="https://", share="https://share.example",
+                peer="https://share.example/forbidden")
+    _assert_quarantined(_gate, "share.example")
+    _assert_serves_app(_gate, "other.example")
+    _assert_disabled_surfaces(_gate, "other.example")
+
+
+def test_interaction_case_3_peer_conflicts_with_external(set_origins):
+    # Before precedence the quarantine candidates are share.example and
+    # app.example; valid External precedence removes only app.example.
+    set_origins(public="https://app.example", share="ftp://share.example",
+                peer="https://app.example/forbidden")
+    _assert_quarantined(_gate, "share.example")
+    _assert_serves_app(_gate, "app.example")
+    _assert_disabled_surfaces(_gate, "app.example")
+    _assert_serves_app(_gate, "other.example")
+    _assert_disabled_surfaces(_gate, "other.example")
+
+
+def test_runtime_share_external_conflict_disables_share_but_keeps_external(set_origins):
+    # A manual conflict disables Share. Valid External precedence keeps the
+    # application on the exact External authority.
+    set_origins(public="https://app.example", share="https://app.example")
+    _assert_serves_app(_gate, "app.example")
+    _assert_disabled_surfaces(_gate, "app.example")
+
+
+def test_invalid_external_quarantines_valid_peer_authority(set_origins):
+    # §11 last row: invalid non-empty External disables Peer classification and
+    # quarantines the configured Peer authority when recognizable.
+    set_origins(public="https://", peer="https://peer.example")
+    _assert_quarantined(_gate, "peer.example")
+    _assert_serves_app(_gate, "other.example")
+
+
+def test_unrecognizable_invalid_settings_disable_without_quarantine(set_origins):
+    # A setting too malformed to name an authority disables its surface but
+    # cannot quarantine an unknown host; other authorities keep the app.
+    set_origins(public="https://app.example", share="https://", peer="https://")
+    _assert_serves_app(_gate, "app.example")
+    _assert_serves_app(_gate, "tunnel.example")
+    _assert_disabled_surfaces(_gate, "tunnel.example")
