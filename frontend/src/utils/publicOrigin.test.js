@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
     checkPublicOriginInput,
+    isRecognizablyCanonicalPublicOrigin,
     usablePublicOrigin,
 } from './publicOrigin.js'
 
@@ -81,5 +82,17 @@ test('stored consumers fail closed for non-canonical or malformed text', () => {
         'ftp://example.com',
     ]) {
         assert.equal(usablePublicOrigin(value), '', value)
+    }
+})
+
+test('the stored guard is separate from the permissive form check', () => {
+    for (const value of [
+        'https://a..example',
+        'https://example.com/base',
+        'https://example.com:bad',
+        'https://[xyz]',
+    ]) {
+        assert.equal(checkPublicOriginInput(value).error, null, value)
+        assert.equal(isRecognizablyCanonicalPublicOrigin(value), false, value)
     }
 })

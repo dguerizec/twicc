@@ -111,6 +111,10 @@ function recognizableCanonicalStoredOrigin(value) {
     return hostname.length <= 253 && hostname.split('.').every(label => DNS_LABEL_RE.test(label))
 }
 
+export function isRecognizablyCanonicalPublicOrigin(value) {
+    return recognizableCanonicalStoredOrigin(value)
+}
+
 export function usablePublicOrigin(value) {
-    return recognizableCanonicalStoredOrigin(value) ? value : ''
+    return isRecognizablyCanonicalPublicOrigin(value) ? value : ''
 }
