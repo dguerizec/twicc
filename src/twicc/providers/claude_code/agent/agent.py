@@ -73,8 +73,6 @@ _RG_REPLACE_DENY_REASON = (
 )
 
 _MONITOR_STARTED_RE = re.compile(r"\bMonitor started \(task ([^,\s)]+),", re.IGNORECASE)
-_TASK_NOTIFICATION_TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
-_TASK_NOTIFICATION_STATUS_RE = re.compile(r"<status>\s*([^<\s]+)\s*</status>")
 
 
 def _rg_replace_trap(command: str) -> bool:
@@ -215,9 +213,12 @@ class ClaudeCodeAgent(BaseAgent):
         self._live_background_tasks: dict[str, str] = {}
         # Monitors are asynchronous background commands that Claude can leave
         # running after its own turn ends. Unlike generic background Bash work,
-        # a Monitor has a bounded lifecycle with a matching terminal task
-        # notification, so retain its task ids and hold ASSISTANT_TURN until
-        # all of them finish. This is deliberately separate from the compute
+        # a Monitor has a bounded lifecycle (it stops on its own timeout at the
+        # latest) with a matching terminal task notification, so retain its task
+        # ids and hold ASSISTANT_TURN until all of them finish. Fed by the
+        # ``Monitor started`` tool_result, drained by the same system events as
+        # ``_live_background_tasks`` (see ``_update_live_tasks``) or by a
+        # ``TaskStop``. This is deliberately separate from the compute
         # pipeline's task_id -> tool_use_id map, which only correlates timeline
         # result fragments for rendering.
         self._live_monitor_tasks: set[str] = set()
@@ -1400,17 +1401,23 @@ class ClaudeCodeAgent(BaseAgent):
             and not ClaudeCodeAgent._is_settings_change_ack(msg)
         )
 
-    async def _update_live_background_tasks(self, msg: SystemMessage) -> None:
-        """Track live background subagents from the CLI's task lifecycle events.
+    async def _update_live_tasks(self, msg: SystemMessage) -> None:
+        """Track live background subagents and drain Monitors, from CLI events.
 
         The CLI streams ``task_started`` when a background task launches,
         ``task_updated`` patches (``{"status": "completed", ...}``) and a
         terminal ``task_notification`` each time the task stops. Only
-        ``task_type == "local_agent"`` entries are tracked: agents are
+        ``task_type == "local_agent"`` entries are *tracked* here: agents are
         conversations with a bounded lifetime and a guaranteed terminal
         notification, whereas other task types (e.g. a ``run_in_background``
         Bash command) may legitimately outlive the whole conversation (dev
         servers, tails) and must not pin the session in ASSISTANT_TURN.
+
+        A terminal event *releases* both collections, whatever the task type:
+        a Monitor is a ``local_bash`` task, tracked from its own tool_result in
+        ``_update_live_monitor_tasks``, and this system event is the only signal
+        the CLI emits when it ends on its own (stream over, timeout reached).
+        Missing it pins the session in ASSISTANT_TURN forever.
         """
         data = msg.data if isinstance(msg.data, dict) else {}
         task_id = data.get("task_id")
@@ -1434,13 +1441,24 @@ class ClaudeCodeAgent(BaseAgent):
             patch = data.get("patch")
             status = patch.get("status") if isinstance(patch, dict) else None
             terminal = isinstance(status, str) and status not in ("pending", "queued", "running", "in_progress")
-        if terminal and self._live_background_tasks.pop(task_id, None) is not None:
+        if not terminal:
+            return
+
+        released = self._live_background_tasks.pop(task_id, None) is not None
+        if released:
             logger.debug(
                 "Session %s: background agent %s stopped (%d live)",
                 self.session_id, task_id, len(self._live_background_tasks),
             )
-            if self._waiting_label_active:
-                await self._refresh_waiting_label()
+        if task_id in self._live_monitor_tasks:
+            self._live_monitor_tasks.discard(task_id)
+            released = True
+            logger.debug(
+                "Session %s: Monitor %s stopped (%d live)",
+                self.session_id, task_id, len(self._live_monitor_tasks),
+            )
+        if released and self._waiting_label_active:
+            await self._refresh_waiting_label()
 
     @staticmethod
     def _message_content_text(content: Any) -> str:
@@ -1458,14 +1476,19 @@ class ClaudeCodeAgent(BaseAgent):
         return "\n".join(parts)
 
     async def _update_live_monitor_tasks(self, msg: UserMessage) -> None:
-        """Track Monitor starts and terminal notifications from the SDK.
+        """Track Monitor starts and explicit stops from the SDK.
 
         A Monitor acknowledgement carries ``tool_use_result.taskId`` and the
-        literal ``Monitor started`` text. Its eventual task notification carries
-        the same id plus a ``status`` field. Event-only notifications carry no
-        status and intentionally leave the monitor live. A successful ``TaskStop``
-        is another terminal path: its result has ``task_id`` either in the
-        structured tool result or in its JSON text payload.
+        literal ``Monitor started`` text. A successful ``TaskStop`` releases it
+        right away: its result has ``task_id`` either in the structured tool
+        result or in its JSON text payload.
+
+        Every other ending — stream over, timeout reached, failure — only
+        reaches us as a ``task_notification`` *system* event, handled by
+        ``_update_live_tasks``. The CLI does write a ``<task-notification>`` XML
+        block in its own JSONL transcript (which the compute pipeline reads),
+        but never injects it into the SDK message stream, so there is nothing
+        to parse here.
         """
         text = self._message_content_text(msg.content)
         tool_use_result = msg.tool_use_result
@@ -1493,21 +1516,6 @@ class ClaudeCodeAgent(BaseAgent):
             logger.debug(
                 "Session %s: Monitor %s stopped by TaskStop (%d live)",
                 self.session_id, stopped_task_id, len(self._live_monitor_tasks),
-            )
-            if self._waiting_label_active:
-                await self._refresh_waiting_label()
-            return
-
-        task_id_match = _TASK_NOTIFICATION_TASK_ID_RE.search(text)
-        status_match = _TASK_NOTIFICATION_STATUS_RE.search(text)
-        if task_id_match is None or status_match is None:
-            return
-        task_id = task_id_match.group(1)
-        if task_id in self._live_monitor_tasks:
-            self._live_monitor_tasks.remove(task_id)
-            logger.debug(
-                "Session %s: Monitor %s stopped (status=%s, %d live)",
-                self.session_id, task_id, status_match.group(1), len(self._live_monitor_tasks),
             )
             if self._waiting_label_active:
                 await self._refresh_waiting_label()
@@ -1761,11 +1769,12 @@ class ClaudeCodeAgent(BaseAgent):
                 if msg is None:
                     continue
 
-                # Keep the live-background-agents set current on every task
-                # lifecycle event — consumed by the ResultMessage branch below
-                # to hold ASSISTANT_TURN while background agents still run.
+                # Keep the live-background-agents set and the live-Monitors set
+                # current on every task lifecycle event — consumed by the
+                # ResultMessage branch below to hold ASSISTANT_TURN while either
+                # still runs.
                 if isinstance(msg, SystemMessage):
-                    await self._update_live_background_tasks(msg)
+                    await self._update_live_tasks(msg)
 
                 # A ScheduleWakeup's tool_result carries the authoritative fire
                 # time (``scheduledFor``, epoch ms). The harness rounds the
