@@ -93,10 +93,26 @@ test('typing invalidates older results for only that field', () => {
     }
 })
 
-test('disconnect discards correlation IDs whose results cannot arrive', () => {
+test('disconnect reports then discards correlation IDs whose results cannot arrive', () => {
     assert.match(
         popoverSource,
-        /watch\(\(\) => dataStore\.wsConnected,[\s\S]*?if \(!connected\) pendingOriginWrites\.clear\(\)/,
+        /watch\(\(\) => dataStore\.wsConnected,[\s\S]*?for \(const \{ field, input \} of pendingOriginWrites\.values\(\)\)[\s\S]*?pendingOriginWrites\.clear\(\)/,
+    )
+    // Never write over a field the user retyped since Apply.
+    assert.match(
+        popoverSource,
+        /if \(originInputRefs\[field\]\.value === input\) \{\s+originErrorRefs\[field\]\.value = CONNECTION_LOST_ERROR/,
+    )
+})
+
+test('a refused send and a dropped connection carry different messages', () => {
+    // A refused send never left the browser; a drop may follow a write the
+    // server already applied. One message must not stand for both.
+    assert.match(popoverSource, /const NOT_CONNECTED_ERROR = 'Not connected to the server/)
+    assert.match(popoverSource, /const CONNECTION_LOST_ERROR = 'Connection lost —/)
+    assert.match(
+        popoverSource,
+        /if \(pending && inputRef\.value === pending\.input\) \{\s+originErrorRefs\[field\]\.value = NOT_CONNECTED_ERROR/,
     )
 })
 

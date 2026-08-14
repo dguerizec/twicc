@@ -32,10 +32,9 @@ Each one changes a behaviour or a structure. None is a mechanical edit.
   `changed_fields` or the same error is reported twice.
 - **`origin_gate` — the "Not connected to the server" branch is near-unreachable**:
   `sendWsMessage` returns true while `wsSendFn` is set, and `wsSendFn` is only cleared on the
-  `CLOSED` transition. Prescribed by the plan. The neighbouring real gap: the `wsConnected` watcher
-  clears pending writes with no message at all, so a write sent just before a drop fails silently.
-  Fix that watcher, not `sendWsMessage` — threading VueUse's `send()` return value out would touch
-  every caller in the app.
+  `CLOSED` transition. Prescribed by the plan. The neighbouring silent-drop gap is now closed (see
+  **Resolved**), so what remains is only the branch itself. Do NOT fix it by threading VueUse's
+  `send()` return value out of `sendWsMessage` — that touches every caller in the app.
 
 ## Open — needs tooling
 
@@ -93,6 +92,13 @@ existing or added test, and carried no behavioural risk.
   value goes out in every handshake.
 - **An exact no-op Apply cleared the plain-HTTP Peer warning with no other feedback.** The warning
   now precedes the empty-patch early return, so it describes the value being applied.
+- **A dropped connection discarded an in-flight Apply in silence.** The `wsConnected` watcher now
+  reports it per field before clearing, under the same retyped-field guard used everywhere else.
+  The message is deliberately NOT the existing "Not connected to the server — try again.": a
+  refused send never left the browser, while a drop may follow a write the server already applied.
+  Consequence accepted: a stale callout survives on a write that did succeed. It clears on the next
+  keystroke or Apply, like every other error in the component. Tracking the fields to clear on
+  reconnect was judged not worth the extra state — a stale callout dissipates, silence never does.
 
 ---
 

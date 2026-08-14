@@ -880,6 +880,14 @@ const originInputRefs = {
     peerBaseUrl: peerBaseUrlInput,
 }
 
+// Two distinct failures, two distinct messages. A refused send never left the
+// browser, so "try again" is the whole truth. A send followed by a dropped
+// connection may well have been applied server-side — claiming otherwise would
+// be wrong half the time.
+const NOT_CONNECTED_ERROR = 'Not connected to the server — try again.'
+const CONNECTION_LOST_ERROR = 'Connection lost — this change may not have been saved. '
+    + 'Check after reconnecting.'
+
 function setOriginError(field, errors) {
     originErrorRefs[field].value = originSettingErrorMessage(errors, field, publicOriginErrorMessage)
 }
@@ -912,7 +920,7 @@ async function applyOriginSetting(field, inputRef) {
         const pending = pendingOriginWrites.get(requestId)
         pendingOriginWrites.delete(requestId)
         if (pending && inputRef.value === pending.input) {
-            originErrorRefs[field].value = 'Not connected to the server — try again.'
+            originErrorRefs[field].value = NOT_CONNECTED_ERROR
         }
     }
 }
@@ -969,7 +977,16 @@ watch(() => store.getPeerBaseUrl, (value, oldValue) => {
     refreshOriginField(peerBaseUrlInput, value, oldValue)
 })
 watch(() => dataStore.wsConnected, connected => {
-    if (!connected) pendingOriginWrites.clear()
+    if (connected) return
+    // The result of an in-flight Apply cannot arrive on the replacement socket.
+    // Report it per field instead of dropping the write silently. Same guard as
+    // everywhere else: never write over a field the user retyped since Apply.
+    for (const { field, input } of pendingOriginWrites.values()) {
+        if (originInputRefs[field].value === input) {
+            originErrorRefs[field].value = CONNECTION_LOST_ERROR
+        }
+    }
+    pendingOriginWrites.clear()
 })
 
 // One-click prefill from the External address, when it is usable.
