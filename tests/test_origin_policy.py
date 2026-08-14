@@ -112,3 +112,203 @@ def test_recognize_authority_extracts_from_invalid_settings():
     assert recognize_authority("https://user:pw@x.example/x") is None
     assert recognize_authority(42) is None
     assert recognize_authority("") is None
+
+
+from twicc.core.services.origin_policy import (  # noqa: E402  (grouped with the module under test)
+    OriginPolicy,
+    build_origin_policy,
+    classify_request,
+    get_origin_policy,
+)
+
+
+def test_policy_valid_trio():
+    policy = build_origin_policy("https://app.example", "https://share.example", "https://peer.example:8443")
+    assert policy == OriginPolicy(
+        external_authority="app.example",
+        share_hostname="share.example",
+        dedicated_peer_authority="peer.example:8443",
+        shared_peer_authority=None,
+        quarantined_hostnames=frozenset(),
+        quarantined_authorities=frozenset(),
+    )
+
+
+def test_policy_shared_peer():
+    policy = build_origin_policy("https://x.example", "", "https://x.example")
+    assert policy.shared_peer_authority == "x.example"
+    assert policy.dedicated_peer_authority is None
+
+
+def test_policy_empty_settings_disable_their_surfaces():
+    policy = build_origin_policy("", "", "")
+    assert policy.share_hostname is None
+    assert policy.dedicated_peer_authority is None and policy.shared_peer_authority is None
+    assert policy.quarantined_hostnames == frozenset() and policy.quarantined_authorities == frozenset()
+
+
+def test_policy_empty_external_makes_peer_dedicated():
+    policy = build_origin_policy("", "", "https://peer.example")
+    assert policy.dedicated_peer_authority == "peer.example"
+    assert policy.external_authority is None
+
+
+def test_policy_invalid_share_quarantines_recognizable_hostname():
+    policy = build_origin_policy("", "ftp://share.example", "")
+    assert policy.share_hostname is None
+    assert policy.quarantined_hostnames == frozenset({"share.example"})
+    # Unrecognizable: surface disabled, nothing to quarantine.
+    policy = build_origin_policy("", "https://", "")
+    assert policy.share_hostname is None
+    assert policy.quarantined_hostnames == frozenset()
+
+
+def test_policy_invalid_peer_quarantines_recognizable_authority():
+    policy = build_origin_policy("", "", "https://peer.example:8443/forbidden")
+    assert policy.dedicated_peer_authority is None and policy.shared_peer_authority is None
+    assert policy.quarantined_authorities == frozenset({"peer.example:8443"})
+
+
+def test_policy_unrecognizable_invalid_peer_disables_without_quarantine():
+    policy = build_origin_policy("https://app.example", "https://share.example", "https://")
+    assert policy.external_authority == "app.example"
+    assert policy.share_hostname == "share.example"
+    assert policy.dedicated_peer_authority is None and policy.shared_peer_authority is None
+    assert policy.quarantined_hostnames == frozenset()
+    assert policy.quarantined_authorities == frozenset()
+
+
+def test_policy_share_conflicts_use_recognized_operands():
+    # Share/External conflict: Share disabled, its hostname quarantined; the
+    # exact External authority survives via classifier precedence.
+    policy = build_origin_policy("https://x.example", "https://x.example:9443", "")
+    assert policy.share_hostname is None
+    assert policy.quarantined_hostnames == frozenset({"x.example"})
+    assert policy.external_authority == "x.example"
+    # Share/Peer conflict, with a recognizable invalid peer operand.
+    policy = build_origin_policy("", "https://x.example", "https://x.example/forbidden")
+    assert policy.share_hostname is None
+    assert policy.dedicated_peer_authority is None and policy.shared_peer_authority is None
+    assert policy.quarantined_hostnames == frozenset({"x.example"})
+    assert policy.quarantined_authorities == frozenset({"x.example"})
+    # A recognizable invalid External operand also disables conflicting Share.
+    policy = build_origin_policy("ftp://x.example", "https://x.example", "")
+    assert policy.external_authority is None
+    assert policy.share_hostname is None
+    assert policy.quarantined_hostnames == frozenset({"x.example"})
+
+
+def test_policy_ambiguous_authority_disables_peer():
+    policy = build_origin_policy("https://x.example", "", "http://x.example")
+    assert policy.dedicated_peer_authority is None and policy.shared_peer_authority is None
+    # The peer authority equals the valid External authority, so precedence
+    # discards it from the authority-quarantine set (§11).
+    assert policy.quarantined_authorities == frozenset()
+    assert policy.external_authority == "x.example"
+
+
+def test_policy_invalid_external_disables_peer_classification():
+    policy = build_origin_policy("https://", "", "https://peer.example")
+    assert policy.external_authority is None
+    assert policy.dedicated_peer_authority is None and policy.shared_peer_authority is None
+    assert policy.quarantined_authorities == frozenset({"peer.example"})
+
+
+def test_policy_interaction_case_1():
+    # Spec §13.2 interaction basis, case 1.
+    policy = build_origin_policy("https://app.example", "ftp://share.example", "https://peer.example/forbidden")
+    assert policy.share_hostname is None
+    assert policy.dedicated_peer_authority is None and policy.shared_peer_authority is None
+    assert policy.quarantined_hostnames == frozenset({"share.example"})
+    assert policy.quarantined_authorities == frozenset({"peer.example"})
+    assert policy.external_authority == "app.example"
+
+
+def test_policy_interaction_case_2():
+    # Spec §13.2 interaction basis, case 2: the recognizable invalid Peer
+    # operand joins the Share-and-Peer conflict and takes valid Share down.
+    policy = build_origin_policy("https://", "https://share.example", "https://share.example/forbidden")
+    assert policy.share_hostname is None
+    assert policy.dedicated_peer_authority is None and policy.shared_peer_authority is None
+    assert policy.quarantined_hostnames == frozenset({"share.example"})
+    assert policy.quarantined_authorities == frozenset({"share.example"})
+    assert policy.external_authority is None
+
+
+def test_policy_interaction_case_3():
+    # Spec §13.2 interaction basis, case 3: External precedence removes only
+    # app.example from the authority-quarantine set.
+    policy = build_origin_policy("https://app.example", "ftp://share.example", "https://app.example/forbidden")
+    assert policy.share_hostname is None
+    assert policy.dedicated_peer_authority is None and policy.shared_peer_authority is None
+    assert policy.quarantined_hostnames == frozenset({"share.example"})
+    assert policy.quarantined_authorities == frozenset()
+    assert policy.external_authority == "app.example"
+
+
+def _authority(value):
+    return parse_request_authority(value)
+
+
+def test_classify_request_routing_table():
+    policy = build_origin_policy("https://app.example", "https://share.example", "https://peer.example:8443")
+    # Share hostname → share surface, any port, both protocols.
+    assert classify_request(policy, _authority("share.example"), "/share/tok/", "http") == "share_surface"
+    assert classify_request(policy, _authority("share.example:9999"), "/share/tok/", "http") == "share_surface"
+    assert classify_request(policy, _authority("share.example"), "/ws/share/tok/", "websocket") == "share_surface"
+    assert classify_request(policy, _authority("share.example"), "/peer/messages/", "http") == "share_surface"
+    assert classify_request(policy, _authority("share.example"), "/api/sessions/", "http") == "share_surface"
+    assert classify_request(policy, _authority("share.example"), "/ws/", "websocket") == "share_surface"
+    # Dedicated Peer authority → only /peer/ HTTP; no WebSocket.
+    assert classify_request(policy, _authority("peer.example:8443"), "/peer/messages/", "http") == "inner_app"
+    assert classify_request(policy, _authority("peer.example:8443"), "/", "http") == "reject"
+    assert classify_request(policy, _authority("peer.example:8443"), "/static/app.js", "http") == "reject"
+    assert classify_request(policy, _authority("peer.example:8443"), "/mcp", "http") == "reject"
+    assert classify_request(policy, _authority("peer.example:8443"), "/share/tok/", "http") == "reject"
+    assert classify_request(policy, _authority("peer.example:8443"), "/ws/", "websocket") == "reject"
+    # The peer hostname WITHOUT its port is just another authority.
+    assert classify_request(policy, _authority("peer.example"), "/peer/messages/", "http") == "reject"
+    assert classify_request(policy, _authority("peer.example"), "/api/sessions/", "http") == "inner_app"
+    # External and every other authority → full app, hidden share, no /peer/.
+    assert classify_request(policy, _authority("app.example"), "/api/sessions/", "http") == "inner_app"
+    assert classify_request(policy, _authority("app.example"), "/peer/messages/", "http") == "reject"
+    assert classify_request(policy, _authority("localhost:3501"), "/api/sessions/", "http") == "inner_app"
+    assert classify_request(policy, _authority("localhost:3501"), "/peer/messages/", "http") == "reject"
+    assert classify_request(policy, _authority("app.example"), "/share/tok/", "http") == "reject"
+    assert classify_request(policy, _authority("app.example"), "/_twicc/share/x.js", "http") == "reject"
+    assert classify_request(policy, _authority("app.example"), "/ws/share/tok/", "websocket") == "reject"
+    assert classify_request(policy, _authority("app.example"), "/ws/", "websocket") == "inner_app"
+    # No valid Host → reject.
+    assert classify_request(policy, None, "/api/sessions/", "http") == "reject"
+
+
+def test_classify_request_shared_peer():
+    policy = build_origin_policy("https://x.example", "", "https://x.example")
+    assert classify_request(policy, _authority("x.example"), "/peer/messages/", "http") == "inner_app"
+    assert classify_request(policy, _authority("x.example"), "/api/sessions/", "http") == "inner_app"
+    assert classify_request(policy, _authority("x.example"), "/share/tok/", "http") == "reject"
+    assert classify_request(policy, _authority("x.example"), "/_twicc/share/x.js", "http") == "reject"
+    assert classify_request(policy, _authority("x.example"), "/ws/share/tok/", "websocket") == "reject"
+    assert classify_request(policy, _authority("x.example"), "/ws/", "websocket") == "inner_app"
+    assert classify_request(policy, _authority("other.example"), "/peer/messages/", "http") == "reject"
+    assert classify_request(policy, _authority("other.example"), "/api/sessions/", "http") == "inner_app"
+
+
+def test_classify_request_quarantine_and_precedence():
+    policy = build_origin_policy("https://x.example", "https://x.example:9443", "")
+    # Hostname quarantine matches every port…
+    assert classify_request(policy, _authority("x.example:9443"), "/api/sessions/", "http") == "reject"
+    assert classify_request(policy, _authority("x.example:1234"), "/ws/", "websocket") == "reject"
+    # …except the exact valid External authority (§11 precedence).
+    assert classify_request(policy, _authority("x.example"), "/api/sessions/", "http") == "inner_app"
+    # Peer stays hidden there: no valid shared Peer origin exists.
+    assert classify_request(policy, _authority("x.example"), "/peer/messages/", "http") == "reject"
+
+
+def test_get_origin_policy_memoizes_and_tracks_changes():
+    settings = {"publicBaseUrl": "https://app.example", "shareBaseUrl": "", "peerBaseUrl": ""}
+    first = get_origin_policy(settings)
+    assert get_origin_policy(dict(settings)) is first
+    changed = get_origin_policy({**settings, "peerBaseUrl": "https://peer.example"})
+    assert changed is not first
+    assert changed.dedicated_peer_authority == "peer.example"
