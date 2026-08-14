@@ -1,7 +1,8 @@
 # Peer Origin Routing — deferred follow-ups
 
-**Status:** open list, nothing blocking. The contained items are closed (see **Resolved**);
-what remains needs a design decision, an arbitration, or tooling.
+**Status:** open list, nothing blocking. Every contained item is closed (see **Resolved**) and
+every performance item is decided against (see **Do NOT act**). What remains is two test-tooling
+investments and one entry blocked on missing information.
 **Source:** the implementation of `docs/plans/2026-08-13-peer-origin-routing-plan.md`,
 commit range `3584afc8..6a478a4c` on branch `peer-system`
 
@@ -10,31 +11,9 @@ load-bearing: the feature ships correctly without them. Each carries the reason 
 so a later reader can re-judge it without re-deriving the context.
 
 Items already closed move to the **Resolved** section, which keeps what each one actually was.
-Two items the final reviewer triaged as **non-defects** are recorded at the end, so nobody
-re-opens them.
+Items triaged as **non-defects** are recorded at the end, so nobody re-opens them.
 
 ---
-
-## Open — needs a decision before any code
-
-Each one changes a behaviour or a structure. None is a mechanical edit.
-
-- **The atomic settings write holds `_settings_lock` while the gate acquires it synchronously in
-  the event loop.** A latency note, not a regression in kind: the same shape existed before this
-  work. A fix means publishing an immutable settings snapshot that readers take without the lock,
-  writers swapping the reference at the end. It touches every reader of `_cache` and must keep the
-  re-entrance the read-modify-write callers rely on.
-- **`normalize_public_origin` is called twice per changed field** in the settings write path
-  (once in the `_merge_and_write` loop, once inside `validate_origin_settings`). Prescribed by the
-  plan; the function is pure and cheap. A fix means `validate_origin_settings` returning its
-  `results` dict and feeding `corrections`/`normalized_patch` from it. Two traps: the `null`
-  rejection must stay BEFORE normalization, and a type-rejected field must stay out of
-  `changed_fields` or the same error is reported twice.
-- **`origin_gate` — the "Not connected to the server" branch is near-unreachable**:
-  `sendWsMessage` returns true while `wsSendFn` is set, and `wsSendFn` is only cleared on the
-  `CLOSED` transition. Prescribed by the plan. The neighbouring silent-drop gap is now closed (see
-  **Resolved**), so what remains is only the branch itself. Do NOT fix it by threading VueUse's
-  `send()` return value out of `sendWsMessage` — that touches every caller in the app.
 
 ## Open — needs tooling
 
@@ -58,6 +37,25 @@ Each one changes a behaviour or a structure. None is a mechanical edit.
 
 ## Do NOT act on these
 
+- **The settings write holds `_settings_lock` while the gate acquires it synchronously in the
+  event loop.** `_merge_and_write` runs in a worker thread (`sync_to_async`) and holds the lock for
+  the WHOLE read-modify-write, not just the file replacement; meanwhile any incoming request makes
+  the event-loop thread block on the same lock inside `read_routing_settings`, so every request
+  stalls, settings-related or not. **Owner decision, 2026-08-14: leave it.** The window is the time
+  to validate and rewrite a small JSON file, it only opens when a human clicks Apply, and the same
+  shape predates this work. The fix — publishing an immutable snapshot that readers take without
+  the lock — touches every reader of `_cache` and must preserve the re-entrance the
+  read-modify-write callers depend on. Same trade as the entry below: invisible gain, wide blast
+  radius. Re-open only if a real latency problem is ever observed.
+- **`normalize_public_origin` is called twice per changed field** in the settings write path (once
+  in the `_merge_and_write` loop, once inside `validate_origin_settings`). Prescribed by the plan.
+  **Owner decision, 2026-08-14: leave it.** The path runs only when a human clicks Apply on an
+  address, a handful of times in an instance's life, and the function is pure and cheap — the
+  performance gain is nil. The only benefit would be clarity, and the refactor (having
+  `validate_origin_settings` return its `results` dict, then feeding `corrections` /
+  `normalized_patch` from it) has to preserve two easily-lost guarantees: the `null` rejection must
+  stay BEFORE normalization, and a type-rejected field must stay out of `changed_fields` or the
+  same error is reported twice. Higher risk of breaking something than of leaving it.
 - **The two lint findings** — `tests/test_origin_policy.py`'s unused plan-mandated `# noqa: E402`
   (RUF100, only under expanded rule sets: the project config does not enable E402) and three
   unused `full` unpacks in `tests/test_share_host_gate.py` (RUF059, matching a pre-existing
@@ -108,3 +106,9 @@ existing or added test, and carried no behavioural risk.
   first reported as dead code; it is not.
 - **The `origin_gate.py` docstring line naming `ShareHostGate`** is deliberate historical prose:
   it records what the gate replaced.
+- **The "Not connected to the server" branch is NOT under-covered.** It was reported as
+  near-unreachable, so the disconnected case looked unhandled. Both halves are in fact handled,
+  each with its own message: with the backend down at page load `wsSendFn` is `null`, so Apply
+  returns false and the branch fires; a drop mid-flight is caught by the `wsConnected` watcher (see
+  **Resolved**). Closed 2026-08-14. Do NOT "fix" it by threading VueUse's `send()` return value out
+  of `sendWsMessage` — that touches every caller in the app for no gain.
