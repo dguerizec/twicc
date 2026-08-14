@@ -5,6 +5,20 @@ import { checkPublicOriginInput, usablePublicOrigin } from './publicOrigin.js'
 
 export const ORIGIN_SETTING_KEYS = ['publicBaseUrl', 'shareBaseUrl', 'peerBaseUrl']
 
+export const PUBLIC_ORIGIN_ERROR = 'Enter a hostname or an HTTP(S) origin without a path, query, or fragment.'
+
+export function publicOriginErrorMessage(error) {
+    const code = error?.replace(/^invalid_origin_/, '')
+    if (code === 'scheme') return 'The address must use HTTP or HTTPS.'
+    if (code === 'credentials') return 'The address must not contain a username or password.'
+    if (code === 'location_hostname') return 'The share host must be a different hostname from this app.'
+    if (code === 'retained_stored_value') return 'The stored address is not valid. Change it, then apply again.'
+    if (code === 'origin_conflict_share_external_hostname') return 'The Share host must use a different hostname from the External address.'
+    if (code === 'origin_conflict_share_peer_hostname') return 'The Share host must use a different hostname from the Peer address.'
+    if (code === 'origin_conflict_ambiguous_authority') return 'The Peer and External addresses must be the same origin or use different authorities.'
+    return PUBLIC_ORIGIN_ERROR
+}
+
 export function originSettingErrorMessage(errors, field, messageFor) {
     return errors
         .filter(error => error.field === field)

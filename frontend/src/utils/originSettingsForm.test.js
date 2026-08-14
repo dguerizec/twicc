@@ -2,8 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+    PUBLIC_ORIGIN_ERROR,
     discardOriginSettingWrites,
     originSettingErrorMessage,
+    publicOriginErrorMessage,
     refreshOriginInput,
     resolveOriginSettingResult,
     validateOriginSetting,
@@ -81,11 +83,21 @@ test('an unchanged retained invalid origin keeps its visible error after Apply',
     assert.deepEqual(result.errors, [{
         field: 'publicBaseUrl', code: 'retained_stored_value',
     }])
-    assert.equal(originSettingErrorMessage(
-        result.errors,
-        'publicBaseUrl',
-        () => 'Enter a hostname or an HTTP(S) origin without a path, query, or fragment.',
-    ), 'Enter a hostname or an HTTP(S) origin without a path, query, or fragment.')
+    const message = originSettingErrorMessage(result.errors, 'publicBaseUrl', publicOriginErrorMessage)
+    // The retained value is syntactically fine for the frontend subset, so the
+    // generic structural copy would describe the wrong defect.
+    assert.notEqual(message, PUBLIC_ORIGIN_ERROR)
+    assert.equal(message, 'The stored address is not valid. Change it, then apply again.')
+})
+
+test('each origin error code maps to its own message', () => {
+    assert.equal(publicOriginErrorMessage('invalid_origin_scheme'), 'The address must use HTTP or HTTPS.')
+    assert.equal(publicOriginErrorMessage('retained_stored_value'),
+        'The stored address is not valid. Change it, then apply again.')
+    assert.equal(publicOriginErrorMessage('origin_conflict_ambiguous_authority'),
+        'The Peer and External addresses must be the same origin or use different authorities.')
+    assert.equal(publicOriginErrorMessage('invalid_origin_host'), PUBLIC_ORIGIN_ERROR)
+    assert.equal(publicOriginErrorMessage(undefined), PUBLIC_ORIGIN_ERROR)
 })
 
 test('only the applied field errors appear in the active section', () => {

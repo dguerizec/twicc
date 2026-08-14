@@ -48,13 +48,16 @@ for peers. The other TwiCC instance cannot complete that check.
 Create a second tunnel address without that gate, and use it as your peer
 address. Keep TwiCC's own password enabled.
 
-TwiCC does not restrict a peer address to peer traffic. Unlike the dedicated
-sharing address, it can also reach the normal TwiCC app. To make it peer-only,
-configure the tunnel provider to allow only `/peer/` paths.
+A peer address that differs from your External address serves peer traffic
+only. It serves no page and no live connection, so you do not need a tunnel
+path filter. If you enter your External address as the peer address, that
+single address serves the app and peer traffic. Every other address, including
+`localhost`, never serves peer traffic.
 
 Do not use the dedicated sharing address for peers. TwiCC limits that hostname
-to sharing routes. See [reaching TwiCC from anywhere](help/external-url) for the
-general tunnel and password setup.
+to sharing routes, and Settings refuses a peer address on it. See [reaching
+TwiCC from anywhere](help/external-url) for the general tunnel and password
+setup.
 
 ### Pairing two instances
 

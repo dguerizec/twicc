@@ -3,6 +3,7 @@ is served ONLY on the Share hostname, /peer/ ONLY on the Peer authority, and a
 dedicated Peer authority serves nothing else."""
 
 import asyncio
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -743,6 +744,37 @@ def test_malformed_host_rejects_whole_request(set_origins, host):
     sent = _run(_drive(gate, _ws("/ws/", host)))
     assert _ws_close_code(sent) == 4404, host
     assert not full.called, host
+
+
+def test_rejections_log_a_debug_diagnostic_without_changing_the_response(set_origins, caplog, monkeypatch):
+    # The operator gets a reason in the log; the response never reveals one
+    # (design §11). Debug level on purpose: one record per rejected request at
+    # warning level would flood an internet-facing gate.
+    set_origins(public="https://app.example", peer="https://peer.example:8443")
+    # The test settings disable existing loggers; re-enable this one to observe it.
+    monkeypatch.setattr(logging.getLogger("twicc.origin_gate"), "disabled", False)
+    caplog.set_level("DEBUG", logger="twicc.origin_gate")
+
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/api/sessions/", "my_host.example")))
+    _assert_plain_404(sent)
+    assert not full.called
+    assert any("my_host.example" in record.getMessage() for record in caplog.records)
+
+    caplog.clear()
+    gate, full = _gate()
+    sent = _run(_drive(gate, _http("/api/sessions/", "peer.example:8443")))
+    _assert_plain_404(sent)
+    assert not full.called
+    assert any("peer.example:8443" in record.getMessage() for record in caplog.records)
+    assert {record.levelname for record in caplog.records} == {"DEBUG"}
+
+    caplog.clear()
+    gate, full = _gate()
+    sent = _run(_drive(gate, _ws("/ws/", "peer.example:8443")))
+    assert _ws_close_code(sent) == 4404
+    assert not full.called
+    assert {record.levelname for record in caplog.records} == {"DEBUG"}
 
 
 def test_uppercase_and_alabel_hosts_canonicalize(set_origins):

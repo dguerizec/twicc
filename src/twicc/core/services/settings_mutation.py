@@ -125,28 +125,40 @@ def _merge_and_write(patch: dict, base_version: int | None) -> dict:
 
         normalized_patch = dict(patch)
         corrections: dict = {}
+        errors: list[SettingsDropError] = []
         changed_origin_fields = {
             key for key in PUBLIC_ORIGIN_SETTING_KEYS
             if key in patch and not _same_json_value(patch[key], existing_settings.get(key))
         }
+        # Fields whose changed value is a string, so ``validate_origin_settings``
+        # can own their structural + relationship verdict.
+        typed_origin_fields = set(changed_origin_fields)
         for key in PUBLIC_ORIGIN_SETTING_KEYS:
             if key not in changed_origin_fields:
                 continue
             value = patch[key]
+            if not isinstance(value, str):
+                # ``normalize_public_origin`` maps ``None`` to the valid empty
+                # result because settings READS need that. A write must not: a
+                # JSON ``null`` would silently clear the address. Reject here,
+                # BEFORE normalizing, and keep the field out of the validated
+                # set so the same error is never reported twice.
+                errors.append(SettingsDropError(key, "invalid_origin_type", _ORIGIN_STRUCTURAL_MESSAGE))
+                typed_origin_fields.discard(key)
+                continue
             result = normalize_public_origin(value)
             if not result.error:
                 normalized_patch[key] = result.value
             if not result.error and result.value != value:
                 corrections[key] = result.value
-        errors: list[SettingsDropError] = []
-        if changed_origin_fields:
+        if typed_origin_fields:
             merged = {
                 key: normalized_patch.get(key, existing_settings.get(key, ""))
                 for key in PUBLIC_ORIGIN_SETTING_KEYS
             }
             for field_error in validate_origin_settings(
                 merged["publicBaseUrl"], merged["shareBaseUrl"], merged["peerBaseUrl"],
-                changed_fields=changed_origin_fields,
+                changed_fields=typed_origin_fields,
             ):
                 errors.append(SettingsDropError(
                     field_error.field,

@@ -262,7 +262,10 @@ def validate_origin_settings(
     errors: list[OriginFieldError] = []
     results: dict[str, PublicOriginResult] = {}
     for field, value in values.items():
-        result = normalize_public_origin(value)
+        # ``normalize_public_origin`` maps ``None`` to the valid empty result
+        # because settings READS need that. Validation is a write-path contract:
+        # a JSON ``null`` is a type error, not a request to clear the address.
+        result = PublicOriginResult(None, "type") if value is None else normalize_public_origin(value)
         results[field] = result
         if field in changed_fields and result.error:
             errors.append(OriginFieldError(field, f"invalid_origin_{result.error}"))

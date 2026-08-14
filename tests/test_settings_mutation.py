@@ -167,6 +167,20 @@ def test_non_origin_patch_stays_allowed_with_invalid_stored_origin(temp_settings
     assert ss.read_synced_settings()["shareBaseUrl"] == "ftp://legacy.example.com"
 
 
+@pytest.mark.parametrize("field", ["publicBaseUrl", "shareBaseUrl", "peerBaseUrl"])
+def test_json_null_origin_is_rejected_and_never_clears_the_setting(temp_settings, field):
+    seeded = ss.read_synced_settings()
+    seeded[field] = "https://stored.example"
+    ss.write_synced_settings(seeded)
+    before = ss.read_synced_settings()
+
+    result = _update({"terminalUseTmux": False, field: None})
+
+    assert result.status == "rejected"
+    assert [(error.field, error.code) for error in result.errors] == [(field, "invalid_origin_type")]
+    assert ss.read_synced_settings() == before
+
+
 @pytest.mark.parametrize(
     "stored, submitted, expected_status",
     [

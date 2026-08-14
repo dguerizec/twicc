@@ -56,6 +56,12 @@ async def _reply_204(send):
     await send({"type": "http.response.body", "body": b""})
 
 
+def _raw_host_header(scope) -> str:
+    """The raw ``Host`` header value(s), for the operator log only."""
+    values = [value for name, value in scope.get("headers") or () if name == b"host"]
+    return ", ".join(value.decode("latin1", "replace") for value in values)
+
+
 async def _reply_redirect(send, location: str):
     # 302 Found — TEMPORARY on purpose: the share-host root points at /share/ for now,
     # but a real homepage could live there later, so it must not be cached permanently.
@@ -105,8 +111,14 @@ class PublicOriginGate:
         stype = scope.get("type")
         if stype not in ("http", "websocket"):
             return await self.full_app(scope, receive, send)
+        path = scope.get("path", "")
         authority = request_authority_from_scope(scope)
         if authority is None:
+            # ``debug``, never ``warning``: this gate faces the internet, so one
+            # record per rejected request would be a log-flood vector. The design
+            # (§11) hides the reason from the RESPONSE, not from the operator's
+            # own log — the reply below stays the plain 404 / close 4404.
+            logger.debug("Origin gate: unusable Host header %r (%s %s)", _raw_host_header(scope), stype, path)
             return await _reject_request(stype, send)
         from twicc.synced_settings import read_routing_settings
 
@@ -118,9 +130,11 @@ class PublicOriginGate:
         except Exception:
             logger.exception("Public-origin routing settings are unavailable")
             return await _reject_request(stype, send)
-        surface = classify_request(policy, authority, scope.get("path", ""), stype)
+        surface = classify_request(policy, authority, path, stype)
         if surface == "share_surface":
             return await self.share_only_app(scope, receive, send)
         if surface == "inner_app":
             return await self.full_app(scope, receive, send)
+        # Same reasoning as above: operator-only diagnostic, at debug level.
+        logger.debug("Origin gate: rejected authority %s (%s %s)", authority.authority, stype, path)
         return await _reject_request(stype, send)
