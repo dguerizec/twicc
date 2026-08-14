@@ -219,3 +219,70 @@ def repair_legacy_public_origin(value: str | None) -> PublicOriginResult:
 def usable_public_origin(value: str | None) -> str:
     """Return the canonical origin, or an empty string for invalid storage."""
     return normalize_public_origin(value).value or ""
+
+
+ORIGIN_CONFLICT_SHARE_EXTERNAL = "origin_conflict_share_external_hostname"
+ORIGIN_CONFLICT_SHARE_PEER = "origin_conflict_share_peer_hostname"
+ORIGIN_CONFLICT_AMBIGUOUS = "origin_conflict_ambiguous_authority"
+
+
+class OriginFieldError(NamedTuple):
+    field: str
+    code: str
+
+
+def classify_peer_external(peer: PublicOriginResult, external: PublicOriginResult) -> str | None:
+    """Peer/External routing class (design §6.2-§6.4) for parsed settings.
+
+    ``None`` when peer is not a valid non-empty origin. An empty or invalid
+    external makes every valid peer address dedicated at this (write-path)
+    level; the runtime policy layer handles invalid-external quarantine.
+    """
+    if not peer.value:
+        return None
+    if not external.value:
+        return "dedicated"
+    if peer.value == external.value:
+        return "shared"
+    if peer.authority == external.authority:
+        return "ambiguous"
+    return "dedicated"
+
+
+def validate_origin_settings(
+    public_value, share_value, peer_value, *, changed_fields,
+) -> tuple[OriginFieldError, ...]:
+    """Validate changed origins and their relationships (design §7).
+
+    Unchanged invalid values do not block a patch and do not become conflict
+    operands. A structural error does not hide conflicts among other valid
+    changed operands. Relationship errors name every participating field.
+    """
+    values = {"publicBaseUrl": public_value, "shareBaseUrl": share_value, "peerBaseUrl": peer_value}
+    errors: list[OriginFieldError] = []
+    results: dict[str, PublicOriginResult] = {}
+    for field, value in values.items():
+        result = normalize_public_origin(value)
+        results[field] = result
+        if field in changed_fields and result.error:
+            errors.append(OriginFieldError(field, f"invalid_origin_{result.error}"))
+    public, share, peer = results["publicBaseUrl"], results["shareBaseUrl"], results["peerBaseUrl"]
+    if (
+        changed_fields & {"shareBaseUrl", "publicBaseUrl"}
+        and share.value and public.value and share.hostname == public.hostname
+    ):
+        errors.append(OriginFieldError("shareBaseUrl", ORIGIN_CONFLICT_SHARE_EXTERNAL))
+        errors.append(OriginFieldError("publicBaseUrl", ORIGIN_CONFLICT_SHARE_EXTERNAL))
+    if (
+        changed_fields & {"shareBaseUrl", "peerBaseUrl"}
+        and share.value and peer.value and share.hostname == peer.hostname
+    ):
+        errors.append(OriginFieldError("shareBaseUrl", ORIGIN_CONFLICT_SHARE_PEER))
+        errors.append(OriginFieldError("peerBaseUrl", ORIGIN_CONFLICT_SHARE_PEER))
+    if (
+        changed_fields & {"peerBaseUrl", "publicBaseUrl"}
+        and classify_peer_external(peer, public) == "ambiguous"
+    ):
+        errors.append(OriginFieldError("peerBaseUrl", ORIGIN_CONFLICT_AMBIGUOUS))
+        errors.append(OriginFieldError("publicBaseUrl", ORIGIN_CONFLICT_AMBIGUOUS))
+    return tuple(errors)

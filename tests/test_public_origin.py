@@ -158,3 +158,81 @@ def test_normalized_origin_exposes_routing_authority():
     assert normalize_public_origin("https://[0:0:0:0:0:0:0:1]:8443").authority == "[::1]:8443"
     assert normalize_public_origin("").authority is None
     assert normalize_public_origin("ftp://x.example").authority is None
+
+
+def test_classify_peer_external():
+    from twicc.core.services.public_origin import classify_peer_external
+
+    def parse(value):
+        return normalize_public_origin(value)
+
+    assert classify_peer_external(parse("https://x.example"), parse("https://x.example")) == "shared"
+    assert classify_peer_external(parse("http://x.example"), parse("https://x.example")) == "ambiguous"
+    assert classify_peer_external(parse("https://x.example:8443"), parse("https://x.example")) == "dedicated"
+    assert classify_peer_external(parse("https://x.example:8443"), parse("https://x.example:7443")) == "dedicated"
+    assert classify_peer_external(parse("https://x.example"), parse("")) == "dedicated"
+    assert classify_peer_external(parse(""), parse("https://x.example")) is None
+    assert classify_peer_external(parse("ftp://x.example"), parse("https://x.example")) is None
+    # IPv6 spellings normalize before comparison: expanded peer == compressed external.
+    assert classify_peer_external(parse("https://[0:0:0:0:0:0:0:1]:8443"), parse("https://[::1]:8443")) == "shared"
+
+
+def test_validate_origin_settings():
+    from twicc.core.services.public_origin import validate_origin_settings
+
+    all_fields = {"publicBaseUrl", "shareBaseUrl", "peerBaseUrl"}
+    assert validate_origin_settings("", "", "", changed_fields=all_fields) == ()
+    assert validate_origin_settings(
+        "https://app.example", "https://share.example", "https://peer.example", changed_fields=all_fields,
+    ) == ()
+    # Structural errors name invalid changed fields only.
+    errors = validate_origin_settings(
+        "ftp://app.example", "https://share.example", 42, changed_fields=all_fields,
+    )
+    assert [(e.field, e.code) for e in errors] == [
+        ("publicBaseUrl", "invalid_origin_scheme"),
+        ("peerBaseUrl", "invalid_origin_type"),
+    ]
+    # An unchanged invalid field does not block another field's repair.
+    assert validate_origin_settings(
+        "ftp://app.example", "https://share.example", "https://peer.example",
+        changed_fields={"peerBaseUrl"},
+    ) == ()
+    # Share/External hostname conflict names both fields; a port does not help.
+    errors = validate_origin_settings(
+        "https://x.example", "https://x.example:9443", "", changed_fields={"shareBaseUrl"},
+    )
+    assert [(e.field, e.code) for e in errors] == [
+        ("shareBaseUrl", "origin_conflict_share_external_hostname"),
+        ("publicBaseUrl", "origin_conflict_share_external_hostname"),
+    ]
+    # Share/Peer hostname conflict.
+    errors = validate_origin_settings(
+        "", "https://x.example", "http://x.example:8443", changed_fields={"peerBaseUrl"},
+    )
+    assert [(e.field, e.code) for e in errors] == [
+        ("shareBaseUrl", "origin_conflict_share_peer_hostname"),
+        ("peerBaseUrl", "origin_conflict_share_peer_hostname"),
+    ]
+    # Ambiguous Peer/External: same authority, different origins.
+    errors = validate_origin_settings(
+        "https://x.example", "", "http://x.example", changed_fields={"peerBaseUrl"},
+    )
+    assert [(e.field, e.code) for e in errors] == [
+        ("peerBaseUrl", "origin_conflict_ambiguous_authority"),
+        ("publicBaseUrl", "origin_conflict_ambiguous_authority"),
+    ]
+    # Shared Peer/External is valid.
+    assert validate_origin_settings(
+        "https://x.example", "", "https://x.example", changed_fields={"peerBaseUrl"},
+    ) == ()
+    # A structural error does not hide a conflict between other changed fields.
+    errors = validate_origin_settings(
+        "ftp://app.example", "https://x.example", "http://x.example:8443",
+        changed_fields=all_fields,
+    )
+    assert [(e.field, e.code) for e in errors] == [
+        ("publicBaseUrl", "invalid_origin_scheme"),
+        ("shareBaseUrl", "origin_conflict_share_peer_hostname"),
+        ("peerBaseUrl", "origin_conflict_share_peer_hostname"),
+    ]
