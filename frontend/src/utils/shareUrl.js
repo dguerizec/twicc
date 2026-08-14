@@ -2,8 +2,8 @@ import { useSettingsStore } from '../stores/settings'
 
 import { buildShareUrl, normalizeShareBase } from './shareUrlCore.js'
 
-// Re-export the parity pair so app code keeps one import point; the
-// algorithm lives in shareUrlCore.js (dependency-free, node-testable).
+// Re-export the core builders so app code keeps one import point. The
+// implementation lives in shareUrlCore.js (dependency-free, node-testable).
 export { buildShareUrl, normalizeShareBase }
 
 /** Absolute share URL from a serialized share's url_path, or null when the
