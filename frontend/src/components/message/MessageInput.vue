@@ -1846,11 +1846,11 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
 
         <!-- Floating "collapse" button: only when the composer is tall enough to
              be worth collapsing, and not already collapsed. Absolutely positioned
-             so it never reflows the toolbar. Framed (outlined + opaque) so it
+             so it never reflows the toolbar. Framed and brand-tinted so it
              reads unambiguously as a button over the textarea. -->
         <wa-button
             v-if="isTall && !collapsed"
-            variant="neutral"
+            variant="brand"
             appearance="outlined"
             size="small"
             class="collapse-toggle-btn"
@@ -2216,10 +2216,14 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
     right: 22px;
     z-index: 1;
 }
-/* Opaque surface so the framed button reads clearly as a button and stays
-   legible over the textarea's first line of text. */
+/* It floats over the textarea's first line: a translucent brand tint keeps the
+   button visible over the text without hiding it. */
 .collapse-toggle-btn::part(base) {
-    background: var(--wa-color-surface-default);
+    background: color-mix(in oklab, var(--wa-color-brand-fill-quiet) 55%, transparent);
+}
+.collapse-toggle-btn:hover::part(base),
+.collapse-toggle-btn:focus-within::part(base) {
+    background: color-mix(in oklab, var(--wa-color-brand-fill-quiet) 80%, transparent);
 }
 
 .code-comments-bar {
