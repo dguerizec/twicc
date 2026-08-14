@@ -30,9 +30,28 @@ Never run these on your own initiative. If the user explicitly asks, do it witho
 
 uv + npm · Django 6 ASGI (Uvicorn, Python ≥ 3.13) · Channels + InMemoryChannelLayer · SQLite (WAL) · watchfiles · claude-agent-sdk + openai_codex · Vue 3 (Composition API, `<script setup>`) + Vite 7 · Pinia + VueUse · Web Awesome 3+ (`wa-*`) · CodeMirror 6 · xterm.js (PTY) · markdown-it + shiki + mermaid.
 
-Python: ruff (line-length=120). Tests: pytest + pytest-django. Frontend tests: `cd frontend && npm test` (node:test, auto-discovers `src/**/*.test.js`).
+**Python lint: ruff (line-length=120), NOT an installed dependency** — always `uvx ruff check .`; `uv run ruff` fails with `Failed to spawn: ruff`. (It gets declared and pinned the day the project-wide lint pass happens, not before.) Same rule for **any** Python tool absent from the env: run it with `uvx <tool> …` instead of reporting it as missing, and never `uv add` it just to make a command work.
 
-**Python tool not installed in the env:** run it with `uvx <tool> …` (e.g. `uvx ruff check src/`) instead of reporting it as missing. Never install it into the project env (`uv add`) to make a command work.
+**Tests: pytest + pytest-django** (declared in the `test` extra, so `uv run` resolves them). Main repo: `uv run pytest`. Worktree: `cd <worktree> && TWICC_DATA_DIR=$PWD uv run pytest`.
+
+**uv — never target the ACTIVE environment.**
+
+| Command | Targets | |
+|---|---|---|
+| `uv run` · `uv sync` · `uv add` | the cwd's project | ✅ |
+| `uvx <tool>` | nothing, ephemeral | ✅ |
+| `uv pip …` | the ACTIVE environment | ❌ |
+| anything `--active` | the ACTIVE environment | ❌ |
+
+`VIRTUAL_ENV` says nothing about your project: an agent session inherits it from the TwiCC backend, which runs under `uv` in the MAIN repo. The ❌ forms do not merely READ that environment — uv treats it as the current project's environment and SYNCS the project into it. Run from a worktree, they install the worktree's editable package into the MAIN repo's venv, which then imports the worktree's sources until someone rebuilds it. Silent corruption of another checkout; it happened on 2026-08-14.
+
+The ✅ forms resolve the project from the cwd and ignore a mismatched `VIRTUAL_ENV`. The `does not match the project environment path` warning they print is that mechanism working — never "fix" it with `--active`.
+
+**Adding a dependency** is the user's call (see Operations Reserved to User) — but when they ask you to do it: `cd <target> && uv add <pkg>`. Never `uv pip install`.
+
+**In doubt, check what you IMPORT, not which venv you are in:** `uv run python -c "import twicc; print(twicc.__file__)"` — the path must be inside the directory you are working in. `sys.prefix` does not answer this: the editable install's `.pth` can point at another checkout's `src`.
+
+Frontend tests: `cd frontend && npm test` (node:test, auto-discovers `src/**/*.test.js`).
 
 ## Architecture
 
