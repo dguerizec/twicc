@@ -21,6 +21,7 @@ import logging
 import os
 import tempfile
 import threading
+from typing import NamedTuple
 
 import orjson
 
@@ -102,7 +103,7 @@ _GENERIC_SYNCED_SETTINGS_DEFAULTS: dict = {
     "publicBaseUrl": "",
     # Dedicated share origin (design §12): an origin with a hostname DISTINCT
     # from the working origin, pointing at the same local port. Serving links
-    # always requires it. The share host gate lives in share/asgi_filter.py,
+    # always requires it. The origin gate lives in origin_gate.py,
     # and the Share UI is disabled when empty. Creation requires it only on the REST path and
     # for agent callers (share_host_unset) — the human CLI and full-token /rpc/
     # stay permissive. Stored as a canonical HTTP origin.
@@ -168,13 +169,24 @@ SYNCED_SETTINGS_DEFAULTS: dict = {
 }
 
 
+class RoutingSettingsSnapshot(NamedTuple):
+    settings: dict
+    available: bool
+
+
 # In-memory cache of the current synced settings (file content merged with defaults).
 # Populated lazily on first read, then kept up-to-date by write_synced_settings().
 # Empty dict means not yet initialized (initialized cache always has at least the defaults).
 _cache: dict = {}
 
-# Lock to serialize concurrent writes (and cache updates) to settings.json.
-_settings_lock = threading.Lock()
+# False when the observation that initialized the active cache found an
+# unreadable, malformed, or non-object source. General settings callers can
+# use defaults, but public-origin routing must fail closed.
+_routing_settings_available = True
+
+# One reentrant lock serializes every public cache read and write. Existing
+# read-modify-write callers already hold this lock, so nested calls must work.
+_settings_lock = threading.RLock()
 
 
 # Cross-provider legacy keys to drop unconditionally on read (no longer used).
@@ -275,54 +287,77 @@ def _migrate_legacy_settings(file_data: dict) -> bool:
 
 
 def read_synced_settings() -> dict:
-    """Read synced settings, using the in-memory cache when available.
+    """Read settings and retain whether the cache-initializing load was valid.
 
-    On first call, reads settings.json, applies legacy migrations (rename/drop),
-    merges with defaults, and populates the cache. If migrations changed
-    anything, the cleaned data is written back to disk so the legacy keys
-    disappear permanently.
-
-    Returns a **copy** so callers can mutate freely without affecting the cache.
+    Missing settings are valid first-install defaults. Other read failures,
+    malformed JSON, and non-object roots provide defaults to general callers
+    but make public-origin routing unavailable. The active cache does not
+    observe later manual file edits before a process restart.
     """
-    if not _cache:
-        path = get_synced_settings_path()
-        try:
-            file_data = orjson.loads(path.read_bytes())
-        except (FileNotFoundError, orjson.JSONDecodeError):
-            file_data = {}
-        migrated = _migrate_legacy_settings(file_data)
-        _cache.update({**SYNCED_SETTINGS_DEFAULTS, **file_data})
-        _cache.setdefault("_version", 0)
-        if migrated:
-            # Persist the cleaned data so old keys do not reappear next read.
-            write_synced_settings(_cache.copy())
-    return _cache.copy()
+    global _routing_settings_available
+    with _settings_lock:
+        if not _cache:
+            path = get_synced_settings_path()
+            available = True
+            try:
+                raw = path.read_bytes()
+            except FileNotFoundError:
+                file_data = {}
+            except OSError:
+                logger.exception("Cannot read synced settings")
+                file_data = {}
+                available = False
+            else:
+                try:
+                    file_data = orjson.loads(raw)
+                except orjson.JSONDecodeError:
+                    logger.exception("Cannot parse synced settings")
+                    file_data = {}
+                    available = False
+                if available and not isinstance(file_data, dict):
+                    logger.error("Synced settings JSON root is not an object")
+                    file_data = {}
+                    available = False
+            migrated = available and _migrate_legacy_settings(file_data)
+            _cache.update({**SYNCED_SETTINGS_DEFAULTS, **file_data})
+            _cache.setdefault("_version", 0)
+            _routing_settings_available = available
+            if migrated:
+                # Persist the cleaned data so old keys do not reappear next read.
+                write_synced_settings(_cache.copy())
+        return _cache.copy()
+
+
+def read_routing_settings() -> RoutingSettingsSnapshot:
+    """Return settings and availability from one active-cache observation."""
+    with _settings_lock:
+        settings = read_synced_settings()
+        return RoutingSettingsSnapshot(settings, _routing_settings_available)
 
 
 def write_synced_settings(data: dict) -> None:
-    """Write synced settings to settings.json atomically and update the cache.
+    """Atomically write settings and publish one available cache snapshot."""
+    global _routing_settings_available
+    with _settings_lock:
+        path = get_synced_settings_path()
+        content = orjson.dumps(data, option=orjson.OPT_INDENT_2)
 
-    Uses write-to-temp-then-rename to avoid partial writes.
-    """
-    path = get_synced_settings_path()
-    content = orjson.dumps(data, option=orjson.OPT_INDENT_2)
-
-    # Write to a temp file in the same directory, then atomically replace.
-    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(content)
-        os.replace(tmp_path, path)
-    except BaseException:
+        # Publish neither cache nor availability before the atomic replacement.
+        fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
         try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "wb") as f:
+                f.write(content)
+            os.replace(tmp_path, path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
-    # Update the in-memory cache.
-    _cache.clear()
-    _cache.update({**SYNCED_SETTINGS_DEFAULTS, **data})
+        _cache.clear()
+        _cache.update({**SYNCED_SETTINGS_DEFAULTS, **data})
+        _routing_settings_available = True
 
 
 def prepare_settings_for_client(settings: dict) -> tuple[dict, int]:

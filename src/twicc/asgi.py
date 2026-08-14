@@ -2143,11 +2143,12 @@ application = ProtocolTypeRouter(
 application = BlackNoise(application, immutable_file_test=lambda *_: True)
 application.add(settings.FRONTEND_DIST_DIR, "/static")
 
-# Mandatory dedicated share origin (design §12): /share/ is served ONLY on the
-# configured share host (the shareBaseUrl hostname) and NEVER on the working
-# origin. The gate reads shareBaseUrl LIVE, so an Apply in Settings → Sharing takes
-# effect on the next request with no restart. Wrapped ABOVE BlackNoise so the share
-# host never reaches the /static/ mount it doesn't use.
-from twicc.share.asgi_filter import ShareHostGate, ShareOnlyApp  # noqa: E402
+# Common public-origin gate (peer-origin-routing design §9-§11): routes the
+# External, Share, and Peer addresses. /share/ is served ONLY on the configured
+# Share hostname; /peer/ ONLY on the configured Peer authority; a dedicated Peer
+# authority serves nothing else. The gate reads the active settings cache, so
+# an Apply in Settings takes effect on the next request with no restart. Wrapped
+# ABOVE BlackNoise so rejected authorities never reach the /static/ mount.
+from twicc.origin_gate import PublicOriginGate, ShareOnlyApp  # noqa: E402
 
-application = ShareHostGate(application, ShareOnlyApp(application))
+application = PublicOriginGate(application, ShareOnlyApp(application))
