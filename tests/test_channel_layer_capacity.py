@@ -19,6 +19,8 @@ import asyncio
 from channels.layers import InMemoryChannelLayer
 from django.conf import settings
 
+from twicc.channel_layer import TwiccChannelLayer
+
 
 # ---------------------------------------------------------------------------
 # The configured layer
@@ -38,15 +40,16 @@ def test_configured_layer_raises_both_defaults():
     assert config["expiry"] > 60, "expiry must beat the library default"
 
 
-def test_config_reaches_the_instantiated_layer():
-    """``CONFIG`` is passed to the backend as kwargs — an unnoticed rename or a
-    stray nesting level would silently leave the defaults in place."""
-    config = settings.CHANNEL_LAYERS["default"]["CONFIG"]
-    layer = InMemoryChannelLayer(**config)
+def test_get_capacity_is_what_sizes_the_queue():
+    """``get_capacity`` — not ``capacity`` — is what ``send`` consults for the
+    queue's maxsize, so the value has to survive that lookup.
 
-    assert layer.capacity == config["capacity"]
-    assert layer.expiry == config["expiry"]
-    # get_capacity() is what send() actually consults for the queue's maxsize.
+    That ``CONFIG`` reaches the configured backend at all is pinned in
+    ``test_channel_layer_resync.py`` against the class actually in use.
+    """
+    config = settings.CHANNEL_LAYERS["default"]["CONFIG"]
+    layer = TwiccChannelLayer(**config)
+
     assert layer.get_capacity("specific.inmemory!abc") == config["capacity"]
 
 
@@ -56,7 +59,12 @@ def test_config_reaches_the_instantiated_layer():
 
 
 def test_group_send_drops_silently_beyond_capacity():
-    """Past ``capacity``, extra frames vanish and ``group_send`` still succeeds."""
+    """Past ``capacity``, extra frames vanish and ``group_send`` still succeeds.
+
+    Deliberately against the stock class: this is the library behaviour
+    ``TwiccChannelLayer`` replaces with a ``resync_required`` signal, and it has
+    to stay pinned so an upgrade that changes it does not go unnoticed.
+    """
     async def scenario():
         layer = InMemoryChannelLayer(capacity=3)
         channel = await layer.new_channel()
@@ -76,7 +84,7 @@ def test_group_send_drops_silently_beyond_capacity():
 def test_capacity_of_1000_absorbs_a_streaming_burst():
     """The configured depth holds a full burst that the default 100 would clip."""
     async def scenario():
-        layer = InMemoryChannelLayer(**settings.CHANNEL_LAYERS["default"]["CONFIG"])
+        layer = TwiccChannelLayer(**settings.CHANNEL_LAYERS["default"]["CONFIG"])
         channel = await layer.new_channel()
         await layer.group_add("updates", channel)
 

@@ -268,15 +268,33 @@ ASGI_APPLICATION = "twicc.asgi.application"
 # message, so the cost is roughly clients x capacity x message size — a few MB
 # at the observed ~4 KB average.
 #
+# - ``group_expiry`` — how long a channel stays in a group after joining it.
+#   The join timestamp is written once by ``group_add`` and never refreshed, so
+#   this is not an idle timeout: at the library default a browser tab whose
+#   socket has been open for 24 hours is dropped from the group and stops
+#   receiving anything, however healthy it is. The mechanism collects consumers
+#   that vanish without notice, which cannot happen in-process — our consumers
+#   call ``group_discard`` on disconnect — so it is pushed out of reach rather
+#   than relied upon.
+#
+# Memory stays bounded: the queue is per client and holds a deepcopy of each
+# message, so the cost is roughly clients x capacity x message size — a few MB
+# at the observed ~4 KB average.
+#
 # Do NOT add ``channel_capacity`` here: ``InMemoryChannelLayer`` stores it raw
 # and ``get_capacity`` iterates it as ``(pattern, capacity)`` pairs, while
 # ``compile_capacities`` is never called — a plain dict breaks every send.
+#
+# The backend is TwiCC's own subclass: it turns a discarded frame into a
+# ``resync_required`` signal instead of a silent gap. See
+# :mod:`twicc.channel_layer`.
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",
+        "BACKEND": "twicc.channel_layer.TwiccChannelLayer",
         "CONFIG": {
             "capacity": 1000,
             "expiry": 300,
+            "group_expiry": 365 * 24 * 3600,
         },
     }
 }

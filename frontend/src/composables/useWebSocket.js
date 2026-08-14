@@ -13,6 +13,7 @@ import { useSettingsStore } from '../stores/settings'
 import { getProviderHelpers, getProviderLabel, getProviderIcon, getProviderIconColor, getProviderWsHandler, getProviderStore } from '../providers'
 import { playNotificationSound, sendBrowserNotification, isPageActive } from '../utils/notificationSounds'
 import { installPresenceHeartbeat, isLocallyPresent } from '../utils/presence'
+import { handleResyncRequired } from '../utils/resync'
 import { truncateTitle } from '../utils/truncate'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { compareVersions } from '../utils/version'
@@ -1176,6 +1177,14 @@ export function useWebSocket() {
                 useSharesStore().removeShare(msg.share_id)
                 break
             }
+            case 'resync_required':
+                // The server's WebSocket layer had to discard updates for this
+                // client and flushed whatever was still queued. We cannot know
+                // what was lost, so the local state is torn in an undescribable
+                // way — the policy (reload, defer to a visible tab, or ask)
+                // lives in utils/resync.js.
+                handleResyncRequired(msg.reason)
+                break
             case 'session_removed':
                 store.removeSession(msg.session_id)
                 break
