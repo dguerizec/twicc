@@ -126,6 +126,13 @@ class AgentManagerRegistry:
             return False
         return mgr.touch_agent_activity(session_id)
 
+    def set_session_hidden(self, session_id: str, hidden: bool) -> bool:
+        """Push a ``hidden`` flip to the live agent, whichever provider owns it."""
+        mgr = self.find_manager_for_session(session_id)
+        if mgr is None:
+            return False
+        return mgr.set_session_hidden(session_id, hidden)
+
     def set_broadcast_callback(self, callback: BroadcastCallback) -> None:
         """Register the same broadcast callback on every manager."""
         for mgr in self._managers.values():

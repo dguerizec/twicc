@@ -122,6 +122,26 @@ class BaseAgentManager:
             )
             return True
 
+    def set_session_hidden(self, session_id: str, hidden: bool) -> bool:
+        """Push a ``Session.hidden`` flip into the live agent, if there is one.
+
+        Keeps the agent's broadcast gate exact without making it poll the DB
+        (see ``BaseAgent._is_session_hidden``). Returns ``True`` if an agent
+        owned the id. No state filter: a hidden session must go quiet in every
+        state, including mid-ASSISTANT_TURN, which is precisely when it is
+        loudest.
+        """
+        with provider_log_context(self.provider):
+            agent = self._agents.get(session_id)
+            if agent is None:
+                return False
+            agent.set_hidden(hidden)
+            logger.debug(
+                "Pushed hidden=%s to the live agent for session %s",
+                hidden, session_id,
+            )
+            return True
+
     async def kill_agent(self, session_id: str, reason: str = "manual") -> bool:
         """Stop one agent. Returns ``True`` if a kill was actually issued."""
         with provider_log_context(self.provider):

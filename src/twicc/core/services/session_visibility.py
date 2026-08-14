@@ -118,11 +118,13 @@ async def _apply_flip(session, *, new_hidden: bool) -> None:
     from twicc.search import reindex_session
 
     @sync_to_async
-    def _save_and_recompute():
+    def _save_flag():
         # Step 1: Toggle the flag and persist. Must succeed; if it raises we abort.
         session.hidden = new_hidden
         session.save(update_fields=["hidden"])
 
+    @sync_to_async
+    def _recompute():
         # Steps 2-4: best-effort. A failure here leaves the flag set but counters/FTS
         # slightly stale; the next refresh / restart will heal.
         try:
@@ -160,7 +162,43 @@ async def _apply_flip(session, *, new_hidden: bool) -> None:
                 session.id, new_hidden,
             )
 
-    await _save_and_recompute()
+    await _save_flag()
+
+    # Silence (or restore) the live agent's own broadcasts the instant the flag
+    # is durable — before the recompute below, which reindexes the whole session
+    # and dominates the flip's few hundred milliseconds. A streaming agent emits
+    # one frame per token into the same bounded per-client queue that must carry
+    # ``session_removed``, so every millisecond of delay here is more frames
+    # queued ahead of it.
+    _push_hidden_to_live_agent(session.id, new_hidden)
+
+    await _recompute()
+
+
+def _push_hidden_to_live_agent(session_id: str, hidden: bool) -> None:
+    """Hand the new ``hidden`` value to the live agent, if the session has one.
+
+    The agent gates its live-update broadcasts on a cached copy of the flag
+    (``BaseAgent._is_session_hidden``) so the streaming path never queries the
+    DB. This push is what keeps that copy exact; ``hide_session`` /
+    ``unhide_session`` are the only writers of the column on an existing row.
+
+    Best-effort by design: a broken push must never fail the flip itself. The
+    agent would keep broadcasting until it dies, which is the pre-existing
+    behaviour, not a new failure.
+    """
+    # Local import: crosses the services -> agent layer, kept out of this
+    # module's import graph (same convention as the sessions watcher).
+    from twicc.agent.registry import get_agent_manager_registry
+
+    try:
+        get_agent_manager_registry().set_session_hidden(session_id, hidden)
+    except Exception:
+        logger.exception(
+            "Failed to push hidden=%s to the live agent for session %s; its "
+            "live broadcasts stay ungated until it stops.",
+            hidden, session_id,
+        )
 
 
 # ---------------------------------------------------------------------------

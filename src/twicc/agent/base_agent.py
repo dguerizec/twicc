@@ -92,6 +92,12 @@ class BaseAgent:
         self.error: str | None = None
         self.kill_reason: str | None = None
 
+        # Cached ``Session.hidden`` for this agent, gating every live-update
+        # broadcast (see ``_is_session_hidden``). ``None`` = not resolved yet.
+        # Filled from the DB on first use and overwritten by ``set_hidden``
+        # when the flag flips, so the streaming path never touches the DB.
+        self._hidden: bool | None = None
+
         self._dead_event = asyncio.Event()
         # Set by ``_transition_to_dead`` after the DEAD state-change callback
         # finishes (success or exception). ``wait_for_dead`` blocks on this
@@ -706,24 +712,49 @@ class BaseAgent:
             return False
         return all_targets_within_work_dirs(candidate_paths, self._work_dirs)
 
-    async def _is_session_hidden(self) -> bool:
-        """Cheap DB lookup of ``Session.hidden`` for this agent's session.
+    def set_hidden(self, hidden: bool) -> None:
+        """Record a ``Session.hidden`` flip pushed by the visibility service.
 
-        Used as an early-return guard in the ``process_*`` broadcast emitters
-        (``_broadcast_process_label`` / ``_broadcast_process_tools``) so hidden
-        sessions produce zero per-tool / per-status churn on the frontend.
-        Not cached: the lookup is a tight indexed pk read; the cost is
-        microseconds per broadcast. Provider-agnostic — ``hidden`` is a
-        cross-provider ``Session`` column — so it lives here and every
-        provider's agent inherits it.
+        ``hide_session`` / ``unhide_session`` are the only writers of the
+        column on an existing row, and they call this through the manager
+        registry the moment they flip it — before the ``session_removed``
+        broadcast. So the cached value below is exact without the broadcast
+        path ever reading the DB.
         """
+        self._hidden = hidden
+
+    async def _is_session_hidden(self) -> bool:
+        """Whether this agent's session is hidden. Gates every live broadcast.
+
+        Resolved once from the DB, then kept fresh by :meth:`set_hidden`. The
+        cache is what makes this usable on the streaming path: a session emits
+        one ``stream_block_delta`` per token, and a DB round-trip per token
+        (through ``sync_to_async``) would be far too expensive.
+
+        The row does not exist until the provider's watcher ingests the first
+        JSONL line, so an unknown session reads as visible AND is not cached —
+        otherwise a session created hidden would latch ``False`` forever, since
+        no flip (and therefore no ``set_hidden``) ever follows a creation.
+        Provider-agnostic — ``hidden`` is a cross-provider ``Session`` column —
+        so it lives here and every provider's agent inherits it.
+        """
+        if self._hidden is not None:
+            return self._hidden
+
         from twicc.core.models import Session
-        return bool(
-            await sync_to_async(
-                lambda: Session.objects.filter(pk=self.session_id)
-                .values_list("hidden", flat=True).first()
-            )()
-        )
+        known = await sync_to_async(
+            lambda: Session.objects.filter(pk=self.session_id)
+            .values_list("hidden", flat=True).first()
+        )()
+        if known is None:
+            return False  # no row yet — stay uncached and ask again next time
+
+        # Re-check after the await: a ``set_hidden`` push may have landed while
+        # the read was in flight, and a push is authoritative over a snapshot
+        # taken before it.
+        if self._hidden is None:
+            self._hidden = bool(known)
+        return self._hidden
 
     # ------------------------------------------------------------------
     # Live-update broadcasts (WebSocket "updates" group)
@@ -737,7 +768,18 @@ class BaseAgent:
         message. Provider-agnostic — every agent's live-update emitters
         (streaming blocks, process labels, …) funnel through here, so the
         WS envelope shape lives in exactly one place.
+
+        Gated by :meth:`_is_session_hidden`, which makes the whole funnel obey
+        the rule every other emitter already follows: a hidden session pushes
+        nothing to the UI. Streaming is the reason the gate sits here rather
+        than on each caller — it is by far the loudest emitter (one frame per
+        token, from every live agent at once), and those frames share the one
+        bounded per-client queue that also carries ``session_removed``. Left
+        ungated, a session went on streaming after being hidden, competing for
+        that queue with the very message announcing its removal.
         """
+        if await self._is_session_hidden():
+            return
         channel_layer = get_channel_layer()
         await channel_layer.group_send(
             "updates",
@@ -750,11 +792,10 @@ class BaseAgent:
         Consumed by the frontend ``process_label`` handler: it overrides the
         working-status line (e.g. ``"compacting"``) until the next
         ``process_state`` transition recreates the process-state object and
-        drops the override. Gated by :meth:`_is_session_hidden` so hidden
-        sessions emit nothing.
+        drops the override. The hidden-session guard lives in
+        :meth:`_broadcast_stream_event` below, which every emitter funnels
+        through.
         """
-        if await self._is_session_hidden():
-            return
         await self._broadcast_stream_event({
             "type": "process_label",
             "session_id": self.session_id,
