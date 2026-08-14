@@ -1,9 +1,7 @@
 """``twicc share`` (list) / ``show`` — read-only, direct DB (works with the server
-down). ``url`` follows the §7.4 parity contract of the agent-sharing design:
-byte-identical to the URL the owner UI shows for the same share (mirrored
-builder ``core/services/share_url.py`` ↔ ``frontend/src/utils/shareUrlCore.js``).
-With ``shareBaseUrl`` unset, prints the relative ``/share/<token>/`` path
-(links only resolve on the dedicated share origin)."""
+down). ``url`` uses the backend Share URL builder. With ``shareBaseUrl`` unset
+or unusable, unredacted rows use the relative ``/share/<token>/`` path. Links
+only resolve on the dedicated Share origin."""
 
 from twicc.cli._output import emit_error, emit_json
 

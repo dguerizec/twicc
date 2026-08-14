@@ -1,7 +1,7 @@
-"""Build fail-closed Share URLs from the common public-origin contract.
+"""Build fail-closed Share URLs from backend-normalized public origins.
 
-Mirrored with ``frontend/src/utils/shareUrlCore.js`` and covered by
-``tests/fixtures/share_url_parity.json``.
+The Python regression fixture covers legacy repair and backend URL construction.
+Frontend stored consumers use their own narrower canonical-shape tests.
 """
 
 from __future__ import annotations

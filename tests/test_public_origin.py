@@ -95,3 +95,66 @@ def test_settings_read_retains_non_string_public_origin(tmp_path, monkeypatch):
         assert orjson.loads(path.read_bytes())["shareBaseUrl"] == 42
     finally:
         ss._cache.clear()
+
+
+def test_canonicalize_hostname_strict_contract():
+    from twicc.core.services.public_origin import canonicalize_hostname
+
+    # localhost is case-insensitive with a fixed canonical value.
+    assert canonicalize_hostname("LocalHost", bracketed=False) == ("localhost", False)
+    # Canonical IPv4 only.
+    assert canonicalize_hostname("192.168.1.42", bracketed=False) == ("192.168.1.42", False)
+    assert canonicalize_hostname("192.168.001.1", bracketed=False).hostname is None
+    assert canonicalize_hostname("1.2.3", bracketed=False).hostname is None
+    # Bracketed IPv6 canonicalizes to lower-case compressed RFC 5952.
+    assert canonicalize_hostname("0:0:0:0:0:0:0:1", bracketed=True) == ("::1", True)
+    assert canonicalize_hostname("2001:DB8::1", bracketed=True) == ("2001:db8::1", True)
+    assert canonicalize_hostname("::ffff:1.2.3.4", bracketed=True) == ("::ffff:1.2.3.4", True)
+    assert canonicalize_hostname("1.2.3.4", bracketed=True).hostname is None
+    assert canonicalize_hostname("fe80::1%eth0", bracketed=True).hostname is None
+    assert canonicalize_hostname("fe80::1%25eth0", bracketed=True).hostname is None
+    # DNS grammar: LDH labels, alphanumeric edges, 1-63 chars per label.
+    assert canonicalize_hostname("Example.COM", bracketed=False) == ("example.com", False)
+    assert canonicalize_hostname("devbox", bracketed=False) == ("devbox", False)
+    assert canonicalize_hostname("a..example", bracketed=False).hostname is None
+    assert canonicalize_hostname("example.com.", bracketed=False).hostname is None
+    assert canonicalize_hostname("-a.example", bracketed=False).hostname is None
+    assert canonicalize_hostname("a-.example", bracketed=False).hostname is None
+    assert canonicalize_hostname("my_host.example", bracketed=False).hostname is None
+    assert canonicalize_hostname("a" * 63 + ".example", bracketed=False).hostname == "a" * 63 + ".example"
+    assert canonicalize_hostname("a" * 64 + ".example", bracketed=False).hostname is None
+    long_253 = ".".join(["a" * 63] * 3 + ["a" * 61])
+    assert canonicalize_hostname(long_253, bracketed=False).hostname == long_253
+    assert canonicalize_hostname(long_253 + "a", bracketed=False).hostname is None
+    # ASCII only: Unicode and percent escapes are invalid, never converted.
+    assert canonicalize_hostname("exämple.com", bracketed=False).hostname is None
+    assert canonicalize_hostname("%65xample.com", bracketed=False).hostname is None
+    # A-labels: valid IDNA2008 round-trips survive, malformed ones are invalid.
+    assert canonicalize_hostname("XN--FA-HIA.de", bracketed=False) == ("xn--fa-hia.de", False)
+    assert canonicalize_hostname("xn--a-ecp.example", bracketed=False).hostname is None
+    assert canonicalize_hostname("xn--e28h.example", bracketed=False).hostname is None
+
+
+def test_normalize_public_origin_strict_hostnames():
+    assert normalize_public_origin("https://[0:0:0:0:0:0:0:1]:8443").value == "https://[::1]:8443"
+    assert normalize_public_origin("HTTPS://XN--FA-HIA.DE").value == "https://xn--fa-hia.de"
+    assert normalize_public_origin("https://xn--.example").error == "host"
+    assert normalize_public_origin("https://exämple.com").error == "host"
+    assert normalize_public_origin("https://%65xample.com").error == "host"
+    assert normalize_public_origin("https://[1.2.3.4]").error == "host"
+    assert normalize_public_origin("https://example.com:").error == "port"
+    assert normalize_public_origin("https://exa\tmple.com").error == "host"
+    assert normalize_public_origin("https://example.com:8\t0").error == "port"
+    assert normalize_public_origin("https://example.com?").error == "query"
+    assert normalize_public_origin("https://example.com#").error == "fragment"
+    assert normalize_public_origin("https://example.com?\t#").error == "query"
+    assert normalize_public_origin("https://example.com#x?y").error == "fragment"
+
+
+def test_normalized_origin_exposes_routing_authority():
+    assert normalize_public_origin("https://Example.com:443").authority == "example.com"
+    assert normalize_public_origin("https://Example.com:8443").authority == "example.com:8443"
+    assert normalize_public_origin("http://example.com").authority == "example.com"
+    assert normalize_public_origin("https://[0:0:0:0:0:0:0:1]:8443").authority == "[::1]:8443"
+    assert normalize_public_origin("").authority is None
+    assert normalize_public_origin("ftp://x.example").authority is None

@@ -1,5 +1,5 @@
 {
-    "_comment": "Parity cases for the mirrored share URL builders (agent-sharing design §7.4). Consumed by tests/test_share_url_parity.py AND frontend/src/utils/shareUrl.test.js — same input, byte-identical expected output on both surfaces.",
+    "_comment": "Backend legacy-input and Share URL regression cases (agent-sharing design §7.4). Python owns every verdict. Frontend stored consumers use direct canonical-shape tests after Task 3.",
     "url_path": "/share/tok123/",
     "cases": [
         {"name": "bare host", "stored": "share.example.com", "expected": "https://share.example.com/share/tok123/"},
@@ -10,7 +10,7 @@
         {"name": "many trailing slashes are invalid at runtime", "stored": "https://share.example.com///", "expected": null},
         {"name": "ascii whitespace trimmed", "stored": "\t share.example.com \r\n", "expected": "https://share.example.com/share/tok123/"},
         {"name": "raw CLI-written value trimmed", "stored": "  share.example.com  ", "expected": "https://share.example.com/share/tok123/"},
-        {"name": "U+FEFF is parser-normalized", "stored": "\ufeffshare.example.com", "expected": "https://share.example.com/share/tok123/"},
+        {"name": "U+FEFF is invalid Unicode input", "stored": "\ufeffshare.example.com", "expected": null},
         {"name": "U+001C is invalid", "stored": "\u001cshare.example.com", "expected": null},
         {"name": "path is invalid", "stored": "https://share.example.com/base", "expected": null},
         {"name": "query is invalid", "stored": "https://share.example.com?x=1", "expected": null},
