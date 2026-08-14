@@ -48,6 +48,13 @@ JSON wrapped in {"exit_code", "result", "error"} — exit_code 0 is success,
 non-zero maps to the exit codes the skills document (3 rejected, 4 failed,
 5 timeout, ...).
 
+You are reading this because the TwiCC MCP server is connected, so its whole
+tool set is available to you — but most schemas are deferred (all of them on
+Codex, all but a handful on Claude Code). A tool missing from your visible tool
+list is therefore not a missing tool: search your full tool list for the one you
+need (`ToolSearch` on Claude Code, `ALL_TOOLS` on Codex) instead of falling back
+to the `twicc` shell CLI.
+
 Conventions:
 - Session-targeting arguments accept `self` (your own session) and `parent`
   (the session that spawned you); your identity is carried by this connection,

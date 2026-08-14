@@ -28,7 +28,7 @@ Not when the criteria interact and need one combined judgment (→ debate).
 ## Pitfalls
 - Lenses that overlap heavily waste agents — make them distinct.
 - This is the canonical home for **read-only analyst** workers; pull their text
-  findings (with the `mcp__twicc__*` tools they could push, but pulling fits here).
+  findings (they could push with `mcp__twicc__send_message`, but pulling fits here).
 - Synthesis is real work — don't just staple the N reports together.
 
 Examples: `examples/pr-review.md`.

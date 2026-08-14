@@ -39,7 +39,7 @@ common, useful combinations to start from. When none fits, compose your own.
 - **Read-only children still push and spawn via `mcp__twicc__*`.** A `strict`/`dontAsk`
   child can't write files, edit code, or run shell — but the MCP tools let it spawn,
   send, and retag (see twicc-orchestration › Permission modes). It's a pull-only leaf
-  only when it has no MCP tools; design around whichever applies.
+  only when MCP is disabled — deferred tools still count as present.
 
 ## Reading the named patterns
 

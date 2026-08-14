@@ -23,8 +23,8 @@ Shape: star or mesh · sideways (peer `send-message` + pull) · continuous · pe
 ## Protocol
 1. The parent spawns the peers (executors, so they can also do project work), giving
    each: its own task, the fact that its co-workers are siblings, and how to discover
-   them. (Read-only peers can still send via the `mcp__twicc__*` tools; if MCP is off
-   they can only be pulled.)
+   them. (Read-only peers still send via the `mcp__twicc__*` tools; only with MCP
+   disabled can they merely be pulled.)
 2. A peer that produces something the others need announces it:
    `send-messages --siblings self --message 'auth done — login at /v2/login, schema in <scratch_dir>/<id>-auth.md'`.
 3. A peer that needs a peer's output pulls it (`session <sibling_id> messages

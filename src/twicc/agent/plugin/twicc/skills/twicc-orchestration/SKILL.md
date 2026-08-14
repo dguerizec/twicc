@@ -15,7 +15,7 @@ A TwiCC session can spawn other sessions, which can spawn their own, forming a *
 
 ## Resolving `$TWICC`
 
-**Prefer the `mcp__twicc__*` tools when you have them.** Inside a TwiCC session the same commands are exposed as `mcp__twicc__*` tools (`/` and `-` → `_`, e.g. `mcp__twicc__create_session`, `mcp__twicc__send_message`, `mcp__twicc__sessions`). When present, use them over the `$TWICC` CLI: same arguments, same JSON, no shell, and your identity travels with the call (`self`/`parent` resolve on their own). The `$TWICC` CLI below is the fallback when those tools aren't available.
+**Prefer the `mcp__twicc__*` tools — inside a TwiCC session you normally have all of them.** The same commands are exposed as `mcp__twicc__*` tools (`/` and `-` → `_`, e.g. `mcp__twicc__create_session`, `mcp__twicc__send_message`, `mcp__twicc__sessions`). Use them over the `$TWICC` CLI: same arguments, same JSON, no shell, and your identity travels with the call (`self`/`parent` resolve on their own). **Most of them are deferred, so a tool missing from your visible tool list is not a missing tool** — search your full tool list for the one you need (`ToolSearch` on Claude Code, `ALL_TOOLS` on Codex); the `$TWICC` CLI below is the fallback only when the search finds nothing.
 
 The examples here and in the role skills (`-leader`, `-manager`, `-worker`) call TwiCC's CLI as `$TWICC`. Its executable varies by launch mode (uvx, dev, installed tool), so resolve it at the start of each bash invocation:
 
@@ -60,7 +60,7 @@ A spawned session starts with **no memory of you** — every prompt must be self
 
 - **Push** — an executor child reports up with `send-message parent` (the `parent` keyword resolves to its spawner). Skill: `twicc-send-message`.
 - **Pull** — a parent can read any child's messages at any time with `$TWICC session <child_id> messages --tail N`, whether or not the child can push. The two coexist: you can look in on a child without waiting for its report.
-- A **read-only** child (see below) cannot push *through the CLI*, but **can** push via `mcp__twicc__send_message` when it has the MCP tools; without them, pull is the only way to read it.
+- A **read-only** child (see below) cannot push *through the CLI*, but **can** push via `mcp__twicc__send_message`; only with MCP disabled is pull the sole way to read it.
 - **Attribution** — a message sent from one session to another arrives under a sender header (a single `:: message from <relation> session <id> ("**<title>**")` line, then the text), where the relation is `your spawned session`, `your parent session`, `a sibling session`, or `another session`. `send-message` / `send-messages` (CLI and MCP) add it automatically — never write it yourself. A message with no such header comes from the user.
 - **Sideways** — siblings *can* talk to each other directly; there is no rule that exchanges must go through the parent. An executor reaches one peer with `send-message <sibling_id>` or broadcasts to all of them with `send-messages --siblings self` (the reference session is always excluded); any session can pull a peer with `$TWICC session <sibling_id> messages`. Discover your peers first with `sessions --siblings self`, `processes --siblings self`, or `topology self --siblings`. Use it for genuine peer coordination — a handoff, a heads-up, sharing a result — not as a replacement for reporting: control and aggregation still flow up to the common parent. Some patterns (e.g. independent quorum advisors) deliberately keep siblings isolated for independence — don't wire peer chat there. Full pattern: `patterns/peer-coordination.md`.
 
@@ -75,7 +75,9 @@ Every session knows its own `permission_mode` from its injected context. For orc
 - **Executor — allows everything** (Claude Code `bypassPermissions`, Codex `yolo`; alias for both `open`): can run shell, write files, edit code, spawn children, and push to its parent — by any means (the `$TWICC` CLI or the MCP tools).
 - **Read-only — no shell execution** (Claude Code `dontAsk`, Codex `strict`; alias for both `strict`): pure read/analysis of the given project. It **cannot run any shell command**, so it cannot use the `$TWICC` CLI, the bash-based skills, write files, or edit code.
 
-**But read-only is not a dead end for orchestration.** The `mcp__twicc__*` tools are a control plane mediated by the provider core, *not* the execution sandbox — so they work in **every** mode, read-only included. A read-only session can therefore still drive TwiCC through those tools: `mcp__twicc__create_session` to spawn a child, `mcp__twicc__send_message` (target `parent`) to push, `mcp__twicc__update_session` to retag itself, and every read tool. So a read-only session is a **pull-only leaf only when it has no `mcp__twicc__*` tools** (e.g. MCP disabled); with them it can delegate and push like an executor — it just still cannot touch the shell, the filesystem, or the project's code.
+**But read-only is not a dead end for orchestration.** The `mcp__twicc__*` tools are a control plane mediated by the provider core, *not* the execution sandbox — so they work in **every** mode, read-only included. A read-only session can therefore still drive TwiCC through those tools: `mcp__twicc__create_session` to spawn a child, `mcp__twicc__send_message` (target `parent`) to push, `mcp__twicc__update_session` to retag itself, and every read tool. So a read-only session is a **pull-only leaf only when MCP is disabled outright**; otherwise it delegates and pushes like an executor — it just still cannot touch the shell, the filesystem, or the project's code.
+
+**Never conclude from your visible tool list that you lack an `mcp__twicc__*` tool.** TwiCC defers most of them on purpose, so they carry no schema until you ask for one: on Codex every tool is deferred, on Claude Code all but a handful. Search your full tool list for the tool you need (`ToolSearch` on Claude Code, `ALL_TOOLS` on Codex) before you treat it as absent. Below, "no MCP tools" always means MCP is off, never merely deferred.
 
 Those aliases are provider-agnostic: pass `--permission-mode open` or `--permission-mode strict` and each provider resolves it to the concrete value above — no need to remember `bypassPermissions`/`yolo`/`dontAsk` per provider.
 
@@ -116,7 +118,7 @@ Useful keys (free — conventions, not rules):
 Who sets them:
 
 - A **parent** tags a child at spawn (`create-session --annotation mode=worker --annotation job=reviewer`).
-- A session updates **its own** tags as it goes (`update-session self annotations set:status=done`) — a read-only session can't run the CLI for this, but can retag itself with `mcp__twicc__update_session` when it has the MCP tools; otherwise it keeps whatever the parent gave it.
+- A session updates **its own** tags as it goes (`update-session self annotations set:status=done`) — a read-only session can't run the CLI for this, but retags itself with `mcp__twicc__update_session`; only with MCP disabled does it keep whatever the parent gave it.
 
 Keep values **short and single-line** — annotations are metadata, not a message channel. Anything long goes in the message or a scratch file.
 
@@ -132,7 +134,7 @@ How the shared scratch works:
 - The leader picks a folder (typically `<scratch_base_dir>/<leader_session_id>/`) and passes its absolute path to each child as the `scratch_dir` annotation. A child that spawns children **propagates the same `scratch_dir`**, so the whole subtree converges on one folder. A `scratch_dir` annotation **takes precedence** over your own `scratch_base_dir`.
 - **Already created**: the shared folder is the root session's own scratch dir, which TwiCC pre-creates (like every session's), so write to it directly — `mkdir -p` stays harmless/idempotent if you ever point `scratch_dir` at a custom path.
 - **Prefix every file with your own session id** (`<session_id>-report.md`) so two agents never clobber the same file.
-- **Read-only sessions**: cannot **write** the scratch (that is a filesystem write, which the MCP tools do not grant), but **can read** it — TwiCC grants every tree member read access to the shared scratch, so a read-only session still pulls peers' files from there. It returns its own result either in its reply (the parent pulls it) or by pushing it with `mcp__twicc__send_message` when it has the MCP tools.
+- **Read-only sessions**: cannot **write** the scratch (that is a filesystem write, which the MCP tools do not grant), but **can read** it — TwiCC grants every tree member read access to the shared scratch, so a read-only session still pulls peers' files from there. It returns its own result either in its reply (the parent pulls it) or by pushing it with `mcp__twicc__send_message`.
 
 Pattern: an executor (worker or manager) writes `<scratch_dir>/<session_id>-result.md`, then sends a short `send-message parent` ("done, see `<session_id>-result.md`"); the parent reads the file.
 
