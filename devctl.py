@@ -53,6 +53,49 @@ def purge_claude_code_vars(env: dict) -> None:
             del env[key]
 
 
+def purge_foreign_venvs(env: dict) -> None:
+    """Drop other projects' Python environments from *env* in-place.
+
+    devctl inherits the launching shell's environment and hands it to the
+    backend and the frontend — and, through the backend, to every agent
+    session. When that shell carries another project's ``.venv/bin`` on PATH,
+    a command missing from this project's venv resolves there instead: a
+    console script then starts that venv's interpreter, with its site-packages
+    and its editable install, so a tool run from this repo can silently import
+    another checkout's sources.
+
+    Only uv-style project venvs are dropped from PATH, and only foreign ones:
+    an entry qualifies when its parent directory is named ``.venv`` and holds
+    a ``pyvenv.cfg``. System dirs, ``~/.local/bin``, ``~/.cargo/bin`` and uv's
+    own tool venvs (``…/uv/tools/<tool>/bin``) keep their place and their
+    order. VIRTUAL_ENV is dropped when it points elsewhere; ``uv run`` sets
+    the right one for the backend.
+
+    PYTHONPATH goes altogether: it outranks every venv, and the backend has no
+    use for one — the editable install provides ``twicc``.
+    """
+    own_venv = (PROJECT_ROOT / ".venv").resolve()
+
+    kept_path = []
+    for entry in env.get("PATH", "").split(os.pathsep):
+        venv = Path(entry).parent
+        foreign = (
+            bool(entry)
+            and venv.name == ".venv"
+            and (venv / "pyvenv.cfg").is_file()
+            and venv.resolve() != own_venv
+        )
+        if not foreign:
+            kept_path.append(entry)
+    env["PATH"] = os.pathsep.join(kept_path)
+
+    virtual_env = env.get("VIRTUAL_ENV")
+    if virtual_env and Path(virtual_env).resolve() != own_venv:
+        del env["VIRTUAL_ENV"]
+
+    env.pop("PYTHONPATH", None)
+
+
 def is_git_worktree() -> bool:
     """Detect if we're running inside a git worktree (not the main working tree).
 
@@ -602,6 +645,10 @@ def start(proc_key: str, processes: dict) -> bool:
     # CLAUDE_CODE_ENTRYPOINT in particular causes Claude Code to think it's
     # already running inside an SDK session, preventing interactive use.
     purge_claude_code_vars(proc_env)
+    # Drop any other project's virtualenv from the inherited environment, so a
+    # command missing from this project's venv can never resolve to another
+    # checkout's (see purge_foreign_venvs).
+    purge_foreign_venvs(proc_env)
     # In worktree mode, purge inherited TWICC_* variables so the child
     # process only sees values from the worktree's .env (loaded by run.py).
     # Without this, variables like TWICC_PASSWORD_HASH from the parent
