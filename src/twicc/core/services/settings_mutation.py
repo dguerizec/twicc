@@ -24,6 +24,11 @@ from channels.layers import get_channel_layer
 
 from twicc.agent.registry import get_agent_manager_registry
 from twicc.core.enums import Provider
+from twicc.core.services.public_origin import (
+    ORIGIN_CONFLICT_AMBIGUOUS,
+    ORIGIN_CONFLICT_SHARE_EXTERNAL,
+    ORIGIN_CONFLICT_SHARE_PEER,
+)
 from twicc.providers.helpers import get_provider_helpers_registry
 from twicc.synced_settings import (
     _settings_lock,
@@ -55,6 +60,34 @@ class SettingsDropResult(NamedTuple):
     status_extra: dict = {}  # generic passthrough → status file; never mutate in place
 
 
+_ORIGIN_STRUCTURAL_MESSAGE = "Enter a hostname or an HTTP(S) origin without a path, query, or fragment."
+_ORIGIN_ERROR_MESSAGES = {
+    ORIGIN_CONFLICT_SHARE_EXTERNAL: "The Share host must use a different hostname from the External address.",
+    ORIGIN_CONFLICT_SHARE_PEER: "The Share host must use a different hostname from the Peer address.",
+    ORIGIN_CONFLICT_AMBIGUOUS: "The Peer and External addresses must be the same origin or use different authorities.",
+}
+
+
+def _same_json_value(left, right) -> bool:
+    """Return true when decoded JSON values have the same JSON type and value."""
+    left_is_number = isinstance(left, (int, float)) and not isinstance(left, bool)
+    right_is_number = isinstance(right, (int, float)) and not isinstance(right, bool)
+    if left_is_number or right_is_number:
+        return left_is_number and right_is_number and left == right
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_json_value(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _same_json_value(left[key], right[key]) for key in left
+        )
+    return left == right
+
+
 def _is_provider(value: str) -> bool:
     try:
         Provider(value)
@@ -84,37 +117,42 @@ def _merge_and_write(patch: dict, base_version: int | None) -> dict:
             clean, ver = prepare_settings_for_client(existing_settings)
             return {"status": "rejected", "clean": clean, "version": ver}
 
-        from twicc.core.services.public_origin import PUBLIC_ORIGIN_SETTING_KEYS, normalize_public_origin
+        from twicc.core.services.public_origin import (
+            PUBLIC_ORIGIN_SETTING_KEYS,
+            normalize_public_origin,
+            validate_origin_settings,
+        )
 
         normalized_patch = dict(patch)
         corrections: dict = {}
-        errors: list[SettingsDropError] = []
+        changed_origin_fields = {
+            key for key in PUBLIC_ORIGIN_SETTING_KEYS
+            if key in patch and not _same_json_value(patch[key], existing_settings.get(key))
+        }
         for key in PUBLIC_ORIGIN_SETTING_KEYS:
-            if key not in patch:
+            if key not in changed_origin_fields:
                 continue
             value = patch[key]
-            # The frontend sends a full settings snapshot. Keep an unchanged
-            # malformed legacy value from blocking unrelated changes.
-            if value == existing_settings.get(key):
-                continue
-            if not isinstance(value, str):
-                errors.append(SettingsDropError(
-                    key,
-                    "invalid_origin_type",
-                    "Enter a hostname or an HTTP(S) origin without a path, query, or fragment.",
-                ))
-                continue
             result = normalize_public_origin(value)
-            if result.error:
-                errors.append(SettingsDropError(
-                    key,
-                    f"invalid_origin_{result.error}",
-                    "Enter a hostname or an HTTP(S) origin without a path, query, or fragment.",
-                ))
-                continue
-            normalized_patch[key] = result.value
-            if result.value != value:
+            if not result.error:
+                normalized_patch[key] = result.value
+            if not result.error and result.value != value:
                 corrections[key] = result.value
+        errors: list[SettingsDropError] = []
+        if changed_origin_fields:
+            merged = {
+                key: normalized_patch.get(key, existing_settings.get(key, ""))
+                for key in PUBLIC_ORIGIN_SETTING_KEYS
+            }
+            for field_error in validate_origin_settings(
+                merged["publicBaseUrl"], merged["shareBaseUrl"], merged["peerBaseUrl"],
+                changed_fields=changed_origin_fields,
+            ):
+                errors.append(SettingsDropError(
+                    field_error.field,
+                    field_error.code,
+                    _ORIGIN_ERROR_MESSAGES.get(field_error.code, _ORIGIN_STRUCTURAL_MESSAGE),
+                ))
         if errors:
             clean, version = prepare_settings_for_client(existing_settings)
             return {

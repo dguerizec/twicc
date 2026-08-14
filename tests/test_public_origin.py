@@ -268,3 +268,46 @@ def test_every_frontend_rejection_is_also_a_backend_rejection():
             continue
         assert case["input"] in backend, case["name"]
         assert backend[case["input"]]["error"] is not None, case["name"]
+
+
+@pytest.mark.parametrize(
+    "public_value,share_value,peer_value,changed_fields",
+    [
+        ("", "ftp://peer.example", "https://peer.example", {"peerBaseUrl"}),
+        ("ftp://share.example", "https://share.example", "", {"shareBaseUrl"}),
+        ("ftp://peer.example", "", "http://peer.example", {"peerBaseUrl"}),
+    ],
+)
+def test_invalid_origin_result_metadata_never_becomes_a_relationship_operand(
+    monkeypatch, public_value, share_value, peer_value, changed_fields,
+):
+    from twicc.core.services import public_origin
+
+    original = public_origin.normalize_public_origin
+
+    def normalize(value):
+        if isinstance(value, str) and value.startswith("ftp://"):
+            hostname = value.removeprefix("ftp://")
+            return public_origin.PublicOriginResult(
+                None, "scheme", "ftp", hostname, None, hostname,
+            )
+        return original(value)
+
+    monkeypatch.setattr(public_origin, "normalize_public_origin", normalize)
+    assert public_origin.validate_origin_settings(
+        public_value, share_value, peer_value, changed_fields=changed_fields,
+    ) == ()
+
+
+def test_settings_read_preserves_invalid_peer_base_url(tmp_path, monkeypatch):
+    import twicc.synced_settings as ss
+
+    path = tmp_path / "settings.json"
+    path.write_bytes(orjson.dumps({"peerBaseUrl": "ftp://peer.example/forbidden"}))
+    monkeypatch.setattr(ss, "get_synced_settings_path", lambda: path)
+    ss._cache.clear()
+    try:
+        assert ss.read_synced_settings()["peerBaseUrl"] == "ftp://peer.example/forbidden"
+        assert orjson.loads(path.read_bytes())["peerBaseUrl"] == "ftp://peer.example/forbidden"
+    finally:
+        ss._cache.clear()

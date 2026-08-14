@@ -140,3 +140,195 @@ def test_notification_test_persists_tested(temp_settings, monkeypatch):
     assert res.success is True
     target = ss.read_synced_settings()["externalNotificationTargets"][0]
     assert target["tested"] is True
+
+
+def test_origin_patch_allows_unchanged_invalid_stored_origin(temp_settings):
+    seeded = ss.read_synced_settings()
+    seeded["shareBaseUrl"] = "ftp://peer.example"
+    ss.write_synced_settings(seeded)
+    before = ss.read_synced_settings()
+    # The patch changes Peer only. The unchanged invalid Share value does not
+    # block this repair and does not become a relationship operand (design §7).
+    r = _update({"peerBaseUrl": "https://peer.example"})
+    assert r.status == "accepted"
+    after = ss.read_synced_settings()
+    assert after["peerBaseUrl"] == "https://peer.example"
+    assert after["shareBaseUrl"] == "ftp://peer.example"
+    assert after["_version"] == before["_version"] + 1
+
+
+def test_non_origin_patch_stays_allowed_with_invalid_stored_origin(temp_settings):
+    seeded = ss.read_synced_settings()
+    seeded["shareBaseUrl"] = "ftp://legacy.example.com"
+    ss.write_synced_settings(seeded)
+    r = _update({"terminalUseTmux": False, "shareBaseUrl": "ftp://legacy.example.com"})
+    assert r.status == "accepted"
+    assert ss.read_synced_settings()["terminalUseTmux"] is False
+    assert ss.read_synced_settings()["shareBaseUrl"] == "ftp://legacy.example.com"
+
+
+@pytest.mark.parametrize(
+    "stored, submitted, expected_status",
+    [
+        (0.0, 0, "accepted"),
+        (1.0, 1, "accepted"),
+        (0, False, "rejected"),
+        (False, 0, "rejected"),
+    ],
+)
+def test_json_scalar_number_round_trip_and_boolean_distinction(
+    temp_settings, stored, submitted, expected_status,
+):
+    seeded = ss.read_synced_settings()
+    seeded["peerBaseUrl"] = stored
+    ss.write_synced_settings(seeded)
+    before = ss.read_synced_settings()
+
+    result = _update({"terminalUseTmux": False, "peerBaseUrl": submitted})
+
+    assert result.status == expected_status
+    after = ss.read_synced_settings()
+    if expected_status == "accepted":
+        assert after["terminalUseTmux"] is False
+        assert after["peerBaseUrl"] == submitted
+        assert after["_version"] == before["_version"] + 1
+    else:
+        assert [(error.field, error.code) for error in result.errors] == [
+            ("peerBaseUrl", "invalid_origin_type"),
+        ]
+        assert after == before
+
+
+@pytest.mark.parametrize(
+    "stored, submitted, expected_status",
+    [
+        ([0.0], [0], "accepted"),
+        ({"value": 1.0}, {"value": 1}, "accepted"),
+        ({"value": 0}, {"value": False}, "rejected"),
+        ([0], [False], "rejected"),
+    ],
+)
+def test_json_nested_number_round_trip_and_boolean_distinction(
+    temp_settings, stored, submitted, expected_status,
+):
+    seeded = ss.read_synced_settings()
+    seeded["peerBaseUrl"] = stored
+    ss.write_synced_settings(seeded)
+    before = ss.read_synced_settings()
+
+    result = _update({"terminalUseTmux": False, "peerBaseUrl": submitted})
+
+    assert result.status == expected_status
+    after = ss.read_synced_settings()
+    if expected_status == "accepted":
+        assert after["terminalUseTmux"] is False
+        assert after["peerBaseUrl"] == submitted
+        assert after["_version"] == before["_version"] + 1
+    else:
+        assert [(error.field, error.code) for error in result.errors] == [
+            ("peerBaseUrl", "invalid_origin_type"),
+        ]
+        assert after == before
+
+
+def test_origin_patch_rejects_relationship_conflicts_atomically(temp_settings):
+    _update({"publicBaseUrl": "https://x.example"})
+    before = ss.read_synced_settings()
+    r = _update({"shareBaseUrl": "https://x.example:9443"})
+    assert r.status == "rejected"
+    assert [(e.field, e.code) for e in r.errors] == [
+        ("shareBaseUrl", "origin_conflict_share_external_hostname"),
+        ("publicBaseUrl", "origin_conflict_share_external_hostname"),
+    ]
+    assert r.errors[0].message == "The Share host must use a different hostname from the External address."
+    after = ss.read_synced_settings()
+    assert after.get("shareBaseUrl", "") == before.get("shareBaseUrl", "")
+    assert after["_version"] == before["_version"]
+
+
+def test_origin_patch_rejects_ambiguous_peer_external(temp_settings):
+    _update({"publicBaseUrl": "https://x.example"})
+    r = _update({"peerBaseUrl": "http://x.example"})
+    assert r.status == "rejected"
+    assert [(e.field, e.code) for e in r.errors] == [
+        ("peerBaseUrl", "origin_conflict_ambiguous_authority"),
+        ("publicBaseUrl", "origin_conflict_ambiguous_authority"),
+    ]
+    assert r.errors[0].message == (
+        "The Peer and External addresses must be the same origin or use different authorities."
+    )
+
+
+def test_origin_patch_accepts_shared_peer_and_external(temp_settings):
+    _update({"publicBaseUrl": "https://x.example"})
+    r = _update({"peerBaseUrl": "https://x.example"})
+    assert r.status == "accepted"
+    assert ss.read_synced_settings()["peerBaseUrl"] == "https://x.example"
+
+
+@pytest.mark.parametrize(
+    "first_field,first_value,second_field,second_value,expected_public,expected_share",
+    [
+        (
+            "publicBaseUrl", "https://share.example",
+            "shareBaseUrl", "https://final-share.example",
+            "https://share.example", "https://final-share.example",
+        ),
+        (
+            "shareBaseUrl", "https://app.example",
+            "publicBaseUrl", "https://final-app.example",
+            "https://final-app.example", "https://app.example",
+        ),
+    ],
+)
+def test_two_invalid_origins_can_be_repaired_in_either_order(
+    temp_settings, first_field, first_value, second_field, second_value, expected_public, expected_share,
+):
+    seeded = ss.read_synced_settings()
+    seeded["publicBaseUrl"] = "ftp://app.example"
+    seeded["shareBaseUrl"] = "ftp://share.example"
+    ss.write_synced_settings(seeded)
+    # Each repair order keeps the other invalid field unchanged.
+    first = _update({first_field: first_value})
+    assert first.status == "accepted"
+    untouched = "shareBaseUrl" if first_field == "publicBaseUrl" else "publicBaseUrl"
+    assert ss.read_synced_settings()[untouched].startswith("ftp://")
+    second = _update({second_field: second_value})
+    assert second.status == "accepted"
+    settings = ss.read_synced_settings()
+    assert settings["publicBaseUrl"] == expected_public
+    assert settings["shareBaseUrl"] == expected_share
+
+
+def test_multi_field_origin_patch_reports_all_errors_and_writes_nothing(temp_settings):
+    before = ss.read_synced_settings()
+    r = _update({
+        "publicBaseUrl": "ftp://app.example",
+        "shareBaseUrl": "https://x.example",
+        "peerBaseUrl": "http://x.example:8443",
+    })
+    assert r.status == "rejected"
+    assert [(e.field, e.code) for e in r.errors] == [
+        ("publicBaseUrl", "invalid_origin_scheme"),
+        ("shareBaseUrl", "origin_conflict_share_peer_hostname"),
+        ("peerBaseUrl", "origin_conflict_share_peer_hostname"),
+    ]
+    assert r.errors[1].message == "The Share host must use a different hostname from the Peer address."
+    assert ss.read_synced_settings() == before
+
+
+def test_update_from_payload_returns_origin_relationship_errors(temp_settings):
+    from asgiref.sync import async_to_sync
+    from twicc.core.services.settings_mutation import update_synced_settings_from_payload
+
+    _update({"publicBaseUrl": "https://x.example"})
+    res = async_to_sync(update_synced_settings_from_payload)({
+        "kind": "settings:update",
+        "patch": {"shareBaseUrl": "https://x.example:9443"},
+        "broadcast": False,
+    })
+    assert res.success is False
+    assert [(error.field, error.code) for error in res.errors] == [
+        ("shareBaseUrl", "origin_conflict_share_external_hostname"),
+        ("publicBaseUrl", "origin_conflict_share_external_hostname"),
+    ]
