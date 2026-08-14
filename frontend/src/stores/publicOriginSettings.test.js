@@ -54,7 +54,7 @@ test('the Settings result protocol carries one correlation ID end to end', () =>
     assert.match(websocketSource, /request_id: requestId/)
     assert.match(backendSource, /request_id = content\.get\("request_id"\)/)
     assert.match(backendSource, /"type": "synced_settings_result"/)
-    assert.match(websocketSource, /twicc:origin-settings-result/)
+    assert.match(websocketSource, /twicc:synced-settings-result/)
     assert.match(popoverSource, /pendingOriginWrites\.get\(payload\?\.request_id\)/)
 })
 
@@ -69,11 +69,11 @@ test('correlated results adopt accepted values and show rejected field errors', 
 test('the popover subscribes and unsubscribes the correlated result handler', () => {
     assert.match(
         popoverSource,
-        /window\.addEventListener\('twicc:origin-settings-result', onOriginSettingsResult\)/,
+        /window\.addEventListener\('twicc:synced-settings-result', onOriginSettingsResult\)/,
     )
     assert.match(
         popoverSource,
-        /window\.removeEventListener\('twicc:origin-settings-result', onOriginSettingsResult\)/,
+        /window\.removeEventListener\('twicc:synced-settings-result', onOriginSettingsResult\)/,
     )
 })
 

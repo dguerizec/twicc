@@ -740,3 +740,21 @@ def test_outbound_display_name_falls_back_to_hostname(transactional_db, peer_hos
     result = _run(peer_mutation.create_peer_and_request(name="bob", base_url="https://bob.example.com"))
     assert result.success
     assert sent["display_name"] == "me.example.com"
+
+
+@pytest.mark.parametrize("base_url,expected", [
+    ("https://me.example.com", "me.example.com"),
+    ("https://me.example.com:8443", "me.example.com"),
+    ("https://192.168.1.42:8443", "192.168.1.42"),
+    # The canonical hostname of an IPv6 origin is unbracketed; the advertised
+    # name is read as an address, so it must carry the brackets back.
+    ("https://[2001:db8::1]", "[2001:db8::1]"),
+    ("https://[0:0:0:0:0:0:0:1]:8443", "[::1]"),
+    ("", "twicc"),
+])
+def test_own_display_name_hostname_fallback_brackets_ipv6(base_url, expected, monkeypatch):
+    monkeypatch.setattr(
+        "twicc.synced_settings.read_synced_settings",
+        lambda: {"peerBaseUrl": base_url},
+    )
+    assert peer_mutation.own_display_name() == expected

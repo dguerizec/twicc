@@ -286,6 +286,45 @@ def _migrate_legacy_settings(file_data: dict) -> bool:
     return changed
 
 
+def _read_synced_settings_locked() -> dict:
+    """Populate the cache on first read and return a copy.
+
+    The caller MUST already hold ``_settings_lock``. Both public readers go
+    through this helper so neither re-acquires the lock a second time.
+    """
+    global _routing_settings_available
+    if not _cache:
+        path = get_synced_settings_path()
+        available = True
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            file_data = {}
+        except OSError:
+            logger.exception("Cannot read synced settings")
+            file_data = {}
+            available = False
+        else:
+            try:
+                file_data = orjson.loads(raw)
+            except orjson.JSONDecodeError:
+                logger.exception("Cannot parse synced settings")
+                file_data = {}
+                available = False
+            if available and not isinstance(file_data, dict):
+                logger.error("Synced settings JSON root is not an object")
+                file_data = {}
+                available = False
+        migrated = available and _migrate_legacy_settings(file_data)
+        _cache.update({**SYNCED_SETTINGS_DEFAULTS, **file_data})
+        _cache.setdefault("_version", 0)
+        _routing_settings_available = available
+        if migrated:
+            # Persist the cleaned data so old keys do not reappear next read.
+            write_synced_settings(_cache.copy())
+    return _cache.copy()
+
+
 def read_synced_settings() -> dict:
     """Read settings and retain whether the cache-initializing load was valid.
 
@@ -294,45 +333,14 @@ def read_synced_settings() -> dict:
     but make public-origin routing unavailable. The active cache does not
     observe later manual file edits before a process restart.
     """
-    global _routing_settings_available
     with _settings_lock:
-        if not _cache:
-            path = get_synced_settings_path()
-            available = True
-            try:
-                raw = path.read_bytes()
-            except FileNotFoundError:
-                file_data = {}
-            except OSError:
-                logger.exception("Cannot read synced settings")
-                file_data = {}
-                available = False
-            else:
-                try:
-                    file_data = orjson.loads(raw)
-                except orjson.JSONDecodeError:
-                    logger.exception("Cannot parse synced settings")
-                    file_data = {}
-                    available = False
-                if available and not isinstance(file_data, dict):
-                    logger.error("Synced settings JSON root is not an object")
-                    file_data = {}
-                    available = False
-            migrated = available and _migrate_legacy_settings(file_data)
-            _cache.update({**SYNCED_SETTINGS_DEFAULTS, **file_data})
-            _cache.setdefault("_version", 0)
-            _routing_settings_available = available
-            if migrated:
-                # Persist the cleaned data so old keys do not reappear next read.
-                write_synced_settings(_cache.copy())
-        return _cache.copy()
+        return _read_synced_settings_locked()
 
 
 def read_routing_settings() -> RoutingSettingsSnapshot:
     """Return settings and availability from one active-cache observation."""
     with _settings_lock:
-        settings = read_synced_settings()
-        return RoutingSettingsSnapshot(settings, _routing_settings_available)
+        return RoutingSettingsSnapshot(_read_synced_settings_locked(), _routing_settings_available)
 
 
 def write_synced_settings(data: dict) -> None:

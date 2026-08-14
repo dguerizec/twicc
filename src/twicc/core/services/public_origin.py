@@ -62,7 +62,7 @@ def canonicalize_hostname(token: str, *, bracketed: bool) -> CanonicalHostname:
     compressed RFC 5952 form. No percent decoding, no Unicode-to-IDNA
     conversion — an invalid raw token stays invalid.
     """
-    if not token or not token.isascii() or "%" in token or not all(0x21 <= ord(char) <= 0x7e for char in token):
+    if not token or "%" in token or not all(0x21 <= ord(char) <= 0x7e for char in token):
         return CanonicalHostname(None)
     lowered = token.lower()
     if bracketed:

@@ -1573,7 +1573,7 @@ export function useWebSocket() {
                 })
                 break
             case 'synced_settings_result':
-                window.dispatchEvent(new CustomEvent('twicc:origin-settings-result', {
+                window.dispatchEvent(new CustomEvent('twicc:synced-settings-result', {
                     detail: msg,
                 }))
                 break

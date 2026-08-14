@@ -81,7 +81,12 @@ def own_display_name() -> str:
         return name
     from twicc.core.services.public_origin import normalize_public_origin
 
-    return normalize_public_origin(peer_base_url()).hostname or "twicc"
+    hostname = normalize_public_origin(peer_base_url()).hostname
+    if not hostname:
+        return "twicc"
+    # ``hostname`` is the bare canonical host, so an IPv6 literal arrives
+    # unbracketed. Peers display this name as an address, so bracket it.
+    return f"[{hostname}]" if ":" in hostname else hostname
 
 
 # ── Broadcasts ──────────────────────────────────────────────────────────────

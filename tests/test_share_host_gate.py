@@ -210,8 +210,9 @@ def test_general_and_routing_first_reads_share_one_source_observation(monkeypatc
                 call = self.calls
             if call == 1:
                 # An unlocked second read enters before this returns. A locked
-                # second read waits and then sees the populated cache.
-                self._second_entered.wait(timeout=0.25)
+                # second read waits and then sees the populated cache. The lock
+                # makes this window a fixed cost, so keep it short.
+                self._second_entered.wait(timeout=0.05)
                 return b"{"
             self._second_entered.set()
             return b'{"peerBaseUrl":"https://peer.example"}'

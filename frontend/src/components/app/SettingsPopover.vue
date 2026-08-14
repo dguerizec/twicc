@@ -897,11 +897,14 @@ async function applyOriginSetting(field, inputRef) {
         },
         locationHostname: window.location.hostname,
     })
-    setOriginError(field, result.errors)
-    if (result.errors.length || !Object.keys(result.patch).length) return
+    // Before the early return below: the warning describes the value the user
+    // is applying, so a no-op Apply on an already-stored plain-HTTP address
+    // must keep showing it instead of silently clearing it.
     if (result.warning === 'http') {
         peerBaseUrlWarning.value = 'Plain HTTP — tokens travel unencrypted. HTTPS is strongly recommended.'
     }
+    setOriginError(field, result.errors)
+    if (result.errors.length || !Object.keys(result.patch).length) return
     const value = result.patch[field]
     const requestId = generateUUID()
     pendingOriginWrites.set(requestId, { field, input: inputRef.value })
@@ -943,11 +946,11 @@ function onOriginSettingsResult(event) {
 }
 
 onMounted(() => {
-    window.addEventListener('twicc:origin-settings-result', onOriginSettingsResult)
+    window.addEventListener('twicc:synced-settings-result', onOriginSettingsResult)
 })
 
 onBeforeUnmount(() => {
-    window.removeEventListener('twicc:origin-settings-result', onOriginSettingsResult)
+    window.removeEventListener('twicc:synced-settings-result', onOriginSettingsResult)
     pendingOriginWrites.clear()
 })
 
