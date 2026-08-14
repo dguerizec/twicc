@@ -1,8 +1,8 @@
 # Peer Origin Routing — deferred follow-ups
 
 **Status:** open list, nothing blocking. Every contained item is closed (see **Resolved**) and
-every performance item is decided against (see **Do NOT act**). What remains is two test-tooling
-investments and one entry blocked on missing information.
+every performance item is decided against (see **Do NOT act**). What remains is one cross-language
+test investment and one entry blocked on missing information.
 **Source:** the implementation of `docs/plans/2026-08-13-peer-origin-routing-plan.md`,
 commit range `3584afc8..6a478a4c` on branch `peer-system`
 
@@ -17,12 +17,6 @@ Items triaged as **non-defects** are recorded at the end, so nobody re-opens the
 
 ## Open — needs tooling
 
-- **The popover Apply/result wiring is covered by source regexes, not by executed code.** The
-  behaviour is proven by the pure-helper tests; what is not executed is the wiring itself. `npm
-  test` is a bare `node --test`: no `@vue/test-utils`, no jsdom, no vitest, so no SFC can be
-  mounted. Either add the component-test tooling, or extract the wiring (`applyOriginSetting`,
-  `onOriginSettingsResult`, the `wsConnected` watcher) into an injectable pure module. The second
-  needs no new dependency and also makes the two entries above testable.
 - **No generative one-way check that the JavaScript subset never rejects what Python accepts.**
   The property is verified today by a fixed case list and by 1,548 adversarial inputs tried during
   plan review, not by a generator. A generator would keep the property honest as both parsers
@@ -74,6 +68,18 @@ Items triaged as **non-defects** are recorded at the end, so nobody re-opens the
 
 Closed on 2026-08-14, after a review of the whole list. Each was contained, fully covered by an
 existing or added test, and carried no behavioural risk.
+
+- **The popover Apply/result wiring was covered by source regexes, not by executed code.** The
+  wiring now lives in `frontend/src/composables/useOriginSettingsForm.js`, driven by 16 executed
+  tests. No new dependency: Vue's reactivity (`ref` / `computed` / `watch` / `nextTick`) runs as-is
+  under the bare `node --test`, and the composable takes its store, hostname and event target by
+  injection. It exposes `start()` / `stop()` instead of registering lifecycle hooks itself, so a
+  test drives the same entry points the component does. The template is untouched: the composable
+  returns the same flat names it used to declare. What stays in
+  `stores/publicOriginSettings.test.js` is only what no test can execute — the Pinia store
+  definition, the ASGI consumer, and the event-name link between `useWebSocket` and the form
+  (that one now compares against the exported constant instead of a literal). **Do not re-add
+  source regexes for the form's own behaviour.**
 
 - **`synced_settings.read_routing_settings` double-acquired the `RLock`.** Both public readers now
   go through `_read_synced_settings_locked()`, which the caller enters holding the lock.

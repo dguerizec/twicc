@@ -1,6 +1,13 @@
+// Contracts that cross a file boundary, or live in code no test can execute
+// (a Pinia store definition, the ASGI consumer). The origin form's own
+// behaviour is exercised for real in
+// ../composables/useOriginSettingsForm.test.js — do not re-add source regexes
+// for it here.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+
+import { ORIGIN_SETTINGS_RESULT_EVENT } from '../composables/useOriginSettingsForm.js'
 
 const settingsSource = readFileSync(new URL('./settings.js', import.meta.url), 'utf8')
 const popoverSource = readFileSync(new URL('../components/app/SettingsPopover.vue', import.meta.url), 'utf8')
@@ -31,89 +38,29 @@ test('the store has one non-optimistic per-field send action', () => {
     assert.doesNotMatch(settingsSource, /this\.\w+BaseUrl = value/)
 })
 
-test('each Apply sends its trimmed field and snapshots its visible text', () => {
-    assert.match(popoverSource, /applyOriginSetting\('publicBaseUrl', publicBaseUrlInput\)/)
-    assert.match(popoverSource, /applyOriginSetting\('shareBaseUrl', shareBaseUrlInput\)/)
-    assert.match(popoverSource, /applyOriginSetting\('peerBaseUrl', peerBaseUrlInput\)/)
-    assert.match(popoverSource, /const value = result\.patch\[field\]/)
-    assert.match(popoverSource, /pendingOriginWrites\.set\(requestId, \{ field, input: inputRef\.value \}\)/)
-    assert.match(popoverSource, /store\.sendOriginSetting\(field, value, requestId\)/)
-})
-
-test('Apply renders field errors before it returns on an empty patch', () => {
-    assert.match(
-        popoverSource,
-        /setOriginError\(field, result\.errors\)\s+if \(result\.errors\.length \|\| !Object\.keys\(result\.patch\)\.length\) return/,
-    )
-})
-
-test('the Settings result protocol carries one correlation ID end to end', () => {
-    assert.match(popoverSource, /import \{ generateUUID \} from '\.\.\/\.\.\/utils\/crypto'/)
-    assert.match(popoverSource, /const requestId = generateUUID\(\)/)
-    assert.doesNotMatch(popoverSource, /crypto\.randomUUID/)
+test('the correlation ID travels from the browser to the backend and back', () => {
     assert.match(websocketSource, /request_id: requestId/)
     assert.match(backendSource, /request_id = content\.get\("request_id"\)/)
     assert.match(backendSource, /"type": "synced_settings_result"/)
-    assert.match(websocketSource, /twicc:synced-settings-result/)
-    assert.match(popoverSource, /pendingOriginWrites\.get\(payload\?\.request_id\)/)
-})
-
-test('correlated results adopt accepted values and show rejected field errors', () => {
-    assert.match(popoverSource, /resolveOriginSettingResult\(/)
-    assert.match(popoverSource, /if \(result\.status === 'accepted'\)/)
-    assert.match(popoverSource, /originInputRefs\[result\.field\]\.value = result\.value/)
-    assert.match(popoverSource, /setOriginError\(result\.field, result\.errors\)/)
     assert.match(websocketSource, /applySyncedSettings\(msg\.settings, msg\.version\)/)
 })
 
-test('the popover subscribes and unsubscribes the correlated result handler', () => {
+test('the form subscribes to the event name useWebSocket actually dispatches', () => {
+    // The one link the form cannot verify on its own: it listens for a name a
+    // different module chooses.
     assert.match(
-        popoverSource,
-        /window\.addEventListener\('twicc:synced-settings-result', onOriginSettingsResult\)/,
-    )
-    assert.match(
-        popoverSource,
-        /window\.removeEventListener\('twicc:synced-settings-result', onOriginSettingsResult\)/,
+        websocketSource,
+        new RegExp("dispatchEvent\\(new CustomEvent\\('" + ORIGIN_SETTINGS_RESULT_EVENT + "'"),
     )
 })
 
-test('broadcast resyncs preserve typed text without settling correlated writes', () => {
-    assert.match(popoverSource, /watch\(\(\) => store\.getPublicBaseUrl/)
-    assert.match(popoverSource, /watch\(\(\) => store\.getShareBaseUrl/)
-    assert.match(popoverSource, /watch\(\(\) => store\.getPeerBaseUrl/)
-    assert.match(popoverSource, /refreshOriginInput\(inputRef\.value, oldValue, value\)/)
-    assert.doesNotMatch(popoverSource, /function refreshOriginField[^}]+pendingOriginWrites/s)
-})
-
-test('typing invalidates older results for only that field', () => {
-    for (const field of ['publicBaseUrl', 'shareBaseUrl', 'peerBaseUrl']) {
-        assert.match(popoverSource, new RegExp(
-            "discardOriginSettingWrites\\(pendingOriginWrites, '" + field + "'\\)",
-        ))
-    }
-})
-
-test('disconnect reports then discards correlation IDs whose results cannot arrive', () => {
-    assert.match(
-        popoverSource,
-        /watch\(\(\) => dataStore\.wsConnected,[\s\S]*?for \(const \{ field, input \} of pendingOriginWrites\.values\(\)\)[\s\S]*?pendingOriginWrites\.clear\(\)/,
-    )
-    // Never write over a field the user retyped since Apply.
-    assert.match(
-        popoverSource,
-        /if \(originInputRefs\[field\]\.value === input\) \{\s+originErrorRefs\[field\]\.value = CONNECTION_LOST_ERROR/,
-    )
-})
-
-test('a refused send and a dropped connection carry different messages', () => {
-    // A refused send never left the browser; a drop may follow a write the
-    // server already applied. One message must not stand for both.
-    assert.match(popoverSource, /const NOT_CONNECTED_ERROR = 'Not connected to the server/)
-    assert.match(popoverSource, /const CONNECTION_LOST_ERROR = 'Connection lost —/)
-    assert.match(
-        popoverSource,
-        /if \(pending && inputRef\.value === pending\.input\) \{\s+originErrorRefs\[field\]\.value = NOT_CONNECTED_ERROR/,
-    )
+test('the popover delegates the origin wiring instead of holding it', () => {
+    assert.match(popoverSource, /useOriginSettingsForm\(\{/)
+    assert.match(popoverSource, /onMounted\(startOriginSettingsForm\)/)
+    assert.match(popoverSource, /onBeforeUnmount\(stopOriginSettingsForm\)/)
+    // No second copy of the correlation bookkeeping.
+    assert.doesNotMatch(popoverSource, /pendingOriginWrites/)
+    assert.doesNotMatch(popoverSource, /generateUUID/)
 })
 
 test('the former External URL label is now External address', () => {

@@ -12,17 +12,7 @@ import { getProviderHelpers, getProviderLabel, getProviderOptions, getRegistered
 import ProviderIcon from '../ui/ProviderIcon.vue'
 import { getActivationCharMetadata } from '../../utils/commandActivation'
 import { validateWorktreeTemplate } from '../../utils/worktreePath'
-import { checkPublicOriginInput, usablePublicOrigin } from '../../utils/publicOrigin'
-import { generateUUID } from '../../utils/crypto'
-import {
-    PUBLIC_ORIGIN_ERROR,
-    discardOriginSettingWrites,
-    originSettingErrorMessage,
-    publicOriginErrorMessage,
-    refreshOriginInput,
-    resolveOriginSettingResult,
-    validateOriginSetting,
-} from '../../utils/originSettingsForm'
+import { useOriginSettingsForm } from '../../composables/useOriginSettingsForm'
 import { DISPLAY_MODE, COLOR_SCHEME, SESSION_TIME_FORMAT, DEFAULT_MAX_CACHED_SESSIONS, WA_THEME, WA_THEME_LABELS, WA_BRAND, WA_BRAND_LABELS, SPONSOR_URL } from '../../constants'
 import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
@@ -176,16 +166,13 @@ function selectSection(id) {
     mobileShowContent.value = true
     if (id === 'general') {
         worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
-        publicBaseUrlInput.value = store.getPublicBaseUrl || ''
-        publicBaseUrlError.value = storedPublicOriginError(publicBaseUrlInput.value)
+        seedOriginField('publicBaseUrl')
     }
     if (id === 'sharing') {
-        shareBaseUrlInput.value = store.getShareBaseUrl || ''
-        shareBaseUrlError.value = storedPublicOriginError(shareBaseUrlInput.value)
+        seedOriginField('shareBaseUrl')
     }
     if (id === 'peers') {
-        peerBaseUrlInput.value = store.getPeerBaseUrl || ''
-        peerBaseUrlError.value = storedPublicOriginError(peerBaseUrlInput.value)
+        seedOriginField('peerBaseUrl')
         peerDisplayNameInput.value = store.getPeerDisplayName || ''
     }
     if (id === 'notifications') {
@@ -644,44 +631,35 @@ const worktreeDirApplyIcon = computed(() => {
     return worktreeDirModified.value ? 'triangle-exclamation' : 'check'
 })
 
-function normalizedInputValue(value) {
-    return checkPublicOriginInput(value).value ?? value.trim()
-}
+// The three public-origin fields (External / Share / Peer). The wiring lives in
+// the composable; the component keeps only the DOM refs it focuses.
+// `publicBaseUrl` is the External address, `shareBaseUrl` the dedicated share
+// host (design §12: a DIFFERENT hostname from this app, checked client-side
+// because cookies are not port-scoped), `peerBaseUrl` the peer address — that
+// one has no different-hostname restriction, /peer/ being a same-origin
+// carve-out.
+const {
+    seedOriginField,
+    startOriginSettingsForm,
+    stopOriginSettingsForm,
+    publicBaseUrlInput, publicBaseUrlError, publicBaseUrlApplyIcon,
+    onPublicBaseUrlInputChange, onPublicBaseUrlApply,
+    shareBaseUrlInput, shareBaseUrlError, shareBaseUrlApplyIcon,
+    onShareBaseUrlInputChange, onShareBaseUrlApply,
+    peerBaseUrlInput, peerBaseUrlError, peerBaseUrlWarning, peerBaseUrlApplyIcon,
+    onPeerBaseUrlInputChange, onPeerBaseUrlApply,
+    canPrefillPeerBaseUrl, prefillPeerBaseUrlFromPublic,
+} = useOriginSettingsForm({
+    settingsStore: store,
+    dataStore,
+    locationHostname: window.location.hostname,
+    eventTarget: window,
+})
 
-function storedPublicOriginError(value) {
-    return usablePublicOrigin(value) || !value ? '' : PUBLIC_ORIGIN_ERROR
-}
-
-// External address (stored as `publicBaseUrl`) — local input, committed to the
-// store on Apply only.
-const publicBaseUrlInput = ref('')
 const publicBaseUrlInputRef = ref(null)
-const publicBaseUrlError = ref('')
-const publicBaseUrlNormalized = computed(() => normalizedInputValue(publicBaseUrlInput.value))
-const publicBaseUrlModified = computed(() => publicBaseUrlNormalized.value !== (store.getPublicBaseUrl || ''))
-const publicBaseUrlApplyIcon = computed(() => (publicBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
-
-// Dedicated share host (stored as `shareBaseUrl`, design §12) — same Apply pattern
-// as publicBaseUrl, plus a client-side check that it's a DIFFERENT hostname from
-// this app (cookies aren't port-scoped, so a distinct hostname is required).
-const shareBaseUrlInput = ref('')
 const shareBaseUrlInputRef = ref(null)
-const shareBaseUrlError = ref('')
-const shareBaseUrlNormalized = computed(() => normalizedInputValue(shareBaseUrlInput.value))
-const shareBaseUrlModified = computed(() => shareBaseUrlNormalized.value !== (store.getShareBaseUrl || ''))
-const shareBaseUrlApplyIcon = computed(() => (shareBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
-const showShareManager = ref(false)
-
-// Peer messaging address (stored as `peerBaseUrl`) — same Apply pattern as
-// shareBaseUrl but WITHOUT the different-hostname restriction: /peer/ is a
-// same-origin carve-out, so the working origin is a perfectly fine value.
-const peerBaseUrlInput = ref('')
 const peerBaseUrlInputRef = ref(null)
-const peerBaseUrlError = ref('')
-const peerBaseUrlWarning = ref('')
-const peerBaseUrlNormalized = computed(() => normalizedInputValue(peerBaseUrlInput.value))
-const peerBaseUrlModified = computed(() => peerBaseUrlNormalized.value !== (store.getPeerBaseUrl || ''))
-const peerBaseUrlApplyIcon = computed(() => (peerBaseUrlModified.value ? 'triangle-exclamation' : 'check'))
+const showShareManager = ref(false)
 
 // Display name advertised to peers in handshakes; empty falls back to the
 // hostname of peerBaseUrl (server-side).
@@ -847,160 +825,10 @@ function onWaBrandChange(event) {
     store.setWaBrand(event.target.value)
 }
 
-const pendingOriginWrites = new Map()
-
-function onPublicBaseUrlInputChange(event) {
-    discardOriginSettingWrites(pendingOriginWrites, 'publicBaseUrl')
-    publicBaseUrlInput.value = event.target.value
-    publicBaseUrlError.value = ''
-}
-
-function onShareBaseUrlInputChange(event) {
-    discardOriginSettingWrites(pendingOriginWrites, 'shareBaseUrl')
-    shareBaseUrlInput.value = event.target.value
-    shareBaseUrlError.value = ''
-}
-
-function onPeerBaseUrlInputChange(event) {
-    discardOriginSettingWrites(pendingOriginWrites, 'peerBaseUrl')
-    peerBaseUrlInput.value = event.target.value
-    peerBaseUrlError.value = ''
-    peerBaseUrlWarning.value = ''
-}
-
-const originErrorRefs = {
-    publicBaseUrl: publicBaseUrlError,
-    shareBaseUrl: shareBaseUrlError,
-    peerBaseUrl: peerBaseUrlError,
-}
-
-const originInputRefs = {
-    publicBaseUrl: publicBaseUrlInput,
-    shareBaseUrl: shareBaseUrlInput,
-    peerBaseUrl: peerBaseUrlInput,
-}
-
-// Two distinct failures, two distinct messages. A refused send never left the
-// browser, so "try again" is the whole truth. A send followed by a dropped
-// connection may well have been applied server-side — claiming otherwise would
-// be wrong half the time.
-const NOT_CONNECTED_ERROR = 'Not connected to the server — try again.'
-const CONNECTION_LOST_ERROR = 'Connection lost — this change may not have been saved. '
-    + 'Check after reconnecting.'
-
-function setOriginError(field, errors) {
-    originErrorRefs[field].value = originSettingErrorMessage(errors, field, publicOriginErrorMessage)
-}
-
-async function applyOriginSetting(field, inputRef) {
-    originErrorRefs[field].value = ''
-    if (field === 'peerBaseUrl') peerBaseUrlWarning.value = ''
-    const result = validateOriginSetting({
-        field,
-        input: inputRef.value,
-        stored: {
-            publicBaseUrl: store.getPublicBaseUrl || '',
-            shareBaseUrl: store.getShareBaseUrl || '',
-            peerBaseUrl: store.getPeerBaseUrl || '',
-        },
-        locationHostname: window.location.hostname,
-    })
-    // Before the early return below: the warning describes the value the user
-    // is applying, so a no-op Apply on an already-stored plain-HTTP address
-    // must keep showing it instead of silently clearing it.
-    if (result.warning === 'http') {
-        peerBaseUrlWarning.value = 'Plain HTTP — tokens travel unencrypted. HTTPS is strongly recommended.'
-    }
-    setOriginError(field, result.errors)
-    if (result.errors.length || !Object.keys(result.patch).length) return
-    const value = result.patch[field]
-    const requestId = generateUUID()
-    pendingOriginWrites.set(requestId, { field, input: inputRef.value })
-    if (!await store.sendOriginSetting(field, value, requestId)) {
-        const pending = pendingOriginWrites.get(requestId)
-        pendingOriginWrites.delete(requestId)
-        if (pending && inputRef.value === pending.input) {
-            originErrorRefs[field].value = NOT_CONNECTED_ERROR
-        }
-    }
-}
-
-function onPublicBaseUrlApply() {
-    applyOriginSetting('publicBaseUrl', publicBaseUrlInput)
-}
-
-function onShareBaseUrlApply() {
-    applyOriginSetting('shareBaseUrl', shareBaseUrlInput)
-}
-
-function onPeerBaseUrlApply() {
-    applyOriginSetting('peerBaseUrl', peerBaseUrlInput)
-}
-
-function onOriginSettingsResult(event) {
-    const payload = event.detail
-    const pending = pendingOriginWrites.get(payload?.request_id)
-    if (!pending) return
-    const result = resolveOriginSettingResult(
-        pendingOriginWrites, payload, originInputRefs[pending.field].value,
-    )
-    if (!result) return
-    if (result.status === 'accepted') {
-        originErrorRefs[result.field].value = ''
-        originInputRefs[result.field].value = result.value
-        return
-    }
-    setOriginError(result.field, result.errors)
-}
-
-onMounted(() => {
-    window.addEventListener('twicc:synced-settings-result', onOriginSettingsResult)
-})
-
-onBeforeUnmount(() => {
-    window.removeEventListener('twicc:synced-settings-result', onOriginSettingsResult)
-    pendingOriginWrites.clear()
-})
-
-// Broadcasts update the store. They do not resolve correlated writes.
-function refreshOriginField(inputRef, value, oldValue) {
-    inputRef.value = refreshOriginInput(inputRef.value, oldValue, value)
-}
-
-watch(() => store.getPublicBaseUrl, (value, oldValue) => {
-    refreshOriginField(publicBaseUrlInput, value, oldValue)
-})
-watch(() => store.getShareBaseUrl, (value, oldValue) => {
-    refreshOriginField(shareBaseUrlInput, value, oldValue)
-})
-watch(() => store.getPeerBaseUrl, (value, oldValue) => {
-    refreshOriginField(peerBaseUrlInput, value, oldValue)
-})
-watch(() => dataStore.wsConnected, connected => {
-    if (connected) return
-    // The result of an in-flight Apply cannot arrive on the replacement socket.
-    // Report it per field instead of dropping the write silently. Same guard as
-    // everywhere else: never write over a field the user retyped since Apply.
-    for (const { field, input } of pendingOriginWrites.values()) {
-        if (originInputRefs[field].value === input) {
-            originErrorRefs[field].value = CONNECTION_LOST_ERROR
-        }
-    }
-    pendingOriginWrites.clear()
-})
-
-// One-click prefill from the External address, when it is usable.
-const canPrefillPeerBaseUrl = computed(() => {
-    const pub = usablePublicOrigin(store.getPublicBaseUrl)
-    if (!pub) return false
-    return pub !== peerBaseUrlNormalized.value
-})
-
-function prefillPeerBaseUrlFromPublic() {
-    peerBaseUrlInput.value = usablePublicOrigin(store.getPublicBaseUrl)
-    peerBaseUrlError.value = ''
-    peerBaseUrlWarning.value = ''
-}
+// The origin form subscribes to the correlated-result event itself; the
+// component only owns the lifecycle.
+onMounted(startOriginSettingsForm)
+onBeforeUnmount(stopOriginSettingsForm)
 
 function openPeersManager() {
     window.dispatchEvent(new CustomEvent('twicc:open-peers-manager'))
@@ -1316,10 +1144,8 @@ function onPopoverShow() {
     // (General is the default section, so selectSection('general') may not fire
     // on open).
     worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
-    publicBaseUrlInput.value = store.getPublicBaseUrl || ''
-    shareBaseUrlInput.value = store.getShareBaseUrl || ''
-    publicBaseUrlError.value = storedPublicOriginError(publicBaseUrlInput.value)
-    shareBaseUrlError.value = storedPublicOriginError(shareBaseUrlInput.value)
+    seedOriginField('publicBaseUrl')
+    seedOriginField('shareBaseUrl')
     if (activeSection.value === 'notifications') {
         nextTick(() => notificationSettingsRef.value?.sync())
     }
