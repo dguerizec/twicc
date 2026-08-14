@@ -242,9 +242,42 @@ TEMPLATES = [
 
 ASGI_APPLICATION = "twicc.asgi.application"
 
+# ``CONFIG`` is handed to the backend as keyword arguments
+# (``channels.layers.ChannelLayerManager._make_backend``), so these are the
+# ``InMemoryChannelLayer.__init__`` parameters. The library defaults
+# (capacity 100, expiry 60) target the generic case — many clients, small
+# messages. TwiCC is the opposite: a handful of browsers receiving large
+# payloads (``session_items_added`` carries full item content) plus one
+# ``stream_block_delta`` per streamed token, from every live agent at once.
+#
+# Both values guard the same per-consumer queue, and both discard silently:
+#
+# - ``capacity`` — queue depth. ``group_send`` swallows ``ChannelFull``, so a
+#   client that cannot drain fast enough loses individual frames with no
+#   error anywhere. At the default 100 that is barely a second of buffer
+#   under parallel agent streaming; a lost ``session_removed`` leaves a
+#   hidden session visible until the page is reloaded.
+# - ``expiry`` — per-message TTL. A message older than this is dropped AND
+#   ``_clean_expired`` calls ``_remove_from_groups``, which unsubscribes the
+#   channel from *every* group. The client then receives nothing at all,
+#   socket still open, until it reconnects. Raising ``capacity`` alone makes
+#   that worse: a deeper queue holds messages longer, so more of them reach
+#   the TTL. The two must move together.
+#
+# Memory stays bounded: the queue is per client and holds a deepcopy of each
+# message, so the cost is roughly clients x capacity x message size — a few MB
+# at the observed ~4 KB average.
+#
+# Do NOT add ``channel_capacity`` here: ``InMemoryChannelLayer`` stores it raw
+# and ``get_capacity`` iterates it as ``(pattern, capacity)`` pairs, while
+# ``compile_capacities`` is never called — a plain dict breaks every send.
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer"
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+        "CONFIG": {
+            "capacity": 1000,
+            "expiry": 300,
+        },
     }
 }
 
