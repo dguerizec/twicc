@@ -1,7 +1,11 @@
 # Peer Origin Routing — deferred follow-ups
 
-**Status:** every actionable item is closed (see **Resolved**) and every performance item is
-decided against (see **Do NOT act**). ONE entry remains, blocked on missing information.
+**Status:** CLOSED. Every actionable item is done (see **Resolved**) and every performance item is
+decided against (see **Do NOT act**). Nothing is open.
+
+**One lesson worth keeping:** an entry here paraphrased a finding instead of quoting it, and the
+paraphrase named the wrong file. The work went to the wrong place, and the real defect stayed open
+under a "resolved" label. Quote a finding verbatim, or record where its text lives.
 **Source:** the implementation of `docs/plans/2026-08-13-peer-origin-routing-plan.md`,
 commit range `3584afc8..6a478a4c` on branch `peer-system`
 
@@ -14,11 +18,18 @@ Items triaged as **non-defects** are recorded at the end, so nobody re-opens the
 
 ---
 
-## Open — blocked on missing information
+## Where the review findings live
 
-- **A Settings hint's copy** was flagged by the final review as improvable. The record does not
-  say which hint, nor what the objection was. Unactionable until someone recovers both. If nobody
-  can, close it.
+The review workspace `.superpowers/sdd/2026-08-13-peer-origin-routing-plan/` was deleted with the
+plan workspace, and the reviewer was a subagent, not a session — so it has no history of its own.
+Two things survive:
+
+- the SDD ledger, `/home/twidi/.twicc/scratch/922032b5-292f-45e8-9ac7-381e414fefd5/`
+  `sdd-ledger-peer-origin-routing.md` — decisions and rulings only, no finding text;
+- the reviewer's FULL report, which passed through the implementer session
+  `922032b5-292f-45e8-9ac7-381e414fefd5` and is intact in its JSONL (line 323).
+
+Anything that transited through a session is recoverable; a workspace on disk is not.
 
 ## Do NOT act on these
 
@@ -95,9 +106,24 @@ existing or added test, and carried no behavioural risk.
 - **The event name `twicc:origin-settings-result`** became `twicc:synced-settings-result`: the
   frame carries the result of ANY correlated synced-settings write, not only an origin. The
   implementation plan keeps the old name — it is a historical record.
-- **IPv6 hostname bracketing.** `own_display_name()` returned the bare canonical hostname, so an
-  IPv6 peer address advertised itself as `::1` instead of `[::1]`. It was not only a hint: the
-  value goes out in every handshake.
+- **IPv6 bracketing broke the Share-vs-current-host rule** (final-review Minor 8, the entry this
+  list first recorded as "IPv6 hostname-hint bracketing in a Settings hint" — a lossy paraphrase
+  that sent the first attempt at the wrong file; see the correction below).
+  `window.location.hostname` brackets an IPv6 literal (`[::1]`), the parsed hint carries the bare
+  hostname (`::1`, the shape Python's `PublicOriginResult.hostname` also uses). Compared as-is in
+  `validateOriginSetting`, the rule could NEVER match on an IPv6 host, so a Share host equal to the
+  current one slipped past the client check. Fixed by stripping the brackets on the browser value
+  only — the bare form stays the contract on both sides. The backend Share/External conflict
+  already caught the case whenever External was set, which is why it was invisible.
+- **`own_display_name()` returned an unbracketed IPv6 hostname.** A separate, genuine defect found
+  while acting on the paraphrase above: an IPv6 peer address advertised itself as `::1` instead of
+  `[::1]`, and the value goes out in every handshake. Unrelated to Minor 8 — recorded on its own so
+  the two are not confused again.
+- **The "Your address" hint never mentioned routing** (final-review Minor 4). It covered HTTPS and
+  machine-to-machine reachability, but not what the value DOES: a different address from External
+  serves peer traffic only, the same address keeps the whole app reachable there. Nothing else
+  taught that consequence once `peers.md` was the only other surface. One sentence added, as the
+  reviewer asked.
 - **An exact no-op Apply cleared the plain-HTTP Peer warning with no other feedback.** The warning
   now precedes the empty-patch early return, so it describes the value being applied.
 - **A dropped connection discarded an in-flight Apply in silence.** The `wsConnected` watcher now

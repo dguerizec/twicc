@@ -52,6 +52,15 @@ export function resolveOriginSettingResult(pendingWrites, payload, currentInput)
     }
 }
 
+// `window.location.hostname` brackets an IPv6 literal (`[::1]`), while the
+// parsed hint is the bare hostname (`::1`) — the same shape Python's
+// `PublicOriginResult.hostname` carries. Compared as-is, the Share-vs-current
+// host rule could never match on an IPv6 host. Strip the brackets on the
+// browser side only: the bare form stays the contract.
+function bareHostname(value) {
+    return value.toLowerCase().replace(/^\[(.*)\]$/, '$1')
+}
+
 export function validateOriginSetting({ field, input, stored, locationHostname }) {
     if (!ORIGIN_SETTING_KEYS.includes(field)) {
         return { errors: [{ field, code: 'unknown_field' }], warning: null, patch: {} }
@@ -61,7 +70,7 @@ export function validateOriginSetting({ field, input, stored, locationHostname }
         return { errors: [{ field, code: checked.error }], warning: null, patch: {} }
     }
     if (field === 'shareBaseUrl' && checked.hostname && locationHostname
-            && checked.hostname === locationHostname.toLowerCase()) {
+            && checked.hostname === bareHostname(locationHostname)) {
         return { errors: [{ field, code: 'location_hostname' }], warning: null, patch: {} }
     }
     const warning = field === 'peerBaseUrl' && checked.scheme === 'http' ? 'http' : null

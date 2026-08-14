@@ -1628,6 +1628,8 @@ function onChangelogClose() {
                         </wa-button>
                         <span class="setting-group-hint">
                             Your address, advertised to peers. Empty disables peer messaging.
+                            A different address from External serves peer traffic only; the same
+                            address keeps the whole app reachable there.
                             HTTPS strongly recommended. The host must be reachable
                             machine-to-machine: a tunnel-level access gate (e.g. Cloudflare
                             Access asking for an email or Google account) blocks peer calls —

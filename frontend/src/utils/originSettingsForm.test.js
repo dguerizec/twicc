@@ -276,6 +276,36 @@ test('the Share field retains its active-location rule', () => {
     assert.deepEqual(result.patch, {})
 })
 
+test('the active-location rule also catches an IPv6 host', () => {
+    // The browser brackets an IPv6 literal, the parsed hint does not. Compared
+    // as-is the rule could never match, so a Share host equal to the current
+    // one slipped through client-side.
+    for (const [input, current] of [
+        ['https://[::1]:8443', '[::1]'],
+        ['https://[0:0:0:0:0:0:0:1]', '[::1]'],
+        ['https://[2001:DB8::1]', '[2001:db8::1]'],
+    ]) {
+        const result = validateOriginSetting({
+            field: 'shareBaseUrl',
+            input,
+            stored: { publicBaseUrl: '', shareBaseUrl: '', peerBaseUrl: '' },
+            locationHostname: current,
+        })
+        assert.deepEqual(result.errors, [{ field: 'shareBaseUrl', code: 'location_hostname' }], input)
+    }
+})
+
+test('the active-location rule still spares a different IPv6 host', () => {
+    const result = validateOriginSetting({
+        field: 'shareBaseUrl',
+        input: 'https://[2001:db8::2]',
+        stored: { publicBaseUrl: '', shareBaseUrl: '', peerBaseUrl: '' },
+        locationHostname: '[2001:db8::1]',
+    })
+    assert.deepEqual(result.errors, [])
+    assert.deepEqual(result.patch, { shareBaseUrl: 'https://[2001:db8::2]' })
+})
+
 test('plain HTTP warns only for Peer and still creates the raw patch', () => {
     const result = validateOriginSetting({
         field: 'peerBaseUrl',
