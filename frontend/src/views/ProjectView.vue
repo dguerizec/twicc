@@ -1340,11 +1340,17 @@ const MOBILE_BREAKPOINT = 640
 const isNarrowViewport = useMediaQuery(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
 const usageTooltipPlacement = computed(() => (isNarrowViewport.value ? 'top-end' : 'right'))
 
-// Tooltip trigger: desktop keeps hover/focus; on mobile use click only, so a tap
-// toggles the tooltip (re-tapping the same row hides it, freeing the view to reach
-// another row). Mixing hover with click on touch would race (synthetic mouseover
-// re-shows what the click just hid), hence click-only on narrow viewports.
-const usageTooltipTrigger = computed(() => (isNarrowViewport.value ? 'click' : 'hover focus'))
+// Tooltip trigger: a pointer that hovers keeps hover/focus; a touch pointer uses
+// click only, so a tap toggles the tooltip (re-tapping the same row hides it,
+// freeing the view to reach another row). Mixing hover with click on touch would
+// race (synthetic mouseover re-shows what the click just hid), hence click-only.
+//
+// The condition is the pointer's hover capability, NOT the viewport width used
+// just above for the placement: a wide touch screen (unfolded foldable, tablet)
+// would otherwise keep the hover trigger, where the tap-emulated mouseover opens
+// the tooltip and nothing ever closes it — the sticky :hover stays on the anchor,
+// so wa-tooltip's mouseout handler returns before it schedules the hide.
+const usageTooltipTrigger = computed(() => (settingsStore.isTouchDevice ? 'click' : 'hover focus'))
 
 // Load sidebar state from localStorage
 function loadSidebarState() {
@@ -2347,7 +2353,7 @@ function updateSidebarClosedClass(closed) {
                             <span class="usage-provider-name">{{ currentUsageProviderLabel }}</span>
                             <wa-icon v-if="hasMultipleUsageProviders" class="usage-switch" name="repeat"></wa-icon>
                         </div>
-                        <AppTooltip for="usage-provider-group" hoist force>
+                        <AppTooltip for="usage-provider-group" hoist>
                             <div class="usage-provider-tooltip">
                                 <span class="usage-provider-tooltip-name">{{ currentUsageProviderLabel }} usage</span>
                                 <span v-if="hasMultipleUsageProviders" class="usage-provider-tooltip-hint">Click to switch to the next provider</span>
@@ -3233,8 +3239,8 @@ wa-dropdown-item:hover .row-menu-trigger,
  * keeps `anchor:matches(':hover')` true across the gap (the condition wa-tooltip
  * re-checks on mouseout), independent of that coordinate math. The strip is
  * transparent, sits beside the row (never over it), and stays below the top-layer
- * tooltip, so it never blocks the buttons. (On mobile the tooltip is re-placed
- * above the row and shown on tap, not hover, so this bridge is a no-op there.)
+ * tooltip, so it never blocks the buttons. (On a touch device the tooltip is shown
+ * on tap, not on hover, so this bridge is a no-op there.)
  *
  * This strip only covers the row's own height, so it misses a diagonal move
  * towards a button further down a tall tooltip. AppTooltip's `interactive` prop

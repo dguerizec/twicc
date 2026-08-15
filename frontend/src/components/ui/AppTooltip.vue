@@ -87,18 +87,77 @@ function clearPendingTimer(el) {
     }
 }
 
+/**
+ * Light-dismiss for click-triggered tooltips.
+ *
+ * wa-tooltip has no backdrop and no outside-click handling: once open, it only
+ * closes on a second click on its own anchor, on Escape, or — for interactive
+ * ones — when the next tooltip opens. On a touch device that leaves a tapped
+ * tooltip on screen with no obvious way out, since the pointer never leaves the
+ * anchor. So while a click-triggered tooltip is open, watch the document and
+ * close it on the first pointer press outside.
+ *
+ * `pointerdown` in capture covers touch and mouse alike, and still fires when
+ * the target swallows the click. Two exclusions are mandatory:
+ *
+ *   - the anchor, because its pointerdown precedes the click that toggles the
+ *     tooltip: closing here would let that click re-open it, so the second tap
+ *     would never close anything;
+ *   - the tooltip itself, because it can hold controls the user must reach
+ *     (buttons, links) — see the `interactive` prop.
+ *
+ * composedPath() is required for both: the tooltip renders its content in a
+ * shadow root, so event.target alone never resolves to it.
+ */
+function handleOutsidePointerDown(event) {
+    const el = tooltipEl.value
+    if (!el) {
+        return
+    }
+    const path = event.composedPath()
+    if (path.includes(el) || (el.anchor && path.includes(el.anchor))) {
+        return
+    }
+    clearPendingTimer(el)
+    el.hide()
+}
+
+let watchingOutside = false
+
+function startOutsideWatch() {
+    // Read the trigger off the element: it can change at runtime (the sidebar
+    // quota tooltips swap hover for click on touch devices).
+    const trigger = tooltipEl.value?.trigger
+    if (watchingOutside || !trigger?.split(' ').includes('click')) {
+        return
+    }
+    document.addEventListener('pointerdown', handleOutsidePointerDown, { capture: true })
+    watchingOutside = true
+}
+
+function stopOutsideWatch() {
+    if (!watchingOutside) {
+        return
+    }
+    document.removeEventListener('pointerdown', handleOutsidePointerDown, { capture: true })
+    watchingOutside = false
+}
+
 function handleShow(event) {
     // wa-show bubbles and is composed: ignore the ones fired by nested wa-*.
     if (event.target !== tooltipEl.value) {
         return
     }
-    for (const other of [...openInteractiveTooltips]) {
-        if (other !== tooltipEl.value) {
-            clearPendingTimer(other)
-            other.hide()
+    if (props.interactive) {
+        for (const other of [...openInteractiveTooltips]) {
+            if (other !== tooltipEl.value) {
+                clearPendingTimer(other)
+                other.hide()
+            }
         }
+        openInteractiveTooltips.add(tooltipEl.value)
     }
-    openInteractiveTooltips.add(tooltipEl.value)
+    startOutsideWatch()
 }
 
 function handleAfterHide(event) {
@@ -106,6 +165,7 @@ function handleAfterHide(event) {
         return
     }
     openInteractiveTooltips.delete(tooltipEl.value)
+    stopOutsideWatch()
 }
 
 let listeningEl = null
@@ -118,15 +178,21 @@ function stopListening() {
     listeningEl.removeEventListener('wa-show', handleShow)
     listeningEl.removeEventListener('wa-after-hide', handleAfterHide)
     openInteractiveTooltips.delete(listeningEl)
+    stopOutsideWatch()
     listeningEl = null
 }
 
+// The show/hide listeners are bound for every tooltip — the outside dismiss is
+// keyed on the trigger, not on `interactive` — while the grace period the
+// pointer needs to reach the tooltip only concerns the interactive ones.
 watch([tooltipEl, () => props.interactive], ([el, interactive]) => {
     stopListening()
-    if (!el || !interactive) {
+    if (!el) {
         return
     }
-    el.addEventListener('mouseover', cancelPendingHide)
+    if (interactive) {
+        el.addEventListener('mouseover', cancelPendingHide)
+    }
     el.addEventListener('wa-show', handleShow)
     el.addEventListener('wa-after-hide', handleAfterHide)
     listeningEl = el
