@@ -871,27 +871,29 @@ function onTabShow(event) {
     <wa-dialog ref="dialogRef" label="Usage History" class="usage-graph-dialog" without-header>
         <div class="usage-graph-content">
             <div class="usage-graph-header">
-                <h2 class="usage-graph-title">
-                    <wa-icon name="chart-line"></wa-icon>
-                    Usage History
-                </h2>
-                <wa-select
-                    v-if="showProviderSelect"
-                    class="usage-graph-provider-select"
-                    size="small"
-                    :value.prop="selectedProvider"
-                    @change="onProviderChange"
-                >
-                    <ProviderIcon slot="start" :provider="selectedProvider" />
-                    <wa-option
-                        v-for="option in providerOptions"
-                        :key="option.value"
-                        :value="option.value"
+                <div class="usage-graph-header-left">
+                    <h2 class="usage-graph-title">
+                        <wa-icon name="chart-line"></wa-icon>
+                        Usage History
+                    </h2>
+                    <wa-select
+                        v-if="showProviderSelect"
+                        class="usage-graph-provider-select"
+                        size="small"
+                        :value.prop="selectedProvider"
+                        @change="onProviderChange"
                     >
-                        <ProviderIcon :provider="option.value" class="provider-option-icon" />
-                        {{ option.label }}
-                    </wa-option>
-                </wa-select>
+                        <ProviderIcon slot="start" :provider="selectedProvider" />
+                        <wa-option
+                            v-for="option in providerOptions"
+                            :key="option.value"
+                            :value="option.value"
+                        >
+                            <ProviderIcon :provider="option.value" class="provider-option-icon" />
+                            {{ option.label }}
+                        </wa-option>
+                    </wa-select>
+                </div>
                 <div class="usage-graph-range-control">
                     <span class="usage-graph-range-label">{{ currentRange.label }}</span>
                     <wa-slider
@@ -1166,10 +1168,19 @@ function onTabShow(event) {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
+    /* Right-align every wrapped line: only the left group carries an auto margin. */
+    justify-content: flex-end;
     padding: var(--wa-space-m) var(--wa-space-l);
     border-bottom: 1px solid var(--wa-color-border);
     gap: var(--wa-space-m);
+}
+
+.usage-graph-header-left {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--wa-space-m);
+    margin-inline-end: auto;
 }
 
 .usage-graph-title {
@@ -1195,8 +1206,6 @@ function onTabShow(event) {
     display: flex;
     align-items: center;
     gap: var(--wa-space-s);
-    flex: 1;
-    justify-content: center;
 }
 
 .usage-graph-range-label {
