@@ -1,6 +1,8 @@
 <script setup>
 import { computed } from 'vue'
 import { SYNTHETIC_ITEM } from '../../../../../constants'
+import { useDataStore } from '../../../../../stores/data'
+import { emptyAssistantMessageMarkdown } from '../../../../../utils/emptyMessage'
 import { interAgentTaskMarkdown } from '../../../../../providers/codex/interAgentTask'
 import UserMessage from './UserMessage.vue'
 import AssistantMessage from './AssistantMessage.vue'
@@ -80,6 +82,18 @@ const text = computed(() => {
     return props.data?.payload?.message || ''
 })
 
+const dataStore = useDataStore()
+
+// Codex sometimes ends a turn with an ``agent_message`` carrying an empty
+// ``message``. The line is a real ASSISTANT_MESSAGE, so it gets a bubble —
+// empty, which reads as a display bug. Show a replacement text instead.
+// Streaming placeholders are excluded: their text is legitimately empty
+// until the first delta lands.
+const assistantText = computed(() => {
+    if (isStreamingBlock.value || text.value.trim()) return text.value
+    return emptyAssistantMessageMarkdown(dataStore.getSession(props.sessionId)?.provider)
+})
+
 // A subagent's opening prompt (Codex multi-agent v2) is a ``NEW_TASK``
 // inter-agent message, not an ``event_msg.user_message``: the text sits in
 // a content-block array and the payload itself is usually encrypted. The
@@ -124,7 +138,7 @@ const images = computed(() => {
     <UserMessage v-else-if="kind === 'user_message'" :text="interAgentTask ?? text" :images="images" />
     <AssistantMessage
         v-else-if="kind === 'assistant_message'"
-        :text="text"
+        :text="assistantText"
         :session-id="sessionId"
         :line-num="lineNum"
     />
