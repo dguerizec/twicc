@@ -524,7 +524,24 @@ class BaseAgent:
             kill_reason=self.kill_reason,
             pending_requests=self.pending_requests,
             stopping=self._stop_requested,
+            label=self.current_status_label(),
         )
+
+    def current_status_label(self) -> str | None:
+        """Return the status-line override a fresh client must show, or ``None``.
+
+        Recomputed on every call from whatever the agent is waiting on right
+        now, so a snapshot never announces a stale count — two subagents may
+        have become one while the user was talking to the agent. Returns
+        ``None`` whenever the agent's own live activity is the truth (it is
+        working, or nothing holds it), which is the arbitration rule: the
+        background reason only surfaces when there is nothing else to show.
+
+        Default: no override. Providers with holdable turns override it, and
+        broadcast the same value through :meth:`_broadcast_process_label` when
+        it changes — one source, computed the same way on both paths.
+        """
+        return None
 
     def mark_stopping(self) -> bool:
         """Flag that a stop has been requested so ``get_info`` reports it.

@@ -126,6 +126,18 @@ class AgentInfo(NamedTuple):
     # a WS reconnect or page refresh. In-memory only — a backend restart kills
     # or re-adopts the agent, so there is nothing to persist.
     stopping: bool = False
+    # Status-line override the front must show *instead of* a bare "thinking",
+    # or None when the agent's own live activity speaks for itself. Set only
+    # while a turn ended held open by something the agent is waiting on
+    # ("waiting for 2 subagents", "monitoring", "waiting for scheduled
+    # wakeup (14:05)", "compacting"). Recomputed on every read from the live
+    # hold reasons — never a stored copy, which would keep announcing two
+    # subagents once only one is left. Travels on the live ``process_state``
+    # AND in the ``active_processes`` snapshot, for the same reason as
+    # ``stopping``: the ``process_label`` message is a one-shot, and a client
+    # that connects (or reconnects, or reloads) afterwards would otherwise
+    # see a session working on nothing, with no explanation.
+    label: str | None = None
 
     @property
     def memory_rss_human(self) -> str | None:
@@ -173,4 +185,6 @@ def serialize_agent_info(info: AgentInfo) -> dict:
         data["extra"] = info.extra
     if info.stopping:
         data["stopping"] = True
+    if info.label:
+        data["label"] = info.label
     return data

@@ -4458,17 +4458,20 @@ export const useDataStore = defineStore('data', {
             // optimistic local flag so neither a not-yet-confirmed click nor a
             // pre-kill broadcast can drop it. It only clears on `dead` below.
             const wasStopping = this.processStates[sessionId]?.stopping === true
-            // Same idea for the `process_label` override (WorkingAssistantMessage's
-            // status text: "compacting", "waiting for 2 subagents", …). It arrives
-            // on its own message and lives only on this object, which we rebuild
-            // from scratch below — so any `process_state` would silently wipe it.
-            // Wiping is the intended behaviour on a real transition (that IS how a
-            // label disappears at turn end — no agent-side cleanup exists for it),
-            // but a same-state refresh is not a transition: a pending request
-            // landing, a memory or title update, a `stopping` flag all re-broadcast
-            // `assistant_turn` mid-work and would drop a label the agent still
-            // considers current (Claude Code only recovers on its next subagent
-            // completion; Codex's wait label has no second posting at all).
+            // Status-line override (WorkingAssistantMessage's text: "compacting",
+            // "waiting for 2 subagents", …). The backend recomputes it on every
+            // snapshot, so when it says something that value wins — including
+            // right after a reconnect or a page load, where the one-shot
+            // `process_label` message that carried it is long gone.
+            //
+            // It is omitted from the payload when there is none, which is also
+            // what a plain state refresh looks like — so fall back to the label
+            // already on screen when the state itself did not change. Wiping is
+            // the intended behaviour on a real transition (that IS how a label
+            // disappears at turn end), but a pending request landing, a memory
+            // or title update, a `stopping` flag all re-broadcast the same state
+            // mid-work and must not drop a label the agent still considers
+            // current.
             const keptLabel = state === previousState
                 ? this.processStates[sessionId]?.label ?? null
                 : null
@@ -4506,9 +4509,9 @@ export const useDataStore = defineStore('data', {
                     lastStartedToolId: null,
                     // Backend truth OR optimistic local flag (see `wasStopping`).
                     stopping: extra.stopping === true || wasStopping,
-                    // Survives a same-state refresh, cleared by a transition
-                    // (see `keptLabel`).
-                    label: keptLabel,
+                    // Backend truth when it carries one, else the label already
+                    // on screen (see `keptLabel`).
+                    label: extra.label ?? keptLabel,
                 }
 
                 // Auto-unarchive: running and archived are mutually exclusive.
@@ -4593,6 +4596,11 @@ export const useDataStore = defineStore('data', {
                         // Restore an in-flight stop from the snapshot so the
                         // spinner survives this (re)connect / page refresh.
                         stopping: p.stopping === true,
+                        // Same for the status-line override: the agent
+                        // recomputes it for every snapshot, so a client that
+                        // arrives while a turn is held for background work
+                        // learns why instead of showing a bare "thinking".
+                        label: p.label || null,
                     }
 
                     // Auto-unarchive: running and archived are mutually exclusive.

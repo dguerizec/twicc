@@ -1520,25 +1520,46 @@ class ClaudeCodeAgent(BaseAgent):
             if self._waiting_label_active:
                 await self._refresh_waiting_label()
 
+    def _waiting_label_text(self) -> str | None:
+        """Compose the "waiting" label from what holds the turn right now.
+
+        Live background agents win ("waiting for N subagents"), then live
+        Monitors ("monitoring"); with neither left but a pending
+        ScheduleWakeup it becomes "waiting for scheduled wakeup (HH:MM)".
+        ``None`` when nothing holds.
+
+        Pure and stateless on purpose: both the broadcast path
+        (:meth:`_refresh_waiting_label`) and the snapshot path
+        (:meth:`current_status_label`) call it, so a client that connects
+        late reads the same count a client that was there sees.
+        """
+        count = len(self._live_background_tasks)
+        if count > 0:
+            return f"waiting for {count} subagent{'s' if count > 1 else ''}"
+        if self._live_monitor_tasks:
+            return "monitoring"
+        if self._has_pending_wakeup():
+            return f"waiting for scheduled wakeup ({self._format_wakeup_time()})"
+        return None
+
+    def current_status_label(self) -> str | None:
+        # Only while a turn is actually held: the moment the agent works
+        # again, its own activity is the truth and the label must not
+        # override it (``_clear_waiting_label`` drops the flag there).
+        if not self._waiting_label_active:
+            return None
+        return self._waiting_label_text()
+
     async def _refresh_waiting_label(self) -> None:
         """Broadcast/refresh the "waiting" process label held in ASSISTANT_TURN.
 
         Shown by ``WorkingAssistantMessage`` instead of the bare "thinking"
         while a turn ended held in ASSISTANT_TURN (see the ResultMessage
-        handler). Live background agents win the label ("waiting for N
-        subagents"), then live Monitors ("monitoring"); with neither left but
-        a pending ScheduleWakeup it becomes "waiting for scheduled wakeup
-        (HH:MM)". Falls back to clearing when nothing holds — the activity that
-        follows repaints the real status.
+        handler). Falls back to clearing when nothing holds — the activity
+        that follows repaints the real status.
         """
-        count = len(self._live_background_tasks)
-        if count > 0:
-            label = f"waiting for {count} subagent{'s' if count > 1 else ''}"
-        elif self._live_monitor_tasks:
-            label = "monitoring"
-        elif self._has_pending_wakeup():
-            label = f"waiting for scheduled wakeup ({self._format_wakeup_time()})"
-        else:
+        label = self._waiting_label_text()
+        if label is None:
             await self._clear_waiting_label()
             return
         self._waiting_label_active = True

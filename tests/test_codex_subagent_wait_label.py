@@ -54,6 +54,9 @@ def _agent(stopped: list[str] | None = None) -> CodexAgent:
     agent.session_id = "session-parent"
     agent._live_subagents = {}
     agent._subagent_wait_label_active = False
+    # A manual /compact owns the status line while it runs, so the label
+    # composition consults it (see ``current_status_label``).
+    agent._manual_compaction = False
     agent._broadcast_process_label = AsyncMock()
     agent._prune_finished_subagents = AsyncMock(
         side_effect=lambda: [agent._live_subagents.pop(sid, None) for sid in (stopped or [])]
@@ -179,6 +182,7 @@ class TestPruningAgainstTheWatcher:
         agent.session_id = parent.id
         agent._live_subagents = {"child-done": "/root/a", "child-live": "/root/b"}
         agent._subagent_wait_label_active = False
+        agent._manual_compaction = False
         agent._broadcast_process_label = AsyncMock()
 
         asyncio.run(agent._refresh_subagent_wait_label())

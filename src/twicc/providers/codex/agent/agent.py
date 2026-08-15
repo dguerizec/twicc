@@ -919,14 +919,29 @@ class CodexAgent(BaseAgent):
         the label is cleared and the normal status takes over.
         """
         await self._prune_finished_subagents()
-        count = len(self._live_subagents)
-        if not count:
+        if not self._live_subagents:
             await self._clear_subagent_wait_label()
             return
         self._subagent_wait_label_active = True
-        await self._broadcast_process_label(
-            f"waiting for {count} subagent{'s' if count > 1 else ''}"
-        )
+        # Same composition as the snapshot path — one source, one wording.
+        label = self.current_status_label()
+        if label is not None:
+            await self._broadcast_process_label(label)
+
+    def current_status_label(self) -> str | None:
+        # Recomputed, never stored: the count is read off the live set at the
+        # moment a client asks. A manual /compact owns the line while it runs
+        # (its own synthetic turn), otherwise the label only exists while the
+        # agent blocks on ``wait_agent`` — any other moment, what Codex is
+        # doing speaks for itself.
+        if self._manual_compaction:
+            return "compacting"
+        if not self._subagent_wait_label_active:
+            return None
+        count = len(self._live_subagents)
+        if not count:
+            return None
+        return f"waiting for {count} subagent{'s' if count > 1 else ''}"
 
     async def _clear_subagent_wait_label(self) -> None:
         """Drop the waiting label if it is currently shown (no-op otherwise)."""
