@@ -405,7 +405,8 @@ async def apply_session_archived_change(
     2. Full-text search reindex (non-critical; logged on failure since the
        ``archived`` flag is denormalised into every indexed document).
     3. When ``archived`` flips to ``True``: kill the live agent
-       (``reason="archived"``) and tear down any tmux terminal attached to
+       (``reason="archived"``), drop the session's surviving DEAD
+       :class:`ProcessRun` rows, and tear down any tmux terminal attached to
        this session id.
 
     Does NOT broadcast ``session_updated``; the caller is responsible so
@@ -446,7 +447,52 @@ async def apply_session_archived_change(
     # Tear down anything tied to a "live" session when flipping to archived.
     if archived:
         await get_agent_manager_registry().kill_agent(session.id, reason="archived")
+        await _drop_dead_process_runs(session.id)
         await asyncio.to_thread(kill_all_tmux_terminals, f"s:{session.id}")
+
+
+async def _drop_dead_process_runs(session_id: str) -> None:
+    """Delete the session's DEAD :class:`ProcessRun` rows (crons cascade).
+
+    Archiving is a deliberate stop: nothing attached to the session may come
+    back to life. Killing the live agent covers the running case — the DEAD
+    transition drops its row, see
+    :meth:`ClaudeCodeHelpers.should_keep_dead_process_run`.
+
+    A session that was ALREADY dead needs this pass: Claude Code deliberately
+    keeps a DEAD row alive when a session died on its own with crons attached,
+    so that the runtime and boot-time restarts can honour them. Left in place,
+    the next TwiCC start would relaunch (and auto-unarchive) the session the
+    user just put away. Deleting the row cascades its :class:`SessionCron`
+    rows, which also drains the runtime restart loop — it re-reads the crons
+    from the DB on every attempt and stops when none are left.
+
+    Provider-agnostic: providers that do not keep DEAD rows (the default rule
+    deletes them on death) simply have nothing to delete here.
+    """
+    from twicc.agent import AgentState
+    from twicc.core.models import ProcessRun
+
+    try:
+        deleted, _ = await run_under_db_write_lock(
+            lambda: asyncio.to_thread(
+                lambda: ProcessRun.objects.filter(
+                    session_id=session_id, state=AgentState.DEAD.value
+                ).delete()
+            )
+        )
+    except Exception:
+        logger.warning(
+            "[apply_session_archived_change] failed to drop dead process runs for %s",
+            session_id, exc_info=True,
+        )
+        return
+
+    if deleted:
+        logger.info(
+            "[apply_session_archived_change] dropped %d dead process run(s) for %s",
+            deleted, session_id,
+        )
 
 
 async def update_session_archived_from_payload(payload: dict) -> UpdateSessionResult:

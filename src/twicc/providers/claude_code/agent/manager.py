@@ -10,7 +10,14 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.conf import settings
 
-from twicc.agent import AgentInfo, AgentState, BaseAgent, BaseAgentManager, SendDeliveryError
+from twicc.agent import (
+    DELIBERATE_STOP_REASONS,
+    AgentInfo,
+    AgentState,
+    BaseAgent,
+    BaseAgentManager,
+    SendDeliveryError,
+)
 from twicc.core.enums import Provider
 from twicc.providers.db_writer import run_under_db_write_lock
 
@@ -23,6 +30,17 @@ if TYPE_CHECKING:
     from twicc.providers.helpers import AgentSettings
 
 logger = logging.getLogger(__name__)
+
+# Deaths that must NOT trigger the runtime cron restart: every deliberate stop
+# (a human asked for it — see :data:`DELIBERATE_STOP_REASONS`) plus ``shutdown``
+# (TwiCC is going down; the boot-time restart takes over on the next start).
+#
+# Redundant with :meth:`ClaudeCodeHelpers.should_keep_dead_process_run`, which
+# already drops the ProcessRun row for the deliberate reasons and so leaves
+# ``agent.process_run`` at ``None`` here. Kept explicit anyway: the two rules
+# answer the same question ("may this session come back?") and must stay
+# aligned, whichever one is read first.
+_NO_CRON_RESTART_REASONS = DELIBERATE_STOP_REASONS | {"shutdown"}
 
 
 def _get_session_slug_sync(session_id: str) -> str | None:
@@ -833,15 +851,15 @@ class ClaudeCodeAgentManager(BaseAgentManager):
 
             clear_protected_title(agent.session_id)
 
-            # Auto-restart crons for non-manual, non-shutdown deaths.
+            # Auto-restart crons for deaths nobody asked for.
             # ``agent.process_run is not None`` ⟹ the helper kept the row,
             # which for Claude Code means "this run still has active crons
-            # to honour". Anything else (kept-then-deleted, manual stop,
+            # to honour". Anything else (kept-then-deleted, deliberate stop,
             # early death before USER_TURN) clears the attribute via the
             # base's :meth:`_persist_process_run_transition`.
             if (
                 agent.process_run is not None
-                and agent.kill_reason not in ("manual", "shutdown")
+                and agent.kill_reason not in _NO_CRON_RESTART_REASONS
                 and settings.CRON_AUTO_RESTART
                 and agent.session_id not in self._cron_restart_tasks
                 and self._stop_event is not None

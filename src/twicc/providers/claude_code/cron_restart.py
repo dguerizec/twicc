@@ -184,12 +184,17 @@ def _prepare_restarts() -> list[str]:
     helper deemed worth keeping (= rows that still have :class:`SessionCron`
     rows attached) survive on the CC slice.
 
-    The single remaining concern here is sessions whose JSONL was deleted
-    on disk between TwiCC instances. The boot cleanup keeps them because
-    their cron rows still exist; the per-session initial sync removes the
-    matching :class:`Session` row but doesn't know about ProcessRun, so we
-    catch that case here and delete the now-pointless :class:`ProcessRun`
-    (cascading its crons) before returning the surviving session ids.
+    Two concerns remain, both resolved by deleting the now-pointless
+    :class:`ProcessRun` (cascading its crons) instead of restarting:
+
+    - Sessions whose JSONL was deleted on disk between TwiCC instances. The
+      boot cleanup keeps them because their cron rows still exist; the
+      per-session initial sync removes the matching :class:`Session` row but
+      doesn't know about ProcessRun, so we catch that case here.
+    - Archived sessions. Archiving is a deliberate stop and drops these rows
+      itself (``core.services.session_update.apply_session_archived_change``),
+      so a surviving row means the archive predates that behaviour — never
+      resurrect a session the user put away.
     """
     from twicc.agent.states import AgentState
     from twicc.core.enums import Provider
@@ -205,11 +210,26 @@ def _prepare_restarts() -> list[str]:
     ):
         session_id = process_run.session_id
 
-        # Validate session exists (clean up if JSONL was deleted)
-        if not Session.objects.filter(id=session_id).exists():
+        # Validate the session exists (clean up if the JSONL was deleted) and
+        # is not archived.
+        archived = (
+            Session.objects
+            .filter(id=session_id)
+            .values_list("archived", flat=True)
+            .first()
+        )
+        if archived is None:
             process_run.delete()
             logger.warning(
                 "Session %s: not found in DB, deleted process run %s",
+                session_id, process_run.pk,
+            )
+            continue
+
+        if archived:
+            process_run.delete()
+            logger.info(
+                "Session %s: archived, deleted process run %s (crons dropped)",
                 session_id, process_run.pk,
             )
             continue

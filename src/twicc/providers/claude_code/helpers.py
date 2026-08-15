@@ -856,9 +856,14 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         Runtime shortcuts override the cron check when an explicit ``agent``
         context is supplied:
 
-        - ``kill_reason == "manual"`` — the user explicitly stopped the
-          session, we discard the row even if crons exist (no auto-restart
-          intended).
+        - ``kill_reason`` in :data:`~twicc.agent.states.DELIBERATE_STOP_REASONS`
+          — a human explicitly stopped the session (Stop, hard kill, or
+          archive, from the UI or the CLI/MCP). We discard the row even if
+          crons exist, so neither the runtime restart in
+          :meth:`ClaudeCodeAgentManager._on_state_change` nor the boot-time
+          one in :mod:`.cron_restart` can bring the session back. Deaths
+          nobody asked for (``shutdown``, ``apply-settings``, crashes) keep
+          the row — restoring their crons is exactly the point.
         - ``not _first_user_turn_reached`` — the agent died before reaching
           USER_TURN (failed cron restart, early crash), so its crons are
           partial or absent; we discard the row to clear any partial state
@@ -867,8 +872,10 @@ class ClaudeCodeHelpers(BaseProviderHelpers):
         Boot cleanup calls without ``agent`` and only the cron-existence
         check runs.
         """
+        from twicc.agent.states import DELIBERATE_STOP_REASONS
+
         if agent is not None:
-            if getattr(agent, "kill_reason", None) == "manual":
+            if getattr(agent, "kill_reason", None) in DELIBERATE_STOP_REASONS:
                 return False
             if not getattr(agent, "_first_user_turn_reached", False):
                 return False

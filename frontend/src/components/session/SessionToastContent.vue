@@ -16,6 +16,7 @@ import { computed, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDataStore } from '../../stores/data'
 import { clearUserTurnToast, markSessionReadState } from '../../composables/useWebSocket'
+import { stopSessionProcess } from '../../composables/useStopSessionProcess'
 import { parseProcessError } from '../../utils/errorParsing'
 import { sessionRouteLocation } from '../../utils/sessionRoute'
 import ProjectBadge from '../project/ProjectBadge.vue'
@@ -101,11 +102,19 @@ onUnmounted(() => {
     }
 })
 
-/** Archive the session and dismiss the toast. */
+/**
+ * Archive the session and dismiss the toast.
+ *
+ * Goes through the shared stop flow rather than archiving directly: the
+ * session behind a toast is typically still running, so archiving it stops
+ * its process — and that must show the active-crons confirmation like every
+ * other archive gesture. The dialog is mounted globally in App.vue, so
+ * dismissing the toast right away does not cancel it.
+ */
 function archiveSession() {
     const s = session.value
     if (s) {
-        store.setSessionArchived(s.project_id, s.id, true)
+        stopSessionProcess(s.id, { archive: true })
     }
     props.item?.clear?.()
 }

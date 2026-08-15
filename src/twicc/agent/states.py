@@ -35,6 +35,25 @@ def get_process_memory(pid: int) -> int | None:
         return None
 
 
+# Kill reasons that mean "a human deliberately stopped this session". Set at
+# the three deliberate-stop call sites, each shared by the UI and the CLI/MCP:
+#
+# - ``manual``   — the Stop gesture (``kill_process`` over the WS,
+#                  ``process stop`` / ``processes stop``)
+# - ``force``    — the hard-kill gesture (Shift-click on Stop, Shift +
+#                  triple-Escape, ``process stop --force``); the default reason
+#                  of :meth:`BaseAgentManager.hard_kill_agent`
+# - ``archived`` — archiving a session (both surfaces go through
+#                  ``core.services.session_update.apply_session_archived_change``)
+#
+# Providers read this to decide what must NOT survive the death: a deliberate
+# stop may not resurrect the session (Claude Code drops the ProcessRun row, so
+# neither the runtime nor the boot cron restart can bring it back). Every other
+# reason — ``shutdown``, ``apply-settings``, ``switch-hybrid``, ``error``, an
+# unsolicited crash — is a death nobody asked for, where restoring is the point.
+DELIBERATE_STOP_REASONS = frozenset({"manual", "force", "archived"})
+
+
 @dataclass(frozen=True)
 class PendingRequest:
     """A request from an agent that is waiting for user response.

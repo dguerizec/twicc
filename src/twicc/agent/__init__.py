@@ -18,6 +18,7 @@ from .base_agent import BaseAgent, StateChangeCallback
 from .base_manager import BaseAgentManager, BroadcastCallback
 from .exceptions import SendDeliveryError
 from .states import (
+    DELIBERATE_STOP_REASONS,
     AgentInfo,
     AgentState,
     PendingRequest,
@@ -27,6 +28,7 @@ from .states import (
 )
 
 __all__ = [
+    "DELIBERATE_STOP_REASONS",
     "AgentInfo",
     "AgentState",
     "BaseAgent",
