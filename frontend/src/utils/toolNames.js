@@ -9,8 +9,13 @@
  * and lower-cases the rest:
  *   ``foo_bar`` → ``Foo bar``, ``AskUserQuestion`` → ``Ask user question``,
  *   ``WebSearch`` → ``Web search``, ``Read`` → ``Read``.
+ *
+ * Exported for the identifiers that are not tool names but follow the same
+ * machine-written shape and deserve the same sentence case — Codex's
+ * ``spawn_agent`` task names (``tweak_display_test`` → ``Tweak display
+ * test``).
  */
-function humanizeToolSegment(raw) {
+export function humanizeToolSegment(raw) {
     const spaced = raw
         .replace(/([a-z0-9])([A-Z])/g, '$1 $2')     // fooBar → foo Bar
         .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')  // HTMLEdit → HTML Edit

@@ -660,14 +660,26 @@ class BaseSessionsWatcher:
             # Exception: TwiCC-initiated sessions (identified by having had pending
             # settings) get an early session_updated so the frontend drops the draft
             # flag immediately, without waiting for the user message to appear in JSONL.
-            if not session.hidden:
-                if session.user_message_count > 0 or pending_agent_settings is not None:
-                    await broadcast_message(channel_layer, {
-                        "type": "session_updated",
-                        "session": serialize_session(session),
-                    })
+            #
+            # Subagents bypass the gate entirely: the "wait for a user message"
+            # rule exists to keep *listed* sessions out of the UI until they
+            # carry something a human wrote, and a subagent is never listed —
+            # it is only ever reached through its parent's tool card. Some
+            # never own a user message at all (Codex multi-agent v2 hands the
+            # task over as an encrypted inter-agent message), so gating them
+            # froze their open tab on whatever the first fetch returned: no
+            # live items, and no ``last_stopped_at`` update to retire the
+            # "running" indicator.
+            broadcast_session = (
+                session.user_message_count > 0 or is_subagent or pending_agent_settings is not None
+            )
+            if not session.hidden and broadcast_session:
+                await broadcast_message(channel_layer, {
+                    "type": "session_updated",
+                    "session": serialize_session(session),
+                })
 
-            if session.user_message_count > 0:
+            if session.user_message_count > 0 or is_subagent:
                 if not session.hidden:
                     # Broadcast new items (with updated metadata of pre-existing items if any)
                     new_items = await get_session_items(session, new_line_nums)

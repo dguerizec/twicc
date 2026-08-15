@@ -738,6 +738,10 @@ class CodexHelpers(BaseProviderHelpers):
           :meth:`CodexSessionCompute.remap_tool_result_id` /
           :meth:`remap_tool_result_id_live`. Its payload doesn't carry
           a ``call_id`` at all (the rebind is purely DB-side).
+        - ``response_item.agent_message`` opening with
+          ``Message Type: FINAL_ANSWER``: the multi-agent v2 form of the
+          same signal (the subagent's answer to its parent), rebound the
+          same way and equally call_id-less.
 
         Callers already filtered ``items`` to the lines linked via
         :class:`ToolResultLink` for this ``tool_use_id``, which is the
@@ -771,8 +775,18 @@ class CodexHelpers(BaseProviderHelpers):
                     # exec_command's tool_use_id.
                     pass
                 elif payload_type == "message" and payload.get("role") == "user":
-                    # Subagent notification — same: rebound DB-side and
-                    # no call_id on this shape anyway.
+                    # Subagent notification (multi-agent v1) — same:
+                    # rebound DB-side and no call_id on this shape anyway.
+                    pass
+                elif payload_type == "agent_message":
+                    # ``FINAL_ANSWER`` inter-agent message (multi-agent
+                    # v2): the subagent's answer handed back to its
+                    # parent, rebound DB-side to the originating
+                    # ``spawn_agent`` exactly like the v1 notification
+                    # (and equally call_id-less). Only the linked lines
+                    # reach us, so the envelope's own type check above
+                    # is enough — the other inter-agent envelopes
+                    # (``NEW_TASK`` / ``MESSAGE``) are never linked.
                     pass
                 else:
                     continue

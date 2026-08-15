@@ -29,7 +29,7 @@ import { parseCodeModeOutput, parseCodeModeScript } from './parseCodeModeScript'
 import { describeWebRun, resolveCodeModeCall, summarizeCodeModeCalls } from './codeModeDisplay'
 import { parseApplyPatchEnvelope } from './parsePatch'
 import { getTodoDescription } from '../../utils/todoList'
-import { formatToolNameForHeader } from '../../utils/toolNames'
+import { formatToolNameForHeader, humanizeToolSegment } from '../../utils/toolNames'
 
 import DescriptionSummary from '../../components/session/detail/items/summary/DescriptionSummary.vue'
 import GrepSummary from '../../components/session/detail/items/summary/GrepSummary.vue'
@@ -236,6 +236,32 @@ function aggregateCodeModeOutput(toolId, options) {
 const SPAWN_AGENT_TOOL_NAME = 'spawn_agent'
 const SUBAGENT_NOTIFICATION_START = '<subagent_notification>'
 const SUBAGENT_NOTIFICATION_END = '</subagent_notification>'
+
+// Codex ships two generations of the multi-agent protocol, and the
+// tool name differs between them: v1 spawns through a bare
+// `spawn_agent`, v2 (`turn_context.multi_agent_version === "v2"`)
+// qualifies every collaboration tool with a `collaboration` namespace,
+// so `ToolUse.vue` composes `collaboration__spawn_agent` (same rule as
+// the backend's `_qualified_function_call_name`). Both must light up
+// the agent UI — old rollouts stay readable forever and a fresh install
+// syncs them alongside new ones. Matched by explicit membership rather
+// than a suffix test, so an unrelated MCP tool literally named
+// `…__spawn_agent` can't hijack the agent card.
+const COLLABORATION_NAMESPACE = 'collaboration'
+const SPAWN_AGENT_TOOL_NAMES = new Set([
+    SPAWN_AGENT_TOOL_NAME,
+    `${COLLABORATION_NAMESPACE}__${SPAWN_AGENT_TOOL_NAME}`,
+])
+
+/**
+ * Whether a resolved tool name is a `spawn_agent` call (multi-agent v1 or v2).
+ *
+ * @param {string} name - Tool name as resolved by `ToolUse.vue`.
+ * @returns {boolean}
+ */
+function isSpawnAgentTool(name) {
+    return SPAWN_AGENT_TOOL_NAMES.has(name)
+}
 
 // ``view_image`` loads a local image file and feeds it back to the model.
 // Its ``function_call_output`` carries the bytes inline as ``input_image``
@@ -1021,7 +1047,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
             // ``isToolRunning`` flips to done only once the
             // notification arrives, matching the agent-running
             // semantics the View-Agent UI relies on.
-            if (name === SPAWN_AGENT_TOOL_NAME) return 2
+            if (isSpawnAgentTool(name)) return 2
             return FUNCTION_CALL_TOOLS_WITH_END_EVENT.has(name) ? 2 : 1
         }
         if (wrapperType === 'custom_tool_call') {
@@ -1256,20 +1282,31 @@ export class CodexToolHelpers extends BaseToolHelpers {
                 props: { description: detected, fileIconSrc: null, truncate: true },
             }
         }
-        if (name === SPAWN_AGENT_TOOL_NAME) {
-            // Surface the subagent's nickname (Codex's
-            // ``agent_nickname``, persisted as ``Session.slug`` and
-            // pulled from the AgentLink lookup wired into
-            // ``helperOptions.agentSlug`` by the shell) at the same
-            // spot Claude Code shows the Task ``description``: after
-            // the em-dash, between parens. The slug is only known
-            // once the spawn ack has been processed — before that
-            // there's nothing to show.
+        if (isSpawnAgentTool(name)) {
+            // Same spot Claude Code shows the Task ``description``: after
+            // the em-dash. Two independent bits land there:
+            //
+            // - the ``task_name`` the parent chose for this delegation
+            //   (multi-agent v2 only), sentence-cased like every other
+            //   machine identifier we surface. It is the ONLY readable
+            //   trace of what the subagent was asked to do — the prompt
+            //   itself travels encrypted.
+            // - the subagent's nickname in parens (Codex's
+            //   ``agent_nickname``, persisted as ``Session.slug``, wired
+            //   into ``helperOptions.agentSlug`` by the shell). Parens
+            //   keep it visibly a name and not part of the task.
+            //
+            // Either can be missing: v1 spawns carry no task name, and the
+            // nickname is only known once the subagent's own transcript has
+            // been parsed. Nothing to show at all → no summary row.
+            const rawTaskName = typeof input?.task_name === 'string' ? input.task_name.trim() : ''
+            const taskName = rawTaskName ? humanizeToolSegment(rawTaskName) : ''
             const slug = options?.agentSlug
-            if (!slug) return null
+            const description = [taskName, slug ? `(${slug})` : ''].filter(Boolean).join(' ')
+            if (!description) return null
             return {
                 component: DescriptionSummary,
-                props: { description: `(${slug})`, fileIconSrc: null },
+                props: { description, fileIconSrc: null, truncate: true },
             }
         }
         if (name === 'update_plan' && isValidPlan(input?.plan)) {
@@ -1500,7 +1537,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
         //     (markdown via ``SpawnAgentResult``);
         //   - status-only variants (``shutdown`` / ``not_found``) ->
         //     a short label, no body.
-        if (name === SPAWN_AGENT_TOOL_NAME && result?.__spawnAgentResult) {
+        if (isSpawnAgentTool(name) && result?.__spawnAgentResult) {
             const status = result.status
             let message = null
             let statusLabel = null
@@ -1666,7 +1703,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // rejection text), we return ``undefined`` so the default
         // ``JsonHumanView`` renders the raw row — the standard error
         // callout already surfaces the failure message.
-        if (name === SPAWN_AGENT_TOOL_NAME) {
+        if (isSpawnAgentTool(name)) {
             if (!Array.isArray(resultData)) return undefined
             let notif = null
             let ack = null
@@ -1842,7 +1879,19 @@ export class CodexToolHelpers extends BaseToolHelpers {
         // provider-level ``CodexHelpers.canStopSubagent`` (defined in
         // ``../helpers.js``) since the stop plumbing belongs to the
         // provider, not to a specific tool name.
-        return name === SPAWN_AGENT_TOOL_NAME
+        return isSpawnAgentTool(name)
+    }
+
+    agentRunEndsOnSubagentIdle() {
+        // Multi-agent v2 has no reliable "the subagent finished" signal in the
+        // parent thread: the `FINAL_ANSWER` message that pairs as the spawn's
+        // second result only exists when the subagent ends its turn with a
+        // final answer. One that reports through `send_message` and stays
+        // alive (Codex still lists it as `running` — an agent is "running"
+        // until closed) would otherwise pulse forever. Its own transcript is
+        // authoritative instead: `task_complete` ends the turn, which the
+        // backend maps onto `Session.last_stopped_at`.
+        return true
     }
 
     getDisplayName(name, input) {
@@ -1854,7 +1903,7 @@ export class CodexToolHelpers extends BaseToolHelpers {
         //   - any other value (built-in ``explorer`` / ``worker`` or
         //     a user-defined role from ``[agents]`` / ``agents/*.toml``)
         //     → the value itself, capitalised.
-        if (name !== SPAWN_AGENT_TOOL_NAME) return null
+        if (!isSpawnAgentTool(name)) return null
         const rawType = typeof input?.agent_type === 'string' ? input.agent_type.trim() : ''
         if (!rawType || rawType === 'default') {
             return { name: 'Agent', namespace: null }

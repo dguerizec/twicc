@@ -124,13 +124,26 @@ def serialize_agent_links(links) -> list[dict]:
     """
     from twicc.core.models import Session
 
-    slugs_by_id = dict(
-        Session.objects.filter(id__in=[link.agent_id for link in links]).values_list("id", "slug")
-    )
+    subagents = {
+        row[0]: row[1:]
+        for row in Session.objects.filter(
+            id__in=[link.agent_id for link in links]
+        ).values_list("id", "slug", "last_stopped_at")
+    }
     return [
         {
             "agent_id": link.agent_id,
-            "agent_slug": slugs_by_id.get(link.agent_id),
+            "agent_slug": subagents.get(link.agent_id, (None, None))[0],
+            # When the subagent's own file says it went idle (see
+            # ``BaseSessionCompute.subagent_turn_boundary``), this is the
+            # moment it did. It lets a page reload decide "still running?"
+            # without waiting for the parent tool chain to complete —
+            # which, on Codex multi-agent v2, may simply never happen.
+            "agent_stopped_at": (
+                stopped.isoformat()
+                if (stopped := subagents.get(link.agent_id, (None, None))[1])
+                else None
+            ),
             "tool_use_id": link.tool_use_id,
             "tool_use_line_num": link.tool_use_line_num,
             "is_background": link.is_background,

@@ -444,7 +444,17 @@ const helperOptions = computed(() => {
         // orphaned by a soft interrupt, has no closing chunk to flip
         // ``extra.is_terminated`` (see ``CodexToolHelpers.isToolRunning``).
         processState: dataStore.getProcessState(props.sessionId)?.state ?? null,
-        agentSlug: agentLink?.slug || null,
+        // The link's own slug is resolved when the link is *created*, so it
+        // is null whenever the subagent's transcript had not been parsed yet
+        // — systematically on Codex multi-agent v2, where the parent
+        // announces the spawn (`sub_agent_activity`) ~100 ms before the
+        // subagent's file exists. The subagent's session row carries the
+        // same nickname and reaches the store through its own
+        // `session_updated`, so fall back to it; a reload re-resolves the
+        // link's copy anyway (`fetchSubagentsState`).
+        agentSlug: agentLink?.slug || (agentLink?.agentId
+            ? dataStore.getSession(agentLink.agentId)?.slug || null
+            : null),
         getSessionItem: (lineNum) => dataStore.getSessionItem(props.sessionId, lineNum),
         getToolState: (toolUseId) => dataStore.getToolState(props.sessionId, toolUseId),
         resultsArray: resultData.value,
@@ -816,10 +826,22 @@ const agentCommentsCount = computed(() => {
         .filter(c => c.subagentSessionId === agentId.value).length
 })
 
+// The subagent's own transcript reported it idle. Live, that lands on its
+// session row (its `session_updated` refreshes `last_stopped_at`); after a
+// reload the session may not be loaded at all, so the agent-links payload
+// carries the same timestamp. Only consulted for providers whose spawn tool
+// can outlive its subagent's completion — see `agentRunEndsOnSubagentIdle`.
+const agentReportedIdle = computed(() => {
+    if (!agentId.value) return false
+    if (!toolHelpers.value?.agentRunEndsOnSubagentIdle?.()) return false
+    return !!(dataStore.getSession(agentId.value)?.last_stopped_at ?? agentLink.value?.stoppedAt)
+})
+
 const isAgentRunning = computed(() => {
     if (transcriptFrozen.value) return false
     if (!isTask.value || !agentId.value) return false
     if (isStaleToolUse.value) return false
+    if (agentReportedIdle.value) return false
     const resultCount = toolState.value?.resultCount || 0
     const requiredCount = (agentLink.value?.isBackground) ? 2 : 1
     return resultCount < requiredCount

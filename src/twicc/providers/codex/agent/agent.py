@@ -255,6 +255,50 @@ def _agent_message_item(payload: Any) -> Any | None:
     return inner
 
 
+# ``ThreadItem`` variants of the multi-agent v2 collaboration protocol
+# that reach the *parent's* stream: ``subAgentActivity`` announces a
+# spawn / interaction / interruption of one child, ``collabAgentToolCall``
+# wraps the parent's own collaboration tool calls (only ``wait`` shows up
+# in practice — ``spawn_agent`` surfaces as a ``subAgentActivity``).
+_SUB_AGENT_ACTIVITY_ITEM_TYPE = "subAgentActivity"
+_COLLAB_AGENT_TOOL_CALL_ITEM_TYPE = "collabAgentToolCall"
+_COLLAB_WAIT_TOOL = "wait"
+_SUB_AGENT_STARTED_KIND = "started"
+_SUB_AGENT_INTERRUPTED_KIND = "interrupted"
+
+
+def _enum_value(value: Any) -> Any:
+    """Return ``value.value`` for an SDK enum, ``value`` otherwise."""
+    return getattr(value, "value", value)
+
+
+def _is_collab_wait_call(inner: Any) -> bool:
+    """Whether this thread item is the parent blocking on ``wait_agent``."""
+    if getattr(inner, "type", None) != _COLLAB_AGENT_TOOL_CALL_ITEM_TYPE:
+        return False
+    return _enum_value(getattr(inner, "tool", None)) == _COLLAB_WAIT_TOOL
+
+
+def _stopped_subagent_ids(session_ids: list[str]) -> list[str]:
+    """Return, among ``session_ids``, those whose subagent session has finished.
+
+    A spawned subagent's completion never reaches the parent's SDK stream
+    (Codex emits no item for the ``FINAL_ANSWER`` it hands back), so the
+    live view of "which children are still running" comes from the
+    watcher instead: it stamps ``Session.last_stopped_at`` when the
+    subagent's completion pairs with its ``spawn_agent``
+    (``check_agent_naturally_stopped``). Blocking ORM call — wrap in
+    ``sync_to_async``.
+    """
+    from twicc.core.models import Session
+
+    return list(
+        Session.objects.filter(
+            id__in=session_ids, last_stopped_at__isnull=False,
+        ).values_list("id", flat=True)
+    )
+
+
 class CodexAgent(BaseAgent):
     """Codex SDK agent wrapping one ``AsyncCodex`` / ``AsyncThread`` pair.
 
@@ -366,6 +410,26 @@ class CodexAgent(BaseAgent):
         # ``interrupt_or_kill`` (with the rest of the side-tables) or by
         # re-creating the agent on a fresh session.
         self._user_terminated_tool_ids: dict[str, str] = {}
+        # Subagents this run spawned through the multi-agent v2
+        # collaboration tools, ``agent_thread_id -> agent_path``. Fed by
+        # the ``subAgentActivity`` items Codex routes on the *parent's*
+        # stream (``started`` adds, ``interrupted`` removes) and pruned
+        # against the watcher's view of which ones already finished (see
+        # :func:`_stopped_subagent_ids`) — the SDK stream has no
+        # per-agent completion item.
+        #
+        # Used only to label the wait: unlike Claude Code, Codex needs no
+        # ASSISTANT_TURN hold, because ``wait_agent`` blocks *inside* the
+        # turn (no ``turn/completed`` fires while children run). What the
+        # user would otherwise see for the whole wait is a bare
+        # "thinking".
+        self._live_subagents: dict[str, str] = {}
+        # True while the "waiting for N subagents" process label is the
+        # one on screen. Set when a ``wait`` collaboration call starts,
+        # cleared when it completes. A ``process_state`` broadcast (turn
+        # end) rebuilds the frontend's process object and drops the label
+        # on its own, so no extra clean-up is needed there.
+        self._subagent_wait_label_active = False
 
         # Set when a user approves an Auto-review denial after Codex has already
         # closed the originating turn. ``_run_turn`` consumes it by immediately
@@ -817,6 +881,79 @@ class CodexAgent(BaseAgent):
             raise RuntimeError(
                 f"No handler for hardcoded command {command.name!r}",
             )
+
+    def _note_sub_agent_activity(self, inner: Any) -> None:
+        """Update the live-subagent set from one ``subAgentActivity`` item.
+
+        ``started`` is the spawn (the only kind whose ``event_id`` is a
+        ``spawn_agent`` call), ``interrupted`` ends the child, and
+        ``interacted`` is just a message passing through — it must not
+        change the set. Idempotent: the SDK emits the same item on
+        ``item/started`` and ``item/completed``.
+        """
+        thread_id = getattr(inner, "agent_thread_id", None)
+        if not isinstance(thread_id, str) or not thread_id:
+            return
+        kind = _enum_value(getattr(inner, "kind", None))
+        if kind == _SUB_AGENT_STARTED_KIND:
+            agent_path = getattr(inner, "agent_path", None)
+            self._live_subagents[thread_id] = agent_path if isinstance(agent_path, str) else ""
+        elif kind == _SUB_AGENT_INTERRUPTED_KIND:
+            self._live_subagents.pop(thread_id, None)
+
+    async def _refresh_subagent_wait_label(self) -> None:
+        """Show "waiting for N subagents" while the parent blocks on ``wait_agent``.
+
+        Codex holds the turn open on its own here (the call blocks inside
+        the turn), so the state is already ``ASSISTANT_TURN`` — what is
+        missing is *why*, since Codex streams no tool activity and the
+        frontend would otherwise show a bare "thinking" for the whole
+        wait. Same channel and wording as Claude Code's
+        ``_refresh_waiting_label``.
+
+        The count is the spawns seen on this run's stream minus the ones
+        the watcher already saw finish, so a sequence of one-agent waits
+        reads "1 subagent" each time instead of accumulating. A stale
+        count would be worse than none: if nothing is live (every child
+        already finished, or the wait was issued with no child at all)
+        the label is cleared and the normal status takes over.
+        """
+        await self._prune_finished_subagents()
+        count = len(self._live_subagents)
+        if not count:
+            await self._clear_subagent_wait_label()
+            return
+        self._subagent_wait_label_active = True
+        await self._broadcast_process_label(
+            f"waiting for {count} subagent{'s' if count > 1 else ''}"
+        )
+
+    async def _clear_subagent_wait_label(self) -> None:
+        """Drop the waiting label if it is currently shown (no-op otherwise)."""
+        if not self._subagent_wait_label_active:
+            return
+        self._subagent_wait_label_active = False
+        await self._broadcast_process_label("")
+
+    async def _prune_finished_subagents(self) -> None:
+        """Forget the children the watcher already saw finish.
+
+        One indexed query per ``wait`` call — the only moment the count
+        is read. Failures are swallowed: an over-count in a status label
+        is not worth breaking a turn over.
+        """
+        if not self._live_subagents:
+            return
+        try:
+            stopped = await sync_to_async(_stopped_subagent_ids)(list(self._live_subagents))
+        except Exception:
+            logger.warning(
+                "Codex: failed to prune finished subagents for session %s",
+                self.session_id, exc_info=True,
+            )
+            return
+        for session_id in stopped:
+            self._live_subagents.pop(session_id, None)
 
     async def compact(self) -> None:
         """Kick off a server-side context compaction on the live thread.
@@ -1790,6 +1927,13 @@ class CodexAgent(BaseAgent):
                 # timing rationale.
                 if getattr(inner, "type", None) == "fileChange":
                     _capture_original_files_for_apply_patch(inner, self.session_id)
+                # Multi-agent v2 bookkeeping: ``subAgentActivity`` tracks
+                # which children are alive, a starting ``wait``
+                # collaboration call turns that into the status label.
+                if getattr(inner, "type", None) == _SUB_AGENT_ACTIVITY_ITEM_TYPE:
+                    self._note_sub_agent_activity(inner)
+                elif _is_collab_wait_call(inner):
+                    await self._refresh_subagent_wait_label()
 
             # Existing agent-message streaming logic — only this kind paints
             # a live ``stream_block_start`` event today; other kinds flow
@@ -1883,6 +2027,18 @@ class CodexAgent(BaseAgent):
             item_id_for_cleanup = getattr(inner, "id", None)
             if item_id_for_cleanup:
                 self._items_by_id.pop(item_id_for_cleanup, None)
+
+            # Multi-agent v2: the ``wait`` collaboration call returned, so
+            # the parent is working again — drop the waiting label. The
+            # matching ``subAgentActivity`` completion carries the same
+            # payload as its ``item/started``, and the bookkeeping is
+            # idempotent, so re-running it here is harmless.
+            if item_type == _SUB_AGENT_ACTIVITY_ITEM_TYPE:
+                self._note_sub_agent_activity(inner)
+                return
+            if _is_collab_wait_call(inner):
+                await self._clear_subagent_wait_label()
+                return
 
             if item_type == "plan":
                 # A Plan collaboration-mode turn just delivered its final

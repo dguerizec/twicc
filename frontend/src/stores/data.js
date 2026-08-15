@@ -4102,12 +4102,17 @@ export const useDataStore = defineStore('data', {
          *   downstream code can label tab headers / tool-card summaries
          *   without separately hydrating the subagent Session row.
          */
-        setAgentLink(sessionId, toolId, agentId, isBackground = false, toolUseLineNum = null, slug = null) {
+        setAgentLink(sessionId, toolId, agentId, isBackground = false, toolUseLineNum = null, slug = null, stoppedAt = null) {
             if (!agentId) return // Only cache found agents
             if (!this.localState.agentLinks[sessionId]) {
                 this.localState.agentLinks[sessionId] = {}
             }
-            this.localState.agentLinks[sessionId][toolId] = { agentId, isBackground, toolUseLineNum, slug }
+            // ``stoppedAt``: the subagent's own file reported it idle (see the
+            // backend's ``subagent_turn_boundary``). Only the load path knows
+            // it — a link is created at spawn time, when nothing has stopped
+            // yet — so the live view reads ``sessions[agentId].last_stopped_at`
+            // instead, which the subagent's own ``session_updated`` refreshes.
+            this.localState.agentLinks[sessionId][toolId] = { agentId, isBackground, toolUseLineNum, slug, stoppedAt }
         },
 
         /**
@@ -4337,11 +4342,18 @@ export const useDataStore = defineStore('data', {
                 const cutoff = getSessionCutoffMs(this.sessions[sessionId])
 
                 for (const agent of agents) {
-                    this.setAgentLink(sessionId, agent.tool_use_id, agent.agent_id, agent.is_background, agent.tool_use_line_num, agent.agent_slug ?? null)
+                    this.setAgentLink(sessionId, agent.tool_use_id, agent.agent_id, agent.is_background, agent.tool_use_line_num, agent.agent_slug ?? null, agent.agent_stopped_at ?? null)
 
                     // Skip synthetic process state if agent predates the session's last start/stop cycle
                     const agentStartedMs = agent.started_at ? new Date(agent.started_at).getTime() : 0
                     if (cutoff && agentStartedMs < cutoff) continue
+
+                    // …or if the subagent's own file already reported it idle. Its
+                    // parent's tool chain may never complete (Codex multi-agent v2:
+                    // a subagent answering through send_message produces no second
+                    // result), so the result count below would resurrect a
+                    // "running" indicator for a subagent that finished long ago.
+                    if (agent.agent_stopped_at) continue
 
                     // Create synthetic process state if agent is not done yet
                     const toolState = this.localState.toolStates[sessionId]?.[agent.tool_use_id]
@@ -4446,6 +4458,20 @@ export const useDataStore = defineStore('data', {
             // optimistic local flag so neither a not-yet-confirmed click nor a
             // pre-kill broadcast can drop it. It only clears on `dead` below.
             const wasStopping = this.processStates[sessionId]?.stopping === true
+            // Same idea for the `process_label` override (WorkingAssistantMessage's
+            // status text: "compacting", "waiting for 2 subagents", …). It arrives
+            // on its own message and lives only on this object, which we rebuild
+            // from scratch below — so any `process_state` would silently wipe it.
+            // Wiping is the intended behaviour on a real transition (that IS how a
+            // label disappears at turn end — no agent-side cleanup exists for it),
+            // but a same-state refresh is not a transition: a pending request
+            // landing, a memory or title update, a `stopping` flag all re-broadcast
+            // `assistant_turn` mid-work and would drop a label the agent still
+            // considers current (Claude Code only recovers on its next subagent
+            // completion; Codex's wait label has no second posting at all).
+            const keptLabel = state === previousState
+                ? this.processStates[sessionId]?.label ?? null
+                : null
 
             if (state === 'dead') {
                 // Remove dead processes from the map
@@ -4480,6 +4506,9 @@ export const useDataStore = defineStore('data', {
                     lastStartedToolId: null,
                     // Backend truth OR optimistic local flag (see `wasStopping`).
                     stopping: extra.stopping === true || wasStopping,
+                    // Survives a same-state refresh, cleared by a transition
+                    // (see `keptLabel`).
+                    label: keptLabel,
                 }
 
                 // Auto-unarchive: running and archived are mutually exclusive.

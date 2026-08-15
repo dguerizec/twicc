@@ -133,8 +133,15 @@ priced with the model carried by the running ``turn_context``;
 filter non-billable events (bootstrap snapshot, inter-turn
 re-emission, compaction-zero) — see the method docstring for details.
 
-Custom titles, session-start detection and subagent linkage remain
-out of scope at this stage. Runtime environment fields are partially
+Subagent linkage is wired for both multi-agent generations: the
+``(spawn_agent call_id, subagent thread id)`` pair comes from the spawn
+ack on v1 and from the ``event_msg.sub_agent_activity`` event on v2,
+and the completion signal rebound as the spawn's second
+``ToolResultLink`` is the ``<subagent_notification>`` user message on
+v1, the ``FINAL_ANSWER`` inter-agent message on v2 — see
+:data:`_SPAWN_AGENT_FUNCTION_NAME` and its neighbours. Custom titles
+and session-start detection remain out of scope at this stage.
+Runtime environment fields are partially
 wired: ``cwd`` and ``cwd_git_branch`` come from the opening
 ``session_meta`` line, ``cwd`` plus ``model`` come from each
 ``turn_context`` line, and ``context_max`` comes from the
@@ -142,7 +149,9 @@ wired: ``cwd`` and ``cwd_git_branch`` come from the opening
 start (the base orchestrator's "last non-null wins" rule means a
 mid-session ``cd`` / model swap / window change is reflected on
 ``Session.cwd`` / ``Session.model`` / ``Session.context_max``).
-``slug`` is unused (Codex doesn't expose one). File-change stats are
+``slug`` carries a subagent's ``agent_nickname`` when the opening
+``session_meta`` declares one (top-level sessions have none).
+File-change stats are
 wired for ``apply_patch`` (aggregated ``+`` / ``-`` from the
 ``patch_apply_end.changes`` map). ``event_msg.patch_apply_end`` lines
 are also enriched in-place with an ``original_files`` map
@@ -259,6 +268,10 @@ _PAYLOAD_TOKEN_COUNT = "token_count"
 # :meth:`CodexSessionCompute.extract_runtime_fields` to populate
 # ``Session.context_max`` for sessions imported from JSONL.
 _PAYLOAD_TASK_STARTED = "task_started"
+# The matching turn-end event. Together they bracket one turn of a
+# thread — the running / idle signal :meth:`subagent_turn_boundary`
+# maps onto a subagent's ``Session.last_stopped_at``.
+_PAYLOAD_TASK_COMPLETE = "task_complete"
 # Compaction headroom Codex CLI reserves on top of the model's nominal
 # input window, expressed as the ratio of "published" to "nominal".
 # Used to recover the nominal window from
@@ -412,23 +425,39 @@ _DEBUG_ONLY_FUNCTION_NAMES = frozenset({"get_goal"})
 # because there is no parent it can pair with.
 #
 # Today this only contains ``wait_agent``: it polls subagents already
-# tracked by ``spawn_agent``, and the parent receives a
-# ``<subagent_notification>`` user message at the exact same instant
-# as the wait_agent output (see ``codex-rs/core/src/agent/control.rs``)
-# — keeping wait_agent as its own tool would just clone the ack/done
-# signal twice. Future agent-control tools (``close_agent``,
-# ``send_input``, ``resume_agent``) will likely join this set as we
-# wire them up.
+# tracked by ``spawn_agent``, and its output is redundant with the
+# completion signal we do capture — a ``<subagent_notification>`` user
+# message emitted at the exact same instant on multi-agent v1 (see
+# ``codex-rs/core/src/agent/control.rs``), a ``FINAL_ANSWER`` agent
+# message on v2. Keeping wait_agent as its own tool would just clone
+# the ack/done signal twice, and its own output identifies no agent
+# (``{"message": "Wait completed.", "timed_out": false}``) so it could
+# not stand in for that signal anyway. Future agent-control tools
+# (``close_agent``, ``send_input``, ``resume_agent``) will likely join
+# this set as we wire them up.
 _IGNORED_FUNCTION_NAMES = frozenset({"wait_agent"})
 
 # ``function_call.name`` for the SDK tool that spawns a subagent thread.
-# The matching ``function_call_output`` carries a JSON string
-# ``{"agent_id": "...", "nickname": "..."}`` on success; on failure the
-# SDK returns a freeform rejection string (e.g. fork-context constraint
-# violations like ``"Full-history forked agents inherit the parent
-# agent type, model, and reasoning effort; ..."``). Both shapes go
-# through the same ``output`` field — the success/failure split is done
-# by attempting an :func:`orjson.loads` and looking for ``agent_id``.
+# Two protocol generations coexist on disk, discriminated by the shape of
+# the ``function_call_output`` ack (never by a version field — old
+# rollouts stay readable forever, and ``turn_context.multi_agent_version``
+# is absent from v1 lines):
+#
+# - **v1** (no ``multi_agent_version``): bare ``spawn_agent`` name, ack
+#   ``{"agent_id": "...", "nickname": "..."}`` carrying the subagent's
+#   thread id, terminated by a ``<subagent_notification>`` user message.
+# - **v2** (``multi_agent_version == "v2"``): name qualified with the
+#   ``collaboration`` namespace, ack ``{"task_name": "/root/<task>"}``
+#   carrying an *agent path* instead of a thread id. See
+#   :data:`_SUB_AGENT_ACTIVITY_PAYLOAD_TYPE` for where the thread id and
+#   the termination signal moved.
+#
+# On failure both generations return a freeform rejection string (e.g.
+# fork-context constraint violations like ``"Full-history forked agents
+# inherit the parent agent type, model, and reasoning effort; ..."``)
+# through the same ``output`` field — the success / failure split is done
+# by attempting an :func:`orjson.loads` and looking for ``agent_id``
+# (v1) or ``task_name`` (v2).
 #
 # Used by :meth:`CodexSessionCompute.extract_task_tool_uses`,
 # :meth:`extract_task_tool_use_prompts`,
@@ -437,8 +466,74 @@ _IGNORED_FUNCTION_NAMES = frozenset({"wait_agent"})
 # path) to keep the success / failure detection in a single place.
 _SPAWN_AGENT_FUNCTION_NAME = "spawn_agent"
 
+# ``function_call.namespace`` of the multi-agent v2 collaboration tools
+# (``spawn_agent``, ``send_message``, ``wait_agent``, ``list_agents``,
+# ``followup_task``). v1 had no namespace at all, so the name resolved by
+# :func:`_qualified_function_call_name` — the one the pairing hooks and
+# the frontend tool card see — is ``spawn_agent`` on v1 rollouts and
+# ``collaboration__spawn_agent`` on v2 ones. Raw ``payload.name`` checks
+# are unaffected: Codex kept the bare name there in both generations.
+_COLLABORATION_NAMESPACE = "collaboration"
+
+# Every qualified name a ``spawn_agent`` call can carry (v1 + v2). Used by
+# the hooks that receive the name already resolved through
+# :func:`_qualified_function_call_name` (:meth:`compute_link_error_override`).
+_SPAWN_AGENT_TOOL_NAMES = frozenset({
+    _SPAWN_AGENT_FUNCTION_NAME,
+    f"{_COLLABORATION_NAMESPACE}__{_SPAWN_AGENT_FUNCTION_NAME}",
+})
+
+# ``event_msg`` sub-type carrying multi-agent v2 subagent activity, and
+# the only ``kind`` value that marks a spawn. The v2 ack no longer
+# carries the subagent's thread id, so this event takes over the role v1
+# gave to the ack: its ``event_id`` IS the ``call_id`` of the tool that
+# touched the subagent (the ``spawn_agent`` for ``kind == "started"``),
+# and its ``agent_thread_id`` is the subagent session id — the exact
+# ``(tool_use_id, agent_id)`` pair :class:`~twicc.core.models.AgentLink`
+# needs. The other kinds (``interacted`` on a ``send_message``,
+# ``interrupted``) carry a different call_id and must never create a
+# link. ``agent_path`` (e.g. ``/root/task1_review``) is the stable
+# handle the collaboration tools use, and the key the v2 termination
+# signal is addressed by.
+_SUB_AGENT_ACTIVITY_PAYLOAD_TYPE = "sub_agent_activity"
+_SUB_AGENT_ACTIVITY_STARTED_KIND = "started"
+
+# Envelope of an inter-agent message, as persisted in the *receiving*
+# thread (``response_item.agent_message``, multi-agent v2). The first
+# content block is plain text::
+#
+#     Message Type: <TYPE>
+#     Task name: <receiver agent path>
+#     Sender: <sender agent path>
+#     Payload:
+#     <payload>
+#
+# ``<payload>`` is a Fernet ciphertext (``gAAAAA…``, in a sibling
+# ``encrypted_content`` block) for ``NEW_TASK`` and ``MESSAGE``, but
+# **plaintext, inline** for ``FINAL_ANSWER`` — the subagent's answer
+# handed back to its parent. That makes ``FINAL_ANSWER`` the v2
+# equivalent of v1's ``<subagent_notification>``: the canonical
+# "spawn_agent terminated" signal, addressed by the sender's agent path.
+# We mine that one only; the encrypted kinds carry nothing we could use.
+_AGENT_MESSAGE_TYPE_PREFIX = "Message Type: "
+_AGENT_MESSAGE_FINAL_ANSWER_TYPE = "FINAL_ANSWER"
+# The task a parent hands to a subagent — the child's opening prompt,
+# promoted to a ``USER_MESSAGE`` by :meth:`compute_item_kind` (the parent
+# is the "user" of that thread, exactly like Claude Code's sidechains).
+_AGENT_MESSAGE_NEW_TASK_TYPE = "NEW_TASK"
+_AGENT_MESSAGE_SENDER_PREFIX = "Sender: "
+_AGENT_MESSAGE_TASK_NAME_PREFIX = "Task name: "
+_AGENT_MESSAGE_PAYLOAD_MARKER = "Payload:"
+# Content-block type of an encrypted payload. Its presence IS the
+# "unreadable body" signal — cheaper and more durable than recognising a
+# Fernet token, and it degrades gracefully if Codex ever ships some of
+# these envelopes in the clear.
+_ENCRYPTED_CONTENT_BLOCK_TYPE = "encrypted_content"
+
 # Marker tags that delimit the JSON body of a Codex
-# ``<subagent_notification>`` user message. Codex injects this message
+# ``<subagent_notification>`` user message (multi-agent **v1** only —
+# v2 replaced it with the ``FINAL_ANSWER`` agent message, see
+# :data:`_AGENT_MESSAGE_FINAL_ANSWER_TYPE`). Codex injects this message
 # in the parent thread (via ``inject_user_message_without_turn``,
 # cf. ``codex-rs/core/src/agent/control.rs``) every time a spawned
 # subagent reaches a final ``AgentStatus`` (Completed / Errored /
@@ -1456,6 +1551,191 @@ def _status_error_text(status) -> str | None:
     return None
 
 
+class _SubAgentSpawn(NamedTuple):
+    """One multi-agent v2 spawn, as decoded from a ``sub_agent_activity``.
+
+    - ``call_id``: the ``spawn_agent`` call this event acknowledges.
+    - ``agent_id``: the subagent's thread id (a TwiCC ``Session.id``).
+    - ``agent_path``: the collaboration handle (``/root/<task_name>``),
+      the key the ``FINAL_ANSWER`` termination message is addressed by.
+    """
+
+    call_id: str
+    agent_id: str
+    agent_path: str
+
+
+def _parse_sub_agent_activity_started(parsed_json: dict) -> _SubAgentSpawn | None:
+    """Decode the multi-agent **v2** spawn event.
+
+    ``event_msg.sub_agent_activity`` is emitted in the parent thread
+    every time a collaboration tool touches a subagent. Only
+    ``kind == "started"`` marks a spawn, and only then does ``event_id``
+    hold the ``call_id`` of the originating ``spawn_agent``: the
+    ``interacted`` / ``interrupted`` kinds carry the call_id of whatever
+    other tool touched the agent (a ``send_message``, …), which must
+    never produce an :class:`~twicc.core.models.AgentLink`.
+
+    Returns ``(spawn_call_id, agent_thread_id, agent_path)``, or ``None``
+    for any other line shape / kind / malformed payload.
+    """
+    if parsed_json.get("type") != _TYPE_EVENT_MSG:
+        return None
+    payload = _payload(parsed_json)
+    if payload is None or payload.get("type") != _SUB_AGENT_ACTIVITY_PAYLOAD_TYPE:
+        return None
+    if payload.get("kind") != _SUB_AGENT_ACTIVITY_STARTED_KIND:
+        return None
+    call_id = payload.get("event_id")
+    agent_id = payload.get("agent_thread_id")
+    agent_path = payload.get("agent_path")
+    if not isinstance(call_id, str) or not call_id:
+        return None
+    if not isinstance(agent_id, str) or not agent_id:
+        return None
+    if not isinstance(agent_path, str) or not agent_path:
+        return None
+    return _SubAgentSpawn(call_id, agent_id, agent_path)
+
+
+class _InterAgentMessage(NamedTuple):
+    """One decoded multi-agent v2 inter-agent envelope.
+
+    - ``message_type``: ``NEW_TASK`` / ``MESSAGE`` / ``FINAL_ANSWER``…
+    - ``sender``: the sending agent's path (``/root``, ``/root/impl``…).
+      Never used as a *filter* — a nested subagent's parent is not
+      ``/root`` — only surfaced as "who asked".
+    - ``task_path``: the receiver's own agent path, as the envelope's
+      ``Task name:`` line spells it (``/root/tweak_display_test``).
+    - ``payload``: the inline body, empty when the payload travelled
+      encrypted.
+    - ``encrypted``: an ``encrypted_content`` block sits next to the
+      header. That block's *type* is the signal — no ciphertext
+      sniffing, and a future plaintext ``NEW_TASK`` would read normally.
+    """
+
+    message_type: str
+    sender: str | None
+    task_path: str | None
+    payload: str
+    encrypted: bool
+
+    @property
+    def task_name(self) -> str | None:
+        """The receiver's task name — the last segment of its agent path."""
+        if not self.task_path:
+            return None
+        return self.task_path.rsplit("/", 1)[-1] or None
+
+
+def _parse_inter_agent_message(parsed_json: dict) -> _InterAgentMessage | None:
+    """Decode a multi-agent **v2** inter-agent message envelope.
+
+    Shape (see :data:`_AGENT_MESSAGE_TYPE_PREFIX`): a
+    ``response_item.agent_message`` whose first content block is plain
+    text opening with ``Message Type: <TYPE>``, followed by the routing
+    header and the payload. Codex persists it in the *receiving* thread,
+    so the same shape carries a task handed down to a subagent
+    (``NEW_TASK``), a mid-flight message either way (``MESSAGE``) and the
+    answer handed back up (``FINAL_ANSWER``).
+
+    Returns ``None`` for any other line shape or a malformed envelope.
+    """
+    if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
+        return None
+    payload = _payload(parsed_json)
+    if payload is None or payload.get("type") != _PAYLOAD_AGENT_MESSAGE:
+        return None
+    content = payload.get("content")
+    if not isinstance(content, list) or not content:
+        return None
+    first = content[0]
+    if not isinstance(first, dict):
+        return None
+    text = first.get("text")
+    if not isinstance(text, str) or not text.startswith(_AGENT_MESSAGE_TYPE_PREFIX):
+        return None
+
+    message_type = ""
+    sender: str | None = None
+    task_path: str | None = None
+    payload_lines: list[str] | None = None
+    for line in text.split("\n"):
+        if payload_lines is not None:
+            payload_lines.append(line)
+            continue
+        if line.startswith(_AGENT_MESSAGE_TYPE_PREFIX):
+            message_type = line[len(_AGENT_MESSAGE_TYPE_PREFIX):].strip()
+            continue
+        if line.startswith(_AGENT_MESSAGE_SENDER_PREFIX):
+            sender = line[len(_AGENT_MESSAGE_SENDER_PREFIX):].strip() or None
+            continue
+        if line.startswith(_AGENT_MESSAGE_TASK_NAME_PREFIX):
+            task_path = line[len(_AGENT_MESSAGE_TASK_NAME_PREFIX):].strip() or None
+            continue
+        if line.rstrip() == _AGENT_MESSAGE_PAYLOAD_MARKER:
+            payload_lines = []
+    if not message_type:
+        return None
+    encrypted = any(
+        isinstance(block, dict) and block.get("type") == _ENCRYPTED_CONTENT_BLOCK_TYPE
+        for block in content
+    )
+    return _InterAgentMessage(
+        message_type=message_type,
+        sender=sender,
+        task_path=task_path,
+        payload="\n".join(payload_lines).strip() if payload_lines else "",
+        encrypted=encrypted,
+    )
+
+
+def _parse_agent_final_answer(parsed_json: dict) -> tuple[str, str] | None:
+    """Return ``(sender_agent_path, answer_text)`` for a ``FINAL_ANSWER``.
+
+    The v2 "spawn_agent terminated" signal: a subagent finishing its work
+    hands its answer back to its parent, in the clear. Returns ``None``
+    for every other envelope (``NEW_TASK`` / ``MESSAGE``, whose payloads
+    are encrypted anyway) and for a sender-less one, which nothing could
+    be paired with.
+    """
+    message = _parse_inter_agent_message(parsed_json)
+    if message is None or message.message_type != _AGENT_MESSAGE_FINAL_ANSWER_TYPE:
+        return None
+    if message.sender is None:
+        return None
+    return message.sender, message.payload
+
+
+def _humanize_identifier(raw: str) -> str:
+    """Sentence-case a machine identifier: ``tweak_display_test`` → ``Tweak display test``.
+
+    Mirrors the frontend's ``humanizeToolSegment`` so a task name reads
+    the same in the session title (written here) and on the parent's
+    spawn card (rendered there).
+    """
+    spaced = raw.replace("_", " ").replace("-", " ").strip()
+    return spaced[:1].upper() + spaced[1:] if spaced else ""
+
+
+def _parse_agent_new_task(parsed_json: dict) -> _InterAgentMessage | None:
+    """Return the ``NEW_TASK`` envelope handed to *this* thread, if any.
+
+    This is a subagent's opening prompt — what a human's first message is
+    to a top-level session — so :meth:`CodexSessionCompute.compute_item_kind`
+    promotes it to a ``USER_MESSAGE``. Filtering is on the message type
+    alone, never on the sender: a nested subagent receives its task from
+    another agent (``/root/impl``), not from ``/root``, and must be
+    treated identically. ``followup_task`` sends further ``NEW_TASK``
+    envelopes to a live agent, and each is a genuine new instruction —
+    so this is not restricted to the first one either.
+    """
+    message = _parse_inter_agent_message(parsed_json)
+    if message is None or message.message_type != _AGENT_MESSAGE_NEW_TASK_TYPE:
+        return None
+    return message
+
+
 def _patch_apply_error(payload: dict) -> str | None:
     """Synthesise an error string from a ``patch_apply_end`` payload.
 
@@ -1706,16 +1986,27 @@ class CodexSessionCompute(BaseSessionCompute):
         # / MCP tool name), recency as fallback. Bounded (last 50
         # entries) and freed in :meth:`end_session_compute`.
         self._code_exec_targets: dict[str, list[tuple[str, CodeModeScriptTargets]]] = {}
-        # {session_id: {agent_id: spawn_agent_call_id}}. Batch-only
-        # side-table mirroring the inverse of the spawn ack: when
-        # ``analyze_content`` sees a successful ``function_call_output``
-        # of a ``spawn_agent`` (i.e. its output JSON contains an
-        # ``agent_id``), it records ``agent_id -> call_id`` here so the
-        # later ``<subagent_notification>`` user message can be rebound
-        # to the originating ``spawn_agent`` ``ToolResultLink`` chain
-        # without a DB lookup. Live mode ignores this map and falls back
-        # to ``AgentLink.objects`` (the AgentLink row is already
-        # persisted from the prior sync that processed the spawn ack).
+        # {session_id: {completion key: spawn_agent_call_id}}. Batch-only
+        # side-table letting the subagent's completion line rebind onto
+        # the originating ``spawn_agent`` ``ToolResultLink`` chain
+        # without a DB lookup. The key is whatever that completion line
+        # addresses the agent by, which differs per protocol generation
+        # (the two key spaces can't collide — a UUID never starts with
+        # ``/``):
+        #
+        # - **v1**: the subagent's ``agent_id``, recorded when
+        #   ``analyze_content`` sees the spawn ack (its output JSON
+        #   carries ``agent_id``); the ``<subagent_notification>`` user
+        #   message repeats it in its ``agent_path`` field.
+        # - **v2**: the subagent's ``agent_path``, recorded when
+        #   ``analyze_content`` sees the ``sub_agent_activity`` spawn
+        #   event; the ``FINAL_ANSWER`` message names it as ``Sender``.
+        #
+        # Live mode ignores this map: v1 falls back to
+        # ``AgentLink.objects`` (the row is already persisted from the
+        # prior sync that processed the spawn ack) and v2 to
+        # :meth:`_lookup_spawn_call_id_for_agent_path` (no model column
+        # carries an agent path).
         # Initialised by :meth:`begin_session_compute`, freed by
         # :meth:`end_session_compute`. Lazily created on first access in
         # :meth:`_agent_id_map` to tolerate the live path that never
@@ -1774,7 +2065,7 @@ class CodexSessionCompute(BaseSessionCompute):
         return self._code_exec_targets.setdefault(session_id, [])
 
     def _agent_id_map(self, session_id: str) -> dict[str, str]:
-        """Return the per-session ``{agent_id: spawn_agent_call_id}`` map.
+        """Return the per-session ``{completion key: spawn_agent_call_id}`` map.
 
         Lazily creates the map on first access for the same reason as
         :meth:`_proc_map`. The live path doesn't actually consult this
@@ -1883,14 +2174,15 @@ class CodexSessionCompute(BaseSessionCompute):
           populated by :meth:`analyze_content` when it saw the parent's
           ``Script running with cell ID <id>`` status header. Same
           identity fallback.
-        - ``<subagent_notification>`` user message: rebound to the
-          originating ``spawn_agent`` via
+        - the subagent completion line — a ``<subagent_notification>``
+          user message on multi-agent v1, a ``FINAL_ANSWER`` agent
+          message on v2: rebound to the originating ``spawn_agent`` via
           ``self._agent_id_to_spawn_call_id``, populated by
           :meth:`analyze_content` when it saw the spawn ack output
-          ``{"agent_id": "...", ...}``. Falls back to identity when no
-          mapping is registered (e.g. notification arrived without a
-          matching spawn ack — defensive only, the SDK never emits one
-          without the other).
+          ``{"agent_id": ...}`` (v1) / the ``sub_agent_activity`` spawn
+          event (v2). Falls back to identity when no mapping is
+          registered (e.g. a completion whose spawn happened in an
+          earlier, unsynced part of the thread).
 
         Also handles eviction for the write_stdin and wait sides: when
         this poll's output reports a terminating status (``Process
@@ -1899,7 +2191,10 @@ class CodexSessionCompute(BaseSessionCompute):
         reading order stays correct (it had already populated / read the
         map by the time we got here).
         """
-        if _subagent_notification_text(parsed_json) is not None:
+        if (
+            _subagent_notification_text(parsed_json) is not None
+            or _parse_agent_final_answer(parsed_json) is not None
+        ):
             agent_map = self._agent_id_to_spawn_call_id.get(session_id)
             if not agent_map:
                 return naive_tool_use_id
@@ -2056,14 +2351,20 @@ class CodexSessionCompute(BaseSessionCompute):
 
         Three unrelated chains converge here, mirroring the batch hook:
 
-        - ``<subagent_notification>`` user message: rebound to the
-          originating ``spawn_agent`` via a single ``AgentLink`` DB
-          query keyed on ``(session_id, agent_id=naive_tool_use_id)``.
+        - ``<subagent_notification>`` user message (multi-agent v1):
+          rebound to the originating ``spawn_agent`` via a single
+          ``AgentLink`` DB query keyed on
+          ``(session_id, agent_id=naive_tool_use_id)``.
           The AgentLink row was persisted by an earlier sync that
           processed the spawn ack ``function_call_output``, so the
           lookup always succeeds in normal operation. Falls back to
           identity if the row is missing (e.g. truly out-of-order
           syncs — defensive).
+        - ``FINAL_ANSWER`` agent message (multi-agent v2): same rebind,
+          but the naive id is an agent *path* no model column carries,
+          so it goes through
+          :meth:`_lookup_spawn_call_id_for_agent_path` (newest
+          ``sub_agent_activity`` announcing that path).
         - ``write_stdin`` ``function_call_output``: resolves the parent
           ``exec_command`` through two DB lookups (write_stdin
           arguments → exec_command_id → function_call_output that
@@ -2090,6 +2391,14 @@ class CodexSessionCompute(BaseSessionCompute):
             if link is None:
                 return naive_tool_use_id
             return link.tool_use_id
+        if _parse_agent_final_answer(parsed_json) is not None:
+            # v2: the naive id is an agent *path*, which no model column
+            # carries — resolve it through the ``sub_agent_activity``
+            # line that announced the spawn (it holds both the path and
+            # the spawning call_id).
+            return self._lookup_spawn_call_id_for_agent_path(
+                session_id, item.line_num, naive_tool_use_id,
+            )
         if parsed_json.get("type") == _TYPE_EVENT_MSG:
             payload = _payload(parsed_json)
             if payload is not None and naive_tool_use_id.startswith("exec-"):
@@ -2170,6 +2479,37 @@ class CodexSessionCompute(BaseSessionCompute):
                 continue
             return payload
         return None
+
+    def _lookup_spawn_call_id_for_agent_path(
+        self,
+        session_id: str,
+        max_line_num: int,
+        agent_path: str,
+    ) -> str:
+        """Resolve a multi-agent v2 agent path to its ``spawn_agent`` call_id.
+
+        Live counterpart of the batch ``_agent_id_to_spawn_call_id``
+        side-table: walks back to the ``event_msg.sub_agent_activity``
+        line that announced the spawn (newest first — an agent path can
+        be reused by a later spawn once the previous holder is gone) and
+        returns the ``event_id`` it carries. Returns ``agent_path``
+        unchanged when nothing matches, so the caller still creates a
+        link (just under the naive id) instead of dropping the result.
+        """
+        candidates = SessionItem.objects.filter(
+            session_id=session_id,
+            line_num__lt=max_line_num,
+            content__contains=_SUB_AGENT_ACTIVITY_PAYLOAD_TYPE,
+        ).filter(content__contains=agent_path).order_by('-line_num')
+        for candidate in candidates.iterator(chunk_size=10):
+            try:
+                parsed = orjson.loads(candidate.content)
+            except orjson.JSONDecodeError:
+                continue
+            spawn = _parse_sub_agent_activity_started(parsed)
+            if spawn is not None and spawn.agent_path == agent_path:
+                return spawn.call_id
+        return agent_path
 
     def _lookup_orphan_end_exec_call_id(
         self,
@@ -2968,6 +3308,17 @@ class CodexSessionCompute(BaseSessionCompute):
 
         if wrapper_type == _TYPE_RESPONSE_ITEM and payload is not None:
             sub_type = payload.get("type")
+            # The task handed down to a subagent (multi-agent v2). Codex
+            # models it as an inter-agent message rather than a user
+            # message, but in the receiving thread it plays exactly the
+            # role a human's prompt plays in a top-level session — it IS
+            # what the agent was asked to do — so it renders as one (and
+            # counts as one: ``user_message_count``, the session title).
+            # Every other envelope stays SYSTEM: the mid-flight
+            # ``MESSAGE`` exchanges are already visible through the
+            # ``send_message`` tool cards on both sides.
+            if sub_type == _PAYLOAD_AGENT_MESSAGE and _parse_agent_new_task(parsed_json):
+                return ItemKind.USER_MESSAGE
             if sub_type in _TOOL_CALL_PAYLOAD_TYPES:
                 # A tier-1 code-mode wrapper around write_stdin is the same
                 # polling operation as the direct function_call: no separate
@@ -3035,6 +3386,18 @@ class CodexSessionCompute(BaseSessionCompute):
         # event_msg:user_message stores the human input as a flat
         # string, optionally with images alongside (irrelevant for the
         # title).
+        #
+        # A subagent's opening prompt is a ``NEW_TASK`` inter-agent
+        # message instead (see :meth:`compute_item_kind`). Its body is
+        # encrypted, so the readable part — the task name the parent
+        # chose — stands in: it is the only description of the job that
+        # ever reaches us, and it makes a far better session title than
+        # nothing at all.
+        task = _parse_agent_new_task(parsed_json)
+        if task is not None:
+            if task.payload:
+                return task.payload
+            return _humanize_identifier(task.task_name) if task.task_name else None
         return _event_msg_text(parsed_json, _PAYLOAD_USER_MESSAGE)
 
     # ------------------------------------------------------------------
@@ -3291,7 +3654,21 @@ class CodexSessionCompute(BaseSessionCompute):
         #   "spawn_agent terminated" signal — ``wait_agent`` outputs
         #   are intentionally NOT rebound (redundant, see the
         #   ``_SUBAGENT_NOTIFICATION_*`` constants docstring).
-        # All three are routed to DEBUG_ONLY; the front uses the tool's
+        # - ``response_item.agent_message`` opening with
+        #   ``Message Type: FINAL_ANSWER``: the multi-agent **v2**
+        #   replacement for ``<subagent_notification>`` — the subagent's
+        #   answer handed back to its parent, rebound to the originating
+        #   ``spawn_agent`` the same way (naive id = the sender's agent
+        #   path).
+        # - ``event_msg.sub_agent_activity`` with ``kind == "started"``:
+        #   the v2 spawn event. It carries no tool *result* (the ack
+        #   ``function_call_output`` already pairs with the call by
+        #   ``call_id``, and :meth:`extract_tool_result_info` returns
+        #   ``None`` here), but the live path only offers
+        #   :meth:`create_agent_link_from_tool_result` the lines it
+        #   considers tool_result-ish — this is the gate that lets the
+        #   v2 ``(call_id, agent_id)`` pair through to the AgentLink.
+        # All of them are routed to DEBUG_ONLY; the front uses the tool's
         # ``isToolRunning`` hook to know when the chain is complete.
         wrapper_type = parsed_json.get("type")
         payload = _payload(parsed_json)
@@ -3302,8 +3679,12 @@ class CodexSessionCompute(BaseSessionCompute):
                 return True
             if _subagent_notification_text(parsed_json) is not None:
                 return True
+            if _parse_agent_final_answer(parsed_json) is not None:
+                return True
             return False
         if wrapper_type == _TYPE_EVENT_MSG:
+            if _parse_sub_agent_activity_started(parsed_json) is not None:
+                return True
             return _event_msg_call_id(parsed_json) is not None
         return False
 
@@ -3363,6 +3744,22 @@ class CodexSessionCompute(BaseSessionCompute):
                 tool_use_id=agent_path,
                 is_error=error_text is not None,
                 error_text=error_text,
+            )
+
+        # ``FINAL_ANSWER`` agent messages (multi-agent v2) play the same
+        # role for the same reason, with the sender's agent path as the
+        # naive tool_use_id (same remap side-table as the v1
+        # notification, keyed by path instead of thread id). No error
+        # variant exists on this envelope: v2 reports nothing about
+        # *how* the subagent ended, so the link never flips to error
+        # here — a failed spawn is still caught upstream by
+        # :meth:`compute_link_error_override` on the ack itself.
+        final_answer = _parse_agent_final_answer(parsed_json)
+        if final_answer is not None:
+            return ToolResultInfo(
+                tool_use_id=final_answer[0],
+                is_error=False,
+                error_text=None,
             )
 
         # Mirror of ``extract_tool_use_entries`` for the matching result
@@ -3510,15 +3907,28 @@ class CodexSessionCompute(BaseSessionCompute):
     def extract_agent_info_from_tool_result(
         self, parsed_json: dict
     ) -> tuple[str, str, bool] | None:
-        """Return ``(call_id, agent_id, is_async)`` for a successful ``spawn_agent`` output.
+        """Return ``(call_id, agent_id, is_async)`` for a successful spawn.
 
-        The ``function_call_output`` of a ``spawn_agent`` carries a JSON
-        string ``{"agent_id": "...", "nickname": "..."}`` on success.
+        Two line shapes carry the pair, one per protocol generation:
+
+        - **v1**: the ``spawn_agent`` ``function_call_output`` itself,
+          a JSON string ``{"agent_id": "...", "nickname": "..."}``.
+        - **v2**: the ``event_msg.sub_agent_activity`` line with
+          ``kind == "started"`` — the v2 ack (``{"task_name": ...}``)
+          has no thread id, so the event carries the pair instead
+          (``event_id`` = the spawning call_id, ``agent_thread_id`` =
+          the subagent session). See
+          :func:`_parse_sub_agent_activity_started`.
+
         Returns ``None`` for any other shape (different tool, freeform
-        rejection text, missing fields, malformed JSON…). ``is_async`` is
-        always True: Codex's ``spawn_agent`` runs the subagent
-        asynchronously (see :meth:`extract_task_tool_uses`).
+        rejection text, non-spawn activity kinds, missing fields,
+        malformed JSON…). ``is_async`` is always True: Codex's
+        ``spawn_agent`` runs the subagent asynchronously in both
+        generations (see :meth:`extract_task_tool_uses`).
         """
+        spawn = _parse_sub_agent_activity_started(parsed_json)
+        if spawn is not None:
+            return spawn.call_id, spawn.agent_id, True
         if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
             return None
         payload = _payload(parsed_json)
@@ -3545,10 +3955,16 @@ class CodexSessionCompute(BaseSessionCompute):
         """Return ``[(call_id, is_background)]`` for ``spawn_agent`` calls.
 
         Codex's ``spawn_agent`` always runs the subagent asynchronously:
-        the parent receives an immediate ``{"agent_id": ...}`` ack and
-        later gets a ``<subagent_notification>`` user message when the
-        subagent finishes — so we always model it as
-        ``is_background=True``.
+        the parent receives an immediate ack and, when the subagent
+        finishes, a second signal — a ``<subagent_notification>`` user
+        message on v1, a ``FINAL_ANSWER`` agent message on v2. Both are
+        rebound as the spawn's second ``ToolResultLink``, so we always
+        model the call as ``is_background=True`` (two expected results).
+
+        Matches on the raw ``payload.name``, which stayed ``spawn_agent``
+        in both generations — the ``collaboration`` namespace v2 adds
+        only shows up in the *qualified* name (see
+        :data:`_SPAWN_AGENT_TOOL_NAMES`).
         """
         if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
             return _EMPTY_TASK_TOOL_USES
@@ -3607,13 +4023,18 @@ class CodexSessionCompute(BaseSessionCompute):
     ) -> str | None:
         """For ``spawn_agent``: surface the SDK's rejection text as the link error.
 
-        On success the ``output`` parses as ``{"agent_id": ..., ...}`` and
-        we return ``None`` (no override — the spawn worked). On failure
-        the SDK returns a freeform string (e.g. fork-context constraint
+        On success the ``output`` parses as ``{"agent_id": ..., ...}``
+        (v1) or ``{"task_name": "/root/<task>"}`` (v2) and we return
+        ``None`` (no override — the spawn worked). On failure the SDK
+        returns a freeform string (e.g. fork-context constraint
         violations); we expose it verbatim as the error so the
         ``ToolResultLink`` flips to error state with a meaningful message.
+
+        ``tool_name`` arrives fully qualified, so it matches against
+        :data:`_SPAWN_AGENT_TOOL_NAMES` (v2 prefixes the ``collaboration``
+        namespace) rather than the bare function name.
         """
-        if tool_name != _SPAWN_AGENT_FUNCTION_NAME:
+        if tool_name not in _SPAWN_AGENT_TOOL_NAMES:
             return None
         if parsed_json.get("type") != _TYPE_RESPONSE_ITEM:
             return None
@@ -3627,7 +4048,10 @@ class CodexSessionCompute(BaseSessionCompute):
             decoded = orjson.loads(output)
         except orjson.JSONDecodeError:
             return output
-        if isinstance(decoded, dict) and isinstance(decoded.get("agent_id"), str):
+        if isinstance(decoded, dict) and (
+            isinstance(decoded.get("agent_id"), str)
+            or isinstance(decoded.get("task_name"), str)
+        ):
             return None
         return output
 
@@ -3992,6 +4416,28 @@ class CodexSessionCompute(BaseSessionCompute):
     def is_session_start_marker(self, parsed_json: dict) -> bool:
         return False
 
+    def subagent_turn_boundary(self, parsed_json: dict) -> bool | None:
+        """Map Codex's own turn events to the subagent's running / idle state.
+
+        ``event_msg.task_started`` / ``task_complete`` bracket every turn a
+        thread runs, subagent threads included — the one signal that says
+        whether the child is still working. Codex's own ``list_agents``
+        does NOT: it reports an agent as ``running`` until it is closed,
+        long after it went idle (a subagent that answered its parent and
+        sits there waiting for a follow-up is still ``running`` there).
+        """
+        if parsed_json.get("type") != _TYPE_EVENT_MSG:
+            return None
+        payload = _payload(parsed_json)
+        if payload is None:
+            return None
+        sub_type = payload.get("type")
+        if sub_type == _PAYLOAD_TASK_COMPLETE:
+            return True
+        if sub_type == _PAYLOAD_TASK_STARTED:
+            return False
+        return None
+
     def extract_custom_title(self, parsed_json: dict) -> tuple[str, str] | None:
         return None
 
@@ -4107,6 +4553,38 @@ class CodexSessionCompute(BaseSessionCompute):
                     tool_result_agent_info=None,
                 )
 
+            # ``sub_agent_activity`` (multi-agent v2): the spawn event
+            # carries the ``(spawn call_id, subagent thread id)`` pair
+            # the v2 ack dropped, so it feeds ``tool_result_agent_info``
+            # — the base batch loop turns that into the AgentLink as
+            # soon as the matching ``spawn_agent`` sits in
+            # ``task_tool_use_map`` (it does: same turn, lower line).
+            # It carries no tool *result* (``has_tool_result=False``):
+            # the ack ``function_call_output`` already pairs with the
+            # call by ``call_id``. We also record ``agent_path ->
+            # spawn call_id`` so :meth:`remap_tool_result_id` can rebind
+            # the later ``FINAL_ANSWER`` message — the v2 termination
+            # signal — onto the same ToolResultLink chain.
+            if sub_type == _SUB_AGENT_ACTIVITY_PAYLOAD_TYPE:
+                spawn = _parse_sub_agent_activity_started(parsed_json)
+                if spawn is None:
+                    return _EMPTY_ANALYSIS
+                self._agent_id_map(session_id)[spawn.agent_path] = spawn.call_id
+                return ContentAnalysis(
+                    has_visible_content=False,
+                    text_content=None,
+                    is_system_xml=False,
+                    has_tool_result=False,
+                    tool_result_id=None,
+                    tool_result_error=None,
+                    tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
+                    task_tool_uses=_EMPTY_TASK_TOOL_USES,
+                    file_paths=_EMPTY_FILE_PATHS,
+                    has_prefix=False,
+                    has_suffix=False,
+                    tool_result_agent_info=(spawn.call_id, spawn.agent_id, True),
+                )
+
             # ``image_generation_end`` is a standalone visible row (see
             # :meth:`compute_item_kind`). No tool_result pairing, no text
             # content surfaced here — the frontend pulls ``revised_prompt``,
@@ -4180,6 +4658,55 @@ class CodexSessionCompute(BaseSessionCompute):
                         tool_result_agent_info=None,
                     )
 
+            # ``FINAL_ANSWER`` inter-agent message (multi-agent v2): the
+            # same synthetic tool_result, one generation later. Detected
+            # on an ``agent_message`` payload (no ``call_id`` either), with
+            # the sender's agent path as the naive tool_result_id — the
+            # remap hook resolves it to the spawning call_id through the
+            # side-table the ``sub_agent_activity`` branch populated.
+            # ``NEW_TASK`` / ``MESSAGE`` envelopes are deliberately left
+            # alone: they're mid-flight traffic, not a completion, and
+            # their payloads are encrypted.
+            if sub_type == _PAYLOAD_AGENT_MESSAGE:
+                final_answer = _parse_agent_final_answer(parsed_json)
+                if final_answer is not None:
+                    return ContentAnalysis(
+                        has_visible_content=False,
+                        text_content=None,
+                        is_system_xml=False,
+                        has_tool_result=True,
+                        tool_result_id=final_answer[0],
+                        tool_result_error=None,
+                        tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
+                        task_tool_uses=_EMPTY_TASK_TOOL_USES,
+                        file_paths=_EMPTY_FILE_PATHS,
+                        has_prefix=False,
+                        has_suffix=False,
+                        tool_result_agent_info=None,
+                    )
+
+                # A ``NEW_TASK`` is the subagent's opening prompt: a
+                # visible row (:meth:`compute_item_kind` makes it a
+                # USER_MESSAGE) whose searchable text is whatever the
+                # envelope leaves readable — the task name when the body
+                # travelled encrypted, which is the usual case.
+                task = _parse_agent_new_task(parsed_json)
+                if task is not None:
+                    return ContentAnalysis(
+                        has_visible_content=True,
+                        text_content=self.extract_user_message_text(parsed_json),
+                        is_system_xml=False,
+                        has_tool_result=False,
+                        tool_result_id=None,
+                        tool_result_error=None,
+                        tool_use_entries=_EMPTY_TOOL_USE_ENTRIES,
+                        task_tool_uses=_EMPTY_TASK_TOOL_USES,
+                        file_paths=_EMPTY_FILE_PATHS,
+                        has_prefix=False,
+                        has_suffix=False,
+                        tool_result_agent_info=None,
+                    )
+
             # Resultless tool calls (``web_search_call``) have no
             # ``call_id`` and never pair with anything — short-circuit
             # to a visible TOOL_USE row with no tool_use_entries so the
@@ -4230,7 +4757,9 @@ class CodexSessionCompute(BaseSessionCompute):
                         del records[:-50]
                 # ``spawn_agent`` is the only agent-spawning tool today.
                 # Always background — see :meth:`extract_task_tool_uses`.
-                if sub_type == "function_call" and name == _SPAWN_AGENT_FUNCTION_NAME:
+                # ``name`` is the *qualified* one, so it matches the v2
+                # ``collaboration__`` form too (:data:`_SPAWN_AGENT_TOOL_NAMES`).
+                if sub_type == "function_call" and name in _SPAWN_AGENT_TOOL_NAMES:
                     task_tool_uses = [(call_id, True)]
                 else:
                     task_tool_uses = _EMPTY_TASK_TOOL_USES

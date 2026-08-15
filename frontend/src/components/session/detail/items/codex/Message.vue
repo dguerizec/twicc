@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { SYNTHETIC_ITEM } from '../../../../../constants'
+import { interAgentTaskMarkdown } from '../../../../../providers/codex/interAgentTask'
 import UserMessage from './UserMessage.vue'
 import AssistantMessage from './AssistantMessage.vue'
 import Reasoning from './Reasoning.vue'
@@ -79,6 +80,16 @@ const text = computed(() => {
     return props.data?.payload?.message || ''
 })
 
+// A subagent's opening prompt (Codex multi-agent v2) is a ``NEW_TASK``
+// inter-agent message, not an ``event_msg.user_message``: the text sits in
+// a content-block array and the payload itself is usually encrypted. The
+// backend classifies it as a USER_MESSAGE (it IS what this thread was asked
+// to do), so it lands in the user bubble; the helper composes the markdown
+// body the renderer would have received had Codex written it in the clear.
+const interAgentTask = computed(() =>
+    props.kind === 'user_message' ? interAgentTaskMarkdown(props.data) : null
+)
+
 // Attached images on a user_message line. Codex CLI persists them in
 // ``payload.images`` as full ``data:image/...;base64,...`` URLs (one per
 // attachment). ``local_images`` / ``text_elements`` are protocol fields
@@ -110,7 +121,7 @@ const images = computed(() => {
         :session-id="sessionId"
         :line-num="lineNum"
     />
-    <UserMessage v-else-if="kind === 'user_message'" :text="text" :images="images" />
+    <UserMessage v-else-if="kind === 'user_message'" :text="interAgentTask ?? text" :images="images" />
     <AssistantMessage
         v-else-if="kind === 'assistant_message'"
         :text="text"

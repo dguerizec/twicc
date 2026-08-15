@@ -1517,6 +1517,27 @@ class BaseSessionCompute:
         """
         raise NotImplementedError
 
+    def subagent_turn_boundary(self, parsed_json: dict) -> bool | None:
+        """Return the turn boundary this line marks in a *subagent* file.
+
+        ``True`` = the subagent just went idle (its own turn ended),
+        ``False`` = it started working again, ``None`` = not a boundary.
+
+        Only consulted on subagent files, and only by the live path, to keep
+        :attr:`Session.last_stopped_at` in step with what the subagent is
+        actually doing. The parent-side rule
+        (:meth:`check_agent_naturally_stopped`, which counts the spawning
+        tool's results) stays the primary signal; this one covers the
+        providers whose subagent can finish a turn without producing that
+        second result — Codex multi-agent v2, where a subagent answering
+        through ``send_message`` stays alive and never emits the
+        ``FINAL_ANSWER`` the parent would pair with its ``spawn_agent``.
+
+        Default: no boundary, so a provider that doesn't override it keeps
+        the parent-side rule as its only source.
+        """
+        return None
+
     def extract_custom_title(self, parsed_json: dict) -> tuple[str, str] | None:
         """
         Return ``(target_session_id, title)`` when ``parsed_json`` carries a
@@ -3155,6 +3176,14 @@ class BaseSessionCompute:
         last_started_at_update: datetime | None = None
         last_updated_at: datetime | None = None
         last_new_content_at: datetime | None = None
+        # Latest subagent turn boundary seen in this batch (see
+        # :meth:`subagent_turn_boundary`): ``True`` = went idle, ``False`` =
+        # started working again, ``None`` = no boundary, leave the stored
+        # ``last_stopped_at`` alone. ``last_turn_end_at`` carries the moment
+        # of the idle one.
+        subagent_idle: bool | None = None
+        last_turn_end_at: datetime | None = None
+        subagent_lifecycle_changed = False
 
         # Track last seen values for runtime environment fields
         first_cwd: str | None = None
@@ -3295,6 +3324,12 @@ class BaseSessionCompute:
                 last_new_content_at = item.timestamp
             if item.timestamp is not None and self.is_session_start_marker(parsed):
                 last_started_at_update = item.timestamp
+            if not is_main_session:
+                boundary = self.subagent_turn_boundary(parsed)
+                if boundary is not None:
+                    subagent_idle = boundary
+                    if boundary:
+                        last_turn_end_at = item.timestamp or last_updated_at
 
             # Extract runtime environment fields (keep last non-null value)
             runtime = self.extract_runtime_fields(parsed)
@@ -3569,6 +3604,16 @@ class BaseSessionCompute:
             session.last_updated_at = last_updated_at
         if last_new_content_at is not None:
             session.last_new_content_at = last_new_content_at
+        # A subagent has no process of its own, so nothing but its file says
+        # whether it is still working. When the provider recognises a turn
+        # boundary in it (:meth:`subagent_turn_boundary`), that is the
+        # authoritative "running / idle" signal for every consumer of
+        # ``last_stopped_at`` — the tab's process indicator, the parent's
+        # spawn card. ``None`` (no boundary in this batch) leaves the stored
+        # value untouched, so the parent-side rule keeps its say.
+        if subagent_idle is not None:
+            session.last_stopped_at = last_turn_end_at if subagent_idle else None
+            subagent_lifecycle_changed = True
 
         # Mark session as compacted if a compact_summary item was found
         if found_compact_summary and not session.compacted:
@@ -3589,6 +3634,8 @@ class BaseSessionCompute:
             "git_directory", "git_branch", "model", "slug", "created_at",
             "last_started_at", "last_updated_at", "last_new_content_at", "compacted",
         ]
+        if subagent_lifecycle_changed:
+            session_update_fields.append("last_stopped_at")
         # Persist a refreshed task snapshot only when this batch carried one, so
         # a batch with no task line leaves the stored Session.tasks intact.
         if last_tasks_snapshot is not None:
