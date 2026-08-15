@@ -1504,6 +1504,25 @@ class SessionCron(models.Model):
         jitter_max = min(period * 0.1, timedelta(minutes=15))
         return self.last_fire + jitter_max + self.JITTER_SAFETY_MARGIN
 
+    def is_restored_on_resume(self, now: datetime | None = None) -> bool:
+        """Whether the Claude CLI re-arms this cron by itself when the session is resumed.
+
+        Since CLI 2.1.110 (``--resume``/``--continue`` "resurrects unexpired
+        scheduled tasks"), resuming replays the transcript's ``CronCreate``
+        calls and re-arms every job that is not expired yet, keeping its
+        original id **and** ``created_at`` — so the 7-day window is *not*
+        extended. Jobs past that window are dropped and only Claude can bring
+        them back (which is what :func:`~twicc.providers.claude_code.cron_restart._build_restart_message`
+        asks for).
+
+        Same predicate as :meth:`active_for_session`, evaluated on one row.
+        """
+        if now is None:
+            now = datetime.now(tz=timezone.utc)
+        if self.recurring:
+            return self.created_at > now - self.CLAUDE_RECURRING_MAX_AGE
+        return self.next_fire > now
+
     @classmethod
     def has_active_for_session(cls, session_id: str, provider: Provider) -> bool:
         """Check if ``session_id`` has any non-expired cron jobs for ``provider``.

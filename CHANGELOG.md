@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **"Share viewed" notifications** — They now name the shared session or artifact, and the link's own label, instead of an internal identifier.
 - **Project icons** — The project selector now shows the current project's icon, not only its color dot.
 - **Quota tooltips** — no longer close before you can reach the buttons inside them (attempt #2).
+- **Claude cron jobs** — A session with cron jobs is now always resumed, and its jobs are no longer duplicated.
 
 ## [1.92.8] - 2026-08-05
 

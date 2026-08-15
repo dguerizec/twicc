@@ -782,12 +782,14 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             info.session_id, state.value,
         )
 
-        # First USER_TURN: purge old ProcessRuns for this session (cascade deletes their crons).
+        # First USER_TURN: consolidate this session's ProcessRuns onto the current one.
+        # Deleting a run cascades onto its crons, so the crons the resumed CLI re-armed
+        # by itself are re-parented first — see reattach_crons_and_purge_old_runs.
         # Done BEFORE broadcasting so that _enrich_with_active_crons sees the correct cron count
         # (without this, crons from the old run + new run would both appear in the broadcast).
         # Uses _old_runs_purged flag because _first_user_turn_reached is already True at this point
         # (set in _run_message_loop before _notify_state_change is called).
-        # Systematic for all agents — no-op if no old process runs exist (DELETE affects 0 rows).
+        # Systematic for all agents — no-op when the session has no old process run.
         # Specific to Claude Code: ghost ProcessRuns only exist when a previous TwiCC instance
         # kept a row alive past death because it had crons attached, and the boot-time cron
         # restart then created a new ProcessRun for the relaunched session. The other provider
@@ -800,18 +802,21 @@ class ClaudeCodeAgentManager(BaseAgentManager):
             agent._old_runs_purged = True
             current_run_id = agent.process_run.pk
             try:
-                from twicc.core.models import ProcessRun
-                deleted_count, _ = await run_under_db_write_lock(
+                from twicc.providers.claude_code.cron_restart import (
+                    reattach_crons_and_purge_old_runs,
+                )
+                reattached, deleted_count = await run_under_db_write_lock(
                     lambda: asyncio.to_thread(
-                        lambda: ProcessRun.objects.filter(
-                            session_id=agent.session_id
-                        ).exclude(pk=current_run_id).delete()
+                        reattach_crons_and_purge_old_runs,
+                        agent.session_id,
+                        current_run_id,
                     )
                 )
                 if deleted_count:
                     logger.info(
-                        "Purged %d old process run(s) for session %s (current: %s)",
-                        deleted_count, agent.session_id, current_run_id,
+                        "Purged %d old process run(s) for session %s (current: %s), "
+                        "re-attached %d restored cron(s)",
+                        deleted_count, agent.session_id, current_run_id, reattached,
                     )
             except Exception as e:
                 logger.error("Error purging old process runs for session %s: %s", agent.session_id, e)

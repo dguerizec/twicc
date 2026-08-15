@@ -5,6 +5,16 @@ Called at TwiCC startup (restart_all_session_crons) and at runtime when a
 process with active crons dies from a non-manual cause (_restart_crons_for_session
 in ClaudeCodeAgentManager). Both paths use the same restart_session_crons() function.
 
+Relaunching the *process* is the part only TwiCC can do; re-arming the jobs is
+mostly the CLI's job now. Since CLI 2.1.110 a resume replays the transcript and
+resurrects every unexpired job with its original id and ``created_at``
+(:meth:`SessionCron.is_restored_on_resume`). So the message we send on resume
+asks Claude to recreate *only* the recurring jobs that went past the CLI's
+7-day window — asking for the others would double them. The rows of the
+resurrected ones are re-parented onto the new run by
+:func:`reattach_crons_and_purge_old_runs` so the expiry monitor keeps renewing
+them.
+
 The cross-provider boot cleanup of stale :class:`ProcessRun` rows lives in
 :mod:`twicc.agent.process_run_cleanup` and runs *before* this module is
 invoked; by the time :func:`_prepare_restarts` reads the table, the only
@@ -17,6 +27,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from typing import NamedTuple
 
 from django.db import transaction
@@ -78,19 +89,121 @@ def _retry_delays(initial_delay: int = 0) -> Iterator[int]:
         yield MAX_RETRY_DELAY
 
 
+class RestorableCrons(NamedTuple):
+    """The session's crons, split by who is responsible for bringing them back.
+
+    ``restored`` — the resumed CLI re-arms them by itself, same id, same
+    ``created_at``. Claude must be told they are back so it does not create a
+    duplicate that fires alongside them.
+
+    ``to_recreate`` — recurring crons past the CLI's 7-day window. The CLI drops
+    them on resume, so only a fresh ``CronCreate`` brings them back (which also
+    resets the window).
+
+    One-shot crons whose fire time has passed are in neither list: they are dead
+    on both sides, and recreating them would schedule the next match a year
+    later. Their rows go away with the old process run.
+    """
+
+    restored: list
+    to_recreate: list
+
+    @property
+    def has_any(self) -> bool:
+        return bool(self.restored or self.to_recreate)
+
+
+def _split_restorable_crons(session_id: str) -> RestorableCrons:
+    """Split ``session_id``'s persisted crons into the two restore buckets.
+
+    Synchronous (DB access) — call from a thread. Deliberately reads every row
+    instead of :meth:`SessionCron.active_for_session`: a recurring cron that
+    went past its 7 days while the process was dead must still bring the
+    session back, it just needs recreating rather than resurrecting.
+    """
+    from twicc.core.models import SessionCron
+
+    now = datetime.now(tz=timezone.utc)
+    restored: list = []
+    to_recreate: list = []
+    for cron in SessionCron.objects.filter(
+        session_id=session_id,
+        provider=Provider.CLAUDE_CODE.value,
+    ).order_by("created_at"):
+        if cron.is_restored_on_resume(now):
+            restored.append(cron)
+        elif cron.recurring:
+            to_recreate.append(cron)
+    return RestorableCrons(restored, to_recreate)
+
+
+def _cron_payload(cron) -> dict:
+    """Message-building payload for one :class:`SessionCron` row."""
+    return {
+        "cron_id": cron.cron_id,
+        "cron_expr": cron.cron_expr,
+        "recurring": cron.recurring,
+        "prompt": cron.prompt,
+    }
+
+
+def reattach_crons_and_purge_old_runs(session_id: str, current_run_id: int) -> tuple[int, int]:
+    """Re-parent the still-live crons onto the current run, then drop the old runs.
+
+    Called at the first USER_TURN of a (re)started agent, from
+    :meth:`ClaudeCodeAgentManager._on_state_change`, under the DB write lock.
+
+    Deleting a :class:`ProcessRun` cascades onto its :class:`SessionCron` rows.
+    That was correct while a resumed CLI lost its jobs, but it now discards rows
+    whose job is still armed (see :meth:`SessionCron.is_restored_on_resume`):
+    TwiCC would stop tracking a live cron, and the expiry monitor would never
+    renew it. So those rows move to the current run first. Everything else —
+    expired one-shots, and recurring jobs Claude has just recreated under a new
+    id — goes away with the old rows.
+
+    Synchronous (DB access) — call from a thread. Returns
+    ``(reattached, deleted_runs)``.
+    """
+    from twicc.core.models import ProcessRun, SessionCron
+
+    old_run_pks = list(
+        ProcessRun.objects
+        .filter(session_id=session_id)
+        .exclude(pk=current_run_id)
+        .values_list("pk", flat=True)
+    )
+    if not old_run_pks:
+        return 0, 0
+
+    now = datetime.now(tz=timezone.utc)
+    reattached = 0
+    for cron in SessionCron.objects.filter(process_run_id__in=old_run_pks):
+        if not cron.is_restored_on_resume(now):
+            continue
+        cron.process_run_id = current_run_id
+        cron.save(update_fields=["process_run"])
+        reattached += 1
+
+    # Counting the pks, not ``delete()``'s first return value: that one sums the
+    # cascaded SessionCron rows in with the runs.
+    ProcessRun.objects.filter(pk__in=old_run_pks).delete()
+    return reattached, len(old_run_pks)
+
+
 def _collect_restart_data(session_id: str) -> dict | None:
     """Collect restart data for a single session (synchronous, runs in thread).
 
     Returns a dict with keys matching send_to_session() kwargs (minus text)
-    plus crons_data for message building. Returns None if restart not possible
-    (no active crons, session not found, or cwd missing).
+    plus the two cron buckets used to build the message (see
+    :class:`RestorableCrons`). Returns None if restart is not possible
+    (nothing left to restore, session not found, or cwd missing).
     """
     from twicc.core.enums import Provider
-    from twicc.core.models import Session, SessionCron
+    from twicc.core.models import Session
     from twicc.providers.helpers import AgentSettings, get_provider_helpers
 
-    active_crons = list(SessionCron.active_for_session(session_id, Provider.CLAUDE_CODE))
-    if not active_crons:
+    crons = _split_restorable_crons(session_id)
+    if not crons.has_any:
         return None
 
     try:
@@ -115,10 +228,8 @@ def _collect_restart_data(session_id: str) -> dict | None:
         "session_id": session_id,
         "project_id": session.project_id,
         "cwd": cwd,
-        "crons_data": [
-            {"cron_expr": c.cron_expr, "recurring": c.recurring, "prompt": c.prompt}
-            for c in active_crons
-        ],
+        "restored_crons": [_cron_payload(c) for c in crons.restored],
+        "crons_to_recreate": [_cron_payload(c) for c in crons.to_recreate],
         "settings": agent_settings,
     }
 
@@ -184,7 +295,7 @@ def _prepare_restarts() -> list[str]:
     helper deemed worth keeping (= rows that still have :class:`SessionCron`
     rows attached) survive on the CC slice.
 
-    Two concerns remain, both resolved by deleting the now-pointless
+    Three concerns remain, all resolved by deleting the now-pointless
     :class:`ProcessRun` (cascading its crons) instead of restarting:
 
     - Sessions whose JSONL was deleted on disk between TwiCC instances. The
@@ -195,6 +306,11 @@ def _prepare_restarts() -> list[str]:
       itself (``core.services.session_update.apply_session_archived_change``),
       so a surviving row means the archive predates that behaviour — never
       resurrect a session the user put away.
+    - Sessions left with nothing to restore. The boot cleanup only checks that
+      cron rows *exist*; a session whose every cron is a one-shot that already
+      fired has nothing to bring back, and without this its row would survive
+      every boot (the purge that would clear it only runs on a USER_TURN that
+      never comes).
     """
     from twicc.agent.states import AgentState
     from twicc.core.enums import Provider
@@ -230,6 +346,14 @@ def _prepare_restarts() -> list[str]:
             process_run.delete()
             logger.info(
                 "Session %s: archived, deleted process run %s (crons dropped)",
+                session_id, process_run.pk,
+            )
+            continue
+
+        if not _split_restorable_crons(session_id).has_any:
+            process_run.delete()
+            logger.info(
+                "Session %s: no cron left to restore, deleted process run %s",
                 session_id, process_run.pk,
             )
             continue
@@ -302,8 +426,10 @@ async def restart_session_crons(
             )
             return
 
-        crons_data = restart_data.pop("crons_data")
-        message = _build_restart_message(crons_data)
+        message = _build_restart_message(
+            restart_data.pop("restored_crons"),
+            restart_data.pop("crons_to_recreate"),
+        )
 
         try:
             await manager.send_to_session(**restart_data, text=message, cancel_cron_restart=False)
@@ -355,16 +481,18 @@ async def restart_session_crons(
             continue
 
 
-def _format_cron_description(cron: dict, *, cron_id_to_delete: str | None = None) -> str:
+def _format_cron_description(cron: dict, *, cron_id_label: str | None = None) -> str:
     """Format a single cron's details for inclusion in a message.
 
     Args:
-        cron: Dict with "cron_expr", "recurring", "prompt" keys.
-        cron_id_to_delete: If provided, adds an "ID to delete" line (for renewal messages).
+        cron: Dict with "cron_id", "cron_expr", "recurring", "prompt" keys.
+        cron_id_label: Label for the cron's CLI id line (e.g. "ID", "ID to
+            delete"). Omit to leave the id out — a cron Claude must create from
+            scratch has no id yet.
     """
     lines = []
-    if cron_id_to_delete:
-        lines.append(f"**ID to delete**: `{cron_id_to_delete}`")
+    if cron_id_label and cron.get("cron_id"):
+        lines.append(f"**{cron_id_label}**: `{cron['cron_id']}`")
     schedule = f'**Schedule**: `{cron["cron_expr"]}`'
     if cron["recurring"]:
         schedule += " (recurring)"
@@ -376,42 +504,60 @@ def _format_cron_description(cron: dict, *, cron_id_to_delete: str | None = None
     return "\n".join(lines)
 
 
-def _build_cron_descriptions(crons_data: list[dict], *, with_cron_ids: bool = False) -> str:
+def _build_cron_descriptions(crons_data: list[dict], *, cron_id_label: str | None = None) -> str:
     """Build the formatted block of cron descriptions separated by ---."""
     parts = ["---\n"]
     for cron in crons_data:
-        cron_id_to_delete = cron.get("cron_id") if with_cron_ids else None
-        parts.append(_format_cron_description(cron, cron_id_to_delete=cron_id_to_delete))
+        parts.append(_format_cron_description(cron, cron_id_label=cron_id_label))
         parts.append("\n---\n")
     return "\n".join(parts)
 
 
-def _build_restart_message(crons_data: list[dict]) -> str:
-    """Build the user message asking Claude to recreate cron jobs.
+def _build_restart_message(restored: list[dict], to_recreate: list[dict]) -> str:
+    """Build the user message sent to a session relaunched for its cron jobs.
 
-    Used when the process is dead and crons need to be recreated from scratch.
-    No deletion needed since the CLI crons are already gone.
+    Two independent sections, either of which may be empty (never both — the
+    caller stops when there is nothing to restore):
+
+    - ``restored``: jobs the resumed CLI re-armed by itself. Claude is told they
+      are back precisely so it does *not* recreate them — a second CronCreate
+      would fire alongside the restored job instead of replacing it.
+    - ``to_recreate``: recurring jobs past the CLI's 7-day window, dropped on
+      resume. Only Claude can bring them back.
     """
-    if len(crons_data) == 1:
-        header = (
-            "This session was just resumed, so we lost our previous cron job, "
-            "please recreate it using CronCreate:"
+    parts = ["<twicc-cron-restart>", "This session was just resumed.\n"]
+
+    if restored:
+        one = len(restored) == 1
+        parts.append(
+            f"Claude Code already restored the cron job{'' if one else 's'} below — "
+            f"{'it is' if one else 'they are'} armed and will fire on schedule. "
+            f"Do NOT call CronCreate for {'it' if one else 'them'}: that would add a "
+            f"duplicate firing alongside the restored job, not replace it.\n"
+        )
+        parts.append(_build_cron_descriptions(restored, cron_id_label="ID"))
+
+    if to_recreate:
+        one = len(to_recreate) == 1
+        parts.append(
+            f"The cron job{'' if one else 's'} below reached the 7-day expiry and "
+            f"{'was' if one else 'were'} dropped. Recreate "
+            f"{'it' if one else 'each of them'} using CronCreate, with the exact "
+            f"schedule and prompt shown.\n"
+        )
+        parts.append(_build_cron_descriptions(to_recreate))
+        parts.append(
+            "Do not say anything other than a short sentence acknowledging the "
+            "number of cron jobs recreated."
         )
     else:
-        header = (
-            "This session was just resumed, so we lost our previous cron jobs, "
-            "please recreate each of them using CronCreate:"
+        parts.append(
+            "There is nothing to do. Do not say anything other than a short sentence "
+            "acknowledging the restored cron job(s)."
         )
 
-    descriptions = _build_cron_descriptions(crons_data)
-
-    return (
-        f"<twicc-cron-restart>\n"
-        f"{header}\n\n{descriptions}\n\n"
-        f"Use the exact schedule and prompt shown above for each CronCreate call.\n\n"
-        f"Do not say anything other than a short sentence acknowledging the number of crons recreated.\n"
-        f"</twicc-cron-restart>"
-    )
+    parts.append("</twicc-cron-restart>")
+    return "\n".join(parts)
 
 
 def _build_renewal_message(crons_data: list[dict]) -> str:
@@ -436,7 +582,7 @@ def _build_renewal_message(crons_data: list[dict]) -> str:
             "then recreate it using CronCreate:"
         )
 
-    descriptions = _build_cron_descriptions(crons_data, with_cron_ids=True)
+    descriptions = _build_cron_descriptions(crons_data, cron_id_label="ID to delete")
 
     return (
         f"<twicc-cron-renewal>\n"
