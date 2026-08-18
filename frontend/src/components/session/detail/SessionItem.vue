@@ -85,6 +85,13 @@ const props = defineProps({
         type: Number,
         default: 0
     },
+    // True when this item is the first of its conversation block (mirrors the
+    // `.is-block-start` CSS class). Forwarded to the message renderers, which
+    // use it with `isBlockEnd` to decide what an empty assistant message shows.
+    isBlockStart: {
+        type: Boolean,
+        default: false
+    },
     // True when this item is the last of its conversation block (mirrors the
     // `.is-block-end` CSS class). Drives the per-block timestamp below.
     isBlockEnd: {
@@ -229,6 +236,8 @@ function toggleJsonView() {
                     :group-tail="groupTail"
                     :prefix-expanded="prefixExpanded"
                     :suffix-expanded="suffixExpanded"
+                    :is-block-start="isBlockStart"
+                    :is-block-end="isBlockEnd"
                     @toggle-suffix="emit('toggle-suffix')"
                 />
                 <ClaudeCodeMessage
@@ -269,6 +278,8 @@ function toggleJsonView() {
                     :kind="kind"
                     :session-id="sessionId"
                     :line-num="lineNum"
+                    :is-block-start="isBlockStart"
+                    :is-block-end="isBlockEnd"
                 />
                 <CodexToolUse
                     v-else-if="kind === 'tool_use'"

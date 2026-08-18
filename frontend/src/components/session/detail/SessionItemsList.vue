@@ -1808,6 +1808,7 @@ defineExpose({
                     :suffix-expanded="item.suffixExpanded || false"
                     :detail-toggle-for="item.detailToggleFor ?? null"
                     :block-comments-count="item.detailToggleFor != null ? blockCommentsCount(item.detailToggleFor) : 0"
+                    :is-block-start="item.isBlockStart || false"
                     :is-block-end="item.isBlockEnd || false"
                     @toggle-suffix="toggleGroup(item.suffixGroupHead)"
                 />

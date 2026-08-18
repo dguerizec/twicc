@@ -136,7 +136,8 @@ watch(() => [settings.displayMode, settings.areMessageTimestampsShown],
                     :line-num="item.lineNum" :externally-grouped="item.externallyGrouped || false"
                     :group-head="item.groupHead" :group-tail="item.groupTail"
                     :prefix-expanded="item.prefixExpanded || false" :suffix-expanded="item.suffixExpanded || false"
-                    :detail-toggle-for="item.detailToggleFor ?? null" :is-block-end="item.isBlockEnd || false"
+                    :detail-toggle-for="item.detailToggleFor ?? null"
+                    :is-block-start="item.isBlockStart || false" :is-block-end="item.isBlockEnd || false"
                     @toggle-suffix="toggleGroup(item.suffixGroupHead)" />
             </template>
         </VirtualScroller>

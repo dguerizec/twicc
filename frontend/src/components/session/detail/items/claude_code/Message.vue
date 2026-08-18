@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { SYNTHETIC_ITEM } from '../../../../../constants'
 import { useDataStore } from '../../../../../stores/data'
-import { emptyAssistantMessageMarkdown } from '../../../../../utils/emptyMessage'
+import { emptyAssistantMessageMarkdown, showEmptyAssistantNotice } from '../../../../../utils/emptyMessage'
 import ContentList from './ContentList.vue'
 import WorkingAssistantMessage from '../WorkingAssistantMessage.vue'
 
@@ -53,6 +53,17 @@ const props = defineProps({
     suffixExpanded: {
         type: Boolean,
         default: false
+    },
+    // Position of this item in its conversation block (mirrors the
+    // `.is-block-start` / `.is-block-end` CSS classes). Only used to decide
+    // what an empty assistant message renders — see showEmptyAssistantNotice.
+    isBlockStart: {
+        type: Boolean,
+        default: false
+    },
+    isBlockEnd: {
+        type: Boolean,
+        default: false
     }
 })
 
@@ -88,18 +99,20 @@ const isStreamingBlock = computed(() =>
     props.data?.syntheticKind === SYNTHETIC_ITEM.STREAMING_BLOCK.kind
 )
 
-// An assistant message the provider wrote without any content renders as an
-// empty bubble, which reads as a display bug — replace it with a text saying
-// so. Blank ``text`` blocks count as no content; a ``thinking`` or
-// ``tool_use`` block does not, so a message is only replaced when it has
-// nothing else to show. Streaming placeholders are excluded: their text is
-// legitimately empty until the first delta lands.
+// An assistant message the provider wrote without any content is either
+// replaced by a notice or rendered as nothing at all, never as the empty
+// bubble it would otherwise paint (showEmptyAssistantNotice owns the choice).
+// Blank ``text`` blocks count as no content; a ``thinking`` or ``tool_use``
+// block does not, so a message is only substituted when it has nothing else to
+// show. Streaming placeholders are excluded: their text is legitimately empty
+// until the first delta lands.
 const displayItems = computed(() => {
     if (props.role !== 'assistant' || isStreamingBlock.value) return contentItems.value
     const isEmpty = contentItems.value.every(
         item => item?.type === 'text' && !(item.text || '').trim()
     )
     if (!isEmpty) return contentItems.value
+    if (!showEmptyAssistantNotice(props.isBlockStart, props.isBlockEnd)) return []
     const provider = dataStore.getSession(props.sessionId)?.provider
     return [{ type: 'text', text: emptyAssistantMessageMarkdown(provider) }]
 })

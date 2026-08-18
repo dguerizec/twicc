@@ -15,3 +15,26 @@ import { getProviderLabel } from '../providers'
 export function emptyAssistantMessageMarkdown(provider) {
     return `*${getProviderLabel(provider)} had nothing to add here.*`
 }
+
+/**
+ * Whether an assistant message with no content must be replaced by the notice
+ * above, or dropped entirely (rendered as nothing).
+ *
+ * The notice only earns its place when the empty message is the whole block:
+ * the assistant turn would otherwise render nothing at all between two user
+ * messages. As soon as the block displays anything else — an earlier text, a
+ * tool use, a group toggle — that context already shows the turn happened, so
+ * narrating the emptiness is noise (a common shape in orchestration: the agent
+ * messages another session, then closes its turn with an empty message).
+ *
+ * Both flags come from the visual-item block flags (see the store's
+ * ``recomputeVisualItems``), so they reflect what is actually displayed in the
+ * current display mode, not the raw JSONL.
+ *
+ * @param {boolean} isBlockStart - Nothing is displayed before it in its block.
+ * @param {boolean} isBlockEnd - Nothing is displayed after it in its block.
+ * @returns {boolean} true to render the notice, false to render nothing.
+ */
+export function showEmptyAssistantNotice(isBlockStart, isBlockEnd) {
+    return isBlockStart && isBlockEnd
+}

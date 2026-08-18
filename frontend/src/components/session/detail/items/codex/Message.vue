@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { SYNTHETIC_ITEM } from '../../../../../constants'
 import { useDataStore } from '../../../../../stores/data'
-import { emptyAssistantMessageMarkdown } from '../../../../../utils/emptyMessage'
+import { emptyAssistantMessageMarkdown, showEmptyAssistantNotice } from '../../../../../utils/emptyMessage'
 import { interAgentTaskMarkdown } from '../../../../../providers/codex/interAgentTask'
 import UserMessage from './UserMessage.vue'
 import AssistantMessage from './AssistantMessage.vue'
@@ -38,6 +38,17 @@ const props = defineProps({
     lineNum: {
         type: Number,
         required: true
+    },
+    // Position of this item in its conversation block (mirrors the
+    // `.is-block-start` / `.is-block-end` CSS classes). Only used to decide
+    // what an empty assistant message renders — see showEmptyAssistantNotice.
+    isBlockStart: {
+        type: Boolean,
+        default: false
+    },
+    isBlockEnd: {
+        type: Boolean,
+        default: false
     }
 })
 
@@ -86,11 +97,14 @@ const dataStore = useDataStore()
 
 // Codex sometimes ends a turn with an ``agent_message`` carrying an empty
 // ``message``. The line is a real ASSISTANT_MESSAGE, so it gets a bubble —
-// empty, which reads as a display bug. Show a replacement text instead.
+// empty, which reads as a display bug. Show a replacement text instead, or
+// nothing at all (``null``, dropping the bubble) when the block already
+// displays something else — showEmptyAssistantNotice owns that choice.
 // Streaming placeholders are excluded: their text is legitimately empty
 // until the first delta lands.
 const assistantText = computed(() => {
     if (isStreamingBlock.value || text.value.trim()) return text.value
+    if (!showEmptyAssistantNotice(props.isBlockStart, props.isBlockEnd)) return null
     return emptyAssistantMessageMarkdown(dataStore.getSession(props.sessionId)?.provider)
 })
 
@@ -137,7 +151,7 @@ const images = computed(() => {
     />
     <UserMessage v-else-if="kind === 'user_message'" :text="interAgentTask ?? text" :images="images" />
     <AssistantMessage
-        v-else-if="kind === 'assistant_message'"
+        v-else-if="kind === 'assistant_message' && assistantText !== null"
         :text="assistantText"
         :session-id="sessionId"
         :line-num="lineNum"
