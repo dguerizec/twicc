@@ -353,8 +353,8 @@ const collapsed = ref(false)
 // bar always exposes its own restore button, so the threshold is irrelevant then,
 // and observing the collapsed height would just oscillate this flag).
 const isTall = ref(false)
-// Show the collapse affordance once the composer passes ~a third of the viewport.
-const COLLAPSE_THRESHOLD_RATIO = 0.33
+// Show the collapse affordance once the composer passes a quarter of the viewport.
+const COLLAPSE_THRESHOLD_RATIO = 0.25
 const collapseButtonId = useId()
 const sendingLockedId = useId()
 let collapseResizeObserver = null
