@@ -91,6 +91,13 @@ class TestCodexStatusLabel:
         agent._subagent_wait_label_active = True
         assert agent.current_status_label() == "waiting for 1 subagent"
 
+    def test_a_wait_with_nothing_live_still_says_waiting(self):
+        """Zero children drops the count, not the line (Codex holds the turn)."""
+        agent = _codex_agent()
+        agent._subagent_wait_label_active = True
+
+        assert agent.current_status_label() == "waiting"
+
     def test_a_manual_compaction_owns_the_line(self):
         agent = _codex_agent()
         agent._manual_compaction = True

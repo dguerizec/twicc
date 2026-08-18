@@ -902,7 +902,7 @@ class CodexAgent(BaseAgent):
             self._live_subagents.pop(thread_id, None)
 
     async def _refresh_subagent_wait_label(self) -> None:
-        """Show "waiting for N subagents" while the parent blocks on ``wait_agent``.
+        """Say the parent blocks on ``wait_agent``, with a count when there is one.
 
         Codex holds the turn open on its own here (the call blocks inside
         the turn), so the state is already ``ASSISTANT_TURN`` — what is
@@ -913,15 +913,15 @@ class CodexAgent(BaseAgent):
 
         The count is the spawns seen on this run's stream minus the ones
         the watcher already saw finish, so a sequence of one-agent waits
-        reads "1 subagent" each time instead of accumulating. A stale
-        count would be worse than none: if nothing is live (every child
-        already finished, or the wait was issued with no child at all)
-        the label is cleared and the normal status takes over.
+        reads "1 subagent" each time instead of accumulating. With nothing
+        live the label drops the count and reads a bare "waiting" — a
+        stale count would be worse than none, and both ways to get there
+        are honest as "waiting": every child already finished, or the wait
+        was issued with no child at all (the model reaching for
+        ``wait_agent`` as a sleep, which nothing can wake before its own
+        ``timeout_ms``).
         """
         await self._prune_finished_subagents()
-        if not self._live_subagents:
-            await self._clear_subagent_wait_label()
-            return
         self._subagent_wait_label_active = True
         # Same composition as the snapshot path — one source, one wording.
         label = self.current_status_label()
@@ -940,7 +940,7 @@ class CodexAgent(BaseAgent):
             return None
         count = len(self._live_subagents)
         if not count:
-            return None
+            return "waiting"
         return f"waiting for {count} subagent{'s' if count > 1 else ''}"
 
     async def _clear_subagent_wait_label(self) -> None:

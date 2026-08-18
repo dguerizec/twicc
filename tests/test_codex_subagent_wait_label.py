@@ -11,7 +11,8 @@ The label is driven by two thread items Codex routes on the parent's
 stream: ``subAgentActivity`` (which children are alive) and
 ``collabAgentToolCall`` with ``tool == "wait"`` (the parent is blocked).
 Completions never reach that stream, so the live set is pruned against
-the watcher's ``Session.last_stopped_at``.
+the watcher's ``Session.last_stopped_at``. With nothing live the label
+keeps the line and drops the count — a bare "waiting".
 """
 
 from __future__ import annotations
@@ -129,15 +130,30 @@ class TestWaitLabel:
         assert _labels(agent) == ["waiting for 1 subagent"]
         assert agent._live_subagents == {"agent-2": "/root/task"}
 
-    def test_no_live_child_shows_no_label(self) -> None:
-        """A wait with nothing left alive falls back to the normal status."""
+    def test_no_live_child_drops_the_count_not_the_label(self) -> None:
+        """A wait with nothing left alive still says the turn is a wait."""
         agent = _agent(stopped=["agent-1"])
         agent._note_sub_agent_activity(_activity("agent-1", "started"))
 
         asyncio.run(agent._refresh_subagent_wait_label())
 
-        assert _labels(agent) == []
-        assert agent._subagent_wait_label_active is False
+        assert _labels(agent) == ["waiting"]
+        assert agent._subagent_wait_label_active is True
+
+    def test_a_wait_with_no_child_at_all_says_waiting(self) -> None:
+        """The model using ``wait_agent`` as a sleep — no spawn ever happened.
+
+        TwiCC's own orchestration spawns sessions through MCP, never Codex
+        collab agents, so this is the shape a mistaken wait takes: nothing
+        can wake it before its ``timeout_ms``, and a bare "thinking" would
+        hide a turn that is doing nothing for up to an hour.
+        """
+        agent = _agent()
+
+        asyncio.run(agent._refresh_subagent_wait_label())
+
+        assert _labels(agent) == ["waiting"]
+        assert agent._subagent_wait_label_active is True
 
     def test_completion_clears_the_label_once(self) -> None:
         agent = _agent()
