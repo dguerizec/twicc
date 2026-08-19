@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from twicc.cli._drop_request.sender_header import (
     TITLE_MAX_CHARS,
+    has_sender_header,
     prefix_sender_header,
 )
 
@@ -142,3 +143,40 @@ def test_the_header_is_a_single_line_above_the_message():
     assert header == ':: message from another session `a` ("**T**")'
     assert blank == ""
     assert body == ["line one", "line two"]
+
+
+# ── has_sender_header ────────────────────────────────────────────────────────
+
+
+def test_has_sender_header_recognises_every_relation():
+    for spawned_by, recipient, recipient_spawned_by in (
+        ("parent", "parent", None),      # your spawned session
+        (None, "child", "caller-id"),    # your parent session
+        ("gp", "sibling", "gp"),         # a sibling session
+        (None, "other", None),           # another session
+    ):
+        caller = _caller(spawned_by_id=spawned_by, title="T")
+        text = prefix_sender_header(
+            "body", caller,
+            recipient_id=recipient, recipient_spawned_by_id=recipient_spawned_by,
+        )
+        assert has_sender_header(text)
+
+
+def test_has_sender_header_covers_an_attachments_only_message():
+    # No body: the header is the whole text, with no trailing blank line.
+    caller = _caller()
+    text = prefix_sender_header(
+        "", caller, recipient_id="b", recipient_spawned_by_id=None,
+    )
+    assert has_sender_header(text)
+
+
+def test_has_sender_header_is_false_for_a_human_message():
+    assert not has_sender_header("run the tests")
+    # The marker mid-message names no sender.
+    assert not has_sender_header("look at\n:: message from another session `a`")
+
+
+def test_has_sender_header_tolerates_leading_whitespace():
+    assert has_sender_header("\n  :: message from another session `a`\n\nbody")

@@ -905,7 +905,19 @@ async def user_messages(request, project_id, session_id):
 
     Returns all user messages for the given session, in chronological order (oldest first).
     Each entry includes line_num, timestamp, and the extracted text content.
+
+    Messages another session sent to this one are left out: this feeds the
+    composer's history picker, whose only purpose is to reuse something the
+    human typed. An orchestrator session receives many reports from its
+    children, and they all land as user messages -- they would bury the few
+    real prompts. They stay in the full-text search, which indexes everything
+    on purpose. The filter is applied here rather than in
+    ``get_user_messages`` because that helper also serves the title suggestion
+    and the workflow prompts, where the first message legitimately comes from
+    another session.
     """
+    from twicc.cli._drop_request.sender_header import has_sender_header
+
     try:
         session = await Session.objects.aget(id=session_id, project_id=project_id)
     except Session.DoesNotExist:
@@ -923,6 +935,7 @@ async def user_messages(request, project_id, session_id):
             "text": msg.text,
         }
         for msg in get_provider_helpers(session.provider).get_user_messages(items)
+        if not has_sender_header(msg.text)
     ]
 
     return JsonResponse({"messages": messages})

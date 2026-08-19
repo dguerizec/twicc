@@ -33,6 +33,11 @@ import re
 
 TITLE_MAX_CHARS = 80
 
+# The invariant opening of every header, whatever the relation wording. Readers
+# use it to tell an inter-session message from a human one -- see
+# :func:`has_sender_header`.
+SENDER_HEADER_PREFIX = ":: message from "
+
 _WHITESPACE_RUN_RE = re.compile(r"\s+")
 
 # The title is arbitrary text dropped into a bold span on the header line. Only
@@ -74,7 +79,21 @@ def prefix_sender_header(
         title = title[: TITLE_MAX_CHARS - 1] + "…"
     suffix = f' ("**{_MD_SPECIAL_RE.sub(r"\\\1", title)}**")' if title else ""
 
-    header = f":: message from {relation} `{caller.id}`{suffix}"
+    header = f"{SENDER_HEADER_PREFIX}{relation} `{caller.id}`{suffix}"
     # An attachments-only message has no text: the header is then the whole
     # body, so don't append a dangling blank line.
     return f"{header}\n\n{text}" if text else header
+
+
+def has_sender_header(text: str) -> bool:
+    """Tell whether ``text`` is an inter-session message (agent to agent).
+
+    The header always opens the message, so a prefix test is enough. It reads
+    the text as stored on the ``SessionItem`` -- already scrubbed of the
+    ``<twicc:context>`` / ``<twicc:instruction>`` blocks at ingestion (see
+    :mod:`twicc.context_injection`), so the header really sits at the front.
+
+    Two shapes are deliberately NOT covered, because they carry no header: a
+    session messaging itself, and the initial prompt of a spawned session.
+    """
+    return text.lstrip().startswith(SENDER_HEADER_PREFIX)
