@@ -206,8 +206,12 @@ const MARKDOWN_LANGS = new Set(['markdown', 'md'])
 // toggle applying to both. Non-reactive: the DOM it drives lives outside Vue.
 const codeToolsState = new Map()
 
+// .floating-over-text (styles/transcript-tokens.css) is unconditional: the bar
+// usually sits on the language-label row, which is empty on its right, but a
+// fence with no language has no such row — and neither does the rendered view of
+// a markdown block. In both, the buttons land on the first line of the content.
 function codeToolsButton(action, icon, label) {
-    return `<button type="button" class="code-tools-btn" data-code-action="${action}"`
+    return `<button type="button" class="code-tools-btn floating-over-text" data-code-action="${action}"`
         + ` title="${label}" aria-label="${label}"><wa-icon name="${icon}"></wa-icon></button>`
 }
 
@@ -304,14 +308,6 @@ async function applyCodeRendered(wrapper, rendered) {
     }
 
     wrapper.classList.toggle('is-rendered', rendered)
-    // Raw, the toolbar sits on the language-label row, which is empty on its
-    // right — nothing to hide. Rendered, that row is gone and the buttons land
-    // on the document's first line, so they take the shared translucent
-    // treatment (.floating-over-text, styles/transcript-tokens.css) for as long
-    // as they float there.
-    for (const btn of wrapper.querySelectorAll(':scope > .code-tools-bar > .code-tools-btn')) {
-        btn.classList.toggle('floating-over-text', rendered)
-    }
     viewBtn.querySelector('wa-icon')?.setAttribute('name', rendered ? 'code' : 'eye')
     const label = rendered ? 'Show raw markdown' : 'Show rendered markdown'
     viewBtn.setAttribute('title', label)
@@ -1054,22 +1050,15 @@ function handleLinkClick(event) {
     line-height: 1;
     cursor: pointer;
 }
-/* Both fills step aside for .floating-over-text (added while the block shows
-   its rendered view): over a document, the button is translucent, and the
-   active state is carried by the border and the icon alone. */
-.markdown-body .code-tools-btn:not(.floating-over-text) {
-    background: var(--wa-color-surface-default);
-}
 .markdown-body .code-tools-btn:hover {
     border-color: var(--wa-color-neutral-border-normal);
     color: var(--wa-color-text-normal);
 }
+/* No fill of its own: the background belongs to .floating-over-text, so the
+   active state is carried by the border and the icon colour. */
 .markdown-body .code-tools-btn.is-active {
     border-color: var(--wa-color-brand-border-quiet);
     color: var(--wa-color-brand-on-quiet);
-}
-.markdown-body .code-tools-btn.is-active:not(.floating-over-text) {
-    background: var(--wa-color-brand-fill-quiet);
 }
 /* The raw block stays in the DOM while its rendered view shows, so toggling
    back is instant and the code remains the source for copy. */

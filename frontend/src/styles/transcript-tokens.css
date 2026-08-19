@@ -36,9 +36,9 @@
    variant, appearance, size, position and z-index. Two shapes are covered: a
    Web Awesome button, painted through `::part(base)`, and a native <button>
    (the code-block toolbar), painted directly. Never both on one element — the
-   two tints would stack. A native consumer whose own rule sets a background must
-   exclude itself with `:not(.floating-over-text)`: this class is a single class
-   selector, so anything more specific silently wins over it. */
+   two tints would stack. A consumer must not paint a background of its own
+   either: this class is a single class selector, so any more specific rule
+   silently wins over it. */
 .floating-over-text::part(base),
 button.floating-over-text {
     background: color-mix(in oklab, var(--wa-color-brand-fill-quiet) 55%, transparent);
