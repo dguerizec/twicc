@@ -1853,7 +1853,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             variant="brand"
             appearance="outlined"
             size="small"
-            class="collapse-toggle-btn"
+            class="collapse-toggle-btn floating-over-text"
             :id="collapseButtonId"
             @click="onCollapseRequest"
         >
@@ -2216,15 +2216,9 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
     right: 22px;
     z-index: 1;
 }
-/* It floats over the textarea's first line: a translucent brand tint keeps the
-   button visible over the text without hiding it. */
-.collapse-toggle-btn::part(base) {
-    background: color-mix(in oklab, var(--wa-color-brand-fill-quiet) 55%, transparent);
-}
-.collapse-toggle-btn:hover::part(base),
-.collapse-toggle-btn:focus-within::part(base) {
-    background: color-mix(in oklab, var(--wa-color-brand-fill-quiet) 80%, transparent);
-}
+/* The translucent tint that keeps the textarea's first line readable under the
+   button comes from the shared .floating-over-text class
+   (styles/transcript-tokens.css). */
 
 .code-comments-bar {
     display: flex;

@@ -990,6 +990,9 @@ body .Notivue__content-title {
     --indicator-transition-duration: 0s;
 }
 
+/* .floating-over-text (buttons that float over readable content) lives in the
+   shared styles/transcript-tokens.css, so the share bundle gets it too. */
+
 /* Style for low-height buttons */
 
 .reduced-height {

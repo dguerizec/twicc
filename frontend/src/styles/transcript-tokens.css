@@ -25,6 +25,31 @@
     box-sizing: border-box;
 }
 
+/* Shared look for a button that floats over readable content — a textarea, a
+   rendered document, anything the user must keep reading while the button sits
+   on top of it. An opaque surface hides the text under the button; a translucent
+   brand tint keeps the button unambiguous and the text legible. 55% at rest, 80%
+   on hover/focus. --wa-color-brand-fill-quiet is theme-aware, so light and dark
+   both work with one rule.
+
+   Purely additive: it only repaints the background. The button keeps its own
+   variant, appearance, size, position and z-index. Two shapes are covered: a
+   Web Awesome button, painted through `::part(base)`, and a native <button>
+   (the code-block toolbar), painted directly. Never both on one element — the
+   two tints would stack. A native consumer whose own rule sets a background must
+   exclude itself with `:not(.floating-over-text)`: this class is a single class
+   selector, so anything more specific silently wins over it. */
+.floating-over-text::part(base),
+button.floating-over-text {
+    background: color-mix(in oklab, var(--wa-color-brand-fill-quiet) 55%, transparent);
+}
+.floating-over-text:hover::part(base),
+.floating-over-text:focus-within::part(base),
+button.floating-over-text:hover,
+button.floating-over-text:focus-visible {
+    background: color-mix(in oklab, var(--wa-color-brand-fill-quiet) 80%, transparent);
+}
+
 /* WA styles native <blockquote> with a serif font at a larger size; markdown in
    the transcript wants it to match surrounding body text. */
 blockquote {

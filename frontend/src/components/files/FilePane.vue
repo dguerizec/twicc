@@ -1842,7 +1842,7 @@ function goToNextDiff() {
                         <span class="preview-tools-wrap">
                             <wa-button
                                 :id="previewToolsButtonId"
-                                class="preview-action-btn preview-tools-btn"
+                                class="preview-action-btn preview-tools-btn floating-over-text"
                                 :class="{ 'preview-action-btn--active': previewActionsExpanded }"
                                 size="small"
                                 variant="neutral"
@@ -1883,7 +1883,7 @@ function goToNextDiff() {
                         <template v-if="showHtmlPreview && isHtmlFile && !diffMode && htmlPreviewSrc && inSessionContext">
                             <wa-button
                                 :id="responsiveButtonId"
-                                class="preview-action-btn"
+                                class="preview-action-btn floating-over-text"
                                 :class="{ 'preview-action-btn--active': responsiveActive }"
                                 size="small"
                                 variant="neutral"
@@ -1902,7 +1902,7 @@ function goToNextDiff() {
                         <template v-if="showHtmlPreview && isHtmlFile && !diffMode && htmlPreviewSrc && canSelectElement">
                             <wa-button
                                 :id="selectButtonId"
-                                class="preview-action-btn"
+                                class="preview-action-btn floating-over-text"
                                 :class="{ 'preview-action-btn--active': selectModeActive }"
                                 size="small"
                                 variant="neutral"
@@ -1921,7 +1921,7 @@ function goToNextDiff() {
                         <template v-if="showHtmlPreview && isHtmlFile && !diffMode && artifactBookmark">
                             <wa-button
                                 :id="previewOpenTabButtonId"
-                                class="preview-action-btn"
+                                class="preview-action-btn floating-over-text"
                                 size="small"
                                 variant="neutral"
                                 appearance="filled"
@@ -1935,7 +1935,7 @@ function goToNextDiff() {
                         </template>
                         <wa-button
                             :id="previewFullscreenButtonId"
-                            class="preview-action-btn"
+                            class="preview-action-btn floating-over-text"
                             size="small"
                             variant="neutral"
                             appearance="filled"
@@ -1958,7 +1958,7 @@ function goToNextDiff() {
                     <wa-button
                         v-if="showMarkdownPreview && isMarkdownFile && showScrollTop"
                         :id="scrollTopButtonId"
-                        class="preview-action-btn preview-scroll-top-btn"
+                        class="preview-action-btn preview-scroll-top-btn floating-over-text"
                         size="small"
                         variant="neutral"
                         appearance="filled"
@@ -2233,6 +2233,9 @@ function goToNextDiff() {
     flex-direction: column-reverse;
 }
 
+/* Every one of them also carries the shared .floating-over-text class
+   (styles/transcript-tokens.css): they sit over a document being read, so their
+   surface is a translucent tint instead of an opaque fill. */
 .preview-action-btn {
     opacity: 0.6;
     transition: opacity 0.15s ease;

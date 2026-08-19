@@ -304,6 +304,14 @@ async function applyCodeRendered(wrapper, rendered) {
     }
 
     wrapper.classList.toggle('is-rendered', rendered)
+    // Raw, the toolbar sits on the language-label row, which is empty on its
+    // right — nothing to hide. Rendered, that row is gone and the buttons land
+    // on the document's first line, so they take the shared translucent
+    // treatment (.floating-over-text, styles/transcript-tokens.css) for as long
+    // as they float there.
+    for (const btn of wrapper.querySelectorAll(':scope > .code-tools-bar > .code-tools-btn')) {
+        btn.classList.toggle('floating-over-text', rendered)
+    }
     viewBtn.querySelector('wa-icon')?.setAttribute('name', rendered ? 'code' : 'eye')
     const label = rendered ? 'Show raw markdown' : 'Show rendered markdown'
     viewBtn.setAttribute('title', label)
@@ -1041,11 +1049,16 @@ function handleLinkClick(event) {
     padding: 0;
     border: 1px solid var(--wa-color-neutral-border-quiet);
     border-radius: var(--wa-border-radius-s);
-    background: var(--wa-color-surface-default);
     color: var(--wa-color-text-quiet);
     font-size: 0.7rem;
     line-height: 1;
     cursor: pointer;
+}
+/* Both fills step aside for .floating-over-text (added while the block shows
+   its rendered view): over a document, the button is translucent, and the
+   active state is carried by the border and the icon alone. */
+.markdown-body .code-tools-btn:not(.floating-over-text) {
+    background: var(--wa-color-surface-default);
 }
 .markdown-body .code-tools-btn:hover {
     border-color: var(--wa-color-neutral-border-normal);
@@ -1053,8 +1066,10 @@ function handleLinkClick(event) {
 }
 .markdown-body .code-tools-btn.is-active {
     border-color: var(--wa-color-brand-border-quiet);
-    background: var(--wa-color-brand-fill-quiet);
     color: var(--wa-color-brand-on-quiet);
+}
+.markdown-body .code-tools-btn.is-active:not(.floating-over-text) {
+    background: var(--wa-color-brand-fill-quiet);
 }
 /* The raw block stays in the DOM while its rendered view shows, so toggling
    back is instant and the code remains the source for copy. */
