@@ -488,7 +488,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
 
     async def handle_hybrid_hook(
         self, session_id: str, event: str, payload: dict, nonce: str,
-    ) -> "HybridHookOutcome":
+    ) -> HybridHookOutcome:
         """Route a hybrid hook event file to its live hybrid agent.
 
         Returns the file-ownership verdict for the hooks watcher:
@@ -510,7 +510,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         return HybridHookOutcome.UNHANDLED
 
     async def handle_hybrid_jsonl_signals(
-        self, session_id: str, signals: "HybridJsonlSignals",
+        self, session_id: str, signals: HybridJsonlSignals,
     ) -> None:
         """Apply JSONL-derived state signals to a live hybrid agent.
 
@@ -902,7 +902,7 @@ class ClaudeCodeAgentManager(BaseAgentManager):
                 await asyncio.wait_for(
                     self._stop_event.wait(), timeout=self.CRON_EXPIRY_MONITOR_INTERVAL,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
         logger.info("Cron expiry monitor stopped")
@@ -1055,8 +1055,8 @@ class ClaudeCodeAgentManager(BaseAgentManager):
         cron_expr: str,
         recurring: bool,
         prompt: str,
-        created_at: "datetime",
-        next_fire: "datetime",
+        created_at: datetime,
+        next_fire: datetime,
     ) -> None:
         """Persist a newly created cron job to the database and broadcast the update."""
         from twicc.core.enums import Provider

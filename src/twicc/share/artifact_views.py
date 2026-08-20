@@ -123,8 +123,7 @@ async def share_artifact_asset(request, token, asset):
     if resp:
         return resp
     # ``__twicc_raw__/<path>`` is the doc-view fetch of the raw markdown; strip it.
-    if asset.startswith("__twicc_raw__/"):
-        asset = asset[len("__twicc_raw__/"):]
+    asset = asset.removeprefix("__twicc_raw__/")
     abs_path = confined_snapshot_path(ctx.share.id, asset)
     if abs_path is None:
         raise Http404("File not found")

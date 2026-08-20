@@ -8,7 +8,7 @@ import re
 import shlex
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
@@ -305,7 +305,7 @@ class ClaudeCodeAgent(BaseAgent):
         """
         from twicc.core.models import SessionCron
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         expired = []
         for cron in SessionCron.objects.filter(session_id=self.session_id, recurring=True):
             if cron.expired_at is not None and now >= cron.expired_at:
@@ -343,7 +343,7 @@ class ClaudeCodeAgent(BaseAgent):
 
             from twicc.core.models import cron_occurrences
 
-            created_at = datetime.now(tz=timezone.utc)
+            created_at = datetime.now(tz=UTC)
 
             # Compute next fire time from the cron expression (always required)
             try:
@@ -2202,7 +2202,7 @@ class ClaudeCodeAgent(BaseAgent):
                 timeout=5.0,
             )
             return
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "SDK disconnect() timed out for session %s — falling back to psutil kill",
                 self.session_id,

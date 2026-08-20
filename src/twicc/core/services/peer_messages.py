@@ -18,7 +18,7 @@ import base64
 import binascii
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import NamedTuple
 
 from asgiref.sync import sync_to_async
@@ -115,7 +115,7 @@ class PeerSendResult(NamedTuple):
 
 
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 # ── Broadcasts ──────────────────────────────────────────────────────────────
@@ -541,7 +541,7 @@ def _format_sent_at(raw: str | None) -> str:
     # A naive timestamp is UTC by convention (that is what we send); anything
     # else is converted from its own offset.
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     local = parsed.astimezone()
     formatted = local.strftime("%a %d %b %Y at %H:%M")
     if zone := local.strftime("%Z"):

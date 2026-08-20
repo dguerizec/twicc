@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import NamedTuple
 
@@ -42,7 +42,7 @@ def write_drop_file(payload: dict, *, kind: str) -> DropFile:
     envelope = {
         "version": 1,
         "request_uuid": request_uuid,
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "submitted_at": datetime.now(UTC).isoformat(),
         "submitter": {
             "user": os.environ.get("USER", "?"),
             "hostname": os.uname().nodename if hasattr(os, "uname") else "?",

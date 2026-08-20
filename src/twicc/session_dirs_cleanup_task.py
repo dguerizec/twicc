@@ -39,7 +39,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ def _dir_mtime(path: Path) -> datetime | None:
         ts = path.stat().st_mtime
     except OSError:
         return None
-    return datetime.fromtimestamp(ts, tz=dt_timezone.utc)
+    return datetime.fromtimestamp(ts, tz=UTC)
 
 
 def _remove_if_empty(path: Path) -> bool:
@@ -193,7 +193,7 @@ async def start_session_dirs_cleanup_task(stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=SESSION_DIRS_CLEANUP_INTERVAL)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Timeout means it's time to prune again.
                 pass
             else:

@@ -1,6 +1,6 @@
 import asyncio
 
-import twicc.providers.background_compute_task as background_compute_task
+from twicc.providers import background_compute_task
 
 run_compute_with_stale_retries = background_compute_task.run_compute_with_stale_retries
 

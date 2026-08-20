@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import orjson
@@ -114,7 +114,7 @@ class InstanceLock:
         self._info_path = data_dir / INFO_FILENAME
         self._fd: int | None = None
 
-    def __enter__(self) -> "InstanceLock":
+    def __enter__(self) -> InstanceLock:
         self.acquire()
         return self
 
@@ -153,7 +153,7 @@ class InstanceLock:
         """Write the sidecar info file used to render a helpful 'already running' message."""
         info: dict[str, object] = {
             "pid": os.getpid(),
-            "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         if port is not None:
             info["port"] = port

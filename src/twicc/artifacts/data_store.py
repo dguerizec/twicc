@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 MAX_DATA_FILE_BYTES = 10 * 1024 * 1024  # 10 MB per file
 MAX_DATA_TREE_BYTES = 100 * 1024 * 1024  # 100 MB per data/ tree
@@ -115,7 +115,7 @@ def list_data_dir(data_root: str) -> tuple[dict, int]:
                     {
                         "path": os.path.relpath(full, data_root).replace(os.sep, "/"),
                         "size": st.st_size,
-                        "mtime": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+                        "mtime": datetime.fromtimestamp(st.st_mtime, tz=UTC).isoformat(),
                     }
                 )
     return {"files": files}, 200

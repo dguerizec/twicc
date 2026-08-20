@@ -18,7 +18,7 @@ import hashlib
 import hmac
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import NamedTuple
 
 import orjson
@@ -54,7 +54,7 @@ class TokenRecord(NamedTuple):
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def digest_token(token: str) -> str:
@@ -209,7 +209,7 @@ async def start_last_used_flush_task(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=LAST_USED_FLUSH_INTERVAL)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         else:
             break  # stop_event fired — exit without another flush

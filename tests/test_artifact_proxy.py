@@ -337,7 +337,6 @@ def test_proxy_view_fetch_refuses_metadata_pinned_ip(monkeypatch):
     async def fake_fetch(**kw):
         nonlocal called
         called = True
-        return None
 
     monkeypatch.setattr(proxy_module, "proxy_fetch", fake_fetch)
     res = _post(

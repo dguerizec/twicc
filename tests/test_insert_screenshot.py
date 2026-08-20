@@ -24,7 +24,7 @@ watcher integration) is covered by separate higher-level tests.
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 
@@ -46,7 +46,7 @@ from twicc.providers.compute_base import (
 _PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"
 _PNG_B64 = base64.b64encode(_PNG_BYTES).decode()
 
-_TS = datetime(2026, 6, 2, 11, 30, 45, tzinfo=timezone.utc)
+_TS = datetime(2026, 6, 2, 11, 30, 45, tzinfo=UTC)
 
 
 def _hit(

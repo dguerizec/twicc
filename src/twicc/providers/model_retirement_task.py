@@ -61,7 +61,7 @@ async def start_model_retirement_task(provider: Provider) -> None:
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=RETIREMENT_CHECK_INTERVAL)
             break  # stop_event was set
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass  # Time to check again
 
         try:

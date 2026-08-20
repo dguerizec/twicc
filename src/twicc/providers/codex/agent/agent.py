@@ -636,7 +636,7 @@ class CodexAgent(BaseAgent):
                     self._current_turn_ready.wait(),
                     timeout=5.0,
                 )
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 raise RuntimeError(
                     "Cannot steer: turn handshake did not complete in time",
                 ) from e
@@ -1759,7 +1759,7 @@ class CodexAgent(BaseAgent):
         try:
             await asyncio.wait_for(self._codex.close(), timeout=5.0)
             close_ok = True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "codex.close() timed out for session %s — forcing process kill",
                 self.session_id,

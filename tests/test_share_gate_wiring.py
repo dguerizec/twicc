@@ -1,7 +1,7 @@
 """End-to-end agent gate wiring and §7.1 precedence for all six wrappers."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from types import SimpleNamespace
 
 import orjson
@@ -313,13 +313,13 @@ def test_agent_expiry_errors_do_not_widen(tree, settings_state):
     assert (_error(bad_create).field, _error(bad_create).code) == ("expires_at", "invalid")
     assert Share.objects.count() == before
     share = _human_share(tree.caller, creator=tree.caller)
-    share.expires_at = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    share.expires_at = datetime(2030, 1, 1, tzinfo=UTC)
     share.save(update_fields=["expires_at"])
     bad_update = _managed_call(
         "update", share, tree.caller, fields={"expires_at": "garbage"})
     assert _error(bad_update).code == "invalid"
     share.refresh_from_db()
-    assert share.expires_at == datetime(2030, 1, 1, tzinfo=timezone.utc)
+    assert share.expires_at == datetime(2030, 1, 1, tzinfo=UTC)
 
 
 def test_share_host_and_attribution(tree, settings_state):
@@ -415,7 +415,7 @@ def test_agent_create_valid_expiry_is_stored(tree, settings_state):
     )))
     assert result.success
     assert Share.objects.get(id=result.share_id).expires_at == datetime(
-        2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc,
+        2031, 2, 3, 4, 5, 6, tzinfo=UTC,
     )
 
 
@@ -440,7 +440,7 @@ def test_agent_update_expiry_set_absent_and_clear(tree, settings_state):
     )
     assert set_result.success
     share.refresh_from_db()
-    stored = datetime(2031, 2, 3, 4, 5, 6, tzinfo=timezone.utc)
+    stored = datetime(2031, 2, 3, 4, 5, 6, tzinfo=UTC)
     assert share.expires_at == stored
 
     absent = _run(share_mutation.update_share_from_payload({

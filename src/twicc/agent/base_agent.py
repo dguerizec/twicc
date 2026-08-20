@@ -368,7 +368,7 @@ class BaseAgent:
         deadline = asyncio.get_event_loop().time() + timeout
         try:
             await asyncio.wait_for(self._dead_event.wait(), timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
         remaining = max(0.0, deadline - asyncio.get_event_loop().time())
         try:
@@ -376,7 +376,7 @@ class BaseAgent:
                 self._dead_callback_done_event.wait(), remaining,
             )
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     # ------------------------------------------------------------------

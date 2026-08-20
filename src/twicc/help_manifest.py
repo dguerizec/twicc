@@ -83,7 +83,7 @@ async def start_help_watcher_task(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=HELP_WATCH_INTERVAL_S)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Timeout means it's time to re-scan
             pass
         else:

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 import orjson
 import pytest
@@ -204,7 +204,7 @@ def test_resolve_share_found(session):
 
 
 def test_status_transitions(session):
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     active = Share.objects.create(kind="session", token=mint_token(), session=session)
     assert active.status() == "active"
     assert active.is_active()

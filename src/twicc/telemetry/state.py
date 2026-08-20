@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, UTC
 from pathlib import Path
 
 from twicc.atomic_json import locked_json_file
@@ -34,7 +34,7 @@ _DEFAULT_STATE = {
 
 
 def utc_today() -> date:
-    return datetime.now(timezone.utc).date()
+    return datetime.now(UTC).date()
 
 
 def get_state_path() -> Path:
@@ -85,7 +85,7 @@ def mark_sent(sent_through: str, payload: dict) -> None:
     with state_txn() as txn:
         txn.data["last_sent_date"] = sent_through
         txn.data["last_payload"] = payload
-        txn.data["last_sent_at"] = datetime.now(timezone.utc).isoformat()
+        txn.data["last_sent_at"] = datetime.now(UTC).isoformat()
         txn.data["days"] = {d: v for d, v in txn.data["days"].items() if d > sent_through}
         txn.write()
 
@@ -106,8 +106,7 @@ def note_active_transition(active: bool) -> None:
         was_active = txn.data.get("was_active")
         if active and was_active is False:
             today = utc_today().isoformat()
-            if txn.data["last_sent_date"] < today:
-                txn.data["last_sent_date"] = today
+            txn.data["last_sent_date"] = max(txn.data["last_sent_date"], today)
             txn.data["days"] = {d: v for d, v in txn.data["days"].items() if d >= today}
             txn.write()
         if was_active != active:

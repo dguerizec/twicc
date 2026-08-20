@@ -20,7 +20,7 @@ own tool_use (the genuine async-launch-ack backfill).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import pytest
 
@@ -28,7 +28,7 @@ from twicc.core.enums import Provider
 from twicc.core.models import AgentLink, Project, Session, SessionItem
 from twicc.providers.claude_code.compute import get_compute
 
-_NOW = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def _tool_result_entry(tool_use_id: str, agent_id: str, *, is_async: bool) -> dict:

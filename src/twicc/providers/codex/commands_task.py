@@ -250,7 +250,7 @@ async def start_commands_task() -> None:
 
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=SYNC_INTERVAL)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     logger.info("Codex commands sync task stopped")

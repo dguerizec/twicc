@@ -15,7 +15,7 @@ tests never touch the real data directory.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 import pytest
@@ -36,22 +36,22 @@ from twicc.session_dirs_cleanup_task import (
 
 
 def test_is_stale_none_reference_is_never_stale():
-    now = datetime.now(dt_timezone.utc)
+    now = datetime.now(UTC)
     assert _is_stale(None, now) is False
 
 
 def test_is_stale_recent_is_not_stale():
-    now = datetime.now(dt_timezone.utc)
+    now = datetime.now(UTC)
     assert _is_stale(now - timedelta(days=5), now) is False
 
 
 def test_is_stale_exactly_at_threshold_is_stale():
-    now = datetime.now(dt_timezone.utc)
+    now = datetime.now(UTC)
     assert _is_stale(now - STALE_SESSION_DIR_AGE, now) is True
 
 
 def test_is_stale_well_past_threshold_is_stale():
-    now = datetime.now(dt_timezone.utc)
+    now = datetime.now(UTC)
     assert _is_stale(now - timedelta(days=40), now) is True
 
 

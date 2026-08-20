@@ -1,6 +1,6 @@
 import asyncio
 import queue
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import orjson
@@ -167,7 +167,7 @@ def test_delete_ignored_session_repairs_project_metadata() -> None:
         file_path="2026/07/16/guardian.jsonl",
         type=SessionType.SESSION,
         model="codex-auto-review",
-        created_at=datetime(2026, 7, 16, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 16, tzinfo=UTC),
         user_message_count=1,
         mtime=123,
     )

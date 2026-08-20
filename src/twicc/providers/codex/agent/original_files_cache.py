@@ -116,7 +116,7 @@ async def start_cleanup_task() -> None:
         try:
             await asyncio.wait_for(_cleanup_stop_event.wait(), timeout=ENTRY_TTL)
             break  # stop event was set
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass  # timeout expired, do cleanup
         cleanup_expired()
 

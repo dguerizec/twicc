@@ -176,7 +176,7 @@ async def start_quota_wakeup_task(stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=_TICK_INTERVAL)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass  # interval elapsed — time to check
             else:
                 break  # stop_event fired

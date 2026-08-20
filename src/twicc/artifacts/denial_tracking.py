@@ -106,7 +106,7 @@ async def start_denial_flush_task(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=_FLUSH_INTERVAL)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         else:
             break

@@ -115,7 +115,7 @@ async def start_usage_sync_task() -> None:
             # storm (we already fetch every interval while active).
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Timeout means it's time to sync again
                 pass
         else:

@@ -17,7 +17,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterable, AsyncIterator
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +52,7 @@ def _write_log_line(log_path: Path, direction: str, data: Any) -> None:
     """
     line = {
         "direction": direction,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "data": data,
     }
     try:

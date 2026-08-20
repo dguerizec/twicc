@@ -28,7 +28,7 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from watchfiles import Change, awatch
 
-import twicc.search as search
+from twicc import search
 from twicc.core.enums import ItemKind
 from twicc.core.models import Project, Session, SessionItem, SessionType
 from twicc.core.serializers import (
@@ -74,7 +74,7 @@ class ParsedSessionFile:
     parse step (e.g. read from Codex's state DB) — used only when the
     session is created for the first time, ignored on later events.
     """
-    __slots__ = ('project_id', 'session_id', 'type', 'parent_session_id', 'file_path', 'title')
+    __slots__ = ('file_path', 'parent_session_id', 'project_id', 'session_id', 'title', 'type')
 
     def __init__(
         self,
@@ -290,7 +290,7 @@ class BaseSessionsWatcher:
         ``tool_result`` appears in JSONL but no PostToolUse hook ever
         fired (e.g. CLI-side validation rejection).
         """
-        return None
+        return
 
     async def _after_compaction_synced(self, session_id: str) -> None:
         """Hook fired once per live batch that ingested a COMPACT_SUMMARY line.
@@ -301,7 +301,7 @@ class BaseSessionsWatcher:
         Fires only on the live incremental-sync path (never on the
         background recompute), so the signal is never replayed.
         """
-        return None
+        return
 
     async def _after_agents_stopped(
         self, session_id: str, stopped_agent_ids: list[str],
@@ -335,7 +335,7 @@ class BaseSessionsWatcher:
         :meth:`_after_compaction_synced`. Implementations must never block
         the ingest path on agent locks (fire-and-forget a task instead).
         """
-        return None
+        return
 
     async def maybe_handle_special_change(
         self,
@@ -384,8 +384,7 @@ class BaseSessionsWatcher:
         phase's wait loop.
         """
         deadline = time.monotonic() + duration
-        if deadline > self._fast_poll_until:
-            self._fast_poll_until = deadline
+        self._fast_poll_until = max(self._fast_poll_until, deadline)
         self.get_boost_event().set()
 
     def stop_watcher(self) -> None:

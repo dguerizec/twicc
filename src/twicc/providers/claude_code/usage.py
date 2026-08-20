@@ -11,7 +11,7 @@ SessionItem costs within the relevant time windows.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import httpx
@@ -150,7 +150,7 @@ def _build_usage_snapshot_fields(raw: dict) -> dict:
 
     fields = {
         "provider": Provider.CLAUDE_CODE.value,
-        "fetched_at": datetime.now(timezone.utc),
+        "fetched_at": datetime.now(UTC),
         "raw_response": raw,
     }
 

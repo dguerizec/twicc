@@ -31,7 +31,7 @@ import logging
 import os
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import orjson
@@ -146,7 +146,7 @@ def _read_manifest(bucket_dir: Path) -> dict | None:
 def _write_manifest(bucket_dir: Path, *, token: str | None, source_path: str | None) -> None:
     bucket_dir.mkdir(parents=True, exist_ok=True)
     payload = {
-        "scanned_at": datetime.now(timezone.utc).isoformat(),
+        "scanned_at": datetime.now(UTC).isoformat(),
         "icon_token": token,
         "source_path": source_path,
     }

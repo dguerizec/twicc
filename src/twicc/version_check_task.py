@@ -147,7 +147,7 @@ async def start_version_check_task() -> None:
         # Wait for the next check interval (or until stop event is set)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=VERSION_CHECK_INTERVAL)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Timeout means it's time to check again
             pass
 

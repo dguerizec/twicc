@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import NamedTuple
 
 from asgiref.sync import sync_to_async
@@ -53,7 +53,7 @@ class ShareMutationResult(NamedTuple):
 
 
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 # ── Option validation ──────────────────────────────────────────────────────
@@ -148,7 +148,7 @@ def source_updated_at(bookmark) -> datetime | None:
                 latest = max(latest, os.path.getmtime(os.path.join(dirpath, name)))
             except OSError:
                 pass
-    return datetime.fromtimestamp(latest, tz=timezone.utc) if latest else None
+    return datetime.fromtimestamp(latest, tz=UTC) if latest else None
 
 
 def snapshot_artifact_share(share) -> str | None:

@@ -9,7 +9,7 @@ fetching/parsing lives in each provider's module.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from decimal import Decimal
 from pathlib import Path
 
@@ -73,7 +73,7 @@ def compute_period_costs(snapshot: UsageSnapshot) -> dict:
         - capped (bool): True if estimated_period was capped due to quota exhaustion
         - cutoff_at (str|None): ISO datetime when quota will be exhausted, or None
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result: dict = {}
 
     periods = [
@@ -347,7 +347,7 @@ def compute_recent_burn_rates(snapshot: UsageSnapshot, references: dict | None) 
     }
 
 
-def format_extra_usage_amount(value: float | int | None, decimal_places: int | None) -> str | None:
+def format_extra_usage_amount(value: float | None, decimal_places: int | None) -> str | None:
     """Render an extra-usage credit figure as a bare money amount.
 
     ``value`` is in minor units and ``decimal_places`` is the exponent the

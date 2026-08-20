@@ -67,7 +67,7 @@ async def check_auth_status() -> bool:
 
     try:
         await asyncio.wait_for(proc.wait(), timeout=_AUTH_STATUS_TIMEOUT)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Codex auth status check timed out after %ds", _AUTH_STATUS_TIMEOUT)
         proc.kill()
         try:

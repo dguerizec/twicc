@@ -18,7 +18,7 @@ import logging
 import os
 from pathlib import Path
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import orjson
 from watchfiles import Change, awatch
@@ -27,7 +27,7 @@ from twicc.paths import get_drop_requests_dir
 
 
 def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 logger = logging.getLogger(__name__)
 

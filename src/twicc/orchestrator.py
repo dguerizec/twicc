@@ -116,7 +116,7 @@ class BaseOrchestrator:
         Default: no-op. Providers without blocking sync threads don't
         need to override.
         """
-        return None
+        return
 
     async def shutdown(self) -> None:
         """Stop this provider's tasks in dependency-safe order.

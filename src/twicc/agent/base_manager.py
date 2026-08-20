@@ -778,7 +778,7 @@ class BaseAgentManager:
                 self._pending_title_retry_tasks.pop(agent.session_id, None)
 
     async def _verify_pending_title_after_delay(
-        self, provider: "Provider", session_id: str, expected_title: str,
+        self, provider: Provider, session_id: str, expected_title: str,
     ) -> None:
         """Sleep, then verify the title is still the user's value on the provider side.
 
@@ -1145,7 +1145,7 @@ class BaseAgentManager:
                         self._stop_event.wait(),
                         timeout=self.TIMEOUT_MONITOR_INTERVAL,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
             logger.info("Agent timeout monitor stopped")
 
@@ -1299,12 +1299,12 @@ class BaseAgentManager:
 
     def _start_extra_monitors(self) -> None:
         """Override to launch extra background monitors."""
-        return None
+        return
 
     async def _stop_extra_monitors(self) -> None:
         """Override to cancel extra background monitors."""
-        return None
+        return
 
     async def _pre_shutdown_extra(self) -> None:
         """Override to perform cleanup before agents are interrupted."""
-        return None
+        return

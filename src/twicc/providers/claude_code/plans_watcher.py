@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 from channels.layers import get_channel_layer
@@ -191,9 +191,9 @@ class ClaudeCodePlansWatcher:
                 # Deleted between the reconcile stat and now — the follow-up
                 # "gone" tick will flip ``exists``.
                 return
-            timestamp = datetime.fromtimestamp(mtime, tz=timezone.utc)
+            timestamp = datetime.fromtimestamp(mtime, tz=UTC)
         else:
-            timestamp = datetime.now(tz=timezone.utc)
+            timestamp = datetime.now(tz=UTC)
 
         event = DocEditEvent(str(plan_file), action, "claude_plan")
 

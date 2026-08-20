@@ -107,7 +107,7 @@ async def _call_haiku(
         logger.info("Title suggestion generated: %r (source=%s, attempt=%d/%d)", suggestion, source, attempt, MAX_RETRIES)
         return suggestion
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(
             "Title suggestion: timeout after %ds (source=%s, attempt=%d/%d)",
             SUGGESTION_TIMEOUT_SECONDS, source, attempt, MAX_RETRIES,

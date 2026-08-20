@@ -5,7 +5,7 @@ setup is still needed to import the compute modules). The subagent
 ancestor-fold tests at the bottom exercise real Session rows.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import orjson
 import pytest
@@ -95,7 +95,7 @@ class TestClaudeCodeDocEdits:
         assert claude.extract_doc_edit_events({'type': 'user', 'message': {'content': 'hi'}}, cwd='/repo') == []
 
     def test_extra_events_native_plan(self, claude, tmp_path, monkeypatch):
-        import twicc.providers.claude_code.constants as constants
+        from twicc.providers.claude_code import constants
 
         plans_dir = tmp_path / 'plans'
         plans_dir.mkdir()
@@ -113,7 +113,7 @@ class TestClaudeCodeDocEdits:
         assert timestamp is not None
 
     def test_extra_events_no_slug_or_missing_file(self, claude, tmp_path, monkeypatch):
-        import twicc.providers.claude_code.constants as constants
+        from twicc.providers.claude_code import constants
         monkeypatch.setattr(constants, 'PLANS_DIR', tmp_path)
 
         from twicc.core.models import Session
@@ -220,8 +220,8 @@ class TestCodexDocEdits:
 # Subagent ancestor fold (DB-level)
 # ---------------------------------------------------------------------------
 
-T1 = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
-T2 = datetime(2026, 7, 4, 13, 0, 0, tzinfo=timezone.utc)
+T1 = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)
+T2 = datetime(2026, 7, 4, 13, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture

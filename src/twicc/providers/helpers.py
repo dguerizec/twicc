@@ -113,7 +113,7 @@ class AgentSettings(NamedTuple):
     question_widget: bool | None = None
 
     @classmethod
-    def from_session(cls, session: "Session") -> "AgentSettings":
+    def from_session(cls, session: Session) -> AgentSettings:
         """Build an :class:`AgentSettings` from a ``Session`` row's columns.
 
         ``None`` values are preserved (they mean "use the synced default"
@@ -823,7 +823,7 @@ class BaseProviderHelpers:
         Implementations should be idempotent and side-effect-free when the
         title is already correct.
         """
-        return None
+        return
 
     def purge_env_vars(self, env: dict) -> None:
         """Strip provider-specific env vars from ``env`` in place.
@@ -837,7 +837,7 @@ class BaseProviderHelpers:
         The default is a no-op so a provider only pays for the keys it
         actually contributes; subclasses override.
         """
-        return None
+        return
 
     async def enrich_agent_state(self, message: dict, session_id: str) -> None:
         """Augment a serialised ``process_state`` / ``active_processes`` entry.
@@ -853,7 +853,7 @@ class BaseProviderHelpers:
         provider-specific decoration here as the multi-provider surface
         grows.
         """
-        return None
+        return
 
     def should_keep_dead_process_run(
         self,
@@ -1097,7 +1097,7 @@ class BaseProviderHelpers:
         The base implementation is a no-op; providers that own
         synced-settings rules override.
         """
-        return None
+        return
 
     def enforce_agent_settings_consistency(self, settings: AgentSettings) -> AgentSettings:
         """Return ``settings`` normalised against this provider's rules.

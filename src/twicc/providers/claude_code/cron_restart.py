@@ -414,7 +414,7 @@ async def restart_session_crons(
                     session_id, attempt,
                 )
                 return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass  # Normal: delay elapsed, time to retry
 
         # Collect fresh data on each attempt (crons may expire, settings may change)
@@ -455,7 +455,7 @@ async def restart_session_crons(
                     process._first_turn_done_event.wait(),
                     timeout=300,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "Cron restart for session %s: timeout waiting for USER_TURN (attempt %d)",
                     session_id, attempt,

@@ -476,11 +476,11 @@ async def backfill_unimported_trust() -> None:
 
 
 __all__ = [
-    "resolve_project_trust",
-    "decide_project_trust",
-    "backfill_unimported_trust",
-    "project_is_untrusted",
-    "untrusted_permission_mode_default",
-    "clamp_permission_mode_for_untrusted",
     "TrustResolution",
+    "backfill_unimported_trust",
+    "clamp_permission_mode_for_untrusted",
+    "decide_project_trust",
+    "project_is_untrusted",
+    "resolve_project_trust",
+    "untrusted_permission_mode_default",
 ]

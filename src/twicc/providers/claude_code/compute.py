@@ -13,7 +13,7 @@ import re
 
 import orjson
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import ClassVar, NamedTuple
 
@@ -634,7 +634,7 @@ class _SessionTaskState:
       re-derived from their tool input instead of being kept immutable.
     """
 
-    __slots__ = ('tasks', 'seen_tool_use_ids', 'duplicates_seen')
+    __slots__ = ('duplicates_seen', 'seen_tool_use_ids', 'tasks')
 
     def __init__(self) -> None:
         self.tasks: dict[str, dict] = {}
@@ -836,7 +836,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             mtime = plan_path.stat().st_mtime
         except OSError:
             return []
-        timestamp = datetime.fromtimestamp(mtime, tz=timezone.utc)
+        timestamp = datetime.fromtimestamp(mtime, tz=UTC)
         return [(DocEditEvent(str(plan_path), 'write', 'claude_plan'), timestamp)]
 
     # ------------------------------------------------------------------

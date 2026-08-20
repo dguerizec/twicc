@@ -46,7 +46,8 @@ from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import date as date_cls
-from typing import Any, Callable, Coroutine, NamedTuple, TypeVar
+from typing import Any, NamedTuple, TypeVar
+from collections.abc import Callable, Coroutine
 
 import orjson
 from asgiref.sync import sync_to_async
@@ -242,7 +243,7 @@ _db_writer_stop_event: asyncio.Event | None = None
 # shutdown() task, not in the DB writer task, and uses this to have the
 # DB writer flush an abandoned compute run's batched state instead of writing
 # to the DB directly and racing the DB writer.
-_async_queue: "asyncio.Queue | None" = None
+_async_queue: asyncio.Queue | None = None
 
 # Shared write lock — serializes every SQLite-writing critical section that
 # happens in the main process. The DB writer itself acquires it via
@@ -371,7 +372,7 @@ class _LockLease:
         self.drive_tasks: set[asyncio.Task] = set()
 
 
-_db_write_lock_lease: contextvars.ContextVar["_LockLease | None"] = contextvars.ContextVar(
+_db_write_lock_lease: contextvars.ContextVar[_LockLease | None] = contextvars.ContextVar(
     "twicc.providers.db_writer._db_write_lock_lease",
     default=None,
 )
@@ -406,7 +407,7 @@ _compute_done_events: dict[int, asyncio.Future] = {}
 # run_id -> that run's accumulated compute state (broadcast throttling,
 # batched activity flushes, failure tally). Initial-sync payloads are
 # self-contained; the only initial-sync run state is the failure tally below.
-_compute_states: dict[int, "_ComputeProviderState"] = {}
+_compute_states: dict[int, _ComputeProviderState] = {}
 
 # Per-provider failed-payload counter for the in-flight initial-sync run.
 # Incremented when an _apply_* raises; reported to the orchestrator via the
@@ -736,7 +737,7 @@ async def _acquire_then_release(lock: asyncio.Lock) -> None:
 
 
 async def _shielded_shutdown_wait(
-    task: "asyncio.Task[Any]",
+    task: asyncio.Task[Any],
     *,
     external_cancel_log: Callable[[], None],
     unexpected_exception_log: Callable[[Exception], None],
@@ -1231,7 +1232,7 @@ async def _drive_inner_under_held_lock(
             lease.drive_tasks.discard(inner)
 
 
-async def _drive_inner_loop(inner: "asyncio.Task[_T]") -> _T:
+async def _drive_inner_loop(inner: asyncio.Task[_T]) -> _T:
     """The shield-loop + branching logic of the drive, factored out so
     the surrounding ``try/finally`` (which cleans up
     ``lease.drive_tasks``) stays compact and obvious. Assumes ``inner``
@@ -1694,7 +1695,7 @@ async def _drain_one() -> bool:
     return any_processed
 
 
-def _provider_from_compute_message(msg: dict) -> "Provider | None":
+def _provider_from_compute_message(msg: dict) -> Provider | None:
     """Extract the ``Provider`` from a compute-side raw JSON message, if any.
 
     The subprocess tags every message with ``provider`` (a ``Provider.value``

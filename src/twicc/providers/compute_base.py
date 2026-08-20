@@ -33,7 +33,7 @@ import os
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, ClassVar, NamedTuple
@@ -409,7 +409,7 @@ def _parse_tag_attrs(blob: str) -> _TagAttrs:
                 parsed_offset = int(value)
             except ValueError:
                 parsed_offset = 0
-            offset = parsed_offset if parsed_offset >= 0 else 0
+            offset = max(parsed_offset, 0)
         elif name == "title":
             title = value
     return _TagAttrs(offset=offset, title=title)
@@ -2646,9 +2646,7 @@ class BaseSessionCompute:
             )
             item.group_head = info.group_head
             items_to_update.extend(info.closed_items)
-            if item.display_level == ItemDisplayLevel.DEBUG_ONLY:
-                items_to_update.append(item)
-            elif item.display_level == ItemDisplayLevel.ALWAYS and not has_suffix:
+            if item.display_level == ItemDisplayLevel.DEBUG_ONLY or item.display_level == ItemDisplayLevel.ALWAYS and not has_suffix:
                 items_to_update.append(item)
 
             # Flush batches
@@ -2807,12 +2805,12 @@ class BaseSessionCompute:
                 'created_at': first_timestamp.isoformat() if first_timestamp else None,
                 'last_started_at': last_started_at.isoformat() if last_started_at else None,
                 'last_updated_at': (
-                    datetime.fromtimestamp(session.mtime, tz=timezone.utc).isoformat()
+                    datetime.fromtimestamp(session.mtime, tz=UTC).isoformat()
                     if session.mtime
                     else (last_updated_at.isoformat() if last_updated_at else None)
                 ),
                 'last_stopped_at': (
-                    datetime.fromtimestamp(session.mtime, tz=timezone.utc).isoformat()
+                    datetime.fromtimestamp(session.mtime, tz=UTC).isoformat()
                     if session.mtime
                     else None
                 ),

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ def _client_ip(request) -> str:
 
 def note_view(share, request) -> None:
     """Record a page view in memory (no I/O). Called after the password check."""
-    at = datetime.now(tz=timezone.utc).isoformat()
+    at = datetime.now(tz=UTC).isoformat()
     ua = (request.headers.get("User-Agent") or "")[:255]
     _pending.setdefault(share.id, []).append((at, _client_ip(request), ua))
 
@@ -138,7 +138,7 @@ async def start_share_view_flush_task(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=_FLUSH_INTERVAL)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         else:
             break

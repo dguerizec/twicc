@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import NamedTuple
 
 from django.db import transaction
@@ -55,7 +55,7 @@ def purge_expired_attachment_bytes(now: datetime | None = None) -> int:
     """
     from twicc.core.models import PeerMessage
 
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(tz=UTC)
     cutoff = now - PEER_ATTACHMENT_RETENTION
     purged = 0
     candidates = PeerMessage.objects.filter(resolved_at__lt=cutoff, purged_at__isnull=True)
@@ -88,7 +88,7 @@ async def start_peer_purge_task(stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=PEER_PURGE_INTERVAL)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Timeout means it's time to purge again.
                 pass
             else:

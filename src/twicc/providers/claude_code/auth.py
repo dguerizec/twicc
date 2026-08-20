@@ -360,7 +360,7 @@ async def check_auth_status() -> bool:
 
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_AUTH_STATUS_TIMEOUT)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Claude Code auth status check timed out after %ds", _AUTH_STATUS_TIMEOUT)
         proc.kill()
         try:

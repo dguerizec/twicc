@@ -1,6 +1,6 @@
 """Unit tests for twicc.providers.plan_docs (pure module, no DB)."""
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from twicc.providers.plan_docs import (
     FOLDED_SOURCES,
@@ -130,9 +130,9 @@ class TestExtractShellWriteTargets:
 
 # --- normalize_stored_path / apply_doc_edit_events -----------------------------
 
-T1 = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
-T2 = datetime(2026, 7, 4, 13, 0, 0, tzinfo=timezone.utc)
-T3 = datetime(2026, 7, 4, 14, 0, 0, tzinfo=timezone.utc)
+T1 = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)
+T2 = datetime(2026, 7, 4, 13, 0, 0, tzinfo=UTC)
+T3 = datetime(2026, 7, 4, 14, 0, 0, tzinfo=UTC)
 
 
 class TestNormalizeStoredPath:

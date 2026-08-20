@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import queue
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import orjson
 import pytest
@@ -231,7 +231,7 @@ class TestParseCodeModeOutput:
 # Compute integration
 # ---------------------------------------------------------------------------
 
-_NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=UTC)
 
 
 def _codex_line(type_: str, payload: dict) -> str:

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from decimal import Decimal
 
 import orjson
@@ -21,7 +21,7 @@ DAY = date(2026, 7, 10)
 
 
 def _at(hour: int) -> datetime:
-    return datetime(DAY.year, DAY.month, DAY.day, hour, 0, tzinfo=timezone.utc)
+    return datetime(DAY.year, DAY.month, DAY.day, hour, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -138,15 +138,15 @@ def test_bucket_edges():
     assert snapshot.bucket(100, snapshot.PROJECT_BUCKETS) == "51-100"
     assert snapshot.bucket(101, snapshot.PROJECT_BUCKETS) == "101+"
 
-    assert snapshot.bucket(Decimal("0"), snapshot.COST_BUCKETS) == "0"
+    assert snapshot.bucket(Decimal(0), snapshot.COST_BUCKETS) == "0"
     assert snapshot.bucket(Decimal("0.5"), snapshot.COST_BUCKETS) == "<1"
-    assert snapshot.bucket(Decimal("1"), snapshot.COST_BUCKETS) == "1-10"
-    assert snapshot.bucket(Decimal("10"), snapshot.COST_BUCKETS) == "10-50"
-    assert snapshot.bucket(Decimal("50"), snapshot.COST_BUCKETS) == "50-100"
-    assert snapshot.bucket(Decimal("100"), snapshot.COST_BUCKETS) == "100-250"
-    assert snapshot.bucket(Decimal("250"), snapshot.COST_BUCKETS) == "250-500"
-    assert snapshot.bucket(Decimal("500"), snapshot.COST_BUCKETS) == "500-1000"
-    assert snapshot.bucket(Decimal("1000"), snapshot.COST_BUCKETS) == "1000+"
+    assert snapshot.bucket(Decimal(1), snapshot.COST_BUCKETS) == "1-10"
+    assert snapshot.bucket(Decimal(10), snapshot.COST_BUCKETS) == "10-50"
+    assert snapshot.bucket(Decimal(50), snapshot.COST_BUCKETS) == "50-100"
+    assert snapshot.bucket(Decimal(100), snapshot.COST_BUCKETS) == "100-250"
+    assert snapshot.bucket(Decimal(250), snapshot.COST_BUCKETS) == "250-500"
+    assert snapshot.bucket(Decimal(500), snapshot.COST_BUCKETS) == "500-1000"
+    assert snapshot.bucket(Decimal(1000), snapshot.COST_BUCKETS) == "1000+"
 
     assert snapshot.bucket(0, snapshot.PRESENCE_BUCKETS) == "0"
     assert snapshot.bucket(29, snapshot.PRESENCE_BUCKETS) == "<30"
@@ -198,7 +198,7 @@ def test_model_family_falls_back_to_raw_sdk_model_id(project):
 
 
 def test_build_payload_returns_none_without_complete_unsent_day(project):
-    today = snapshot.datetime.now(timezone.utc).date()
+    today = snapshot.datetime.now(UTC).date()
     state = {
         "instance_id": "abc-123",
         "last_sent_date": today.isoformat(),
@@ -208,13 +208,13 @@ def test_build_payload_returns_none_without_complete_unsent_day(project):
 
 
 def test_build_payload_covers_complete_days_after_last_sent(project):
-    today = snapshot.datetime.now(timezone.utc).date()
+    today = snapshot.datetime.now(UTC).date()
     complete_day = today - timedelta(days=1)  # yesterday: the most recent complete UTC day
     last_sent = complete_day - timedelta(days=1)
 
     _make_session(
         project, "payload-session",
-        created_at=datetime(complete_day.year, complete_day.month, complete_day.day, 9, tzinfo=timezone.utc),
+        created_at=datetime(complete_day.year, complete_day.month, complete_day.day, 9, tzinfo=UTC),
         selected_model="opus", effort="high", permission_mode="bypassPermissions",
     )
 

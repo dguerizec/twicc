@@ -37,7 +37,8 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
+from collections.abc import Iterator
 
 if TYPE_CHECKING:
     from twicc.core.enums import Provider
@@ -64,7 +65,7 @@ class ProviderFilter(logging.Filter):
 
 
 @contextmanager
-def provider_log_context(provider: "Provider | None") -> Iterator[None]:
+def provider_log_context(provider: Provider | None) -> Iterator[None]:
     """Temporarily tag every log record emitted in the body with ``provider``.
 
     Used by cross-provider services that process per-provider messages

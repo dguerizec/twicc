@@ -26,7 +26,8 @@ or a JSONL-only stamp shape changing) is caught immediately.
 
 from __future__ import annotations
 
-from typing import Callable, NamedTuple
+from typing import NamedTuple
+from collections.abc import Callable
 
 import pytest
 

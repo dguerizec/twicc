@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import httpx
@@ -154,7 +154,7 @@ def _extract_window_fields(window: dict | None, prefix: str) -> dict:
     resets_at = None
     if isinstance(reset_at_epoch, (int, float)):
         try:
-            resets_at = datetime.fromtimestamp(reset_at_epoch, tz=timezone.utc)
+            resets_at = datetime.fromtimestamp(reset_at_epoch, tz=UTC)
         except (OverflowError, OSError, ValueError):
             logger.warning("Failed to parse reset_at for %s: %r", prefix, reset_at_epoch)
 
@@ -270,7 +270,7 @@ def _build_usage_snapshot_fields(raw: dict) -> dict:
 
     fields: dict = {
         "provider": Provider.CODEX.value,
-        "fetched_at": datetime.now(timezone.utc),
+        "fetched_at": datetime.now(UTC),
         "raw_response": raw,
     }
     fields.update(_extract_windows(rate_limit))

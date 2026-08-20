@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import hmac
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import NamedTuple
 from urllib.parse import urlparse
 
@@ -56,7 +56,7 @@ class PeerMutationResult(NamedTuple):
 
 
 def _now() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def normalize_base_url(url: str) -> str:

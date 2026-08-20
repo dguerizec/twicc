@@ -10,7 +10,6 @@ import pytest
 
 from twicc.artifacts.data_store import (
     MAX_DATA_FILE_BYTES,
-    MAX_DATA_TREE_BYTES,
     delete_data_file,
     list_data_dir,
     resolve_data_target,

@@ -90,7 +90,7 @@ def fetch_openrouter_models() -> list[dict]:
 
 
 def extract_provider_prices(
-    models: list[dict], provider: "Provider",
+    models: list[dict], provider: Provider,
 ) -> list[dict]:
     """Filter ``models`` to entries owned by ``provider`` and shape them.
 
@@ -141,7 +141,7 @@ def extract_provider_prices(
 
 
 def persist_provider_prices(
-    provider: "Provider", prices: list[dict],
+    provider: Provider, prices: list[dict],
 ) -> dict[str, int]:
     """Persist ``prices`` for ``provider`` into :class:`ModelPrice`.
 
@@ -198,7 +198,7 @@ def persist_provider_prices(
     return stats
 
 
-def sync_provider_model_prices(provider: "Provider") -> dict[str, int]:
+def sync_provider_model_prices(provider: Provider) -> dict[str, int]:
     """Single-provider end-to-end sync: fetch + filter + persist.
 
     Convenience wrapper used when only one provider needs syncing
@@ -214,7 +214,7 @@ def sync_provider_model_prices(provider: "Provider") -> dict[str, int]:
 
 
 def calculate_line_cost(
-    provider: "Provider",
+    provider: Provider,
     usage: TokenUsage,
     model_id: str,
     line_date: date,

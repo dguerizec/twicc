@@ -18,7 +18,7 @@ import logging
 import re
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any
 
 from asgiref.sync import sync_to_async
@@ -550,7 +550,7 @@ class HybridClaudeAgent(BaseAgent):
         """
         try:
             fired_ns = int(nonce.rsplit("-", 1)[-1])
-            fired_at = datetime.fromtimestamp(fired_ns / 1e9, tz=timezone.utc)
+            fired_at = datetime.fromtimestamp(fired_ns / 1e9, tz=UTC)
         except (ValueError, OverflowError, OSError):
             # Unparseable nonce: register rather than silently drop.
             return False

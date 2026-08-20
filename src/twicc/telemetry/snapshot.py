@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import platform
 import sys
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, UTC
 from decimal import Decimal
 
 from django.conf import settings
@@ -144,7 +144,7 @@ def build_instance_block() -> dict:
 
 
 def build_day_block(day: date, day_state: dict) -> dict:
-    start = datetime.combine(day, time.min, tzinfo=timezone.utc)
+    start = datetime.combine(day, time.min, tzinfo=UTC)
     end = start + timedelta(days=1)
 
     # Nested counts: provider -> model family -> version -> effort -> count.
@@ -178,7 +178,7 @@ def build_day_block(day: date, day_state: dict) -> dict:
         messages=Sum("user_message_count"), cost=Sum("cost"),
     )
     messages_sent = totals["messages"] or 0
-    total_cost = totals["cost"] or Decimal("0")
+    total_cost = totals["cost"] or Decimal(0)
 
     subagents = Session.objects.filter(
         type=SessionType.SUBAGENT, created_at__gte=start, created_at__lt=end,
@@ -217,7 +217,7 @@ def build_payload(state: dict) -> dict | None:
     covered.
     """
     last_sent = date.fromisoformat(state["last_sent_date"])
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
 
     complete_days = []
     day = last_sent + timedelta(days=1)

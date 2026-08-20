@@ -31,7 +31,8 @@ from __future__ import annotations
 import glob
 import logging
 import os
-from typing import Callable, NamedTuple
+from typing import NamedTuple
+from collections.abc import Callable
 
 from asgiref.sync import sync_to_async
 

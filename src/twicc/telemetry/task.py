@@ -102,7 +102,7 @@ async def start_telemetry_task(stop_event: asyncio.Event) -> None:
                 logger.debug("Telemetry cycle failed", exc_info=True)
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=TICK_INTERVAL)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             else:
                 break

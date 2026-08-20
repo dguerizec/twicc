@@ -96,22 +96,21 @@ async def _write_value(root: str, value: str | None) -> None:
 
     config = await make_codex_config(cwd=str(Path.home()))
     try:
-        async with _write_lock:
-            async with AsyncCodexClient(config=config) as client:
-                await client.initialize()
-                await client.request(
-                    "config/batchWrite",
-                    {
-                        "edits": [
-                            {
-                                "keyPath": _key_path(root),
-                                "mergeStrategy": "upsert",
-                                "value": value,
-                            }
-                        ]
-                    },
-                    response_model=ConfigWriteResponse,
-                )
+        async with _write_lock, AsyncCodexClient(config=config) as client:
+            await client.initialize()
+            await client.request(
+                "config/batchWrite",
+                {
+                    "edits": [
+                        {
+                            "keyPath": _key_path(root),
+                            "mergeStrategy": "upsert",
+                            "value": value,
+                        }
+                    ]
+                },
+                response_model=ConfigWriteResponse,
+            )
         logger.info("Codex trust for %s -> %s", root, value)
     except Exception:
         logger.exception("Failed to write Codex trust for %s", root)

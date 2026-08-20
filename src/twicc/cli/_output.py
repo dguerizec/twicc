@@ -29,14 +29,14 @@ import typer
 class _Sink:
     """Capture target for one in-process invocation."""
 
-    __slots__ = ("result", "error")
+    __slots__ = ("error", "result")
 
     def __init__(self) -> None:
         self.result = None
         self.error: str | None = None
 
 
-_capture: contextvars.ContextVar["_Sink | None"] = contextvars.ContextVar(
+_capture: contextvars.ContextVar[_Sink | None] = contextvars.ContextVar(
     "emit_capture", default=None
 )
 

@@ -185,7 +185,7 @@ async def _call_codex(
         )
         return suggestion
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(
             "Codex title suggestion: timeout after %ds (source=%s, attempt=%d/%d)",
             SUGGESTION_TIMEOUT_SECONDS, source, attempt, MAX_RETRIES,

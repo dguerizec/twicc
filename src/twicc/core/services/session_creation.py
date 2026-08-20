@@ -15,7 +15,7 @@ translate (e.g. to ``status: failed`` in the watcher).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import NamedTuple
 
 import orjson
@@ -329,7 +329,7 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
             project_id=project_id,
             resolved_settings=effective,
             session_id=addendum_session_id,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             spawned_by_id=spawned_by_session_id,
             spawned_by_title=spawned_by_title,
             spawned_by_project_id=spawned_by_project_id,

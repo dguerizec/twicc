@@ -56,7 +56,7 @@ KEYRING_SERVICE = "Codex Auth"
 # and reused on subsequent calls. Dropped by :func:`invalidate_credentials_cache`
 # — called both at the start of a refresh attempt and on a usage-API 401 — so a
 # token refreshed underneath us (by a real session) is picked up on the re-read.
-_cached_credentials: "Credentials | None" = None
+_cached_credentials: Credentials | None = None
 
 # Track ``last_refresh`` values for which a refresh has already been attempted
 # (and failed), to avoid re-spawning the costly SDK throwaway call for the same
@@ -272,7 +272,7 @@ def refresh_token_via_codex_sdk(last_refresh: str) -> bool:
         asyncio.run(
             asyncio.wait_for(_codex_sdk_throwaway_call(), timeout=_TOKEN_REFRESH_TIMEOUT),
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Codex SDK refresh call timed out after %ds", _TOKEN_REFRESH_TIMEOUT)
         return False
     except Exception as e:

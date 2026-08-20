@@ -24,7 +24,7 @@ import math
 import shutil
 import threading
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import TYPE_CHECKING, NamedTuple
 
 import tantivy
@@ -313,10 +313,10 @@ def index_document(
     _check_writer()
 
     if timestamp is None:
-        timestamp = datetime.now(timezone.utc)
+        timestamp = datetime.now(UTC)
     elif timestamp.tzinfo is None:
         # Tantivy requires timezone-aware datetimes
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
+        timestamp = timestamp.replace(tzinfo=UTC)
 
     doc = tantivy.Document()
     doc.add_text("body", body)
@@ -418,7 +418,7 @@ def reindex_session(session_id: str) -> None:
 def _format_datetime_for_query(dt: datetime) -> str:
     """Format a datetime as an ISO 8601 string suitable for Tantivy query parsing."""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
@@ -622,7 +622,7 @@ def search(
         if ts is not None:
             if isinstance(ts, datetime):
                 if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
+                    ts = ts.replace(tzinfo=UTC)
                 ts_str = ts.isoformat()
             else:
                 ts_str = str(ts)
@@ -638,8 +638,7 @@ def search(
             timestamp=ts_str,
         )
         session_matches[sid].append(match)
-        if effective_score > session_max_score[sid]:
-            session_max_score[sid] = effective_score
+        session_max_score[sid] = max(session_max_score[sid], effective_score)
 
     # Session score = best hit score + small log bonus for match count.
     # The best hit determines the primary ranking; the log bonus is a tiebreaker
@@ -893,7 +892,7 @@ def raw_search(
         if ts is not None:
             if isinstance(ts, datetime):
                 if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
+                    ts = ts.replace(tzinfo=UTC)
                 ts_str = ts.isoformat()
             else:
                 ts_str = str(ts)

@@ -6,6 +6,7 @@ import pytest
 
 from twicc import paths
 from twicc.mcp import server as mcp_server
+from datetime import UTC
 
 
 @pytest.fixture
@@ -78,11 +79,11 @@ def test_call_tool_normalizes_datetime_to_json_native(monkeypatch):
     chokes on datetime ("Object of type datetime is not JSON serializable").
     """
     import json
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from twicc.rpc.invoker import InvocationResult
 
-    ts = datetime(2026, 7, 6, 19, 14, 24, 421000, tzinfo=timezone.utc)
+    ts = datetime(2026, 7, 6, 19, 14, 24, 421000, tzinfo=UTC)
     monkeypatch.setattr(
         mcp_server,
         "_run_invoke",

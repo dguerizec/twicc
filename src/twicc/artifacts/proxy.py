@@ -12,7 +12,8 @@ import asyncio
 import base64
 import ipaddress
 import socket
-from typing import Awaitable, Callable, NamedTuple
+from typing import NamedTuple
+from collections.abc import Awaitable, Callable
 
 import httpx
 import orjson

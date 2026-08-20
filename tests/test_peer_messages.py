@@ -1489,7 +1489,7 @@ def test_owner_message_light_detail_keeps_full_text_without_attachment_bytes(
         "images": [],
         "documents": [],
     }
-    assert row["text_bytes"] == len("full **message**".encode())
+    assert row["text_bytes"] == len(b"full **message**")
     assert image["source"]["data"].encode() not in response.content
 
 

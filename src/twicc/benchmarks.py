@@ -76,7 +76,7 @@ def fetch_deepswe_leaderboard() -> list[dict]:
     return orjson.loads(response.content).get("rows", [])
 
 
-def _internal_model_registry() -> dict[str, "Provider"]:
+def _internal_model_registry() -> dict[str, Provider]:
     """Build a ``{full_name: Provider}`` index over every registered model.
 
     The per-provider ``MODEL_VERSIONS`` lists are the single source of truth

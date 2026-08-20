@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +68,7 @@ def _write_log_line(session_id: str, direction: str, data: Any) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     line = {
         "direction": direction,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "data": data,
     }
     try:

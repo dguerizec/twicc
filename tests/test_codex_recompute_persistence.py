@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import queue
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import orjson
 import pytest
@@ -39,7 +39,7 @@ from twicc.providers.codex.compute import get_compute
 # Minimal Codex JSONL helpers
 # ---------------------------------------------------------------------------
 
-_NOW = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def _codex_line(type_: str, payload_type: str, payload_extra: dict | None = None, **top) -> str:

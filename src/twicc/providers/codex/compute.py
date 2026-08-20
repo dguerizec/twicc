@@ -1448,7 +1448,7 @@ class _PlanPrefixState:
     fields evolve line by line during a sequential scan.
     """
 
-    __slots__ = ("last_mode", "marker_seen", "armed")
+    __slots__ = ("armed", "last_mode", "marker_seen")
 
     def __init__(self, last_mode: str | None = None) -> None:
         # Collaboration mode of the last ``turn_context`` seen. ``None``
@@ -1475,7 +1475,7 @@ class _GoalContextState:
     the sequential compute scan.
     """
 
-    __slots__ = ("initialized", "seen_context", "last_objective", "show_next")
+    __slots__ = ("initialized", "last_objective", "seen_context", "show_next")
 
     def __init__(self, *, initialized: bool = False) -> None:
         self.initialized = initialized

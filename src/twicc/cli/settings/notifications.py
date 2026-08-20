@@ -31,7 +31,6 @@ validation error if the id is not found.
 
 from __future__ import annotations
 
-from typing import Optional
 
 import typer
 
@@ -80,11 +79,11 @@ def _notifications_default(ctx: typer.Context) -> None:
 
 
 def _build_flags_dict(
-    enabled: Optional[bool],
-    user_turn: Optional[bool],
-    pending: Optional[bool],
-    extra_usage: Optional[bool],
-    away_only: Optional[bool],
+    enabled: bool | None,
+    user_turn: bool | None,
+    pending: bool | None,
+    extra_usage: bool | None,
+    away_only: bool | None,
 ) -> dict:
     """Build the flags dict from explicitly-set toggles only (skip None values).
 
@@ -146,23 +145,23 @@ def _drop_patch(patch: dict, timeout: int) -> int:
 def notifications_add(
     url: str = typer.Argument(help="Apprise URL for the notification target."),
     name: str = typer.Option("", "--name", help="Optional human-readable name for this target."),
-    enabled: Optional[bool] = typer.Option(
+    enabled: bool | None = typer.Option(
         None, "--enabled/--disabled",
         help="Whether this target is active. Default: enabled.",
     ),
-    user_turn: Optional[bool] = typer.Option(
+    user_turn: bool | None = typer.Option(
         None, "--user-turn/--no-user-turn",
         help="Send a notification when the agent is waiting for the user. Default: on.",
     ),
-    pending: Optional[bool] = typer.Option(
+    pending: bool | None = typer.Option(
         None, "--pending/--no-pending",
         help="Send a notification when a permission request is pending. Default: on.",
     ),
-    extra_usage: Optional[bool] = typer.Option(
+    extra_usage: bool | None = typer.Option(
         None, "--extra-usage/--no-extra-usage",
         help="Send a notification when extra usage starts. Default: on.",
     ),
-    away_only: Optional[bool] = typer.Option(
+    away_only: bool | None = typer.Option(
         None, "--away-only/--no-away-only",
         help="Hold notifications while the user is present; send when they go away. Default: on.",
     ),
@@ -228,31 +227,31 @@ def notifications_update(
         metavar="ID",
         help="ID of the notification target to update.",
     ),
-    url: Optional[str] = typer.Option(
+    url: str | None = typer.Option(
         None, "--url",
         help="New Apprise URL (resets the 'tested' flag to null).",
     ),
-    name: Optional[str] = typer.Option(
+    name: str | None = typer.Option(
         None, "--name",
         help="New human-readable name.",
     ),
-    enabled: Optional[bool] = typer.Option(
+    enabled: bool | None = typer.Option(
         None, "--enabled/--disabled",
         help="Whether this target is active.",
     ),
-    user_turn: Optional[bool] = typer.Option(
+    user_turn: bool | None = typer.Option(
         None, "--user-turn/--no-user-turn",
         help="Send a notification when the agent is waiting for the user.",
     ),
-    pending: Optional[bool] = typer.Option(
+    pending: bool | None = typer.Option(
         None, "--pending/--no-pending",
         help="Send a notification when a permission request is pending.",
     ),
-    extra_usage: Optional[bool] = typer.Option(
+    extra_usage: bool | None = typer.Option(
         None, "--extra-usage/--no-extra-usage",
         help="Send a notification when extra usage starts.",
     ),
-    away_only: Optional[bool] = typer.Option(
+    away_only: bool | None = typer.Option(
         None, "--away-only/--no-away-only",
         help="Hold notifications while the user is present; send when they go away.",
     ),

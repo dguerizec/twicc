@@ -44,7 +44,7 @@ class ResolvedSession(NamedTuple):
     Used to compute the spawn-tree relation in the sender header of
     ``send-message`` / ``send-messages``.
     """
-    current_settings: "AgentSettings"
+    current_settings: AgentSettings
     """The session row's AgentSettings at lookup time (all fields, None = use synced default).
 
     Populated via :meth:`AgentSettings.from_session`. Callers that need to

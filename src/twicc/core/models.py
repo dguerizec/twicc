@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from decimal import Decimal
 from functools import cached_property
 from typing import ClassVar, TypeAlias
@@ -42,7 +42,7 @@ def cron_occurrences(cron_expr: str, from_dt: datetime):
 
     local_from = from_dt.astimezone()  # Convert UTC → local
     for occurrence in CronSim(cron_expr, local_from):
-        yield occurrence.astimezone(timezone.utc)
+        yield occurrence.astimezone(UTC)
 
 DateType: TypeAlias = date
 
@@ -357,7 +357,7 @@ class WeeklyActivity(PeriodicActivity):
     @classmethod
     def date_range(cls, activity_date: DateType) -> tuple[datetime, datetime]:
         """Weekly range: Monday 00:00 UTC to next Monday 00:00 UTC."""
-        date_start = datetime.combine(activity_date, datetime.min.time(), tzinfo=timezone.utc)
+        date_start = datetime.combine(activity_date, datetime.min.time(), tzinfo=UTC)
         return date_start, date_start + timedelta(days=7)
 
 
@@ -367,7 +367,7 @@ class DailyActivity(PeriodicActivity):
     @classmethod
     def date_range(cls, activity_date: DateType) -> tuple[datetime, datetime]:
         """Daily range: day 00:00 UTC to next day 00:00 UTC."""
-        date_start = datetime.combine(activity_date, datetime.min.time(), tzinfo=timezone.utc)
+        date_start = datetime.combine(activity_date, datetime.min.time(), tzinfo=UTC)
         return date_start, date_start + timedelta(days=1)
 
 
@@ -966,7 +966,7 @@ class Workflow(models.Model):
             sid[len(prefix):]: cost
             for sid, cost in Session.objects.filter(id__startswith=prefix).values_list("id", "total_cost")
         }
-        total = sum((c for c in by_agent.values() if c is not None), Decimal("0"))
+        total = sum((c for c in by_agent.values() if c is not None), Decimal(0))
         phases: dict[str, Decimal] = {}
         for entry in (envelope or {}).get("workflowProgress", []):
             if entry.get("type") != "workflow_agent":
@@ -976,7 +976,7 @@ class Workflow(models.Model):
             if idx is None or cost is None:
                 continue
             key = str(idx)
-            phases[key] = phases.get(key, Decimal("0")) + cost
+            phases[key] = phases.get(key, Decimal(0)) + cost
         return total, {k: float(v) for k, v in phases.items()}
 
 
@@ -1530,7 +1530,7 @@ class SessionCron(models.Model):
         Recurring crons expire after CLAUDE_RECURRING_MAX_AGE (7 days, matching CLI behavior).
         One-shot crons expire after their fire time passes.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         return cls.objects.filter(
             session_id=session_id,
             provider=provider.value,
@@ -1544,7 +1544,7 @@ class SessionCron(models.Model):
     @classmethod
     def active_for_session(cls, session_id: str, provider: Provider) -> models.QuerySet:
         """Return the queryset of non-expired crons for ``(session_id, provider)``."""
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         return cls.objects.filter(
             session_id=session_id,
             provider=provider.value,
@@ -1680,7 +1680,7 @@ class Share(models.Model):
         """``active`` | ``revoked`` | ``expired`` (revoked wins over expired)."""
         if self.revoked_at is not None:
             return "revoked"
-        now = now or datetime.now(tz=timezone.utc)
+        now = now or datetime.now(tz=UTC)
         if self.expires_at is not None and self.expires_at <= now:
             return "expired"
         return "active"
