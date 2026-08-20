@@ -270,7 +270,7 @@ class DropRequestsWatcher:
         await self._cleanup_orphan_status_files()
         try:
             await watch_task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError:  # noqa: TRY203 — explicit: cancellation propagates
             raise
 
     async def stop(self) -> None:

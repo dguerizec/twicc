@@ -1677,11 +1677,10 @@ def _is_worktree_marker_segment(segment: str, *, is_last: bool) -> bool:
     """True if *segment* marks a worktree. A directly-named ``worktree-*`` folder
     counts anywhere; a bare container (``.worktrees``) only counts when it is not
     the last segment — the worktree itself must live inside it."""
-    if _WORKTREE_NAMED_RE.match(segment):
-        return True
-    if not is_last and _WORKTREE_CONTAINER_RE.match(segment):
-        return True
-    return False
+    return bool(
+        _WORKTREE_NAMED_RE.match(segment)
+        or (not is_last and _WORKTREE_CONTAINER_RE.match(segment))
+    )
 
 
 def _nearest_repo_root(start_dir: str) -> str | None:

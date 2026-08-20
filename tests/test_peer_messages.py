@@ -90,10 +90,10 @@ def _post(client, path, body, *, bearer=None):
 
 
 def _active_peer(**kw):
-    defaults = dict(
-        name="alice", base_url="https://alice.example.com", state=PeerState.ACTIVE,
-        token_ours=mint_token(), token_theirs="their-" + "t" * 30,
-    )
+    defaults = {
+        "name": "alice", "base_url": "https://alice.example.com", "state": PeerState.ACTIVE,
+        "token_ours": mint_token(), "token_theirs": "their-" + "t" * 30,
+    }
     defaults.update(kw)
     return Peer.objects.create(**defaults)
 
@@ -481,13 +481,13 @@ def test_replay_does_not_reconstruct_reply_from_new_wire_data(
 
 def _out_message(peer, **kw):
     message_id = kw.get("message_id", "pm_" + "b" * 16)
-    defaults = dict(
-        peer=peer, direction=PeerMessageDirection.OUT, message_id=message_id,
-        thread_id=message_id,
-        payload={"text": "hi", "images": [], "documents": []},
-        origin={"sent_at": "2026-07-24T12:00:00+00:00"},
-        status=PeerMessageStatus.PENDING,
-    )
+    defaults = {
+        "peer": peer, "direction": PeerMessageDirection.OUT, "message_id": message_id,
+        "thread_id": message_id,
+        "payload": {"text": "hi", "images": [], "documents": []},
+        "origin": {"sent_at": "2026-07-24T12:00:00+00:00"},
+        "status": PeerMessageStatus.PENDING,
+    }
     defaults.update(kw)
     return PeerMessage.objects.create(**defaults)
 
@@ -867,14 +867,14 @@ def test_descendants_keep_each_local_parents_thread_identity(
 
 def _in_message(peer, **kw):
     message_id = kw.get("message_id", "pm_" + "c" * 16)
-    defaults = dict(
-        peer=peer, direction=PeerMessageDirection.IN, message_id=message_id,
-        thread_id=message_id,
-        title="The *subject*",
-        payload={"text": "the message body", "images": [], "documents": []},
-        origin={"sent_at": "2026-07-24T12:00:00+00:00"},
-        status=PeerMessageStatus.PENDING,
-    )
+    defaults = {
+        "peer": peer, "direction": PeerMessageDirection.IN, "message_id": message_id,
+        "thread_id": message_id,
+        "title": "The *subject*",
+        "payload": {"text": "the message body", "images": [], "documents": []},
+        "origin": {"sent_at": "2026-07-24T12:00:00+00:00"},
+        "status": PeerMessageStatus.PENDING,
+    }
     defaults.update(kw)
     return PeerMessage.objects.create(**defaults)
 

@@ -179,7 +179,7 @@ def _analyze_segment(tokens: list[str]) -> list[tuple[str, str]]:
     if cmd == 'tee':
         targets.extend((p, 'write') for p in positional)
     elif cmd == 'sed':
-        in_place = any(f == '-i' or f.startswith('-i') or f.startswith('--in-place') for f in flags)
+        in_place = any(f == '-i' or f.startswith(('-i', '--in-place')) for f in flags)
         if in_place:
             # When the script comes via -e/-f/--expression/--file, every
             # remaining positional is an edited file; otherwise the first
@@ -195,7 +195,7 @@ def _analyze_segment(tokens: list[str]) -> list[tuple[str, str]]:
                     script_via_flag = True
                     skip_next = True
                     continue
-                if a.startswith('--expression=') or a.startswith('--file='):
+                if a.startswith(('--expression=', '--file=')):
                     script_via_flag = True
                     continue
                 if a.startswith('-'):

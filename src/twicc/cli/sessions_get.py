@@ -40,7 +40,7 @@ def _build_placeholder_template() -> dict:
     sample = Session.objects.first()
     if sample is None:
         return {"id": None}
-    return {k: None for k in serialize_session(sample).keys()}
+    return {k: None for k in serialize_session(sample)}
 
 
 def main(session_ids: list[str]) -> None:

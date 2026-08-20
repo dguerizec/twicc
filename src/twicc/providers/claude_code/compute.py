@@ -1711,7 +1711,7 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         ):
             return None
         if any(
-            text_lower.endswith(suffix) or text_lower.endswith(suffix + ")")
+            text_lower.endswith((suffix, suffix + ")"))
             for suffix in _LOCAL_COMMAND_FILTERED_SUFFIXES
         ):
             return None

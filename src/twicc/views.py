@@ -1273,7 +1273,7 @@ async def bulk_archive_sessions(request):
 
     try:
         older_than_epoch = datetime.fromisoformat(
-            older_than_iso.replace("Z", "+00:00")
+            older_than_iso
         ).timestamp()
     except (ValueError, AttributeError, TypeError):
         return JsonResponse({"error": "Invalid older_than format"}, status=400)

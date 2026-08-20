@@ -92,7 +92,7 @@ class ClaudeCodePlansWatcher:
         self._active = True
         try:
             await watch_task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError:  # noqa: TRY203 — explicit: cancellation propagates
             raise
 
     def stop(self) -> None:

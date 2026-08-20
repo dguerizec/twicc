@@ -427,13 +427,13 @@ class BaseSessionsWatcher:
                 parent_session=parent_session,
                 compute_version=compute.compute_version,
             )
-        kwargs: dict = dict(
-            id=parsed.session_id,
-            project=project,
-            provider=compute.provider,
-            file_path=parsed.file_path,
-            compute_version=compute.compute_version,
-        )
+        kwargs: dict = {
+            'id': parsed.session_id,
+            'project': project,
+            'provider': compute.provider,
+            'file_path': parsed.file_path,
+            'compute_version': compute.compute_version,
+        }
         if parsed.title:
             kwargs["title"] = parsed.title
         if agent_settings is not None:

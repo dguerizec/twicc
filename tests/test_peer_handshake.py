@@ -212,11 +212,11 @@ def test_handshake_request_413_on_oversized_body(client, transactional_db, peer_
 # ── handshake_verify (phase 4) ──────────────────────────────────────────────
 
 def _make_pending_received(**kw):
-    defaults = dict(
-        name="", remote_display_name="alice", base_url="https://alice.example.com",
-        state=PeerState.PENDING_RECEIVED, token_theirs="tok-" + "a" * 40,
-        verification_code="123456",
-    )
+    defaults = {
+        "name": "", "remote_display_name": "alice", "base_url": "https://alice.example.com",
+        "state": PeerState.PENDING_RECEIVED, "token_theirs": "tok-" + "a" * 40,
+        "verification_code": "123456",
+    }
     defaults.update(kw)
     return Peer.objects.create(**defaults)
 
@@ -311,10 +311,10 @@ def test_verify_mismatch_on_active_row_never_mutates(client, transactional_db, p
 # ── submit_verification_code service (requester side) ───────────────────────
 
 def _make_pending_sent(**kw):
-    defaults = dict(
-        name="bob", base_url="https://bob.example.com",
-        state=PeerState.PENDING_SENT, token_ours=mint_token(),
-    )
+    defaults = {
+        "name": "bob", "base_url": "https://bob.example.com",
+        "state": PeerState.PENDING_SENT, "token_ours": mint_token(),
+    }
     defaults.update(kw)
     return Peer.objects.create(**defaults)
 

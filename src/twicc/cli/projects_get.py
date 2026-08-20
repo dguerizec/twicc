@@ -39,7 +39,7 @@ def _build_placeholder_template() -> dict:
     sample = Project.objects.first()
     if sample is None:
         return {"id": None, "workspaces": None, "worktrees": None}
-    template = {k: None for k in serialize_project(sample).keys()}
+    template = {k: None for k in serialize_project(sample)}
     template["workspaces"] = None
     template["worktrees"] = None
     return template

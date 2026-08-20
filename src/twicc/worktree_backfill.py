@@ -158,8 +158,8 @@ async def backfill_worktree_links(
 
     for project_id in unresolved_marked:
         warn(
-            "Worktree backfill: %s looks like a worktree (path marker) but its "
-            "repo could not be found — left unlinked for manual fix." % project_id
+            f"Worktree backfill: {project_id} looks like a worktree (path marker) "
+            "but its repo could not be found — left unlinked for manual fix."
         )
 
     linked = 0

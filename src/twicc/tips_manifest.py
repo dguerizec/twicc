@@ -187,7 +187,9 @@ def _parse_tip_file(key: str, path: Path) -> TipMeta:
     except yaml.YAMLError as exc:
         raise ValueError(f"invalid YAML front-matter: {exc}") from exc
     if not isinstance(fm, dict):
-        raise ValueError("front-matter must be a YAML mapping")
+        # ValueError, not TypeError: the caller catches (ValueError, OSError) to
+        # skip a single bad file and keep scanning.
+        raise ValueError("front-matter must be a YAML mapping")  # noqa: TRY004
 
     title = fm.get("title")
     if not isinstance(title, str) or not title.strip():

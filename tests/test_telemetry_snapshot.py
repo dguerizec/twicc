@@ -30,14 +30,14 @@ def project(transactional_db):
 
 
 def _make_session(project, session_id, **overrides):
-    defaults = dict(
-        id=session_id,
-        project=project,
-        provider="claude_code",
-        file_path=f"{session_id}.jsonl",
-        type=SessionType.SESSION,
-        created_at=_at(9),
-    )
+    defaults = {
+        "id": session_id,
+        "project": project,
+        "provider": "claude_code",
+        "file_path": f"{session_id}.jsonl",
+        "type": SessionType.SESSION,
+        "created_at": _at(9),
+    }
     defaults.update(overrides)
     return Session.objects.create(**defaults)
 

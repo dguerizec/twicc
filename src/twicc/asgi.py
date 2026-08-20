@@ -556,7 +556,8 @@ class WSConsumer(AsyncJsonWebsocketConsumer):
         # /api/bootstrap/ — so the client store stays in sync without re-fetching
         # the bootstrap payload.
         if self._should_send("agent_settings_presets_updated"):
-            for provider, _ in get_provider_helpers_registry().items():
+            # The registry is not a dict — it exposes get/items/values, no keys().
+            for provider, _ in get_provider_helpers_registry().items():  # noqa: PERF102
                 presets = await sync_to_async(read_agent_settings_presets)(provider)
                 await self.send_json({
                     "type": "agent_settings_presets_updated",

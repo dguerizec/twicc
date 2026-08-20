@@ -676,7 +676,7 @@ async def stop_db_writer() -> None:
                 unexpected_exception_log=lambda exc: logger.error(
                     "DB writer task exited with an unexpected exception: %s",
                     exc,
-                    exc_info=True,
+                    exc_info=exc,
                 ),
             )
         # Drain in-flight external lock holders. The writer task is done by
@@ -706,7 +706,7 @@ async def stop_db_writer() -> None:
                 unexpected_exception_log=lambda exc: logger.error(
                     "DB write-lock drain at shutdown raised: %s",
                     exc,
-                    exc_info=True,
+                    exc_info=exc,
                 ),
             )
     finally:

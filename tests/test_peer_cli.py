@@ -22,10 +22,10 @@ def _passthrough(monkeypatch):
 
 
 def _active_peer(**kw):
-    defaults = dict(
-        name="alice", base_url="https://alice.example.com", state=PeerState.ACTIVE,
-        token_ours=mint_token(), token_theirs="their-" + "t" * 30,
-    )
+    defaults = {
+        "name": "alice", "base_url": "https://alice.example.com", "state": PeerState.ACTIVE,
+        "token_ours": mint_token(), "token_theirs": "their-" + "t" * 30,
+    }
     defaults.update(kw)
     return Peer.objects.create(**defaults)
 

@@ -181,7 +181,9 @@ async def start_quota_wakeup_task(stop_event: asyncio.Event) -> None:
             else:
                 break  # stop_event fired
             try:
-                await _run_quota_wakeup_tick(datetime.now())
+                # The tick matches a user-configured local HH:MM, so it must read
+                # the server's local wall clock, not UTC.
+                await _run_quota_wakeup_tick(datetime.now())  # noqa: DTZ005
             except Exception as e:  # noqa: BLE001 — keep the loop alive across transient errors
                 logger.error("Quota warm-up tick failed: %s", e, exc_info=True)
     finally:

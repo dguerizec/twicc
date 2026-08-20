@@ -1827,7 +1827,7 @@ def _count_diff_lines(unified_diff: str) -> tuple[int, int]:
     for line in unified_diff.splitlines():
         if not line:
             continue
-        if line.startswith("+++") or line.startswith("---"):
+        if line.startswith(("+++", "---")):
             continue
         if line.startswith("@@"):
             continue
@@ -3677,11 +3677,10 @@ class CodexSessionCompute(BaseSessionCompute):
         if wrapper_type == _TYPE_RESPONSE_ITEM:
             if payload.get("type") in _TOOL_RESULT_PAYLOAD_TYPES:
                 return True
-            if _subagent_notification_text(parsed_json) is not None:
-                return True
-            if _parse_agent_final_answer(parsed_json) is not None:
-                return True
-            return False
+            return (
+                _subagent_notification_text(parsed_json) is not None
+                or _parse_agent_final_answer(parsed_json) is not None
+            )
         if wrapper_type == _TYPE_EVENT_MSG:
             if _parse_sub_agent_activity_started(parsed_json) is not None:
                 return True

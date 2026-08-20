@@ -329,7 +329,8 @@ def _provider_entries() -> list[str]:
 
     default_provider = read_synced_settings().get("defaultProvider")
     entries: list[str] = []
-    for prov, _ in get_provider_helpers_registry().items():
+    # The registry is not a dict — it exposes get/items/values, no keys().
+    for prov, _ in get_provider_helpers_registry().items():  # noqa: PERF102
         flags = ["enabled" if is_provider_enabled(prov) else "disabled"]
         if prov.value == default_provider:
             flags.append("default")

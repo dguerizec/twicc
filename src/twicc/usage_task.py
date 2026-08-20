@@ -391,9 +391,7 @@ def _extra_usage_recently_active(snapshot: UsageSnapshot, ref: UsageSnapshot | N
         return True
     cur_rem = snapshot.extra_usage_remaining_credits
     ref_rem = ref.extra_usage_remaining_credits
-    if cur_rem is not None and ref_rem is not None and cur_rem < ref_rem:
-        return True
-    return False
+    return cur_rem is not None and ref_rem is not None and cur_rem < ref_rem
 
 
 @sync_to_async

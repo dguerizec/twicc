@@ -25,6 +25,7 @@ import os
 import sys
 from datetime import datetime, UTC
 from pathlib import Path
+from typing import Self
 
 import orjson
 
@@ -114,7 +115,7 @@ class InstanceLock:
         self._info_path = data_dir / INFO_FILENAME
         self._fd: int | None = None
 
-    def __enter__(self) -> InstanceLock:
+    def __enter__(self) -> Self:
         self.acquire()
         return self
 

@@ -97,7 +97,7 @@ def test_long_title_is_truncated_with_ellipsis():
         "x", caller, recipient_id="b", recipient_spawned_by_id=None,
     )
     header = result.split("\n", 1)[0]
-    title_part = header.split('("**', 1)[1].rstrip('**")')
+    title_part = header.split('("**', 1)[1].removesuffix('**")')
     assert title_part == "t" * (TITLE_MAX_CHARS - 1) + "…"
     # The cap measures the real title, before escaping.
     assert len(title_part) == TITLE_MAX_CHARS

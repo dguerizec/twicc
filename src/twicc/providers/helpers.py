@@ -1004,9 +1004,7 @@ class BaseProviderHelpers:
         """Return ``True`` when ``mv`` is usable: enabled and not retired."""
         if not mv.enabled:
             return False
-        if mv.retirement_date is not None and date.today() > mv.retirement_date:
-            return False
-        return True
+        return mv.retirement_date is None or date.today() <= mv.retirement_date
 
     def resolve_to_available_model(self, identifier: str) -> str:
         """Resolve ``identifier`` to the closest available model by weight.

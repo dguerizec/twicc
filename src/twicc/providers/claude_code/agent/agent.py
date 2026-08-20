@@ -1632,7 +1632,8 @@ class ClaudeCodeAgent(BaseAgent):
 
     def _format_wakeup_time(self) -> str:
         """Local ``HH:MM`` of the pending wake-up deadline (for the label)."""
-        return datetime.fromtimestamp(self._pending_wakeup_at).strftime("%H:%M")
+        # The label is deliberately local, per the docstring.
+        return datetime.fromtimestamp(self._pending_wakeup_at).strftime("%H:%M")  # noqa: DTZ006
 
     async def apply_live_settings(self, settings: AgentSettings) -> None:
         """Apply live and idle setting changes to the live SDK client.

@@ -42,7 +42,7 @@ _SHELL_DATA_ID = "twicc-shell-data"
 # the artifact *is* the untrusted script; CSP here controls egress, not the
 # widget's own markup. Child contexts (about:blank/srcdoc/blob/data) inherit this,
 # and `worker-src 'none'` forbids an un-patched worker network scope.
-ARTIFACT_CSP = "; ".join(
+ARTIFACT_CSP = "; ".join(  # noqa: FLY002 — one directive per line beats a 300-char string
     [
         "default-src 'none'",
         "script-src 'self' 'unsafe-inline'",
