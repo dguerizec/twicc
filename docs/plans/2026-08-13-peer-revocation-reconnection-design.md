@@ -1,6 +1,6 @@
 # Peer Revocation, Reconnection, and Address Changes — Design
 
-**Status:** validated by adversarial review; awaiting owner approval
+**Status:** validated by adversarial review and approved by the owner
 **Date:** 2026-08-15
 **Scope:** preserve peer history when a relationship ends, provide an explicit full-pairing reconnection flow, and make local or remote address changes fail closed.
 
@@ -1217,9 +1217,7 @@ The implementation diff must not add:
 
 ---
 
-## 16. Implementation lots
-
-### Lot 1 — Revocation and retained history
+## Lot 1 — Revocation and retained history
 
 Deliver the schema migration, canonical remote identity, `PROTECT`, revoked and broken metadata, credential binding,
 Revoke and pending-only deletion APIs, the final-`PeerMessage` late-send guard, Manage Peers revocation UI, and
@@ -1229,13 +1227,13 @@ This lot also delivers the runtime safeguards for `twicc peers`, `twicc peer-sen
 
 This lot ends with a complete usable Revoke flow. It does not expose Reconnect yet.
 
-### Lot 2 — Full reconnection and status reconciliation
+## Lot 2 — Full reconnection and status reconciliation
 
 Deliver the provisional slot with its slot-owned credential pair and leg-owned metadata, shared handshake routing,
 fresh credential promotion, one-sided and crossed Accept recovery, retry behavior, status query protocol, manual
 Refresh status, and Reconnect UI.
 
-### Lot 3 — Local and remote address changes
+## Lot 3 — Local and remote address changes
 
 Deliver the managed extension of the existing `peerBaseUrl` WebSocket Apply, local address confirmations, fail-closed
 interrupted-Apply recovery, the optional active-peer batch, internal `request_previous_base_url`, verified
@@ -1243,7 +1241,7 @@ interrupted-Apply recovery, the optional active-peer batch, internal `request_pr
 
 This lot also classifies `peerBaseUrl` as readable but managed in the generic CLI. `twicc settings set peerBaseUrl` and `twicc settings unset peerBaseUrl` reject it before any settings patch can bypass the managed transition.
 
-### Lot 4 — Skills and repository documentation
+## Lot 4 — Skills and repository documentation
 
 Deliver bundled skill wording, its required plugin version bump, and repository documentation only. This lot changes no runtime contract.
 
