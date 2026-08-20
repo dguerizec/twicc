@@ -84,14 +84,18 @@ export function ancestorChain(projectId, projectsById) {
 
 /**
  * Resolve the inherited per-project agent-settings defaults for a provider.
+ * ``options.includeSelf`` defaults to true. Set it to false when resolving the
+ * inheritance baseline for a project whose own sparse values are being edited.
+ *
  * @returns {Object} a { field: value } map holding only the fields the chain
  *   actually sets; a missing field means "inherit further / fall back to the
  *   global default" (the caller applies that global fallback).
  */
-export function resolveProjectAgentDefaults(projectId, provider, projectsById) {
+export function resolveProjectAgentDefaults(projectId, provider, projectsById, { includeSelf = true } = {}) {
     const resolved = {}
     if (!projectId || !provider) return resolved
-    for (const node of ancestorChain(projectId, projectsById)) {
+    const chain = ancestorChain(projectId, projectsById)
+    for (const node of includeSelf ? chain : chain.slice(1)) {
         const bundle = (node.default_agent_settings && node.default_agent_settings[provider]) || {}
         for (const field in bundle) {
             const value = bundle[field]

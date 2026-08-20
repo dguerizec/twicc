@@ -5,12 +5,10 @@
 // boolean flags (thinking / fast / Chrome MCP) as coloured icons. The shared
 // ``AgentSettingsSummaryView`` renders the resulting parts.
 //
-// The difference from the live summary is that a preset/bundle is PARTIAL — it
-// only carries the fields it forces — so this builder emits a part *only* for a
-// field that is actually set (present, not null/undefined), rather than always
-// showing every field (dimmed when off) the way the live state does. This is
-// why preset displays historically showed a plain "label: value" text summary;
-// they now share the icon renderer for a consistent look across the app.
+// A preset is PARTIAL: null fields inherit from a context-specific defaults
+// bundle. ``presetSummaryParts`` resolves that inheritance before it calls the
+// shared builder, so every preset summary shows the concrete values that would
+// apply in its current project or global context.
 //
 // The boundary between preset shape and wire shape lives here on purpose:
 // presets historically use ``model`` / ``thinking`` (no suffix) while the
@@ -149,26 +147,56 @@ function richSummaryParts(helpers, bundle, current) {
     return parts
 }
 
+function resolveBundle(bundle, defaults) {
+    const resolved = { ...defaults }
+    for (const [field, value] of Object.entries(bundle ?? {})) {
+        if (value !== null && value !== undefined) resolved[field] = value
+    }
+    return resolved
+}
+
 /**
- * Rich summary parts of the fields a preset forces. Preset shape uses ``model``
- * / ``thinking`` keys, converted to the wire-named bundle here. ``current``
- * (optional, wire-keyed) drives the forced dashed-underline diff-marking.
+ * Resolve a preset to the concrete wire-named bundle that applying it uses.
+ * In a session context, ``options.untrusted`` selects the matching permission
+ * layer and drops the inactive one. Null keeps both layers for global/project
+ * management surfaces that describe both defaults.
  */
-export function presetSummaryParts(preset, helpers, current = null) {
+export function resolvePresetBundle(preset, defaults = {}, { untrusted = null } = {}) {
     const bundle = {}
     for (const [presetKey, wire] of Object.entries(PRESET_KEY_TO_WIRE)) {
         const v = preset?.[presetKey]
         if (v !== null && v !== undefined) bundle[wire] = v
     }
-    return richSummaryParts(helpers, bundle, current)
+    if (untrusted === true) {
+        const untrustedMode = bundle.permission_mode_if_untrusted
+        delete bundle.permission_mode
+        delete bundle.permission_mode_if_untrusted
+        if (untrustedMode !== undefined) bundle.permission_mode = untrustedMode
+    } else if (untrusted === false) {
+        delete bundle.permission_mode_if_untrusted
+    }
+    return resolveBundle(bundle, defaults)
 }
 
 /**
- * Rich summary parts of a CONCRETE agent-settings bundle keyed by WIRE field
- * names (``selected_model`` / ``thinking_enabled`` / …) — as produced by the
- * resolved default bundles (e.g. the preset picker's "{provider} default"
- * entries) and the project defaults picker.
+ * Rich summary parts of a resolved preset. ``options.defaults`` supplies the
+ * context-specific inheritance baseline. ``options.untrusted`` selects the
+ * active permission layer in a session context. ``options.current`` drives
+ * the forced dashed-underline diff-marking.
  */
-export function bundleSummaryParts(bundle, helpers, current = null) {
-    return richSummaryParts(helpers, bundle, current)
+export function presetSummaryParts(
+    preset,
+    helpers,
+    { defaults = {}, current = null, untrusted = null } = {},
+) {
+    return richSummaryParts(helpers, resolvePresetBundle(preset, defaults, { untrusted }), current)
+}
+
+/**
+ * Rich summary parts of an agent-settings bundle keyed by WIRE field names
+ * (``selected_model`` / ``thinking_enabled`` / …). Null fields inherit from
+ * ``options.defaults``. ``options.current`` drives diff-marking.
+ */
+export function bundleSummaryParts(bundle, helpers, { defaults = {}, current = null } = {}) {
+    return richSummaryParts(helpers, resolveBundle(bundle, defaults), current)
 }

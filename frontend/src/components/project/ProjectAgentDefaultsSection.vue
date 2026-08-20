@@ -27,7 +27,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderLabel } from '../../providers'
 import ProviderIcon from '../ui/ProviderIcon.vue'
 import { useAgentSettingsPresetsStore } from '../../stores/agentSettingsPresets'
-import { ancestorChain } from '../../utils/projectAgentDefaults'
+import { ancestorChain, resolveProjectAgentDefaults } from '../../utils/projectAgentDefaults'
 import { bundleSummaryParts } from '../../utils/presetFormat'
 import AgentSettingsSummaryView from '../message/AgentSettingsSummaryView.vue'
 import { DEFAULT_SENTINEL } from '../../composables/useSessionAgentSettings'
@@ -220,14 +220,15 @@ function loadSources(provider) {
     presets.forEach((preset, index) => {
         sources.push({ key: `preset:${index}`, label: `Preset: ${preset.name}` })
     })
-    // Attach a value summary (only the fields each source would set, filtered to
-    // the provider's supported ones) so the user sees what loading it brings in,
-    // rendered as the shared agent-settings icon summary. Entries that already
-    // carry summary parts (the synthetic "inherit" one) keep them.
+    // Resolve every partial source against the current project's inherited
+    // baseline. The summary therefore matches the concrete settings a new
+    // session would receive after the source is loaded.
     return h
         ? sources.map(s => {
             if (s.summaryParts !== undefined) return s
-            const parts = bundleSummaryParts(sourceBundle(provider, s.key), h)
+            const parts = bundleSummaryParts(sourceBundle(provider, s.key), h, {
+                defaults: inheritedDefaultsFor(provider),
+            })
             return { ...s, summaryParts: parts.length ? parts : [{ text: 'all default' }] }
         })
         : sources
@@ -252,6 +253,18 @@ function globalBundleFor(provider) {
         permission_mode_if_untrusted: s.defaultUntrustedPermissionMode,
         claude_in_chrome: s.defaultClaudeInChrome,
         fast_mode: s.defaultFastMode,
+    }
+}
+
+// The baseline for sparse values edited on this project. Skip the project's
+// current bundle, then resolve its parent/worktree/path chain over the global
+// provider defaults.
+function inheritedDefaultsFor(provider) {
+    return {
+        ...globalBundleFor(provider),
+        ...resolveProjectAgentDefaults(props.project.id, provider, store.projects, {
+            includeSelf: false,
+        }),
     }
 }
 function loadFrom(provider, event) {

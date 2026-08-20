@@ -7,6 +7,7 @@ import { getProviderHelpers, getProviderStore, getProviderOptions, getProviderIc
 import { resolveProjectAgentDefaults, ancestorChain } from '../utils/projectAgentDefaults'
 import { resolveProjectTrust } from '../utils/trust'
 import { buildEffortColumns, buildMatrixBlocks } from '../utils/agentMatrix'
+import { resolvePresetBundle } from '../utils/presetFormat'
 
 // Sentinel value used by the popover selects to encode the "follow global
 // default" choice. When set, the corresponding selected ref is null.
@@ -124,8 +125,6 @@ export function useSessionAgentSettings(sessionIdSource) {
             context_max: pStore?.defaultContextMax,
         }
     }
-
-    const globalDefaults = computed(() => providerGlobalDefaults(session.value?.provider))
 
     // Collapse the trust-dependent permission layer of a resolved bundle: in an
     // untrusted project the effective permission default is the
@@ -364,6 +363,7 @@ export function useSessionAgentSettings(sessionIdSource) {
             label: getProviderLabel(provider),
             icon: getProviderIcon(provider),
             isCurrent: provider === current,
+            defaults: resolveDefaultsForProvider(provider),
             resetTargets: resetTargetsForProvider(provider),
             presets: presetsStore.getPresets(provider).map((preset, index) => ({ preset, index })),
         }))
@@ -428,22 +428,14 @@ export function useSessionAgentSettings(sessionIdSource) {
         benchmarksStore,
     }))
 
-    // Apply a preset's forced fields onto the selected refs (of the current
-    // provider). Trust-dependent field selection (trust design §13.3): an
-    // untrusted project applies the preset's untrusted permission layer instead
-    // of the trusted one (falling back to the global untrusted default).
+    // Resolve and apply one concrete bundle. This is the same resolver used by
+    // preset summaries, so inherited project defaults and the trust-dependent
+    // permission layer cannot differ between preview and application.
     function applyPresetToRefs(preset) {
-        selectedModel.value = preset.model
-        selectedContextMax.value = preset.context_max
-        selectedEffort.value = preset.effort
-        selectedThinking.value = preset.thinking
-        selectedPermissionMode.value = sessionIsUntrusted.value
-            ? (preset.permission_mode_if_untrusted
-                ?? globalDefaults.value.permission_mode_if_untrusted
-                ?? preset.permission_mode)
-            : preset.permission_mode
-        selectedClaudeInChrome.value = preset.claude_in_chrome
-        selectedFastMode.value = preset.fast_mode
+        const bundle = resolvePresetBundle(preset, resolvedDefaults.value, {
+            untrusted: sessionIsUntrusted.value,
+        })
+        applyBundleToRefs(bundle)
     }
 
     // Apply a concrete resolved bundle (wire keys) onto the selected refs — used

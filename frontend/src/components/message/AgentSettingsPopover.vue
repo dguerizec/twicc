@@ -47,6 +47,7 @@ const {
     selectedContextMax,
     SELECTED_REFS,
     summaryState,
+    resolvedDefaults,
     effectiveModel,
     isContextMaxForced,
     sessionIsUntrusted,
@@ -531,7 +532,12 @@ onBeforeUnmount(() => {
                     >
                         <wa-icon slot="icon" name="arrow-rotate-left"></wa-icon>
                         <span>{{ target.label }}</span>
-                        <AgentSettingsSummaryView class="option-description" :parts="bundleSummaryParts(target.bundle, getProviderHelpers(group.provider), group.isCurrent ? currentEffective : null)" />
+                        <AgentSettingsSummaryView
+                            class="option-description"
+                            :parts="bundleSummaryParts(target.bundle, getProviderHelpers(group.provider), {
+                                current: group.isCurrent ? currentEffective : null,
+                            })"
+                        />
                     </wa-dropdown-item>
                     <wa-dropdown-item
                         v-for="p in group.presets"
@@ -540,7 +546,14 @@ onBeforeUnmount(() => {
                         class="preset-item"
                     >
                         <span>{{ p.preset.name }}</span>
-                        <AgentSettingsSummaryView class="option-description" :parts="presetSummaryParts(p.preset, getProviderHelpers(group.provider), group.isCurrent ? currentEffective : null)" />
+                        <AgentSettingsSummaryView
+                            class="option-description"
+                            :parts="presetSummaryParts(p.preset, getProviderHelpers(group.provider), {
+                                defaults: group.defaults,
+                                current: group.isCurrent ? currentEffective : null,
+                                untrusted: sessionIsUntrusted,
+                            })"
+                        />
                     </wa-dropdown-item>
                 </template>
                 <wa-divider></wa-divider>
@@ -651,6 +664,8 @@ onBeforeUnmount(() => {
             v-if="session?.provider"
             v-model:open="presetsDialogOpen"
             :provider="session.provider"
+            :resolved-defaults="resolvedDefaults"
+            :untrusted="sessionIsUntrusted"
         />
     </wa-popover>
 </template>

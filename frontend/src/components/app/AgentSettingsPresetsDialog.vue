@@ -31,19 +31,18 @@ import HelpTextLink from '../help/HelpTextLink.vue'
 const props = defineProps({
     open: { type: Boolean, default: false },
     provider: { type: String, required: true },
+    // Context-specific project defaults. The global settings surface omits
+    // this prop, so the dialog reads the provider's global defaults instead.
+    resolvedDefaults: { type: Object, default: null },
+    // Null means the global management context, where both permission layers
+    // are relevant. A session supplies its resolved trust context.
+    untrusted: { type: Boolean, default: null },
 })
 const emit = defineEmits(['update:open'])
 
 const providerHelpers = computed(() => getProviderHelpers(props.provider))
 const presetsStore = useAgentSettingsPresetsStore()
 const providerLabel = computed(() => providerHelpers.value?.constructor?.label ?? 'Agent')
-
-// Icon summary parts for a preset, falling back to a plain "all default" text
-// part when the preset forces nothing (no field surfaces an icon).
-function presetSummary(preset) {
-    const parts = presetSummaryParts(preset, providerHelpers.value)
-    return parts.length ? parts : [{ text: 'all default' }]
-}
 
 // Preset records use historical key names (``model``, ``thinking``) while
 // the helpers' rendering hooks are keyed on wire names
@@ -60,6 +59,28 @@ const WIRE_TO_PRESET_KEY = {
     fast_mode: 'fast_mode',
 }
 const FIELD_ORDER = ['selected_model', 'context_max', 'effort', 'thinking_enabled', 'permission_mode', 'permission_mode_if_untrusted', 'claude_in_chrome', 'fast_mode']
+
+const presetDefaults = computed(() => {
+    if (props.resolvedDefaults) return props.resolvedDefaults
+    const helpers = providerHelpers.value
+    if (!helpers) return {}
+    const defaults = {}
+    for (const field of FIELD_ORDER) {
+        const value = helpers.getDefaultValue(field)
+        if (value !== null && value !== undefined) defaults[field] = value
+    }
+    return defaults
+})
+
+// Every list row shows the preset resolved in this dialog's context. The
+// global settings surface supplies its defaults through the provider helpers.
+function presetSummary(preset) {
+    const parts = presetSummaryParts(preset, providerHelpers.value, {
+        defaults: presetDefaults.value,
+        untrusted: props.untrusted,
+    })
+    return parts.length ? parts : [{ text: 'all default' }]
+}
 
 const view = ref('list')
 const editIndex = ref(null)
