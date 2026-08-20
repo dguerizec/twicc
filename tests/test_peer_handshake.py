@@ -147,7 +147,6 @@ def test_non_object_json_is_400_not_500(client, transactional_db, peer_host):
 def test_handshake_request_dedup_remints_code(client, transactional_db, peer_host, broadcasts):
     _post(client, "/peer/handshake/request/", _request_body())
     peer = Peer.objects.get()
-    old_code = peer.verification_code
     peer.verification_attempts = 3
     peer.save(update_fields=["verification_attempts"])
     res = _post(client, "/peer/handshake/request/", _request_body(token="tok-" + "b" * 40))
@@ -156,8 +155,8 @@ def test_handshake_request_dedup_remints_code(client, transactional_db, peer_hos
     assert Peer.objects.count() == 1
     assert peer.token_theirs == "tok-" + "b" * 40
     assert peer.verification_attempts == 0
-    # A fresh code was minted (a random collision with old_code is possible at
-    # 1e-6, so only the shape is asserted).
+    # A fresh code was minted (a random collision with the previous code is
+    # possible at 1e-6, so only the shape is asserted).
     assert len(peer.verification_code) == 6 and peer.verification_code.isdigit()
     assert broadcasts[-1]["type"] == "peer_updated"
 

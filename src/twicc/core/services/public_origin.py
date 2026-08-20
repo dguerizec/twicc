@@ -154,7 +154,10 @@ def _parse(
     if not hostname:
         return raw, None, None, "host"
     try:
-        parsed.port
+        # Not a useless expression: ``SplitResult.port`` is a property that
+        # raises ValueError on a non-numeric or out-of-range port. Reading it
+        # *is* the validation.
+        parsed.port  # noqa: B018
     except ValueError:
         return raw, None, None, "port"
     if parsed.username is not None or parsed.password is not None:

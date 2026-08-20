@@ -953,9 +953,14 @@ class ClaudeCodeAgentManager(BaseAgentManager):
 
                 # Delete expired crons from DB (they're already dead in the CLI)
                 expired_ids = [c.pk for c in expired]
+                # ``ids=`` binds this iteration's list into the outer factory
+                # rather than closing over the loop variable. The helper does
+                # await the inner task to completion, but the binding keeps that
+                # guarantee local to the call site. It must sit on the OUTER
+                # lambda: the inner one is only built when the factory runs.
                 await run_under_db_write_lock(
-                    lambda: asyncio.to_thread(
-                        lambda: SessionCron.objects.filter(pk__in=expired_ids).delete()
+                    lambda ids=expired_ids: asyncio.to_thread(
+                        lambda: SessionCron.objects.filter(pk__in=ids).delete()
                     )
                 )
                 logger.info(
