@@ -94,6 +94,68 @@ artifacts = [
 # the wheel and sdist both pick up the built frontend assets.
 [tool.hatch.build.hooks.custom]
 
+[tool.ruff]
+# `line-length` shapes the few rules that wrap code; E501 itself stays off (see
+# the lint section) — long lines are not worth a diff in a codebase agents read.
+line-length = 120
+target-version = "py313"
+# Let isort classify `twicc` and `openai_codex` as first-party.
+src = ["src", "."]
+extend-exclude = [
+    # Vendored Codex SDK — upstream code, not ours to lint.
+    "src/openai_codex",
+    # Django migrations — generated files, frozen history. Style rules do not
+    # apply and a fix here would rewrite an applied migration.
+    "src/twicc/core/migrations",
+]
+
+[tool.ruff.lint]
+# Ruff's default rule set applies, minus the rules below. Every entry is a
+# deliberate decision, not a backlog: none of them is meant to be revisited
+# file by file. Anything not listed here is a real finding worth fixing.
+ignore = [
+    # -- Stack idioms: the rule fights Django or Typer, not our code. --------
+    "RUF012",   # mutable-class-default — Django `class Meta` and migration
+                # `dependencies`/`operations` lists; ClassVar everywhere is noise
+    "B008",     # function-call-in-default-argument — the whole Typer API is
+                # `def cmd(x: str = typer.Option(...))`
+    "PLW1510",  # subprocess-run-without-check — callers read `returncode`
+                # themselves; check=True would raise instead
+
+    # -- Deliberate design in a long-running server. -------------------------
+    "BLE001",   # blind-except — a provider or parsing error must never kill the
+                # process; ~120 sites, 24 of them already annotated by hand
+    "S110",     # try-except-pass — best-effort cleanup and watcher paths
+    "S112",     # try-except-continue — same
+    "SIM115",   # open-file-with-context-handler — long-lived handles (logs, PTY)
+
+    # -- No rule whose purpose is to rearrange imports. ----------------------
+    # Reordering every import block is a large mechanical diff with no
+    # behavioural gain. Only rules that exist *to* rearrange imports are off;
+    # a rule that happens to rewrite one on its way (UP035, PLR0402, F401…)
+    # stays enabled. Revisit as a standalone commit if ever wanted.
+    "I001",     # unsorted-imports
+
+    # -- Low value, high churn. ----------------------------------------------
+    "G201",     # logging-exc-info — `.error(..., exc_info=True)` is equivalent
+                # to `.exception(...)` and works outside a handler
+    "RUF059",   # unused-unpacked-variable — renaming to `_project` hides the
+                # tuple contract the call site documents
+    "SIM102",   # collapsible-if — the nested form carries per-branch comments
+    "PLW0602",  # global-variable-not-assigned — documentary `global`
+    "DTZ011",   # call-date-today — local display dates are intended
+    "TRY401",   # verbose-log-message
+    "UP040",    # non-pep695-type-alias — syntax churn
+    "UP047",    # non-pep695-generic-function — same
+
+    # -- Keep existing `# noqa` comments valid. ------------------------------
+    # The code annotates E402/ARG002/BLE001/A003/F403 exceptions by hand. Those
+    # rules are now off (or never were in ruff's default set), which would make
+    # every one of those directives an "unused noqa" error. The comments stay:
+    # they document intent, and removing ~70 of them is pure diff.
+    "RUF100",   # unused-noqa
+]
+
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "twicc.settings_test"
 python_files = ["test_*.py"]
