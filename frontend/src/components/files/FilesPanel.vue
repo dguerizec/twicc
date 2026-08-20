@@ -308,9 +308,16 @@ async function fetchTree(dirPath) {
         return
     }
 
+    // Re-fetching the directory already on screen (Refresh button): keep
+    // `loadedDirectory` on it, so the route-sync watch below still sees a tree
+    // that matches the route and leaves the selection alone. Nulling it drops
+    // the selected file for the duration of the fetch, and the re-selection
+    // that follows resets the open file's view state — preview mode (markdown,
+    // SVG, HTML, Mermaid), edit mode, zoom and scroll position.
+    const isReload = loadedDirectory.value === dirPath
     loading.value = true
     error.value = null
-    loadedDirectory.value = null
+    if (!isReload) loadedDirectory.value = null
 
     try {
         const res = await apiFetch(
@@ -457,12 +464,11 @@ async function refresh(hints) {
 /**
  * Refresh the tree in place WITHOUT disturbing the open file or preview.
  *
- * Unlike refresh()/fetchTree, this never flips `loading`/`loadedDirectory` to a
- * transient "reloading" state. That transient is what makes the route-sync watch
- * (below) clear and then re-reveal the selection, which momentarily nulls the
- * rendered file path and reloads an open HTML preview iframe. Here we fetch into
- * a local and swap `tree.value` atomically, so the current selection — and any
- * rendered HTML page — is left untouched. New files still appear in the tree.
+ * Unlike refresh()/fetchTree, this never flips `loading`, so the tree panel
+ * never swaps to its loading placeholder and the route-sync watch (below) never
+ * re-runs its reveal/scroll pass. Here we fetch into a local and swap
+ * `tree.value` atomically, so the current selection — and any rendered HTML
+ * page — is left untouched. New files still appear in the tree.
  */
 async function refreshTreeSoft() {
     const dirPath = directory.value
@@ -813,7 +819,7 @@ watch(
         if (props.routeRootKey === 'bookmarks') return
         if (!active || !props.routeOwner || !dirPath || !selectedRootKey.value) return
 
-        if (!treeData || isLoading || loadedDir !== dirPath) {
+        if (!treeData || loadedDir !== dirPath) {
             if (routeFilePath != null && selectedFile.value) {
                 syncingFromRoute = true
                 clearSelectedFile()
@@ -822,6 +828,11 @@ watch(
             }
             return
         }
+
+        // A refresh of the directory already on screen: the tree on display
+        // still matches the route, so keep the selection (and the open file's
+        // view state) until the fetch settles and this watch runs again.
+        if (isLoading) return
 
         if (routeFilePath == null) {
             if (selectedFile.value) {
