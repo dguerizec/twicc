@@ -84,22 +84,20 @@ const submitting = ref(false)          // attaching + inserting on "Add to messa
 
 // Combined pixel offset (drag + clamp corrections) from the base position.
 const panelOffset = ref({ dx: 0, dy: 0 })
+const SELECTION_GAP = 16
 
 const rootStyle = computed(() => {
-    const base = { left: props.position.left + 'px' }
     const above = props.position.above
-    if (above) {
-        // Anchor from bottom: place widget's bottom edge 4px above position.top
-        const vh = window.visualViewport?.height ?? window.innerHeight
-        base.bottom = (vh - props.position.top + 4) + 'px'
-    } else {
-        base.top = (props.position.top + 4) + 'px'
+    const base = {
+        left: props.position.left + 'px',
+        top: (props.position.top + (above ? -SELECTION_GAP : SELECTION_GAP)) + 'px',
     }
     if (expanded.value) {
         const { dx, dy } = panelOffset.value
-        base.transform = `translate(calc(-50% + ${dx}px), ${dy}px)`
+        const translateY = above ? `calc(-100% + ${dy}px)` : `${dy}px`
+        base.transform = `translate(calc(-50% + ${dx}px), ${translateY})`
     } else {
-        base.transform = 'translateX(-50%)'
+        base.transform = above ? 'translate(-50%, -100%)' : 'translateX(-50%)'
     }
     return base
 })
@@ -120,17 +118,19 @@ function clampToViewport() {
     const rect = el.getBoundingClientRect()
     const margin = 8
     const vv = window.visualViewport
-    const vw = vv?.width ?? window.innerWidth
-    const vh = vv ? (vv.offsetTop + vv.height) : window.innerHeight
+    const viewportLeft = vv?.offsetLeft ?? 0
+    const viewportTop = vv?.offsetTop ?? 0
+    const viewportRight = viewportLeft + (vv?.width ?? window.innerWidth)
+    const viewportBottom = viewportTop + (vv?.height ?? window.innerHeight)
 
     let dx = 0
     let dy = 0
 
-    if (rect.left < margin) dx = margin - rect.left
-    else if (rect.right > vw - margin) dx = (vw - margin) - rect.right
+    if (rect.left < viewportLeft + margin) dx = (viewportLeft + margin) - rect.left
+    else if (rect.right > viewportRight - margin) dx = (viewportRight - margin) - rect.right
 
-    if (rect.bottom > vh - margin) dy = (vh - margin) - rect.bottom
-    if (rect.top + dy < margin) dy = margin - rect.top
+    if (rect.bottom > viewportBottom - margin) dy = (viewportBottom - margin) - rect.bottom
+    if (rect.top + dy < viewportTop + margin) dy = (viewportTop + margin) - rect.top
 
     if (dx || dy) {
         panelOffset.value = {
@@ -140,9 +140,36 @@ function clampToViewport() {
     }
 }
 
-/** Re-clamp when the mobile keyboard opens/closes. */
-function onVisualViewportResize() {
-    if (expanded.value) clampToViewport()
+let viewportClampScheduled = false
+
+/** Re-clamp once per frame when the mobile keyboard changes the visible viewport. */
+function onVisualViewportChange() {
+    if (!expanded.value || viewportClampScheduled) return
+    viewportClampScheduled = true
+    window.requestAnimationFrame(() => {
+        viewportClampScheduled = false
+        if (expanded.value) clampToViewport()
+    })
+}
+
+function addViewportListeners() {
+    const vv = window.visualViewport
+    if (vv) {
+        vv.addEventListener('resize', onVisualViewportChange)
+        vv.addEventListener('scroll', onVisualViewportChange)
+    } else {
+        window.addEventListener('resize', onVisualViewportChange)
+    }
+}
+
+function removeViewportListeners() {
+    const vv = window.visualViewport
+    if (vv) {
+        vv.removeEventListener('resize', onVisualViewportChange)
+        vv.removeEventListener('scroll', onVisualViewportChange)
+    } else {
+        window.removeEventListener('resize', onVisualViewportChange)
+    }
 }
 
 // ─── Drag (panel background as handle) ────────────────────────────
@@ -189,7 +216,7 @@ function expand() {
     // but for CodeMirror sources the internal selection persists — the consumer's
     // override clears it for consistency.
     props.clearSourceSelection?.()
-    window.visualViewport?.addEventListener('resize', onVisualViewportResize)
+    addViewportListeners()
     nextTick(() => {
         clampToViewport()
         textareaRef.value?.focus()
@@ -197,7 +224,7 @@ function expand() {
 }
 
 function close() {
-    window.visualViewport?.removeEventListener('resize', onVisualViewportResize)
+    removeViewportListeners()
     emit('close')
 }
 
@@ -315,7 +342,7 @@ onBeforeUnmount(() => {
     document.removeEventListener('mousedown', handleDocumentMousedown, true)
     document.removeEventListener('pointermove', onDragPointerMove)
     document.removeEventListener('pointerup', onDragPointerUp)
-    window.visualViewport?.removeEventListener('resize', onVisualViewportResize)
+    removeViewportListeners()
 })
 
 defineExpose({ isExpanded: expanded })
