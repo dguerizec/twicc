@@ -4,7 +4,7 @@
 
 The Codex provider relies on OpenAI's Codex Python SDK (`openai_codex`) plus the Codex CLI binary it drives over JSON-RPC.
 
-- The **SDK** is vendored from the `openai/codex` repository at tag [`rust-v0.146.0`](https://github.com/openai/codex/releases/tag/rust-v0.146.0). A PyPI release (`openai-codex`) exists but currently pins an older runtime version, so we stay on the vendored source to ride a known-good combination with the matching upstream tag.
+- The **SDK** is vendored from the `openai/codex` repository at tag [`rust-v0.149.0`](https://github.com/openai/codex/releases/tag/rust-v0.149.0). A PyPI release (`openai-codex`) exists but currently pins an older runtime version, so we stay on the vendored source to ride a known-good combination with the matching upstream tag.
 - The **CLI binary** is downloaded at first launch from the matching GitHub Release (`openai-codex-cli-bin` wheel), extracted into a shared cache, and pointed at via `CodexConfig(codex_bin=…)`. It is no longer a PyPI dependency: OpenAI stopped publishing stable `openai-codex-cli-bin` wheels on PyPI after `0.136.0` (the wheel is ~122 MB, above practical PyPI quotas), but every tagged stable still ships the same manylinux / macOS wheels as GitHub Release assets. Provisioning lives in `src/twicc/providers/codex/runtime.py`; the download is triggered unconditionally in the background at startup (`OrchestratorRegistry.start_all`) and on demand by `make_codex_config`.
 
 ## Layout
@@ -22,7 +22,7 @@ The extracted tree is the whole `codex_cli_bin/` package (not just the `codex` b
 
 Assumes the new version is published as a `rust-vX.Y.Z` GitHub tag/Release with the `openai-codex-cli-bin` wheels attached (they still are, even though PyPI stopped receiving stable ones).
 
-1. Pick the release tag matching the upstream version you want, e.g. `rust-v0.146.0`. Verify that `sdk/python/src/openai_codex/` exists at that tag and the GitHub Release carries the 4 platform wheels.
+1. Pick the release tag matching the upstream version you want, e.g. `rust-v0.149.0`. Verify that `sdk/python/src/openai_codex/` exists at that tag and the GitHub Release carries the 4 platform wheels.
 2. Re-vendor the SDK source (extract the `openai_codex` package from the tarball):
    ```bash
    rm -rf src/openai_codex
@@ -42,7 +42,7 @@ Assumes the new version is published as a `rust-vX.Y.Z` GitHub tag/Release with 
    Paste the digests into `_WHEELS`.
 4. Diff the new SDK's `pyproject.toml` against ours — copy any new **runtime** dependency over (today only `pydantic>=2.12` is shared; the SDK's own `openai-codex-cli-bin` pin is deliberately ignored — that's the whole point of the runtime download).
 5. Run the checklist from the `reference_codex_sdk_update_procedure.md` memory: verify the monkey-patch path `_client._sync._approval_handler`, that `ThreadStartParams`/`TurnStartParams` still accept `approval_policy`/`approvals_reviewer`/`sandbox(_policy)`, that the SDK subclassing in `sdk_wrappers.py` still compiles, that the `_inputs._normalize_run_input` / `_to_wire_input` helpers still exist, etc. Note the lazy `from codex_cli_bin import bundled_codex_path` in `client.py` is fine to leave — it's only reached when `codex_bin` is `None`, which we never do, and it degrades to a `FileNotFoundError` if the package is absent.
-6. Re-verify the TwiCC MCP server's per-thread config keys (`src/twicc/providers/codex/agent/manager.py`, `_twicc_mcp_server_config`): `url`, `http_headers`, `default_tools_approval_mode`, `tool_timeout_sec`, `startup_timeout_sec` against `codex-rs/config/src/mcp_types.rs`; that the streamable-HTTP MCP client stays un-gated (`codex-rs/codex-mcp/src/connection_manager.rs`); and the `tool_search_always_defer_mcp_tools` feature key (`codex-rs/features/src/lib.rs`) — still `Stage::UnderDevelopment`? removed/promoted? If it changed, flip `TWICC_MCP_CODEX_DEFER=False` in `src/twicc/mcp/__init__.py` (eager fallback).
+6. Re-verify the TwiCC MCP server's per-thread config keys (`src/twicc/providers/codex/agent/manager.py`, `_twicc_mcp_server_config`): `url`, `http_headers`, `default_tools_approval_mode`, `tool_timeout_sec`, `startup_timeout_sec` against `codex-rs/config/src/mcp_types.rs`; that the streamable-HTTP MCP client stays un-gated (`codex-rs/codex-mcp/src/connection_manager.rs`); and the `tool_search_always_defer_mcp_tools` feature key (`codex-rs/features/src/lib.rs`) — `Stage::Removed` with `default_enabled: true` since at least 0.144.6, so Codex silently ignores the key and always defers. `_apply_codex_mcp_context_mode` is therefore a harmless no-op: flip `TWICC_MCP_CODEX_DEFER=False` in `src/twicc/mcp/__init__.py` (eager fallback) only if deferral itself regresses, not because the flag disappeared.
 7. Run `uv lock`, then `./scripts/build-release.sh` and check the resulting single `py3-none-any` wheel installs and runs locally (first launch downloads the runtime).
 
 ## Why we still vendor the SDK
