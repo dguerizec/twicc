@@ -1637,10 +1637,25 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         # progress events, summaries, file snapshots, custom-title, etc.).
         # agent-name / agent-color are written by interactive CLI sessions
         # (hybrid mode brought them into TwiCC-watched files).
+        # The "latch" family (atis-latch, isolation-latch, ...) restores
+        # conversation state on --resume / fork; atis carries the opaque
+        # experiment token the CLI sends as the `x-cc-atis` request header.
+        # This list is deliberately NOT versioned: adding a type here without
+        # bumping CLAUDE_CODE_COMPUTE_VERSION leaves already-stored lines as
+        # COLLAPSIBLE and only fixes newly computed ones, which is enough for
+        # noise this rare.
         if entry_type in (
             'queue-operation', 'progress', 'summary', 'file-history-snapshot',
             'last-prompt', 'attachment', 'permission-mode', 'custom-title',
             'pr-link', 'mode', 'ai-title', 'agent-name', 'agent-color',
+            'agent-setting', 'tag', 'ended-by-model', 'relocated',
+            'atis-latch', 'isolation-latch', 'worktree-state',
+            'content-replacement', 'history-suppression',
+            'attribution-snapshot', 'file-history-delta', 'frame-link',
+            'artifact-comment-monitor', 'artifact-autoreact-ledger',
+            'bridge-session', 'observer-ref', 'fork-context-ref',
+            'marble-origami-commit', 'marble-origami-snapshot',
+            'marble-origami-reset',
         ):
             return ItemKind.SYSTEM
 
