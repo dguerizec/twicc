@@ -505,6 +505,32 @@ def _has_visible_content(content: str | list | None) -> bool:
 
 _TASK_TOOL_NAMES = frozenset({'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList'})
 
+# The model sometimes spells a task tool's keys the "close but incorrect" way
+# (``id`` / ``task_id`` for ``taskId``, ``active_form`` for ``activeForm``).
+# Claude Code repairs those names before running the tool, but the JSONL records
+# the raw input, so the aliases reach compute unrepaired — reading only the
+# canonical spelling silently drops the call (measured on real transcripts:
+# 39 of 556 TaskUpdate blocks, ~7%, spell the id ``task_id`` or ``id``).
+# Order matters: the canonical spelling wins when several are present.
+_TASK_ID_KEYS = ('taskId', 'id', 'task_id')
+
+
+def _canonical_task_input(tool_input: dict) -> dict:
+    """Return ``tool_input`` with the aliased key spellings canonicalised.
+
+    Only ``activeForm`` is rewritten here: the id aliases are handled by each
+    caller (TaskCreate drops them, TaskUpdate resolves the task through them).
+    Canonicalising at ingestion keeps every stored task dict on the canonical
+    shape, so readers — including the frontend's ``tasksDataToTodos`` mirror —
+    need no alias awareness.
+    """
+    active_form = tool_input.get('active_form')
+    if not isinstance(active_form, str) or 'activeForm' in tool_input:
+        return tool_input
+    canonical = dict(tool_input)
+    canonical['activeForm'] = canonical.pop('active_form')
+    return canonical
+
 
 def _extract_tasks_snapshot(parsed_json: dict) -> list[dict] | None:
     """Return the **last** ``twiccTasksData`` list embedded in an assistant
@@ -792,12 +818,13 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         subject = tool_input.get('subject')
         if not isinstance(subject, str) or not subject:
             return None
+        tool_input = _canonical_task_input(tool_input)
         new_id = self._next_task_id(tasks)
         # Merge all input fields as-is, then default status to 'pending'
-        # and set our authoritative id. Any incoming 'id'/'taskId' is
-        # dropped (TaskCreate input shouldn't carry them; defensive).
+        # and set our authoritative id. Any incoming id spelling is dropped
+        # (TaskCreate input shouldn't carry one; defensive).
         task = {
-            **{k: v for k, v in tool_input.items() if k not in ('id', 'taskId')},
+            **{k: v for k, v in tool_input.items() if k not in _TASK_ID_KEYS},
             'status': 'pending',
             'id': new_id,
         }
@@ -806,7 +833,8 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
 
     def _apply_task_update(self, tasks: dict[str, dict], tool_input: dict) -> dict | None:
         """Merge update fields into the existing task. Returns the updated
-        task dict, or None when taskId is missing or unknown.
+        task dict, or None when the task id is missing or unknown. The id is
+        read through every spelling the model uses (see ``_TASK_ID_KEYS``).
 
         Mutation pattern: each input field reassigns the key on the existing
         task dict (``existing[k] = v``). Nested mutable values from the input
@@ -814,14 +842,19 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
         dicts) — embedded snapshots in already-enriched blocks share the
         references via shallow ``dict(task)`` copies.
         """
-        task_id = tool_input.get('taskId')
-        if not isinstance(task_id, str) or not task_id:
+        task_id = None
+        for key in _TASK_ID_KEYS:
+            candidate = tool_input.get(key)
+            if isinstance(candidate, str) and candidate:
+                task_id = candidate
+                break
+        if task_id is None:
             return None
         existing = tasks.get(task_id)
         if existing is None:
             return None
-        for k, v in tool_input.items():
-            if k in ('taskId', 'id'):
+        for k, v in _canonical_task_input(tool_input).items():
+            if k in _TASK_ID_KEYS:
                 continue
             existing[k] = v
         return existing

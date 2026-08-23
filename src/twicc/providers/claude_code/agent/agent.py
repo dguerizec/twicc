@@ -1050,8 +1050,15 @@ class ClaudeCodeAgent(BaseAgent):
 
             _mcp_on = mcp_enabled()
             mcp_servers_option = str(write_claude_mcp_config(self.session_id)) if _mcp_on else {}
-            mcp_env_option = {"MCP_TOOL_TIMEOUT": "600000"} if _mcp_on else {}
             mcp_allowed_option = ["mcp__twicc"] if _mcp_on else []
+
+            # Claude Code 2.1.233 retired the todo/task tools (TodoWrite, Task*) on
+            # Opus 4.8, Sonnet 5, Fable 5 and every newer model. They are the only
+            # source feeding ``Session.tasks`` on this provider, so force them back
+            # on — without the flag the Tasks snapshot stays empty on current models.
+            env_option = {"CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"}
+            if _mcp_on:
+                env_option["MCP_TOOL_TIMEOUT"] = "600000"
 
             options = ClaudeAgentOptions(
                 system_prompt=system_prompt_option,
@@ -1087,7 +1094,7 @@ class ClaudeCodeAgent(BaseAgent):
                 extra_args=extra_args,
                 include_partial_messages=True,
                 mcp_servers=mcp_servers_option,
-                env=mcp_env_option,
+                env=env_option,
             )
 
             if resume:
