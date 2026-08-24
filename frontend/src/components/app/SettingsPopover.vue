@@ -90,7 +90,7 @@ const providerSections = computed(() =>
 )
 
 const sections = computed(() => [
-    { id: 'global',                    label: 'Global' },
+    { id: 'general',                   label: 'General' },
     { id: 'providers',                 label: 'Providers', synced: true },
     ...providerSections.value.filter(s => s.enabled),
     { id: 'notifications',             label: 'Notifications' },
@@ -103,24 +103,24 @@ const sections = computed(() => [
     { id: 'usage',         label: 'Providers quotas/usage', navLabel: 'Usage' },
 ])
 
-const activeSection = ref('global')
+const activeSection = ref('general')
 const mobileShowContent = ref(false)
 const popoverRef = ref(null)
 
 // If the user is sitting on the Tips section when its nav entry
 // disappears (e.g. they just toggled the last enabled provider that
-// gated the only available tip), bounce them back to Global so the
+// gated the only available tip), bounce them back to General so the
 // detail panel doesn't render an empty/orphaned TipsSettings.
 watch(hasTips, (now) => {
     if (!now && activeSection.value === 'tips') {
-        activeSection.value = 'global'
+        activeSection.value = 'general'
     }
 })
 
 // Same bounce for the Help section when its nav entry disappears.
 watch(hasHelp, (now) => {
     if (!now && activeSection.value === 'help') {
-        activeSection.value = 'global'
+        activeSection.value = 'general'
     }
 })
 
@@ -158,7 +158,7 @@ const activeSectionLabel = computed(() => {
 function selectSection(id) {
     activeSection.value = id
     mobileShowContent.value = true
-    if (id === 'global') {
+    if (id === 'general') {
         worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
         publicBaseUrlInput.value = store.getPublicBaseUrl || ''
     }
@@ -824,10 +824,10 @@ function onShareBaseUrlApply() {
     shareBaseUrlInput.value = store.getShareBaseUrl || ''
 }
 
-// Called when the Notifications section's callout is clicked: jump to Global and
+// Called when the Notifications section's callout is clicked: jump to General and
 // focus the External URL field.
 function goToPublicBaseUrl() {
-    selectSection('global')
+    selectSection('general')
     nextTick(() => publicBaseUrlInputRef.value?.focus())
 }
 
@@ -1119,7 +1119,7 @@ function resetTitleSystemPrompt() {
 function onPopoverShow() {
     mobileShowContent.value = false
     // Seed the worktree-directory template input from the persisted value
-    // (Global is the default section, so selectSection('global') may not fire
+    // (General is the default section, so selectSection('general') may not fire
     // on open).
     worktreeDirInput.value = worktreeDirectoryTemplate.value || ''
     publicBaseUrlInput.value = store.getPublicBaseUrl || ''
@@ -1237,9 +1237,9 @@ function onChangelogClose() {
                     </div>
                     <div class="settings-sections">
 
-                <!-- Global Section -->
-                <section v-if="activeSection === 'global'" class="settings-section">
-                    <h3 class="settings-section-title">Global</h3>
+                <!-- General Section -->
+                <section v-if="activeSection === 'general'" class="settings-section">
+                    <h3 class="settings-section-title">General</h3>
                     <div class="setting-group">
                         <label class="setting-group-label">External URL <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
                         <div class="setting-input-apply-row">

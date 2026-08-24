@@ -96,7 +96,7 @@ function onAfterHide(event) {
             See exactly what is sent on the
             <a href="https://twicc-telemetry.twidi.com/" target="_blank" rel="noopener noreferrer">transparency page</a>.
         </p>
-        <p>You can disable it any time in Settings &rarr; Global.</p>
+        <p>You can disable it any time in Settings &rarr; General.</p>
 
         <wa-button slot="footer" appearance="outlined" @click="onOpenSettings">Open settings</wa-button>
         <wa-button slot="footer" variant="brand" @click="onGotIt">Got it</wa-button>

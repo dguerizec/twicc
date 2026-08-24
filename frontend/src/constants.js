@@ -218,6 +218,6 @@ export const SYNCED_SETTINGS_KEYS = new Set([
     // never enforced on existing sessions). Shown in the Claude settings section.
     'claudeHybridDefault',
     // Anonymous telemetry opt-in/out, and whether the user has seen the
-    // telemetry notice (gates a one-time explainer). Shown in the Global section.
+    // telemetry notice (gates a one-time explainer). Shown in the General section.
     'telemetryEnabled', 'telemetryNoticeSeen',
 ])

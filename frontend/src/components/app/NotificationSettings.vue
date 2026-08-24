@@ -364,7 +364,7 @@ defineExpose({ sync })
                 <wa-icon slot="icon" name="link"></wa-icon>
                 No <strong>External URL</strong> is set, so these notifications won't link back
                 to the session.
-                <a href="#" @click.prevent="emit('go-to-public-base-url')">Set it in Global settings</a>.
+                <a href="#" @click.prevent="emit('go-to-public-base-url')">Set it in General settings</a>.
             </wa-callout>
             <label class="setting-group-label">Targets</label>
             <div class="apprise-targets">

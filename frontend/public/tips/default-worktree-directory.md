@@ -10,7 +10,7 @@ example `{git_root}/.worktrees` keeps them inside the repo, while
 place. The worktree dialog then pre-fills the path from it — you can still
 change it each time.
 
-Set it in **Settings → Global → Worktree directory template**, and override it
+Set it in **Settings → General → Worktree directory template**, and override it
 per project (with a plain absolute path) from that project's edit dialog.
 
 More in the help dialog: [Working with worktrees](help/worktrees).
