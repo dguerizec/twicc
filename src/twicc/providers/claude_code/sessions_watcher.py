@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 import re
 from pathlib import Path
 from typing import ClassVar
@@ -22,6 +21,7 @@ from watchfiles import Change
 
 from twicc.core.models import SessionType, Workflow
 from twicc.core.serializers import serialize_project, serialize_session
+from twicc.projects import compute_project_stale
 
 from .compute import (
     WORKFLOW_FILE_PREFIX,
@@ -562,9 +562,7 @@ class ClaudeCodeSessionsWatcher(BaseSessionsWatcher):
         if project is None:
             return
 
-        should_be_stale = (
-            project.directory is not None and not os.path.isdir(project.directory)
-        )
+        should_be_stale = compute_project_stale(project.directory)
         if project.stale != should_be_stale:
             project.stale = should_be_stale
             await sync_to_async(project.save)(update_fields=["stale"])

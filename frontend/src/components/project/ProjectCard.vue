@@ -15,6 +15,8 @@ import { useSettingsStore } from '../../stores/settings'
 import { formatDate } from '../../utils/date'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from './ProjectBadge.vue'
+import ProjectDirectoryPath from './ProjectDirectoryPath.vue'
+import ProjectMissingDirectoryNote from './ProjectMissingDirectoryNote.vue'
 import AggregatedProcessIndicator from '../ui/AggregatedProcessIndicator.vue'
 import CodeCommentsIndicator from '../ui/CodeCommentsIndicator.vue'
 import ActivitySparkline from '../activity/ActivitySparkline.vue'
@@ -105,7 +107,10 @@ function handleMenuSelect(event) {
                     <AppTooltip :for="`project-menu-trigger-${project.id}`">Project actions</AppTooltip>
                 </div>
             </div>
-            <div v-if="project.directory" class="project-directory">{{ project.directory }}</div>
+            <div v-if="project.directory" class="project-directory">
+                <ProjectDirectoryPath :project-id="project.id" />
+            </div>
+            <ProjectMissingDirectoryNote :project-id="project.id" />
             <div class="project-meta-wrapper">
                 <div class="project-meta">
                     <span :id="`sessions-count-${project.id}`" class="sessions-count">

@@ -42,6 +42,7 @@ import WorktreeDialog from '../components/project/WorktreeDialog.vue'
 import ProjectDetailPanel from '../components/project/ProjectDetailPanel.vue'
 import SessionRenameDialog from '../components/session/detail/SessionRenameDialog.vue'
 import ProjectEditDialog from '../components/project/ProjectEditDialog.vue'
+import ProjectMissingDirectoryDialog from '../components/project/ProjectMissingDirectoryDialog.vue'
 import WorkspaceManageDialog from '../components/workspace/WorkspaceManageDialog.vue'
 import ShareDialog from '../components/share/ShareDialog.vue'
 import ShareTargetDialog from '../components/share/ShareTargetDialog.vue'
@@ -1131,6 +1132,18 @@ function handleBackHome() {
 // In all projects mode: requires an explicit targetProjectId, used both for
 // the draft and for the URL's canonical projectId (the sidebar stays on
 // "All Projects" because the route name carries that mode).
+/** The floating "New session" button. It is `disabled` on a stale project, so
+ *  wa-button swallows the click on its inner control — this listener sits on the
+ *  host and still fires, which is what turns the dead control into an
+ *  explanation. */
+function onNewSessionButtonClick() {
+    if (isCurrentProjectStale.value) {
+        openProjectMissingDirectoryDialog(projectId.value)
+        return
+    }
+    handleNewSession()
+}
+
 async function handleNewSession(targetProjectId = null) {
     const projectIdToUse = targetProjectId || projectId.value
     if (!projectIdToUse) return
@@ -1194,6 +1207,9 @@ let forceClosingSelector = false
 // Edit dialog dedicated to the sidebar selector (distinct from the create one).
 const sidebarProjectEditRef = ref(null)
 const sidebarEditingProject = ref(null)
+// Missing-directory explainer, shared by every fake-disabled session entry point.
+const missingDirectoryDialogRef = ref(null)
+const missingDirectoryProjectId = ref(null)
 
 function onSelectorHide(event) {
     // Veto only the selector's own close, and only while a row "…" menu is open.
@@ -1273,6 +1289,19 @@ function createSessionInProject(projectId) {
     handleNewSession(projectId)
 }
 provide('createSessionInProject', createSessionInProject)
+
+// Provided to ProjectSelectorRow so a row whose directory is gone can explain
+// itself instead of just looking broken. Also called by the floating "New
+// session" button for the current project.
+async function openProjectMissingDirectoryDialog(pid) {
+    missingDirectoryProjectId.value = pid
+    closeSelector()
+    // Let the prop reach the dialog before it animates in, so it never shows a
+    // frame with the previous project (or none at all, on the first open).
+    await nextTick()
+    missingDirectoryDialogRef.value?.open()
+}
+provide('openProjectMissingDirectoryDialog', openProjectMissingDirectoryDialog)
 
 // Workspace row "…" menu actions (workspace rows are inline in this template).
 function onWorkspaceRowMenuSelect(event, ws) {
@@ -2086,14 +2115,17 @@ function updateSidebarClosedClass(closed) {
                     class="new-session-split-button"
                     label="New session actions"
                 >
-                    <!-- Main button: creates session in current project -->
+                    <!-- Main button: creates session in current project. On a
+                         stale project it takes a disabled LOOK but stays live
+                         (`.fake-disabled`) and explains why, instead of leaving
+                         a dead control with no reason. -->
                     <wa-button
                         id="new-session-button"
                         variant="brand"
                         appearance="accent"
                         size="small"
-                        :disabled="isCurrentProjectStale"
-                        @click="handleNewSession()"
+                        :class="{ 'fake-disabled': isCurrentProjectStale }"
+                        @click="onNewSessionButtonClick"
                     >
                         <wa-icon name="plus"></wa-icon>
                         <span>New session</span>
@@ -2212,7 +2244,7 @@ function updateSidebarClosedClass(closed) {
                 </wa-button-group>
 
                 <template v-if="!isAllProjectsMode">
-                    <AppTooltip for="new-session-button">Create a new session in this project</AppTooltip>
+                    <AppTooltip for="new-session-button">{{ isCurrentProjectStale ? 'This project\'s directory is missing — click for details' : 'Create a new session in this project' }}</AppTooltip>
                     <AppTooltip for="new-session-project-picker">Choose a different project</AppTooltip>
                 </template>
 
@@ -2625,6 +2657,10 @@ function updateSidebarClosedClass(closed) {
     <!-- Edit project dialog (opened from a selector row's "…" menu) -->
     <ProjectEditDialog ref="sidebarProjectEditRef" :project="sidebarEditingProject" />
 
+    <!-- Why "New session" does not work here (opened from every fake-disabled
+         session entry point: the floating button and each selector row's menu) -->
+    <ProjectMissingDirectoryDialog ref="missingDirectoryDialogRef" :project-id="missingDirectoryProjectId" />
+
     <!-- Usage graph dialog -->
     <UsageGraphDialog ref="usageGraphDialogRef" :provider="currentUsageProvider" />
 
@@ -3016,6 +3052,24 @@ wa-dropdown-item:hover .row-menu-trigger,
 }
 
 /* Floating "New session" split button (single project mode) */
+/* "Fake disabled": the button LOOKS disabled but stays live, so clicking it can
+   explain why no session starts here. The real `disabled` cannot be used —
+   wa-button is a form-associated custom element, and the browser does not
+   dispatch click events on a disabled form control, so the listener would never
+   fire. We reproduce its two visible effects instead: the dimmed opacity, and no
+   hover/active feedback (killed by taking pointer events off the inner control,
+   which also routes the click to the host, where the listener sits). Keyboard
+   activation still works: the inner control stays focusable and its click
+   bubbles up. */
+.fake-disabled {
+    opacity: 0.5;
+    cursor: help;
+}
+
+.fake-disabled::part(base) {
+    pointer-events: none;
+}
+
 .new-session-split-button {
     position: absolute;
     bottom: var(--wa-space-s);

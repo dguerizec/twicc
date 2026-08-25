@@ -34,6 +34,7 @@ from twicc.providers.db_writer import (
     UpdateSessionPayload,
     UpsertWorkflowPayload,
 )
+from twicc.projects import compute_project_stale
 from twicc.sync_helpers import BackpressureSyncQueue, check_file_has_content, read_session_items_from_file
 from .helpers import ClaudeCodeHelpers
 
@@ -529,10 +530,7 @@ def sync_all(
     # writes are pushed as ``UpdateProjectMetadataPayload`` so they apply
     # inside an atomic block on the DB writer side.
     for project in Project.objects.only("id", "directory", "stale"):
-        should_be_stale = (
-            project.directory is not None
-            and not os.path.isdir(project.directory)
-        )
+        should_be_stale = compute_project_stale(project.directory)
         if project.stale != should_be_stale:
             sync_queue.put(UpdateProjectMetadataPayload(
                 provider=Provider.CLAUDE_CODE,

@@ -18,6 +18,9 @@ import { formatDate } from '../../utils/date'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import ProjectBadge from './ProjectBadge.vue'
 import WorktreeBadge from './WorktreeBadge.vue'
+import ProjectDirectoryPath from './ProjectDirectoryPath.vue'
+import ProjectMissingDirectoryIcon from './ProjectMissingDirectoryIcon.vue'
+import ProjectMissingDirectoryNote from './ProjectMissingDirectoryNote.vue'
 import AggregatedProcessIndicator from '../ui/AggregatedProcessIndicator.vue'
 import CodeCommentsIndicator from '../ui/CodeCommentsIndicator.vue'
 import ProjectEditDialog from './ProjectEditDialog.vue'
@@ -101,6 +104,10 @@ const displayName = computed(() => {
 
 // Directory (single project only)
 const directory = computed(() => project.value?.directory || null)
+// Compact mode collapses the directory row away, so the warning is re-hung next
+// to the badge — the wrapper needs the same condition as the icon itself,
+// otherwise an empty indicator would still claim its slot in the row's gap.
+const directoryMissing = computed(() => !!project.value?.stale)
 
 // Project IDs aggregated for this page's stats (counter, cost, last activity,
 // sparkline). No archived filter — these reflect the whole, including archived
@@ -247,7 +254,13 @@ function handleUnarchive() {
                     </h2>
                 </template>
 
-                <!-- Compact-only indicators (visible only in compact collapsed mode) -->
+                <!-- Compact-only indicators (visible only in compact collapsed mode).
+                     The missing-directory mark comes first: in compact mode the
+                     directory row is collapsed away, so the warning would
+                     otherwise disappear exactly where the badge still shows. -->
+                <span v-if="directoryMissing" class="compact-indicator compact-missing-directory">
+                    <ProjectMissingDirectoryIcon :project-id="projectId" />
+                </span>
                 <span v-if="!isAllProjectsMode" class="compact-indicator">
                     <CodeCommentsIndicator :project-ids="indicatorProjectIds" />
                 </span>
@@ -284,7 +297,10 @@ function handleUnarchive() {
             <!-- Directory (single project only) -->
             <div v-if="isSingleProjectMode && directory" class="detail-directory">
                 <wa-icon name="folder" class="detail-icon"></wa-icon>
-                <span>{{ directory }}</span>
+                <ProjectDirectoryPath :project-id="projectId" />
+                <!-- flex-basis: 100% puts it on its own line without disturbing the
+                     icon/path alignment of the single-line case. -->
+                <ProjectMissingDirectoryNote :project-id="projectId" class="detail-directory-note" />
             </div>
 
             <!-- Meta info -->
@@ -391,6 +407,11 @@ function handleUnarchive() {
     display: none;
 }
 
+/* Keeps the missing-directory mark on the badge's centre line. */
+.compact-missing-directory {
+    align-items: center;
+}
+
 .detail-sparkline-row {
     display: flex;
     align-items: center;
@@ -404,11 +425,16 @@ function handleUnarchive() {
 
 .detail-directory {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--wa-space-xs);
+    gap: var(--wa-space-3xs) var(--wa-space-xs);
     font-size: var(--wa-font-size-s);
     color: var(--wa-color-text-quiet);
     word-break: break-all;
+}
+
+.detail-directory-note {
+    flex-basis: 100%;
 }
 
 .detail-icon {

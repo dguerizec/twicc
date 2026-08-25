@@ -12,12 +12,14 @@ import BrowserUrlListEditor from '../browser/BrowserUrlListEditor.vue'
 import DirectoryPickerPopup from '../files/DirectoryPickerPopup.vue'
 import { expandWorktreeTemplate } from '../../utils/worktreePath'
 import { resolveProjectTrust } from '../../utils/trust'
+import { useProjectDirectoryRecheck } from '../../composables/useProjectDirectoryRecheck'
 import { resolveProjectIconUrl } from '../../utils/projectIcon'
 import ProjectAgentDefaultsSection from './ProjectAgentDefaultsSection.vue'
 import TabBar from '../ui/TabBar.vue'
 import HelpIconButton from '../help/HelpIconButton.vue'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ProjectBadge from './ProjectBadge.vue'
+import ProjectDirectoryPath from './ProjectDirectoryPath.vue'
 import WorktreeBadge from './WorktreeBadge.vue'
 import ProjectMark from './ProjectMark.vue'
 
@@ -104,6 +106,24 @@ const directoryLeaf = computed(() => {
 // Badge label: the typed name, falling back to the directory leaf when empty —
 // matching how an unnamed project (or worktree) renders once saved.
 const previewName = computed(() => localName.value.trim() || directoryLeaf.value)
+
+// -- Missing directory --------------------------------------------------------
+// `stale` is a STORED observation ("the directory was gone last time TwiCC
+// looked"), refreshed at startup and by the provider-folder watcher — never
+// re-checked while rendering. Nothing watches the working directories, so a
+// directory restored while TwiCC runs stays flagged until the "Re-check"
+// button (or a restart) clears it.
+const directoryMissing = computed(() => !isCreateMode.value && !!props.project?.stale)
+const {
+    busy: recheckBusy,
+    outcome: recheckOutcome,
+    recheck,
+    reset: resetRecheck,
+} = useProjectDirectoryRecheck()
+
+function recheckDirectory() {
+    recheck(props.project?.id)
+}
 
 // -- Trust --------------------------------------------------------------------
 function trustChoiceFromValue(trust) {
@@ -308,6 +328,7 @@ function open() {
     scanDone.value = false
     scanCandidates.value = []
     scanError.value = ''
+    resetRecheck()
     if (isCreateMode.value) {
         localDirectory.value = ''
         localName.value = ''
@@ -809,7 +830,26 @@ defineExpose({
                     class="dialog-title-badge"
                 />
             </div>
-            <span v-if="!isCreateMode && project?.directory" class="dialog-title-path">{{ project.directory }}</span>
+            <ProjectDirectoryPath v-if="!isCreateMode && project?.directory" :project-id="project.id" class="dialog-title-path" />
+            <!-- The stored "directory is gone" state, plus the manual re-check that
+                 heals it once the folder is back (nothing detects that live). -->
+            <div v-if="directoryMissing" class="dialog-title-missing">
+                <span class="dialog-title-missing-text">
+                    {{ recheckOutcome === 'confirmed' ? 'Still not found on disk' : 'Directory not found on disk' }}
+                    <template v-if="recheckOutcome === 'error'"> — re-check failed</template>
+                </span>
+                <wa-button
+                    size="small"
+                    appearance="outlined"
+                    :loading="recheckBusy"
+                    :disabled="recheckBusy"
+                    class="dialog-title-recheck"
+                    @click="recheckDirectory"
+                >
+                    <wa-icon slot="start" name="arrow-rotate-right"></wa-icon>
+                    Re-check
+                </wa-button>
+            </div>
         </div>
         <form :id="formId" class="dialog-content" @submit.prevent="handleSave">
             <!-- Two main tabs: "Project" holds everything; "Agent settings" the
@@ -1244,6 +1284,23 @@ defineExpose({
     font-weight: var(--wa-font-weight-normal);
     color: var(--wa-color-text-quiet);
     word-break: break-all;
+}
+
+.dialog-title-missing {
+    display: flex;
+    align-items: center;
+    gap: var(--wa-space-s);
+    flex-wrap: wrap;
+    font-size: var(--wa-font-size-xs);
+    font-weight: var(--wa-font-weight-normal);
+}
+
+.dialog-title-missing-text {
+    color: var(--wa-color-warning-on-quiet);
+}
+
+.dialog-title-recheck {
+    font-size: var(--wa-font-size-xs);
 }
 
 .form-group {

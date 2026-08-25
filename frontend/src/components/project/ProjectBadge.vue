@@ -5,6 +5,7 @@ import { useDataStore } from '../../stores/data'
 import { projectPathTitle } from '../../utils/projectName'
 import { useProjectMark } from '../../composables/useProjectMark'
 import ProjectMark from './ProjectMark.vue'
+import ProjectMissingDirectoryIcon from './ProjectMissingDirectoryIcon.vue'
 
 const props = defineProps({
     projectId: {
@@ -40,6 +41,15 @@ const props = defineProps({
         type: String,
         default: null,
     },
+    // Opt-in: mark the badge when the project's working directory is gone.
+    // Deliberately NOT the default — the badge appears in dozens of places and
+    // the mark would become noise. Only the sidebar project selector turns it
+    // on: it is the one list where the state is otherwise invisible and where
+    // the row is the way to reach the project home, which explains it in full.
+    flagMissingDirectory: {
+        type: Boolean,
+        default: false,
+    },
 })
 
 const store = useDataStore()
@@ -74,6 +84,7 @@ const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
     <span class="project-badge" :style="gap ? { '--badge-gap': gap } : null">
         <ProjectMark :icon-url="iconUrl" :color="dotColor" />
         <span class="project-badge-name" :title="nameTitle">{{ displayName }}</span>
+        <ProjectMissingDirectoryIcon v-if="flagMissingDirectory" :project-id="projectId" />
         <wa-icon
             v-if="untrusted"
             name="lock"
@@ -104,6 +115,13 @@ const untrusted = computed(() => store.untrustedProjectIds.has(props.projectId))
     flex-shrink: 0;
     color: var(--wa-color-text-normal);
     opacity: 0.2;
+    font-size: 0.85em;
+}
+
+/* :deep — ProjectMissingDirectoryIcon has two root nodes (icon + tooltip), so
+   Vue does not stamp this component's scope id on its icon. */
+.project-badge :deep(.missing-directory-icon) {
+    flex-shrink: 0;
     font-size: 0.85em;
 }
 </style>

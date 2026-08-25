@@ -398,6 +398,29 @@ async def project_resolve_git(request, project_id):
     return JsonResponse({"git_root": git_root})
 
 
+async def project_refresh_directory(request, project_id):
+    """POST /api/projects/<id>/refresh-directory/ - Re-check the project directory live.
+
+    ``Project.stale`` ("the working directory was gone last time we looked") is
+    a stored observation: the UI renders it without ever re-checking per render.
+    Nothing watches the working directories themselves, so a directory restored
+    while TwiCC runs stays flagged until a restart. This is what the project
+    dialog's "Re-check" button calls — it re-stats the directory, re-resolves
+    ``git_root`` when the directory is back, persists, and broadcasts
+    ``project_updated`` on change.
+
+    Returns the refreshed serialised project.
+    """
+    from twicc.projects import refresh_project_directory_state
+
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    found, project = await refresh_project_directory_state(project_id)
+    if not found:
+        return JsonResponse({"error": "Project not found"}, status=404)
+    return JsonResponse(serialize_project(project))
+
+
 # Worktree-creation error code -> HTTP status. The service is
 # transport-agnostic (it returns structured codes); the endpoint maps
 # them here. Anything unmapped is a 400 (client-side input fault).

@@ -111,6 +111,20 @@ def get_project_git_root(project_id: str) -> str | None:
     return _project_git_roots.get(project_id)
 
 
+def compute_project_stale(directory: str | None) -> bool:
+    """Whether a project pointing at *directory* must be flagged ``stale``.
+
+    ``Project.stale`` means "the working directory was gone the last time TwiCC
+    looked": a stored observation, never re-checked at render time. A project
+    whose directory is still unknown (``None``) is never stale.
+
+    Single source of truth for the three sites that recompute the flag: the
+    startup recompute (claude_code ``initial_sync``), the provider-folder
+    watcher, and the action-time :func:`refresh_project_directory_state`.
+    """
+    return directory is not None and not os.path.isdir(directory)
+
+
 def ensure_project_directory(project_id: str, cwd: str) -> None:
     """
     Ensure the project's directory is set and up-to-date.
@@ -142,7 +156,7 @@ def ensure_project_directory(project_id: str, cwd: str) -> None:
     # cache ahead of the DB, and the `== cwd` check above would then suppress
     # the corrective write forever. on_commit runs immediately when there is
     # no active transaction, so non-transactional callers are unaffected.
-    should_be_stale = not os.path.isdir(cwd)
+    should_be_stale = compute_project_stale(cwd)
     Project.objects.filter(id=project_id).update(directory=cwd, stale=should_be_stale)
     transaction.on_commit(lambda: _project_directories.update({project_id: cwd}))
 
@@ -230,6 +244,57 @@ async def reresolve_project_git_root(project_id: str) -> tuple[bool, str | None]
     if new != old:
         await _broadcast_project_updated(project_id)
     return (True, new)
+
+
+async def refresh_project_directory_state(project_id: str) -> tuple[bool, Project | None]:
+    """Action-time directory verifier behind the project dialog's "Re-check" button.
+
+    ``Project.stale`` is a STORED observation (see :func:`compute_project_stale`),
+    refreshed at startup by the claude_code initial sync and by the watcher when
+    a *provider* project folder appears or disappears. Nothing watches the
+    working directories themselves, so a directory deleted — or restored — while
+    TwiCC runs keeps the stored flag until the next restart. This re-stats it
+    live, persists, and broadcasts ``project_updated`` on change, so the flag
+    heals without a backend restart. Both directions, like
+    :func:`reresolve_project_git_root`.
+
+    ``git_root`` is re-resolved in the same pass, but ONLY when the directory is
+    there: a restored repository would otherwise keep whatever value it had when
+    it went away (typically ``None`` for a project first seen while its
+    directory was already gone). Resolving from a MISSING directory can only
+    yield ``None``, which would destroy the last known value for no gain — so a
+    stale project keeps its ``git_root`` untouched.
+
+    Returns ``(found, project)``. ``found=False`` means the project row does not
+    exist (caller maps to 404) and ``project`` is ``None``. Otherwise *project*
+    is the refreshed row, with the fresh values mirrored onto the in-memory
+    instance (the writes below are bare ``UPDATE``s) so it is safe to serialise.
+    """
+    from twicc.providers.db_writer import run_under_db_write_lock
+
+    project = await Project.objects.filter(id=project_id).afirst()
+    if project is None:
+        return (False, None)
+
+    old_stale = project.stale
+    old_git_root = project.git_root
+    new_stale = compute_project_stale(project.directory)
+    directory = project.directory
+
+    async def _apply() -> str | None:
+        if new_stale != old_stale:
+            await sync_to_async(Project.objects.filter(id=project_id).update)(stale=new_stale)
+        if not new_stale and directory:
+            return await sync_to_async(ensure_project_git_root)(project_id, directory)
+        return old_git_root
+
+    new_git_root = await run_under_db_write_lock(_apply)
+
+    project.stale = new_stale
+    project.git_root = new_git_root
+    if new_stale != old_stale or new_git_root != old_git_root:
+        await _broadcast_project_updated(project_id)
+    return (True, project)
 
 
 # =============================================================================

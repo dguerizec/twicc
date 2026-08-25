@@ -34,11 +34,13 @@ const store = useDataStore()
 // through every level.
 const openProjectEditDialog = inject('openProjectEditDialog', null)
 const createSessionInProject = inject('createSessionInProject', null)
+const openProjectMissingDirectoryDialog = inject('openProjectMissingDirectoryDialog', null)
 
 const project = computed(() => store.getProject(props.projectId))
 const isArchived = computed(() => !!project.value?.archived)
 // Stale projects/worktrees have a gone directory — no session can be created
-// there, so the "New session" entry is hidden (mirrors the bottom picker).
+// there, so the "New session" entry stays disabled-looking but live, and
+// explains itself through the missing-directory dialog.
 const isStale = computed(() => !!project.value?.stale)
 
 // Row "…" menu actions. In the template the child dropdown's wa-select is
@@ -47,7 +49,13 @@ const isStale = computed(() => !!project.value?.stale)
 function onRowMenuSelect(event) {
     const value = event.detail?.item?.value
     if (value === 'new-session') {
-        createSessionInProject?.(props.projectId)
+        // The entry stays selectable on a stale project so the click can say why
+        // no session starts there (see `.fake-disabled`).
+        if (isStale.value) {
+            openProjectMissingDirectoryDialog?.(props.projectId)
+        } else {
+            createSessionInProject?.(props.projectId)
+        }
     } else if (value === 'edit') {
         openProjectEditDialog?.(props.projectId)
     } else if (value === 'archive') {
@@ -62,7 +70,11 @@ function onRowMenuSelect(event) {
     <wa-dropdown-item :value="projectId" :class="{ 'selector-row-archived': isArchived }">
         <wa-icon slot="icon" name="check" :style="{ visibility: !isAllProjectsMode && currentProjectId === projectId ? 'visible' : 'hidden' }"></wa-icon>
         <span class="selector-item-content" :style="depth ? { paddingLeft: `${depth * 12}px` } : null">
-            <ProjectBadge :project-id="projectId" :label="label" :fallback-color="fallbackColor" />
+            <!-- flag-missing-directory: the selector is the only list where a
+                 gone directory is otherwise invisible. The mark is enough here —
+                 selecting the row leads to the project home, which spells it
+                 out. -->
+            <ProjectBadge :project-id="projectId" :label="label" :fallback-color="fallbackColor" flag-missing-directory />
             <span class="selector-item-indicators">
                 <CodeCommentsIndicator :project-ids="[projectId]" />
                 <AggregatedProcessIndicator :project-ids="[projectId]" size="small" />
@@ -77,11 +89,15 @@ function onRowMenuSelect(event) {
                     <wa-button slot="trigger" appearance="plain" size="small" class="row-menu-trigger">
                         <wa-icon name="ellipsis-v" label="Project actions"></wa-icon>
                     </wa-button>
-                    <wa-dropdown-item v-if="!isStale" value="new-session">
+                    <!-- Kept visible on a stale project, in a disabled look but
+                         still live (see `.fake-disabled`): removing it made users
+                         hunt for an entry that had simply vanished. Selecting it
+                         explains the reason instead. -->
+                    <wa-dropdown-item value="new-session" :class="{ 'fake-disabled': isStale }">
                         <wa-icon slot="icon" name="plus"></wa-icon>
                         New session
                     </wa-dropdown-item>
-                    <wa-divider v-if="!isStale"></wa-divider>
+                    <wa-divider></wa-divider>
                     <wa-dropdown-item value="edit">
                         <wa-icon slot="icon" name="pencil"></wa-icon>
                         Edit
@@ -105,6 +121,21 @@ function onRowMenuSelect(event) {
    active ones when "show archived projects" surfaces them in the selector. */
 .selector-row-archived {
     opacity: 0.55;
+}
+
+/* "Fake disabled": the entry LOOKS disabled but stays live, so selecting it can
+   explain why no session starts here. The real `disabled` cannot be used — the
+   dropdown filters disabled items out before emitting wa-select, so the action
+   would never reach us. We reproduce its two visible effects instead: the dimmed
+   opacity, and no hover highlight (a :host(:hover) rule, which outer-document
+   styles override). The `help` cursor is the hint that clicking says why. */
+.fake-disabled {
+    opacity: 0.5;
+    cursor: help;
+}
+
+.fake-disabled:hover {
+    background-color: transparent;
 }
 
 .selector-item-content {
