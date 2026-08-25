@@ -297,6 +297,50 @@ async def refresh_project_directory_state(project_id: str) -> tuple[bool, Projec
     return (True, project)
 
 
+async def refresh_all_project_directory_states() -> int:
+    """Cross-provider boot sweep: recompute ``stale`` for every known project.
+
+    ``Project.stale`` only tracks whether ``Project.directory`` exists on disk;
+    nothing about it is provider-specific. It used to be recomputed inside
+    claude_code's ``sync_all``, so a TwiCC running Codex alone never refreshed
+    it at all — a project flagged once stayed flagged for good. This is that
+    same pass, owned by nobody in particular.
+
+    Call it from the boot sequence BEFORE any provider orchestrator starts: the
+    flag is then already correct when the first project syncs, and there is no
+    race with :func:`ensure_project_directory` writing ``directory`` + ``stale``
+    together from a session's cwd.
+
+    The ``isdir`` calls run in a thread — a project on a dead network mount can
+    block for seconds. Returns the number of rows whose flag changed.
+    """
+    from twicc.providers.db_writer import run_under_db_write_lock
+
+    def _collect_changed() -> list[tuple[str, bool]]:
+        changed = []
+        for project in Project.objects.only("id", "directory", "stale").iterator():
+            should_be_stale = compute_project_stale(project.directory)
+            if project.stale != should_be_stale:
+                changed.append((project.id, should_be_stale))
+        return changed
+
+    changed = await sync_to_async(_collect_changed)()
+    if not changed:
+        return 0
+
+    def _apply() -> None:
+        for project_id, should_be_stale in changed:
+            Project.objects.filter(id=project_id).update(stale=should_be_stale)
+
+    await run_under_db_write_lock(lambda: sync_to_async(_apply)())
+    # No-op at boot (nothing is connected yet, and the client reads fresh rows
+    # on connect), but it keeps this callable at runtime without silently
+    # leaving clients behind.
+    for project_id, _ in changed:
+        await _broadcast_project_updated(project_id)
+    return len(changed)
+
+
 # =============================================================================
 # Project creation — single entry point
 # =============================================================================

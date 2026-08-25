@@ -19,6 +19,7 @@ from twicc.core.models import Project
 from twicc.projects import (
     _project_git_roots,
     compute_project_stale,
+    refresh_all_project_directory_states,
     refresh_project_directory_state,
 )
 
@@ -113,6 +114,40 @@ def test_refresh_keeps_git_root_while_the_directory_is_missing(tmp_path, _captur
     assert refreshed.stale is True
     assert refreshed.git_root == str(directory)
     # Nothing changed, so no broadcast.
+    assert _capture_broadcasts == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_boot_sweep_fixes_every_project_both_ways(tmp_path, _capture_broadcasts):
+    """The sweep is provider-agnostic on purpose: it used to live inside
+    claude_code's sync_all, so a Codex-only TwiCC never refreshed the flag."""
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    back = tmp_path / "back"
+    back.mkdir()
+    Project.objects.create(id="-sweep-gone", directory=str(gone), stale=False)
+    Project.objects.create(id="-sweep-back", directory=str(back), stale=True)
+    # Already correct, and a project with no known directory: neither must move.
+    Project.objects.create(id="-sweep-ok", directory=str(back), stale=False)
+    Project.objects.create(id="-sweep-nodir", directory=None, stale=False)
+    gone.rmdir()
+
+    changed = async_to_sync(refresh_all_project_directory_states)()
+
+    assert changed == 2
+    assert Project.objects.get(id="-sweep-gone").stale is True
+    assert Project.objects.get(id="-sweep-back").stale is False
+    assert Project.objects.get(id="-sweep-ok").stale is False
+    assert Project.objects.get(id="-sweep-nodir").stale is False
+    # Only the two rows that moved are broadcast.
+    assert sorted(_capture_broadcasts) == ["-sweep-back", "-sweep-gone"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_boot_sweep_is_a_no_op_when_nothing_moved(tmp_path, _capture_broadcasts):
+    Project.objects.create(id="-sweep-quiet", directory=str(tmp_path), stale=False)
+
+    assert async_to_sync(refresh_all_project_directory_states)() == 0
     assert _capture_broadcasts == []
 
 

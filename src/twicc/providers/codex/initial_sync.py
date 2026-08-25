@@ -13,7 +13,6 @@ the DB writer via ``CreateSessionPayload`` / ``UpdateSessionPayload`` /
 from __future__ import annotations
 
 import logging
-import os
 import queue
 import threading
 import time
@@ -25,6 +24,7 @@ import orjson
 from twicc.core.enums import Provider
 from twicc.core.models import Project, Session, SessionType
 from twicc.paths import path_to_project_id
+from twicc.projects import compute_project_stale
 from twicc.providers.db_writer import (
     CreateSessionPayload,
     DeleteSessionsPayload,
@@ -235,7 +235,7 @@ def _build_create_payload(
         provider=Provider.CODEX,
         project_id=project_id,
         new_project_directory=entry.cwd,
-        new_project_stale=not os.path.isdir(entry.cwd),
+        new_project_stale=compute_project_stale(entry.cwd),
         session=session,
         items=to_insert.items,
         last_offset=to_insert.last_offset,
@@ -472,9 +472,9 @@ def sync_project(
         project_id=project_id,
         recalc_sessions_count=True,
         recalc_mtime=True,
-        # Codex sync_project leaves ``project.stale`` alone; it is handled
-        # by Claude Code's sync_all (which iterates every Project and
-        # recomputes stale from disk).
+        # ``project.stale`` is left alone here: it is not provider state, and
+        # the boot sweep (twicc.projects.refresh_all_project_directory_states)
+        # has already recomputed it for every project before this run started.
         new_stale=None,
         recalc_total_cost=False,
         resolve_git_root=False,

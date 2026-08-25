@@ -34,7 +34,6 @@ from twicc.providers.db_writer import (
     UpdateSessionPayload,
     UpsertWorkflowPayload,
 )
-from twicc.projects import compute_project_stale
 from twicc.sync_helpers import BackpressureSyncQueue, check_file_has_content, read_session_items_from_file
 from .helpers import ClaudeCodeHelpers
 
@@ -518,7 +517,6 @@ def sync_all(
 
     stats = {
         "projects_created": 0,
-        "projects_stale": 0,
         "sessions_created": 0,
         "sessions_stale": 0,
         "items_added": 0,
@@ -526,24 +524,12 @@ def sync_all(
 
     disk_project_ids = scan_projects()
 
-    # Recompute project.stale based on disk presence. Reads-only here;
-    # writes are pushed as ``UpdateProjectMetadataPayload`` so they apply
-    # inside an atomic block on the DB writer side.
-    for project in Project.objects.only("id", "directory", "stale"):
-        should_be_stale = compute_project_stale(project.directory)
-        if project.stale != should_be_stale:
-            sync_queue.put(UpdateProjectMetadataPayload(
-                provider=Provider.CLAUDE_CODE,
-                project_id=project.id,
-                recalc_sessions_count=False,
-                recalc_mtime=False,
-                new_stale=should_be_stale,
-                recalc_total_cost=False,
-                resolve_git_root=False,
-                git_root_directory=None,
-            ))
-        if should_be_stale:
-            stats["projects_stale"] += 1
+    # Note: ``project.stale`` is NOT recomputed here. It only tracks whether a
+    # project's working directory exists on disk — nothing provider-specific —
+    # so the sweep lives in the boot sequence
+    # (``twicc.projects.refresh_all_project_directory_states``, called before
+    # any orchestrator starts). Doing it here left a Codex-only TwiCC with a
+    # flag that never refreshed.
 
     # Note: projects are NOT created eagerly here. They are created lazily
     # by ``sync_project`` only when they contain at least one session with
@@ -689,7 +675,7 @@ class ProgressDisplay:
         elapsed = time.time() - self.start_time
         self._write("")
         self._write(f"Sync complete in {self._format_time(elapsed)}")
-        self._write(f"  Projects: {stats['projects_created']} created, {stats['projects_stale']} stale")
+        self._write(f"  Projects: {stats['projects_created']} created")
         self._write(f"  Sessions: {stats['sessions_created']} created, {stats['sessions_stale']} stale")
         self._write(f"  Items: {stats['items_added']} added")
 

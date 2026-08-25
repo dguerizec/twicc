@@ -226,6 +226,22 @@ async def run_server(port: int):
             "Boot ProcessRun cleanup failed: %s", exc, exc_info=True,
         )
 
+    # Cross-provider boot sweep of ``Project.stale``: re-stat every known
+    # project directory. Runs after the DB writer is up but before any provider
+    # orchestrator starts, so the flag is already correct when the first project
+    # syncs, and no session's cwd write races it. Provider-agnostic on purpose —
+    # it used to live inside claude_code's sync_all, which left a Codex-only
+    # TwiCC with a flag that never refreshed.
+    from twicc.projects import refresh_all_project_directory_states
+    try:
+        refreshed = await refresh_all_project_directory_states()
+        if refreshed:
+            logger.info("Boot directory sweep: %d project(s) changed stale state", refreshed)
+    except Exception as exc:
+        logger.error(
+            "Boot project directory sweep failed: %s", exc, exc_info=True,
+        )
+
     # Cross-provider search lifecycle event: set once ``init_search_index()``
     # has returned, so provider watchers know they can write into the
     # index. Created here, owned by ``_orchestrate_global_search``,
