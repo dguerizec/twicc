@@ -16,6 +16,8 @@ const props = defineProps({
     // Git status of the node (only relevant in git-index mode)
     stagedStatus: { type: String, default: null },
     unstagedStatus: { type: String, default: null },
+    // Git status of the node (only relevant in git-commit mode)
+    status: { type: String, default: null },
 })
 
 const emit = defineEmits([
@@ -23,6 +25,7 @@ const emit = defineEmits([
     'create-file', 'create-folder', 'rename', 'move', 'delete',
     'copy-name', 'copy-relative-path', 'copy-full-path',
     'git-stage', 'git-unstage', 'git-discard',
+    'download', 'download-diff',
 ])
 
 const dropdownRef = ref(null)
@@ -59,6 +62,23 @@ const canDelete = computed(() => {
 const hasGitActions = computed(() =>
     canStage.value || canUnstage.value || canDiscard.value || canDelete.value
 )
+
+// ─── Downloads ──────────────────────────────────────────────────────────────
+// Files only: a directory would need an archive, which is out of scope. In git
+// modes the file is always downloadable (a deleted one comes from the revision
+// that still had it), but a patch only exists for a modified file — an added,
+// deleted or untracked file has no meaningful diff to hand over.
+
+const canDownload = computed(() => props.nodeType === 'file')
+
+const canDownloadDiff = computed(() => {
+    if (props.nodeType !== 'file') return false
+    if (isGitIndex.value) {
+        return props.stagedStatus === 'modified' || props.unstagedStatus === 'modified'
+    }
+    if (props.mode === 'git-commit') return props.status === 'modified'
+    return false
+})
 
 function handleSelect(event) {
     const value = event.detail?.item?.value
@@ -193,6 +213,19 @@ watch([() => props.x, () => props.y], () => {
                 >
                     <wa-icon slot="icon" name="trash"></wa-icon>
                     Delete
+                </wa-dropdown-item>
+                <wa-divider></wa-divider>
+            </template>
+
+            <!-- ═══ Downloads (files only — directories would need an archive) ═══ -->
+            <template v-if="canDownload">
+                <wa-dropdown-item value="download">
+                    <wa-icon slot="icon" name="download"></wa-icon>
+                    {{ isFilesMode ? 'Download' : 'Download file' }}
+                </wa-dropdown-item>
+                <wa-dropdown-item v-if="canDownloadDiff" value="download-diff">
+                    <wa-icon slot="icon" name="code-compare"></wa-icon>
+                    Download diff
                 </wa-dropdown-item>
                 <wa-divider></wa-divider>
             </template>

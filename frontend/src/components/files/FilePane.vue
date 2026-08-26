@@ -2,6 +2,7 @@
 import { ref, watch, computed, nextTick, useId, inject, onMounted, onBeforeUnmount } from 'vue'
 import { useResizeObserver } from '@vueuse/core'
 import { apiFetch } from '../../utils/api'
+import { base64UrlEncode, encodeFilePathSegments } from '../../utils/download'
 import { useArtifactBroker } from '../../composables/useArtifactBroker'
 import { useSettingsStore } from '../../stores/settings'
 import { useCommandRegistry } from '../../composables/useCommandRegistry'
@@ -237,15 +238,6 @@ const showHtmlPreview = ref(false)
 // edits are reflected only after saving and reloading.
 const htmlPreviewReloadKey = ref(0)
 
-// base64url-encode a string (unicode-safe) for the standalone raw URL's
-// confinement-root path segment.
-function base64UrlEncode(str) {
-    const bytes = new TextEncoder().encode(str)
-    let binary = ''
-    for (const byte of bytes) binary += String.fromCharCode(byte)
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
 // URL of the raw-serving endpoint for the current file. The file path lives in
 // the URL *path* (not a query param) so an <iframe> resolves a page's relative
 // CSS/JS/asset references to sibling raw URLs. Project scope uses the
@@ -254,16 +246,11 @@ function base64UrlEncode(str) {
 // and video previews.
 const rawFileUrl = computed(() => {
     if (!props.filePath) return null
-    const trailing = props.filePath
-        .replace(/^\/+/, '')
-        .split('/')
-        .map(encodeURIComponent)
-        .join('/')
+    const trailing = encodeFilePathSegments(props.filePath)
     if (props.projectId) {
         return `${resolvedApiPrefix.value}/file-raw/${trailing}`
     }
-    const rootB64 = base64UrlEncode(props.rootRestriction || '')
-    return `/api/file-raw/${rootB64}/${trailing}`
+    return `/api/file-raw/${base64UrlEncode(props.rootRestriction || '')}/${trailing}`
 })
 
 // The HTML preview adds a cache-bust token so the reload button forces a fresh

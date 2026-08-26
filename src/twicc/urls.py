@@ -99,6 +99,8 @@ urlpatterns = [
     path("api/projects/<str:project_id>/git-stage/", views.git_stage_file),
     path("api/projects/<str:project_id>/git-unstage/", views.git_unstage_file),
     path("api/projects/<str:project_id>/git-discard/", views.git_discard_file),
+    path("api/projects/<str:project_id>/git-file-download/", views.git_file_download),
+    path("api/projects/<str:project_id>/git-diff-download/", views.git_diff_download),
     # Git endpoints (session-level, no subagent support)
     path("api/projects/<str:project_id>/sessions/<str:session_id>/git-log/", views.git_log),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/git-index-files/", views.git_index_files),
@@ -109,6 +111,8 @@ urlpatterns = [
     path("api/projects/<str:project_id>/sessions/<str:session_id>/git-stage/", views.git_stage_file),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/git-unstage/", views.git_unstage_file),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/git-discard/", views.git_discard_file),
+    path("api/projects/<str:project_id>/sessions/<str:session_id>/git-file-download/", views.git_file_download),
+    path("api/projects/<str:project_id>/sessions/<str:session_id>/git-diff-download/", views.git_diff_download),
     # File system endpoints (scoped to project + session for security)
     path("api/projects/<str:project_id>/sessions/<str:session_id>/directory-tree/", views.directory_tree),
     path("api/projects/<str:project_id>/sessions/<str:session_id>/file-search/", views.file_search),

@@ -15,6 +15,7 @@ import GitStatusBadge from '../ui/GitStatusBadge.vue'
 import FileTreePanel from '../files/FileTreePanel.vue'
 import FilePane from '../files/FilePane.vue'
 import { searchTreeFiles } from '../../utils/treeSearch'
+import { triggerDownload } from '../../utils/download'
 import { useCodeCommentsStore, buildCommentedPathsSet } from '../../stores/codeComments'
 import { usePanZoom, useSyncedPanZoom } from '../../composables/usePanZoom'
 import { usePanelContentFocus } from '../../composables/usePanelContentFocus'
@@ -545,6 +546,27 @@ const contextMenuMode = computed(() => {
     if (isViewingIndex.value) return 'git-index'
     return 'git-commit'
 })
+
+/**
+ * Download a file from the Git tab — its content at the viewed revision
+ * (``kind`` = ``file``) or the patch that revision carries for it (``diff``).
+ *
+ * The endpoints resolve the bytes themselves: at the index they read the
+ * working tree (falling back to HEAD for a file deleted from disk), at a commit
+ * they read the blob (falling back to the parent for a file that commit
+ * deleted). The panel only supplies the revision it is showing.
+ */
+function handleDownload(kind, { path }) {
+    const endpoint = kind === 'diff' ? 'git-diff-download' : 'git-file-download'
+    const params = new URLSearchParams({
+        path,
+        ref: isViewingIndex.value ? 'index' : (selectedCommit.value?.hash ?? 'index'),
+    })
+    if (effectiveGitDirectory.value) {
+        params.set('git_dir', effectiveGitDirectory.value)
+    }
+    triggerDownload(`${apiPrefix.value}/${endpoint}/?${params}`)
+}
 
 async function handleGitAction(action, { path }) {
     const endpoint = {
@@ -1558,6 +1580,8 @@ onMounted(() => {
                         @git-stage="handleGitAction('git-stage', $event)"
                         @git-unstage="handleGitAction('git-unstage', $event)"
                         @git-discard="handleGitAction('git-discard', $event)"
+                        @download="handleDownload('file', $event)"
+                        @download-diff="handleDownload('diff', $event)"
                     >
                         <template #options-before>
                             <wa-dropdown-item

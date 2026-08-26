@@ -32,6 +32,7 @@
 
 import { ref, computed, watch, nextTick, shallowRef, useId } from 'vue'
 import { apiFetch } from '../../utils/api'
+import { buildFileDownloadUrl, triggerDownload } from '../../utils/download'
 import FileTree from './FileTree.vue'
 import FileTreeContextMenu from './FileTreeContextMenu.vue'
 import FileRenameDialog from './FileRenameDialog.vue'
@@ -143,6 +144,15 @@ const props = defineProps({
         type: String,
         default: null,
     },
+    /**
+     * Confinement root for the standalone (project-less) raw-file endpoint —
+     * the Artifacts tab passes the session's artifacts dir. Ignored when a
+     * projectId is set, where the project/session scope applies instead.
+     */
+    rootRestriction: {
+        type: String,
+        default: null,
+    },
     // When set (the owning session), the mobile header shows an artifact bookmark
     // toggle for renderable artifacts and surfaces the artifact bookmark name.
     artifactBookmarkSessionId: {
@@ -182,7 +192,13 @@ const props = defineProps({
     },
 })
 
-const emit = defineEmits(['file-select', 'refresh', 'option-select', 'filter-input', 'git-stage', 'git-unstage', 'git-discard'])
+const emit = defineEmits([
+    'file-select', 'refresh', 'option-select', 'filter-input',
+    'git-stage', 'git-unstage', 'git-discard',
+    // Git modes only: the owner (GitPanel) knows the revision being viewed, so
+    // it builds the download URL. In files mode the panel handles it itself.
+    'download', 'download-diff',
+])
 
 // ─── Mobile overlay state ────────────────────────────────────────────────────
 
@@ -995,6 +1011,7 @@ const contextMenu = ref({
     writableLoading: false,
     stagedStatus: null,
     unstagedStatus: null,
+    status: null,
 })
 
 const renameDialogRef = ref(null)
@@ -1020,6 +1037,7 @@ async function onContextMenu(data) {
         writableLoading: props.contextMenuMode === 'files',
         stagedStatus: data.stagedStatus || null,
         unstagedStatus: data.unstagedStatus || null,
+        status: data.status || null,
     }
 
     // In files mode, check writable status via API. In git modes, skip.
@@ -1062,6 +1080,31 @@ function computeFullPath(absolutePath) {
         return `${props.gitDirectory}/${relativePath}`
     }
     return absolutePath
+}
+
+/**
+ * Download the file the context menu points at.
+ *
+ * Files mode serves it straight from the raw endpoint, which the panel can
+ * address on its own. Git modes go up to the owner instead: the bytes depend on
+ * the revision being viewed, which only GitPanel knows.
+ */
+function handleDownload() {
+    if (props.contextMenuMode !== 'files') {
+        emit('download', { path: computeRelativePath(contextMenu.value.path) })
+        return
+    }
+    triggerDownload(buildFileDownloadUrl({
+        filePath: contextMenu.value.path,
+        projectId: props.projectId,
+        apiPrefix: apiPrefix.value,
+        root: props.rootRestriction || props.rootPath,
+    }))
+}
+
+/** Download the unified patch. Offered in git modes only (see the menu). */
+function handleDownloadDiff() {
+    emit('download-diff', { path: computeRelativePath(contextMenu.value.path) })
 }
 
 function handleGitStage() {
@@ -1357,6 +1400,7 @@ defineExpose({
                 :mode="contextMenuMode"
                 :staged-status="contextMenu.stagedStatus"
                 :unstaged-status="contextMenu.unstagedStatus"
+                :status="contextMenu.status"
                 @close="closeContextMenu"
                 @create-file="handleCreateFile"
                 @create-folder="handleCreateFolder"
@@ -1369,6 +1413,8 @@ defineExpose({
                 @git-stage="handleGitStage"
                 @git-unstage="handleGitUnstage"
                 @git-discard="handleGitDiscard"
+                @download="handleDownload"
+                @download-diff="handleDownloadDiff"
             />
             <FileRenameDialog
                 v-if="apiPrefix"

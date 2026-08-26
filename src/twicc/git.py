@@ -1156,7 +1156,7 @@ def get_commit_file_diff(git_directory: str, commit_hash: str, file_path: str) -
 # ---------------------------------------------------------------------------
 
 
-def _validate_path_in_repo(git_directory: str, file_path: str) -> str:
+def validate_path_in_repo(git_directory: str, file_path: str) -> str:
     """Validate that file_path stays within git_directory. Returns absolute path.
 
     Raises GitError if the resolved path escapes the repository root.
@@ -1172,7 +1172,7 @@ def git_stage(git_directory: str, file_path: str) -> None:
 
     Raises GitError on failure.
     """
-    _validate_path_in_repo(git_directory, file_path)
+    validate_path_in_repo(git_directory, file_path)
 
     try:
         result = subprocess.run(
@@ -1196,7 +1196,7 @@ def git_unstage(git_directory: str, file_path: str) -> None:
 
     Raises GitError on failure.
     """
-    _validate_path_in_repo(git_directory, file_path)
+    validate_path_in_repo(git_directory, file_path)
 
     try:
         result = subprocess.run(
@@ -1222,7 +1222,7 @@ def git_discard(git_directory: str, file_path: str) -> None:
 
     Raises GitError on failure.
     """
-    _validate_path_in_repo(git_directory, file_path)
+    validate_path_in_repo(git_directory, file_path)
 
     try:
         result = subprocess.run(
@@ -1239,6 +1239,145 @@ def git_discard(git_directory: str, file_path: str) -> None:
     if result.returncode != 0:
         stderr = result.stderr.strip()
         raise GitError(f"git restore failed: {stderr}" if stderr else "git restore failed")
+
+
+# ---------------------------------------------------------------------------
+# Git file downloads (streamed — no size cap)
+# ---------------------------------------------------------------------------
+# The Git tab's context menu downloads a file's content at a given ref, or the
+# unified patch for it. Unlike the diff endpoints (which buffer into JSON and
+# cap at MAX_FILE_SIZE for the editor), these stream git's stdout straight into
+# the HTTP response, so a large blob never lands in memory.
+
+# A ref accepted by the download endpoints: ``index`` or an abbreviated/full
+# commit hash. Anything else is refused — the value is interpolated into a
+# revision spec, so it must never carry an option or an arbitrary expression.
+_COMMIT_REF_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
+
+# Bytes read per chunk when streaming a git process' stdout.
+_STREAM_CHUNK_SIZE = 64 * 1024
+
+
+def is_valid_commit_ref(ref: str) -> bool:
+    """Whether ``ref`` is a hash the download endpoints may interpolate."""
+    return bool(_COMMIT_REF_RE.match(ref or ""))
+
+
+class GitProcessStream:
+    """File-like wrapper over a git process' stdout, for ``FileResponse``.
+
+    ``FileResponse`` iterates it with ``read()`` and calls ``close()`` when the
+    response is done, which is where the child process gets reaped — a plain
+    ``Popen.stdout`` would leave a zombie behind when the client disconnects
+    mid-download.
+    """
+
+    def __init__(self, proc: subprocess.Popen):
+        self._proc = proc
+
+    def read(self, size: int = -1) -> bytes:
+        return self._proc.stdout.read(size)
+
+    def close(self) -> None:
+        try:
+            self._proc.stdout.close()
+        finally:
+            if self._proc.poll() is None:
+                self._proc.terminate()
+            self._proc.wait()
+
+
+def _spawn_git(git_directory: str, args: list[str]) -> GitProcessStream:
+    """Start ``git -C <dir> <args>`` and return its stdout as a stream."""
+    try:
+        proc = subprocess.Popen(
+            ["git", "-C", git_directory, *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=_STREAM_CHUNK_SIZE,
+        )
+    except FileNotFoundError:
+        raise GitError("Git is not installed or not in PATH")
+    return GitProcessStream(proc)
+
+
+def blob_exists_at_ref(git_directory: str, ref: str, file_path: str) -> bool:
+    """Whether ``<ref>:<file_path>`` resolves to a blob (a regular file).
+
+    ``cat-file --batch-check`` answers in one call and stays quiet on a missing
+    object (it prints ``<spec> missing`` and still exits 0), so a lookup for a
+    path that never existed is not an error.
+    """
+    validate_path_in_repo(git_directory, file_path)
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", git_directory, "cat-file", "--batch-check"],
+            input=f"{ref}:{file_path}\n",
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+    if result.returncode != 0:
+        return False
+    parts = result.stdout.split()
+    return len(parts) >= 2 and parts[1] == "blob"
+
+
+def stream_blob_at_ref(git_directory: str, ref: str, file_path: str) -> GitProcessStream:
+    """Stream the content of ``<ref>:<file_path>``.
+
+    The caller checks :func:`blob_exists_at_ref` first — ``cat-file blob`` on a
+    missing object would only fail once the stream is already open.
+    """
+    validate_path_in_repo(git_directory, file_path)
+    return _spawn_git(git_directory, ["cat-file", "blob", f"{ref}:{file_path}"])
+
+
+def is_tracked(git_directory: str, file_path: str) -> bool:
+    """Whether the file is known to the index (i.e. not untracked)."""
+    validate_path_in_repo(git_directory, file_path)
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", git_directory, "ls-files", "--error-unmatch", "--", file_path],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    return result.returncode == 0
+
+
+def stream_index_patch(git_directory: str, file_path: str) -> GitProcessStream:
+    """Stream the unified patch of a working-tree file against HEAD.
+
+    An untracked file has nothing to diff against, so it is compared to
+    ``/dev/null`` instead (``--no-index`` exits 1 when the files differ, which
+    is the normal case here — the exit code is not inspected).
+    """
+    validate_path_in_repo(git_directory, file_path)
+
+    if is_tracked(git_directory, file_path):
+        return _spawn_git(git_directory, ["diff", "HEAD", "--", file_path])
+    return _spawn_git(git_directory, ["diff", "--no-index", "--", os.devnull, file_path])
+
+
+def stream_commit_patch(git_directory: str, commit_hash: str, file_path: str) -> GitProcessStream:
+    """Stream the unified patch a commit applied to one file.
+
+    ``--root`` covers the initial commit (no parent). Merge commits show no
+    patch, which matches what the diff view already displays for them.
+    """
+    validate_path_in_repo(git_directory, file_path)
+    return _spawn_git(
+        git_directory,
+        ["show", "--format=", "--root", commit_hash, "--", file_path],
+    )
 
 
 # ---------------------------------------------------------------------------

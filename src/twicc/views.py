@@ -2072,12 +2072,16 @@ def _guess_raw_content_type(path: str) -> str:
     return guessed or "application/octet-stream"
 
 
-def _raw_file_response(normalized_path: str):
-    """Return an inline FileResponse for a regular file, or ``None``.
+def _raw_file_response(normalized_path: str, *, as_attachment: bool = False):
+    """Return a FileResponse for a regular file, or ``None``.
 
     ``os.stat`` follows symlinks, so a symlinked target is served only when it
     resolves to a regular file. Callers are responsible for confinement (the
     path has already been validated against the allowed root/dirs).
+
+    ``as_attachment`` turns the response into a download: Django adds a
+    ``Content-Disposition: attachment`` header carrying the file's basename
+    (RFC 5987-encoded when it is not ASCII).
     """
     import stat
 
@@ -2097,7 +2101,7 @@ def _raw_file_response(normalized_path: str):
     response = FileResponse(
         fp,
         content_type=_guess_raw_content_type(normalized_path),
-        as_attachment=False,
+        as_attachment=as_attachment,
     )
     # Render with the declared type only — never let the browser sniff a
     # served asset into something executable in a different context.
@@ -2142,6 +2146,24 @@ def _serve_artifact_file(normalized_path: str, *, as_document: bool):
 
         return artifact_html_response(html)
     return _raw_file_response(normalized_path)
+
+
+async def _raw_serve_response(request, normalized_path: str):
+    """Serve an already-validated raw path. Returns ``None`` for a
+    non-regular/unreadable file (the caller turns that into a 404).
+
+    ``?download=1`` streams the file as an attachment and **bypasses the
+    artifact broker wrap**: an ``<a download>`` click is a navigation, so the
+    browser sends ``Sec-Fetch-Dest: document`` and the HTML would otherwise
+    arrive shim-injected + CSP-gated instead of as written on disk.
+    """
+    if request.GET.get("download") in ("1", "true"):
+        return await asyncio.to_thread(_raw_file_response, normalized_path, as_attachment=True)
+
+    from twicc.artifacts.broker_html import is_artifact_document_request
+
+    as_document = is_artifact_document_request(request.headers.get("Sec-Fetch-Dest"))
+    return await asyncio.to_thread(_serve_artifact_file, normalized_path, as_document=as_document)
 
 
 def _normalize_raw_filepath(filepath: str) -> str:
@@ -2211,6 +2233,9 @@ async def file_raw(request, project_id, filepath, session_id=None):
     session-scoped variant. Confinement matches :func:`file_content`: the
     file's directory must be within the project/session allowed base dirs.
 
+    ``?download=1`` serves the file as an attachment instead (Files / Git
+    working-tree downloads) — see :func:`_raw_serve_response`.
+
     ``PUT``/``DELETE`` (and a ``GET`` on a directory) additionally serve the
     artifact data store when the host-set ``X-Twicc-Artifact-Doc`` header names
     a document this route serves — see :func:`_dispatch_data_request`.
@@ -2252,10 +2277,7 @@ async def file_raw(request, project_id, filepath, session_id=None):
     if error:
         return error
 
-    from twicc.artifacts.broker_html import is_artifact_document_request
-
-    as_document = is_artifact_document_request(request.headers.get("Sec-Fetch-Dest"))
-    response = await asyncio.to_thread(_serve_artifact_file, normalized, as_document=as_document)
+    response = await _raw_serve_response(request, normalized)
     if response is None:
         raise Http404("File not found")
     return response
@@ -2267,6 +2289,9 @@ async def standalone_file_raw(request, root_b64, filepath):
     Mounted at ``/api/file-raw/<root_b64>/<path:filepath>``. ``root_b64`` is the
     base64url-encoded confinement root (the Artifacts tab passes the session's
     artifacts dir). Confinement mirrors :func:`standalone_file_content`.
+
+    ``?download=1`` serves the file as an attachment instead (Artifacts tab
+    downloads) — see :func:`_raw_serve_response`.
 
     ``PUT``/``DELETE`` (and a ``GET`` on a directory) additionally serve the
     artifact data store when the host-set ``X-Twicc-Artifact-Doc`` header names
@@ -2309,10 +2334,7 @@ async def standalone_file_raw(request, root_b64, filepath):
         if handled is not None:
             return handled
 
-    from twicc.artifacts.broker_html import is_artifact_document_request
-
-    as_document = is_artifact_document_request(request.headers.get("Sec-Fetch-Dest"))
-    response = await asyncio.to_thread(_serve_artifact_file, normalized, as_document=as_document)
+    response = await _raw_serve_response(request, normalized)
     if response is None:
         raise Http404("File not found")
     return response
@@ -2879,6 +2901,150 @@ async def git_unstage_file(request, project_id, session_id=None):
 async def git_discard_file(request, project_id, session_id=None):
     """POST: discard unstaged changes (git restore)."""
     return await _git_file_action(request, project_id, session_id, "discard")
+
+
+# --- Git downloads ------------------------------------------------------
+#
+# The Git tab downloads a file as it stands at a given ref, or the patch that
+# ref carries for it. Both stream (see twicc.git — no size cap, unlike the
+# diff endpoints that feed the editor).
+
+
+def _git_download_response(stream, filename: str, content_type: str):
+    """Wrap a streamed git process into an attachment response."""
+    from django.http import FileResponse
+    from django.utils.cache import add_never_cache_headers
+
+    response = FileResponse(
+        stream,
+        content_type=content_type,
+        as_attachment=True,
+        filename=filename,
+    )
+    response["X-Content-Type-Options"] = "nosniff"
+    add_never_cache_headers(response)
+    response["CDN-Cache-Control"] = "no-store"
+    return response
+
+
+async def _resolve_git_download(request, project_id, session_id):
+    """Validate the shared query params of the two download endpoints.
+
+    Returns ``(git_directory, file_path, ref, None)`` or ``(None, None, None,
+    error_response)``. ``ref`` is ``"index"`` or a commit hash — it lands in a
+    revision spec, so anything else is refused.
+    """
+    from twicc.git import is_valid_commit_ref
+
+    if request.method not in ("GET", "HEAD"):
+        return None, None, None, HttpResponseNotAllowed(["GET", "HEAD"])
+
+    file_path = request.GET.get("path")
+    if not file_path:
+        return None, None, None, JsonResponse({"error": "Missing 'path' query parameter"}, status=400)
+    if "\n" in file_path or "\0" in file_path:
+        # ``cat-file --batch-check`` reads one spec per line, so a newline in the
+        # path would smuggle a second lookup past the confinement check.
+        return None, None, None, JsonResponse({"error": "Invalid 'path' parameter"}, status=400)
+
+    ref = request.GET.get("ref") or "index"
+    if ref != "index" and not is_valid_commit_ref(ref):
+        return None, None, None, JsonResponse({"error": "Invalid 'ref' parameter"}, status=400)
+
+    requested_git_dir = request.GET.get("git_dir")
+    git_directory = await _resolve_session_git_directory(
+        project_id, session_id, requested_git_dir=requested_git_dir
+    )
+    return git_directory, file_path, ref, None
+
+
+async def git_file_download(request, project_id, session_id=None):
+    """GET /api/projects/<id>/[sessions/<session_id>/]git-file-download/
+
+    Download a file's content as it stands at ``ref``.
+
+    Query params:
+        path: File path relative to the git root.
+        ref: ``index`` (default) or a commit hash.
+        git_dir: Optional git root, validated against the session's known roots.
+
+    At ``index`` the working-tree file is served, which is what the diff view
+    shows as "modified"; a file deleted from the working tree falls back to its
+    HEAD content. At a commit the blob comes from that commit, or from its
+    parent when the commit deleted the file.
+    """
+    from twicc.git import GitError, blob_exists_at_ref, stream_blob_at_ref, validate_path_in_repo
+
+    git_directory, file_path, ref, error = await _resolve_git_download(request, project_id, session_id)
+    if error:
+        return error
+
+    def resolve():
+        if ref == "index":
+            abs_path = validate_path_in_repo(git_directory, file_path)
+            if os.path.isfile(abs_path):
+                return "disk", abs_path
+            # Deleted from the working tree — serve the version it replaced.
+            if blob_exists_at_ref(git_directory, "HEAD", file_path):
+                return "git", "HEAD"
+            return None, None
+        if blob_exists_at_ref(git_directory, ref, file_path):
+            return "git", ref
+        # Deleted by that commit — its content only exists in the parent.
+        if blob_exists_at_ref(git_directory, f"{ref}^", file_path):
+            return "git", f"{ref}^"
+        return None, None
+
+    try:
+        source, located = await asyncio.to_thread(resolve)
+    except GitError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+
+    filename = os.path.basename(file_path)
+    if source == "disk":
+        # validate_path is not involved here: _resolve_session_git_directory
+        # already pinned the repo, and validate_path_in_repo (inside the git
+        # helpers) confines the path to it. Serve the working-tree file itself.
+        response = await asyncio.to_thread(_raw_file_response, located, as_attachment=True)
+        if response is None:
+            raise Http404("File not found")
+        return response
+    if source != "git":
+        raise Http404("File not found at this revision")
+
+    try:
+        stream = await asyncio.to_thread(stream_blob_at_ref, git_directory, located, file_path)
+    except GitError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+    return _git_download_response(stream, filename, _guess_raw_content_type(file_path))
+
+
+async def git_diff_download(request, project_id, session_id=None):
+    """GET /api/projects/<id>/[sessions/<session_id>/]git-diff-download/
+
+    Download the unified patch for one file, as a ``.patch`` attachment.
+
+    Query params:
+        path: File path relative to the git root.
+        ref: ``index`` (default, diff against HEAD) or a commit hash.
+        git_dir: Optional git root, validated against the session's known roots.
+    """
+    from twicc.git import GitError, stream_commit_patch, stream_index_patch
+
+    git_directory, file_path, ref, error = await _resolve_git_download(request, project_id, session_id)
+    if error:
+        return error
+
+    try:
+        if ref == "index":
+            stream = await asyncio.to_thread(stream_index_patch, git_directory, file_path)
+        else:
+            stream = await asyncio.to_thread(stream_commit_patch, git_directory, ref, file_path)
+    except GitError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+
+    filename = f"{os.path.basename(file_path)}.patch"
+    return _git_download_response(stream, filename, "text/x-patch")
 
 
 _WEEKLY_ACTIVITY_MAX_WEEKS = 52

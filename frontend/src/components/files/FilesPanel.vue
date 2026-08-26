@@ -1100,6 +1100,7 @@ defineExpose({ revealFile, setRootByPath, onArtifactFilesChanged, reloadAll })
                 :project-id="projectId"
                 :session-id="sessionId"
                 :is-draft="isDraft"
+                :root-restriction="rootRestriction"
                 :extra-query="optionsQuery()"
                 :show-refresh="true"
                 :is-mobile="isMobile"
