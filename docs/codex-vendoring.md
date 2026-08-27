@@ -11,12 +11,18 @@ The Codex provider relies on OpenAI's Codex Python SDK (`openai_codex`) plus the
 
 | Path                                         | Origin                                                                              |
 |----------------------------------------------|-------------------------------------------------------------------------------------|
-| `src/openai_codex/`                          | Vendored SDK source. Treat as read-only — edits land upstream, then we re-sync.     |
+| `src/openai_codex/`                          | Vendored SDK source. Treat as read-only — edits land upstream, then we re-sync — except the local patches listed below. |
 | `src/twicc/providers/codex/runtime.py`       | Downloads + caches the Codex CLI binary wheel from the GitHub Release into `~/.cache/twicc/codex-runtime/<version>/` (honours `$XDG_CACHE_HOME`). Holds the pinned `CODEX_VERSION` / `CODEX_RELEASE_TAG` and the 4 wheel sha256. |
 | `src/twicc/providers/codex/sdk_wrappers.py`  | TwiCC subclasses (`TwiccAsyncCodex`, `TwiccAsyncThread`) that expose `*_with_policy` methods so we can keep our 5 fine-grained presets — the upstream SDK now only exposes the coarse `ApprovalMode`. |
 | `src/twicc/providers/codex/bin.py`           | Single entry point: `resolve_bundled_binary()` (sync, non-downloading) + `make_codex_config()` (async, ensures the runtime and builds a `CodexConfig` that also puts `rg` on PATH). |
 
 The extracted tree is the whole `codex_cli_bin/` package (not just the `codex` binary), so its sibling resources ship too: `codex-resources/bwrap` (Linux sandbox helper) and `codex-resources/zsh` are found by `codex` relative to its own path, and `codex-path/rg` (ripgrep) is put on PATH by `make_codex_config` (the SDK only does that itself when `codex_bin` is auto-resolved, which is never our case).
+
+## Local patches
+
+Deliberate divergences from the pristine upstream tree. Re-apply them after every re-vendor (a `diff -rq <pristine> src/openai_codex` against the current version's pristine tree finds them all), and drop each one once upstream ships the fix.
+
+- `generated/v2_all.py` — `SubAgentActivityKind`: added `completed = "completed"` (2026-08-27, on 0.150.1). The 0.150.1 runtime emits `subAgentActivity` items with that kind, but the generated models at the same tag lag behind; without the patch, `thread/resume` validation (`ThreadResumeResponse`) rejects any rollout containing one and the session can no longer resume.
 
 ## Updating to a newer Codex version
 
@@ -31,6 +37,7 @@ Assumes the new version is published as a `rust-vX.Y.Z` GitHub tag/Release with 
    tar -xzf /tmp/codex.tar.gz -C /tmp/codex-sdk "codex-<new_tag>/sdk/python/src/openai_codex"
    mv /tmp/codex-sdk/codex-<new_tag>/sdk/python/src/openai_codex src/openai_codex
    ```
+   Then re-apply the [local patches](#local-patches) still needed at the new tag.
 3. Bump `CODEX_VERSION` and `CODEX_RELEASE_TAG` in `src/twicc/providers/codex/runtime.py`, and recompute the 4 wheel sha256:
    ```bash
    TAG=rust-vX.Y.Z; V=X.Y.Z
