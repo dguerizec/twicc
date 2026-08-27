@@ -2,12 +2,13 @@
 // IndexedDB wrapper for draft messages, draft sessions, and draft medias persistence
 
 const DB_NAME = 'twicc'
-const DB_VERSION = 6
+const DB_VERSION = 7
 const DRAFT_MESSAGES_STORE = 'draftMessages'
 const DRAFT_SESSIONS_STORE = 'draftSessions'
 const DRAFT_MEDIAS_STORE = 'draftMedias'
 const CODE_COMMENTS_STORE = 'codeComments'
 const INFLIGHT_SENDS_STORE = 'inflightSends'
+const PENDING_REQUEST_DRAFTS_STORE = 'pendingRequestDrafts'
 
 let dbPromise = null
 
@@ -55,6 +56,18 @@ export function getDb() {
                 // (see utils/inflightStorage.js)
                 if (!db.objectStoreNames.contains(INFLIGHT_SENDS_STORE)) {
                     db.createObjectStore(INFLIGHT_SENDS_STORE)
+                }
+                // Create pendingRequestDrafts store if not exists (v7) —
+                // in-progress answers to a pending request (question widget,
+                // elicitation form, deny reason, edited tool input). Compound
+                // key: a request id is already unique on its own, the session
+                // id makes a cross-session collision structurally impossible
+                // and scopes the per-session sweep.
+                // (see utils/pendingRequestDraftStorage.js)
+                if (!db.objectStoreNames.contains(PENDING_REQUEST_DRAFTS_STORE)) {
+                    db.createObjectStore(PENDING_REQUEST_DRAFTS_STORE, {
+                        keyPath: ['sessionId', 'requestId']
+                    })
                 }
             }
         })
@@ -340,4 +353,4 @@ export async function getAllDraftMedias() {
     })
 }
 
-export { CODE_COMMENTS_STORE, INFLIGHT_SENDS_STORE }
+export { CODE_COMMENTS_STORE, INFLIGHT_SENDS_STORE, PENDING_REQUEST_DRAFTS_STORE }

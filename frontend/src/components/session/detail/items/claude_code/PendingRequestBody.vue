@@ -25,6 +25,7 @@ import ElicitationFormBody from '../shared/ElicitationFormBody.vue'
 import ElicitationUrlBody from '../shared/ElicitationUrlBody.vue'
 import { getLanguageFromPath } from '../../../../../utils/languages'
 import { canStealFocus } from '../../../../../utils/focusGuard'
+import { usePendingRequestDraft } from '../../../../../composables/usePendingRequestDraft'
 
 // Per-tool overrides for JsonHumanView (display type or visibility).
 // Only keys that need an override (not auto-detected) are listed.
@@ -918,6 +919,66 @@ function handleCancelQuestions() {
         answers: {},
     })
 }
+
+// ============================================================================
+// Draft persistence
+// ============================================================================
+
+// Persist everything the user has typed or picked — question answers AND the
+// tool-approval side (deny reason, accepted permission suggestions, mode
+// picker, and the "Approve with changes" edited input, which can hold a whole
+// rewritten plan) — so a page reload doesn't throw it away.
+//
+// Gated off for the self-contained bodies: they run this same composable on
+// the same (session, request) key, so writing our own (empty) state here would
+// wipe theirs.
+usePendingRequestDraft({
+    sessionId: () => props.sessionId,
+    pendingRequest: () => props.pendingRequest,
+    isResponding: () => props.isResponding,
+    enabled: () => !selfContainedBody.value,
+    collect: () => {
+        // Multi-select answers live in a Set — structured clone would take it,
+        // but JSON (which is how the draft is sized and plain-ified) would not.
+        const selections = {}
+        for (const [key, value] of Object.entries(questionSelections)) {
+            selections[key] = value instanceof Set ? [...value] : value
+        }
+        return {
+            questionSelections: selections,
+            otherTexts: { ...otherTexts },
+            otherActive: { ...otherActive },
+            denyReason: denyReason.value,
+            showDenyReason: showDenyReason.value,
+            isEditing: isEditing.value,
+            editedToolInput: editedToolInput.value,
+            checkedSuggestions: [...checkedSuggestions],
+            // Map keys are suggestion indices; JSON turns them into strings.
+            editedSuggestions: Object.fromEntries(editedSuggestions),
+            selectedMode: selectedMode.value,
+        }
+    },
+    apply: (state) => {
+        for (const [key, value] of Object.entries(state.questionSelections || {})) {
+            questionSelections[key] = Array.isArray(value) ? new Set(value) : value
+        }
+        Object.assign(otherTexts, state.otherTexts || {})
+        Object.assign(otherActive, state.otherActive || {})
+        denyReason.value = state.denyReason || ''
+        showDenyReason.value = state.showDenyReason === true
+        // Edit mode without its edited copy would silently show the original
+        // input as editable — restore the pair or neither.
+        editedToolInput.value = state.editedToolInput ?? null
+        isEditing.value = state.isEditing === true && editedToolInput.value != null
+        checkedSuggestions.clear()
+        for (const index of state.checkedSuggestions || []) checkedSuggestions.add(index)
+        editedSuggestions.clear()
+        for (const [key, value] of Object.entries(state.editedSuggestions || {})) {
+            editedSuggestions.set(Number(key), value)
+        }
+        selectedMode.value = state.selectedMode ?? null
+    },
+})
 </script>
 
 <template>

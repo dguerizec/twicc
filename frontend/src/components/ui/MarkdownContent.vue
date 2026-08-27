@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, inject, watch, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { splitMarkdownBlocks, renderBlockToHtml, extractHeadings, hashString } from '../../utils/markdown.js'
+import { splitMarkdownBlocks, renderBlockToHtml, extractHeadings } from '../../utils/markdown.js'
+import { hashString } from '../../utils/hash.js'
 import { useSettingsStore } from '../../stores/settings'
 import { vHighlight } from '../../directives/vHighlight.js'
 import { toast } from '../../composables/useToast'

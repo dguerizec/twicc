@@ -20,6 +20,7 @@ import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { canStealFocus } from '../../../../../utils/focusGuard'
 import { usePendingRequestSubmitShortcut } from '../../../../../composables/usePendingRequestSubmitShortcut'
+import { usePendingRequestDraft } from '../../../../../composables/usePendingRequestDraft'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },
@@ -270,6 +271,30 @@ usePendingRequestSubmitShortcut((e) => {
     e.stopPropagation()
     submit()
 }, () => props.isResponding)
+
+// Persist the half-filled form so a page reload doesn't lose it.
+usePendingRequestDraft({
+    sessionId: () => props.sessionId,
+    pendingRequest: () => props.pendingRequest,
+    isResponding: () => props.isResponding,
+    collect: () => ({ values: { ...values.value } }),
+    apply: (state) => {
+        const stored = state.values
+        if (!stored) return
+        // Rebuild the null-prototype store field by field: property names come
+        // from an untrusted schema, and only the fields this schema declares
+        // may be restored (same guard as resetState).
+        const restored = Object.create(null)
+        for (const field of fields.value) {
+            // 'unsupported' fields hold no state at all (see resetState).
+            if (field.kind === 'unsupported') continue
+            restored[field.name] = Object.prototype.hasOwnProperty.call(stored, field.name)
+                ? stored[field.name]
+                : values.value[field.name]
+        }
+        values.value = restored
+    },
+})
 </script>
 
 <template>

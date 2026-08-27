@@ -29,6 +29,7 @@ import {
     getAllDraftMedias
 } from '../utils/draftStorage'
 import { saveInflightSend, deleteInflightSend, getAllInflightSends } from '../utils/inflightStorage'
+import { liveDraftKey, sweepPendingRequestDrafts } from '../utils/pendingRequestDraftStorage'
 import {
     processFile,
     mediasToSdkFormat,
@@ -4488,6 +4489,14 @@ export const useDataStore = defineStore('data', {
                 }
                 destroySessionBuffers(sessionId)
                 delete this.localState.streamingBlocks[sessionId]
+                // The process is gone, and so are its pending requests and the
+                // forms that carried them — drop whatever answers the user had
+                // started typing into them. Waiting for the next
+                // ``active_processes`` sweep would leave them behind for as
+                // long as this tab stays connected.
+                sweepPendingRequestDrafts(new Set(), Date.now(), sessionId).catch(err =>
+                    console.warn('Failed to sweep pending request drafts from IndexedDB:', err)
+                )
             } else {
                 this.processStates[sessionId] = {
                     state,
@@ -4553,6 +4562,11 @@ export const useDataStore = defineStore('data', {
          * @param {Array<{session_id: string, project_id: string, state: string, started_at?: number, state_changed_at?: number, memory?: number, session_title?: string, project_name?: string}>} processes
          */
         setActiveProcesses(processes) {
+            // Stamped before anything else: the draft sweep at the bottom uses
+            // it as the cut-off for "could this entry have been in the
+            // snapshot?".
+            const snapshotAt = Date.now()
+
             // Sessions showing synthetic/live UI before the rebuild. Neither
             // clearing streaming blocks nor ending an assistant turn recomputes
             // visual items on its own, so after a reconnect a session that was
@@ -4626,6 +4640,25 @@ export const useDataStore = defineStore('data', {
                     this.recomputeVisualItems(sid)
                 }
             }
+
+            // Garbage-collect the pending-request drafts (utils/
+            // pendingRequestDraftStorage.js). This snapshot is the only moment
+            // the client knows the COMPLETE set of live requests, so it is the
+            // authoritative sweep: after a backend restart every process is
+            // gone, the snapshot is empty, and the whole store is dropped.
+            // ``snapshotAt`` keeps a draft written for a request that appeared
+            // after the snapshot was built — it cannot be in ``liveKeys``, but
+            // it is not stale either.
+            const liveKeys = new Set()
+            for (const p of processes) {
+                if (p.state === 'dead') continue
+                for (const request of p.pending_requests || []) {
+                    liveKeys.add(liveDraftKey(p.session_id, request.request_id))
+                }
+            }
+            sweepPendingRequestDrafts(liveKeys, snapshotAt).catch(err =>
+                console.warn('Failed to sweep pending request drafts from IndexedDB:', err)
+            )
         },
 
         // ── Streaming blocks ─────────────────────────────────────────────

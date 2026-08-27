@@ -25,6 +25,7 @@ import { computed, nextTick, onMounted, ref, useId, watch } from 'vue'
 import AppTooltip from '../../../../ui/AppTooltip.vue'
 import { canStealFocus } from '../../../../../utils/focusGuard'
 import { usePendingRequestSubmitShortcut } from '../../../../../composables/usePendingRequestSubmitShortcut'
+import { usePendingRequestDraft } from '../../../../../composables/usePendingRequestDraft'
 
 const props = defineProps({
     pendingRequest: { type: Object, required: true },
@@ -215,6 +216,32 @@ usePendingRequestSubmitShortcut((e) => {
     e.stopPropagation()
     submit()
 }, () => props.isResponding)
+
+// Persist the in-progress answers so a page reload doesn't lose them. Secret
+// answers are never written to disk (the native tool never sets ``isSecret``,
+// but the defensive branch exists in the template — so it exists here too).
+usePendingRequestDraft({
+    sessionId: () => props.sessionId,
+    pendingRequest: () => props.pendingRequest,
+    isResponding: () => props.isResponding,
+    collect: () => {
+        const texts = {}
+        for (const [idx, text] of Object.entries(otherTexts.value)) {
+            if (questions.value[idx]?.isSecret) continue
+            texts[idx] = text
+        }
+        return {
+            selections: { ...selections.value },
+            otherTexts: texts,
+            otherActive: { ...otherActive.value },
+        }
+    },
+    apply: (state) => {
+        selections.value = { ...state.selections }
+        otherTexts.value = { ...state.otherTexts }
+        otherActive.value = { ...state.otherActive }
+    },
+})
 </script>
 
 <template>

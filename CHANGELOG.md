@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Codex Subagents v2** — Subagents spawned by Codex's new multi-agent mode are now visible (their prompt stays hidden, encrypted by OpenAI).
 - **Download a file** — In the Files, Artifacts and Git tabs, a file's menu can now save it to your device — or, in Git, its changes as a patch.
 - **Buttons on code blocks** — Wherever Markdown is displayed, each code block can be copied, or have its long lines wrapped. A Markdown block can also be shown rendered.
+- **Answers to questions survive a reload** — What you picked or typed when an agent asks you questions is kept if the page reloads before you submit (as long as the agent is still running).
 - **Attachments on their own** — In an ongoing conversation, you can now send images or files without writing any text.
 
 ### Changed
