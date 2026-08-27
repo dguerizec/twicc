@@ -36,8 +36,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-CODEX_VERSION = "0.149.1"
-CODEX_RELEASE_TAG = "rust-v0.149.1"
+CODEX_VERSION = "0.150.1"
+CODEX_RELEASE_TAG = "rust-v0.150.1"
 _RELEASE_URL = f"https://github.com/openai/codex/releases/download/{CODEX_RELEASE_TAG}"
 
 # our platform key -> (wheel filename, sha256 of the wheel)
@@ -46,19 +46,19 @@ _RELEASE_URL = f"https://github.com/openai/codex/releases/download/{CODEX_RELEAS
 _WHEELS: dict[str, tuple[str, str]] = {
     "manylinux_2_17_x86_64": (
         f"openai_codex_cli_bin-{CODEX_VERSION}-py3-none-manylinux_2_17_x86_64.whl",
-        "1b5cf7f7aaeb266d17a66eb2c7324a9e51c3e8ce0c3c6a73d0a8d55d7f891982",
+        "a0c4670d21372f7c98bee3dc8af831e5fca1eb21d429ddeb40941b6ed4e8b3e4",
     ),
     "manylinux_2_17_aarch64": (
         f"openai_codex_cli_bin-{CODEX_VERSION}-py3-none-manylinux_2_17_aarch64.whl",
-        "005adcc741331d2a4a0580455571f0b44500ac92c8ceae88ee337af03c8ad8c6",
+        "e5de36c2124fd167f79f6003ba82ee70f4d103676eda769b03818b9af24065d5",
     ),
     "macosx_11_0_arm64": (
         f"openai_codex_cli_bin-{CODEX_VERSION}-py3-none-macosx_11_0_arm64.whl",
-        "f53a347b01e919035999a54d03fccfd8aa79f6a964a37aeb82308394d2fce820",
+        "571e812c3db5d314a83ab26815de194edab97a39c68c52413daa274296dd9bda",
     ),
     "macosx_10_9_x86_64": (
         f"openai_codex_cli_bin-{CODEX_VERSION}-py3-none-macosx_10_9_x86_64.whl",
-        "a6f553b75ce7f628b5e2c7fb58e6faebd856b7c3c7aa3abd4e2d1082d3021818",
+        "56fa50785d9fe2c68f652aeb88ad5d9b2a3a1c0c899794043cab489fd126cc7d",
     ),
 }
 
