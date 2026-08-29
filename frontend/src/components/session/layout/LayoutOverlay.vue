@@ -40,30 +40,35 @@ function onShow(event) { emit('select', event.detail.name) }
     <div class="overlay-layer">
         <div class="overlay-backdrop" @click="emit('close')"></div>
         <div class="layout-overlay" :class="overlay.edge" :style="style" @click.stop>
-            <TabBar class="overlay-tabnav" :active="activeTabId" @wa-tab-show.stop="onShow">
-                <wa-tab v-for="t in overlay.tabs" :key="t.id" slot="nav" :panel="t.id" class="overlay-tab">
-                    <SessionTabLink :href="tabHref(t.id)">
-                        <wa-icon v-if="t.icon" :name="t.icon" class="overlay-tab-icon"></wa-icon>
-                        <span>{{ t.label }}</span>
-                    </SessionTabLink>
-                    <TabPlacementMenu
-                        :tab-id="t.id"
-                        :current="dockOf(t.id)"
-                        @place="(dest) => emit('place', t.id, dest)"
-                    />
-                </wa-tab>
-                <wa-button
-                    slot="nav"
-                    class="overlay-close reduced-height"
-                    appearance="plain"
-                    size="small"
-                    title="Close"
-                    aria-label="Close overlay"
-                    @click.stop="emit('close')"
-                >
-                    <wa-icon name="xmark"></wa-icon>
-                </wa-button>
-            </TabBar>
+            <!-- Flex row [scrollable tabs][fixed close], like DockRegion's bar: the close button
+                 must stay visible while the tab strip scrolls, and never sit over a tab. -->
+            <div class="overlay-topbar">
+                <TabBar class="overlay-tabnav" :active="activeTabId" @wa-tab-show.stop="onShow">
+                    <wa-tab v-for="t in overlay.tabs" :key="t.id" slot="nav" :panel="t.id" class="overlay-tab">
+                        <SessionTabLink :href="tabHref(t.id)">
+                            <wa-icon v-if="t.icon" :name="t.icon" class="overlay-tab-icon"></wa-icon>
+                            <span>{{ t.label }}</span>
+                        </SessionTabLink>
+                        <TabPlacementMenu
+                            :tab-id="t.id"
+                            :current="dockOf(t.id)"
+                            @place="(dest) => emit('place', t.id, dest)"
+                        />
+                    </wa-tab>
+                </TabBar>
+                <div class="overlay-controls">
+                    <wa-button
+                        class="overlay-close reduced-height"
+                        appearance="plain"
+                        size="small"
+                        title="Close"
+                        aria-label="Close overlay"
+                        @click.stop="emit('close')"
+                    >
+                        <wa-icon name="xmark"></wa-icon>
+                    </wa-button>
+                </div>
+            </div>
             <div ref="bodyRef" class="overlay-body"></div>
         </div>
     </div>
@@ -99,10 +104,24 @@ function onShow(event) { emit('select', event.detail.name) }
 .layout-overlay.left { border-right: var(--overlay-border); }
 .layout-overlay.right { border-left: var(--overlay-border); }
 .layout-overlay.bottom { border-top: var(--overlay-border); }
-.overlay-tabnav {
+.overlay-topbar {
     flex: 0 0 auto;
     min-width: 0;
+    display: flex;
+    align-items: stretch;
     overflow: hidden;
+}
+.overlay-tabnav {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+}
+/* Continues the tabs' track under the fixed close button (same tokens as WA's track). */
+.overlay-controls {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    border-bottom: var(--divider-size) solid var(--wa-color-neutral-fill-normal);
 }
 .overlay-tabnav::part(body) {
     display: none;
@@ -118,7 +137,6 @@ function onShow(event) { emit('select', event.detail.name) }
     font-size: 0.85em;
 }
 .overlay-close {
-    margin-inline-start: auto;
     --wa-form-control-padding-inline: 0.3em;
 }
 .overlay-body {

@@ -1289,6 +1289,39 @@ async function syncCenterBarTitle() {
 }
 watch([hasDocks, isCenterMaximized, sessionTabsRef], syncCenterBarTitle, { immediate: true })
 
+// ─── Fixed nav-cluster geometry (see the cluster's template comment) ─────────
+// One observer, two targets: the cluster (its width changes with hasDocks and menu content) and
+// the bar container (its height follows fonts/zoom). Width → reserved ::part(nav) margin;
+// height → the cluster's own height, so its bottom border lands on the tabs' track.
+const layoutNavClusterEl = ref(null)
+const centerNavClusterWidth = ref(0)
+const centerNavBarHeight = ref(0)
+let centerNavContainerEl = null
+const centerNavObserver = new ResizeObserver(measureCenterNav)
+function measureCenterNav() {
+    // getBoundingClientRect, NOT offsetWidth/offsetHeight: those round to integers, and the bar's
+    // real height is usually fractional (em paddings × font size, zoom, mobile DPR) — a rounded
+    // cluster height lands its bottom border up to 1px off the tabs' track.
+    centerNavClusterWidth.value = layoutNavClusterEl.value?.getBoundingClientRect().width || 0
+    centerNavBarHeight.value = centerNavContainerEl?.getBoundingClientRect().height || 0
+}
+watch(layoutNavClusterEl, (el, old) => {
+    if (old) centerNavObserver.unobserve(old)
+    if (el) centerNavObserver.observe(el)
+    measureCenterNav()
+})
+watch(sessionTabsRef, async (bar) => {
+    const group = bar?.el
+    if (group?.updateComplete) await group.updateComplete
+    const nav = group?.shadowRoot?.querySelector('[part~="nav"]') || null
+    if (nav === centerNavContainerEl) return
+    if (centerNavContainerEl) centerNavObserver.unobserve(centerNavContainerEl)
+    if (nav) centerNavObserver.observe(nav)
+    centerNavContainerEl = nav
+    measureCenterNav()
+}, { immediate: true })
+onBeforeUnmount(() => centerNavObserver.disconnect())
+
 // ─── Layout actions on the focused pane (keyboard shortcuts + palette) ───────
 // These drive the SAME handlers as the on-screen maximize / minimize / restore
 // buttons, targeting the region that holds the focused (route) tab — i.e. the
@@ -2168,6 +2201,7 @@ onBeforeUnmount(() => {
             @dblclick="onCenterTabDblClick"
             class="session-tabs"
             :class="{ 'tabnav-dimmed': !isCenterRouteActive, 'tabbar-maximizable': hasDocks }"
+            :style="{ '--layout-nav-cluster-w': `${centerNavClusterWidth}px` }"
         >
             <!-- Tab navigation -->
             <wa-tab slot="nav" panel="main"
@@ -2235,29 +2269,6 @@ onBeforeUnmount(() => {
                 <TabPlacementMenu v-if="showCenterPlacementArrows" :tab-id="tab.id" current="center" @place="(dest) => layout.place(tab.id, dest)" />
             </wa-tab>
 
-            <!-- Right-aligned nav cluster: [Layout menu ▾] [Maximize]. A real-box wrapper carries the
-                 auto-margin (a wa-dropdown host is display:contents, so a margin on it is ignored).
-                 The layout menu (Save + Select) shows whenever docking is available; Maximize only
-                 when not single pane. Hidden entirely in the mobile tab strip — no layout there. -->
-            <div v-if="!layoutTabsMode" slot="nav" class="layout-nav-cluster">
-                <LayoutMenu :has-docks="hasDocks" :scope-defaults="layoutScopeDefaults" @save="onOpenSaveLayout" @select="onSelectLayout" @manage="onManageLayouts" />
-
-                <!-- While maximized the button wears a loud brand-accent fill (the docks are hidden and
-                     this is the only way back); plain otherwise so the maximize affordance stays quiet. -->
-                <wa-button
-                    v-if="hasDocks"
-                    class="layout-winbtn reduced-height"
-                    :variant="isCenterMaximized ? 'brand' : 'neutral'"
-                    :appearance="isCenterMaximized ? 'accent' : 'plain'"
-                    size="small"
-                    :title="isCenterMaximized ? 'Restore (Alt+Shift+Enter)' : 'Maximize main area (Alt+Shift+Enter)'"
-                    :aria-label="isCenterMaximized ? 'Restore' : 'Maximize main area'"
-                    @click.stop="isCenterMaximized ? onLayoutRestoreMaximized() : onCenterMaximize()"
-                >
-                    <wa-icon :name="isCenterMaximized ? 'compress' : 'expand'"></wa-icon>
-                </wa-button>
-            </div>
-
             <!-- Main session panel -->
             <wa-tab-panel name="main">
                 <SessionItemsList
@@ -2310,6 +2321,39 @@ onBeforeUnmount(() => {
                 <div :ref="centerTargetSetters.browser" class="layout-center-target"></div>
             </wa-tab-panel>
         </TabBar>
+
+        <!-- Fixed nav cluster: [Layout menu ▾] [Maximize]. NOT slotted into the tab strip — the
+             strip's nav scrolls, and these must stay visible without covering a tab. A sibling of
+             the TabBar, absolutely positioned over the bar's right end within SessionLayout's
+             .center-slot; the cluster's measured width is reserved as ::part(nav) margin so the
+             tabs and scroll chevrons stop before it, and the bar's measured height sizes it so
+             its bottom border continues the tabs' track. The layout menu (Save + Select) shows
+             whenever docking is available; Maximize only when not single pane. Hidden entirely in
+             the mobile tab strip — no layout there. -->
+        <div
+            v-if="!layoutTabsMode"
+            ref="layoutNavClusterEl"
+            class="layout-nav-cluster"
+            :class="{ 'tabnav-dimmed': !isCenterRouteActive }"
+            :style="centerNavBarHeight ? { height: `${centerNavBarHeight}px` } : null"
+        >
+            <LayoutMenu :has-docks="hasDocks" :scope-defaults="layoutScopeDefaults" @save="onOpenSaveLayout" @select="onSelectLayout" @manage="onManageLayouts" />
+
+            <!-- While maximized the button wears a loud brand-accent fill (the docks are hidden and
+                 this is the only way back); plain otherwise so the maximize affordance stays quiet. -->
+            <wa-button
+                v-if="hasDocks"
+                class="layout-winbtn reduced-height"
+                :variant="isCenterMaximized ? 'brand' : 'neutral'"
+                :appearance="isCenterMaximized ? 'accent' : 'plain'"
+                size="small"
+                :title="isCenterMaximized ? 'Restore (Alt+Shift+Enter)' : 'Maximize main area (Alt+Shift+Enter)'"
+                :aria-label="isCenterMaximized ? 'Restore' : 'Maximize main area'"
+                @click.stop="isCenterMaximized ? onLayoutRestoreMaximized() : onCenterMaximize()"
+            >
+                <wa-icon :name="isCenterMaximized ? 'compress' : 'expand'"></wa-icon>
+            </wa-button>
+        </div>
         </SessionLayout>
 
         <!-- Session not found (backend returned 404) -->
@@ -2527,14 +2571,28 @@ onBeforeUnmount(() => {
     overflow: hidden;
 }
 
-/* Right-aligned tab-nav cluster: [Select] [Save] [Maximize]. A real-box wrapper carries the
-   auto-margin so the whole cluster is pushed to the far right of the nav (a wa-dropdown host is
-   display:contents, so a margin on it has no effect — hence the wrapper). */
+/* Fixed tab-nav cluster: absolutely positioned over the bar's right end (containing block:
+   SessionLayout's .center-slot), outside the nav scroller so it never scrolls away with the
+   tabs. Height is measured (see measureCenterNav); the bottom border continues the tabs' track
+   with the same tokens WA uses. Dimmed with the bar when the center doesn't own the route. */
 .layout-nav-cluster {
-    margin-inline-start: auto;
+    position: absolute;
+    top: 0;
+    inset-inline-end: 0;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     gap: var(--wa-space-3xs);
+    border-bottom: var(--divider-size) solid var(--wa-color-neutral-fill-normal);
+    transition: opacity var(--wa-transition-fast, 0.15s) var(--wa-transition-easing, ease);
+}
+.layout-nav-cluster.tabnav-dimmed {
+    opacity: 0.5;
+}
+/* Reserve the cluster's width at the end of the nav container: the tab strip (and its end
+   scroll chevron, positioned at the container's edge) stops before the fixed cluster. */
+.session-tabs::part(nav) {
+    margin-inline-end: var(--layout-nav-cluster-w, 0px);
 }
 .layout-winbtn {
     --wa-form-control-padding-inline: 0.3em;

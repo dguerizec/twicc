@@ -99,7 +99,11 @@ function onEmptyBarDblClick(event) {
 
 <template>
     <div class="dock-region" :class="region.kind" :data-rid="region.id" :style="style">
-        <TabBar class="dock-tabnav" :class="{ 'tabnav-dimmed': !isRouteActive }" :active="activeTabId" :title="maximized ? 'Double-click to restore' : 'Double-click to maximize'" @wa-tab-show.stop="onShow" @click="onEmptyBarClick" @dblclick="onEmptyBarDblClick">
+        <!-- Flex row [scrollable tabs][fixed controls], like TerminalPanel's actions bar: the
+             window buttons must stay visible while the tab strip scrolls, and never sit over a
+             tab — they live beside the scroll area, not inside it. -->
+        <div class="dock-topbar" :class="{ 'tabnav-dimmed': !isRouteActive }" :title="maximized ? 'Double-click to restore' : 'Double-click to maximize'">
+        <TabBar class="dock-tabnav" :active="activeTabId" @wa-tab-show.stop="onShow" @click="onEmptyBarClick" @dblclick="onEmptyBarDblClick">
             <!-- Clicking a tab header activates it: focuses its filter + claims the route (onTabClick).
                  wa-tab-show handles switching to a *different* tab; the claim also covers clicking the
                  tab that is ALREADY this group's active one (no wa-tab-show fires then) while another
@@ -120,12 +124,13 @@ function onEmptyBarDblClick(event) {
                     @place="(dest) => emit('place', t.id, dest)"
                 />
             </wa-tab>
+        </TabBar>
+        <div class="dock-controls" @click="onEmptyBarClick" @dblclick="onEmptyBarDblClick">
             <!-- Maximized cue: the restore button is the only exit, and the rest of the layout is gone —
                  so it wears a loud brand-accent fill (not the plain min/max styling) to flag "you are
                  maximized, click here to come back" against the otherwise-neutral bar. -->
             <wa-button
                 v-if="maximized"
-                slot="nav"
                 class="dock-winbtn dock-restore reduced-height"
                 variant="brand"
                 appearance="accent"
@@ -138,7 +143,6 @@ function onEmptyBarDblClick(event) {
             </wa-button>
             <template v-else>
                 <wa-button
-                    slot="nav"
                     class="dock-winbtn dock-minimize reduced-height"
                     appearance="plain"
                     size="small"
@@ -149,7 +153,6 @@ function onEmptyBarDblClick(event) {
                     <wa-icon name="window-minimize"></wa-icon>
                 </wa-button>
                 <wa-button
-                    slot="nav"
                     class="dock-winbtn dock-maximize reduced-height"
                     appearance="plain"
                     size="small"
@@ -160,7 +163,8 @@ function onEmptyBarDblClick(event) {
                     <wa-icon name="expand"></wa-icon>
                 </wa-button>
             </template>
-        </TabBar>
+        </div>
+        </div>
         <div ref="bodyRef" class="dock-body" @click.capture="onBodyClick"></div>
     </div>
 </template>
@@ -202,21 +206,40 @@ function onEmptyBarDblClick(event) {
 .dock-region[data-rid="right-bottom"] { border-top: var(--dock-border); }
 .dock-region[data-rid="bottom-right"] { border-left: var(--dock-border); }
 
-/* TabBar used only for its nav — hide its (empty) body, like TerminalPanel */
-.dock-tabnav {
+/* The bar row: the tab strip takes the space and scrolls; the window buttons keep their own
+   fixed zone at the end. Stretch aligns the controls' bottom border with the strip's track. */
+.dock-topbar {
     flex: 0 0 auto;
     min-width: 0;
+    display: flex;
+    align-items: stretch;
     overflow: hidden;
     transition: opacity var(--wa-transition-fast, 0.15s) var(--wa-transition-easing, ease);
 }
-/* Active-region cue: a dock that doesn't own the route dims its tab bar (this nav-only group; the
+/* Active-region cue: a dock that doesn't own the route dims its tab bar (nav + window buttons; the
    panel content lives in .dock-body and stays full opacity), so the region holding the URL's tab
    reads as the active one among the several that can show content at once. */
-.dock-tabnav.tabnav-dimmed {
+.dock-topbar.tabnav-dimmed {
     opacity: 0.5;
+}
+/* TabBar used only for its nav — hide its (empty) body, like TerminalPanel */
+.dock-tabnav {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
 }
 .dock-tabnav::part(base) {
     overflow: hidden;
+}
+/* Continues the tabs' track (and the double-click affordance) under the fixed buttons, so the
+   bar reads as one piece. Same tokens as WA's track: TabBar's --track-width is --divider-size,
+   the color is WA's default. */
+.dock-controls {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    border-bottom: var(--divider-size) solid var(--wa-color-neutral-fill-normal);
+    cursor: pointer;
 }
 /* The bar is double-clickable to maximize/restore (empty area + tabs); pointer signals it. The
    min/max/restore buttons keep their own cursor + richer titles. */
@@ -241,11 +264,6 @@ function onEmptyBarDblClick(event) {
 }
 .dock-winbtn {
     --wa-form-control-padding-inline: 0.3em;
-}
-/* The leading window button — minimize (then maximize), or restore when maximized — pushes the whole
-   group to the far right. Keyed on first-of-type so it follows whichever button comes first. */
-.dock-winbtn:first-of-type {
-    margin-inline-start: auto;
 }
 
 .dock-body {
