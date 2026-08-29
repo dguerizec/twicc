@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Messages between sessions** — A session that writes to another one is now always named, instead of its message looking like it came from you.
 - **Quoted text in a message** — Comments on a selection, quotes, and messages from another session now stand out as their own block instead of blending into the text around them.
 - **Comments on a selection** — On desktop, the selection comment widget in the conversation puts the cursor back in the message box when you add your comment, so you can send it right away.
-- **Claude Agent SDK** — Upgrade from 0.2.130 to 0.2.147 (bundled Claude Code CLI: 2.1.222 → 2.1.250)
+- **Claude Agent SDK** — Upgrade from 0.2.130 to 0.2.148 (bundled Claude Code CLI: 2.1.222 → 2.1.251)
 - **Codex runtime** — Update from v0.146.0 to v0.150.1.
 
 ### Fixed
