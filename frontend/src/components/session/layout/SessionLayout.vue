@@ -296,8 +296,91 @@ function clearLongPress() {
     if (pendingTabDrag) pendingTabDrag.timer = null
 }
 
+// ---- Touch pan on the tab strips ----
+// `touch-action: none` on the tab links reserves the long press for dragging, but it also kills the
+// browser's native horizontal pan on the very surface a finger naturally lands on (the icon/name) —
+// and the strip's own padding is too thin to aim for. So the pan is reimplemented: a touch/pen
+// gesture that moves mostly horizontally BEFORE the long press arms the drag pans the strip's
+// scroller by hand (wa-tab-group's shadow `.nav`, the same element WA's chevrons drive), with a
+// small fling on release. Vertical movement keeps cancelling the pending drag as before. Mouse is
+// untouched: it arms the drag on any direction and already pans via TabBar's wheel handler.
+const PAN_FLING_DECAY = 0.94        // per-16ms multiplier on the fling velocity
+const PAN_FLING_MIN_VELOCITY = 0.02 // px/ms below which the fling stops
+
+let tabPan = null
+let panInertiaFrame = 0
+
+// The scrollable nav of the tab strip the gesture started in. Gutter chips resolve to null
+// (their rails don't scroll), which simply keeps today's cancel behaviour for them.
+function navScrollerForEvent(event) {
+    const tab = event.target instanceof Element ? event.target.closest('wa-tab[slot="nav"]') : null
+    const group = tab?.parentElement
+    if (!group?.matches?.('.session-tabs, .dock-tabnav, .overlay-tabnav')) return null
+    return group.shadowRoot?.querySelector('.nav') || null
+}
+
+function stopPanInertia() {
+    if (panInertiaFrame) cancelAnimationFrame(panInertiaFrame)
+    panInertiaFrame = 0
+}
+
+function startPanInertia(scroller, velocity) {
+    let v = -velocity // finger velocity → content moves the opposite way
+    let last = performance.now()
+    const step = (now) => {
+        panInertiaFrame = 0
+        const dt = now - last
+        last = now
+        const before = scroller.scrollLeft
+        scroller.scrollLeft = before + v * dt
+        v *= PAN_FLING_DECAY ** (dt / 16)
+        // Stop when the energy is spent or the scroller hit an edge (scrollLeft self-clamps).
+        if (Math.abs(v) < PAN_FLING_MIN_VELOCITY || scroller.scrollLeft === before) return
+        panInertiaFrame = requestAnimationFrame(step)
+    }
+    panInertiaFrame = requestAnimationFrame(step)
+}
+
+// Promote the pending press into a pan: from here the gesture only scrolls, never drags.
+function startTabPan(event) {
+    const { pointerId, scroller } = pendingTabDrag
+    clearLongPress()
+    pendingTabDrag = null
+    tabPan = {
+        pointerId,
+        scroller,
+        lastX: event.clientX,
+        lastT: event.timeStamp,
+        velocity: 0,
+    }
+}
+
+function onTabPanMove(event) {
+    const dx = event.clientX - tabPan.lastX
+    tabPan.scroller.scrollLeft -= dx
+    const dt = event.timeStamp - tabPan.lastT
+    // Exponential smoothing over the recent moves, so the release picks up the gesture's
+    // current speed rather than one noisy last sample.
+    if (dt > 0) tabPan.velocity = 0.8 * (dx / dt) + 0.2 * tabPan.velocity
+    tabPan.lastX = event.clientX
+    tabPan.lastT = event.timeStamp
+    event.preventDefault()
+}
+
+function finishTabPan({ fling }) {
+    const pan = tabPan
+    tabPan = null
+    removeTabPointerListeners()
+    // The finger crossed the move tolerance to get here: the release must not also click the
+    // tab under it.
+    suppressClickUntil = Date.now() + 500
+    if (fling && Math.abs(pan.velocity) >= PAN_FLING_MIN_VELOCITY) startPanInertia(pan.scroller, pan.velocity)
+}
+
 function onTabPointerDown(event) {
     if (pendingTabDrag || tabDrag.value || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+    if (tabPan) return
+    stopPanInertia() // a new touch grabs a flinging strip, as native scrolling would
     const tab = sourceTabForEvent(event)
     if (!tab) return
     pendingTabDrag = {
@@ -308,6 +391,7 @@ function onTabPointerDown(event) {
         lastX: event.clientX,
         lastY: event.clientY,
         tab,
+        scroller: navScrollerForEvent(event),
         timer: null,
     }
     addTabPointerListeners()
@@ -420,15 +504,28 @@ function updateTabDrop(clientX, clientY) {
 }
 
 function onTabPointerMove(event) {
+    if (tabPan) {
+        if (event.pointerId === tabPan.pointerId) onTabPanMove(event)
+        return
+    }
     if (!pendingTabDrag || event.pointerId !== pendingTabDrag.pointerId) return
     pendingTabDrag.lastX = event.clientX
     pendingTabDrag.lastY = event.clientY
     if (!tabDrag.value) {
-        const distance = Math.hypot(event.clientX - pendingTabDrag.x, event.clientY - pendingTabDrag.y)
+        const dx = event.clientX - pendingTabDrag.x
+        const dy = event.clientY - pendingTabDrag.y
+        const distance = Math.hypot(dx, dy)
         if (pendingTabDrag.pointerType === 'mouse') {
             if (distance >= MOUSE_DRAG_DISTANCE) startTabDrag(event.clientX, event.clientY)
         } else if (distance > TOUCH_MOVE_TOLERANCE) {
-            cancelTabPointer()
+            // Early movement decides the touch gesture: mostly horizontal over a scrollable
+            // strip → pan it; anything else → not a drag, give the pointer up.
+            const scroller = pendingTabDrag.scroller
+            if (Math.abs(dx) > Math.abs(dy) && scroller && scroller.scrollWidth > scroller.clientWidth) {
+                startTabPan(event)
+            } else {
+                cancelTabPointer()
+            }
             return
         }
     }
@@ -459,6 +556,10 @@ function finishTabDrag() {
 }
 
 function onTabPointerUp(event) {
+    if (tabPan) {
+        if (event.pointerId === tabPan.pointerId) finishTabPan({ fling: true })
+        return
+    }
     if (!pendingTabDrag || event.pointerId !== pendingTabDrag.pointerId) return
     const dragState = tabDrag.value
     const drop = activeDrop.value
@@ -473,6 +574,10 @@ function onTabPointerUp(event) {
     finishTabDrag()
 }
 function cancelTabPointer(event) {
+    if (tabPan) {
+        if (event?.pointerId == null || event.pointerId === tabPan.pointerId) finishTabPan({ fling: false })
+        return
+    }
     if (event?.pointerId != null && pendingTabDrag && event.pointerId !== pendingTabDrag.pointerId) return
     finishTabDrag()
 }
@@ -490,7 +595,7 @@ function onCapturedClick(event) {
     event.stopImmediatePropagation()
 }
 function onCapturedContextMenu(event) {
-    if (tabDrag.value || (pendingTabDrag && pendingTabDrag.pointerType !== 'mouse')) event.preventDefault()
+    if (tabDrag.value || tabPan || (pendingTabDrag && pendingTabDrag.pointerType !== 'mouse')) event.preventDefault()
 }
 function onNativeDragStart(event) {
     if (sourceTabForEvent(event)) event.preventDefault()
@@ -511,14 +616,17 @@ function insertionStyle(indicator) {
     }
 }
 
-onBeforeUnmount(cancelTabPointer)
+onBeforeUnmount(() => {
+    cancelTabPointer()
+    stopPanInertia()
+})
 </script>
 
 <template>
     <div
         ref="sessionLayoutEl"
         class="session-layout"
-        :class="[rootClasses, { resizing: draggingId !== null, 'tab-drag-active': !!tabDrag }]"
+        :class="[rootClasses, { resizing: draggingId !== null, 'tab-drag-active': !!tabDrag, 'tab-drag-disabled': tabDragDisabled }]"
         @pointerdown.capture="onTabPointerDown"
         @click.capture="onCapturedClick"
         @contextmenu.capture="onCapturedContextMenu"
@@ -655,6 +763,13 @@ onBeforeUnmount(cancelTabPointer)
 .session-layout :deep(.g-chip) {
     touch-action: none;
     -webkit-user-drag: none;
+}
+/* No drag in the mobile tab strip (see tabDragDisabled) — nothing reserves the touch gesture
+   anymore, so hand the links back to the browser: a finger on a tab's icon/name pans the strip
+   natively (overflow-x on wa-tab-group's .nav), with inertia. Without this, `none` above would
+   leave the strip with NEITHER drag NOR touch pan. */
+.session-layout.tab-drag-disabled :deep(.session-tab-link) {
+    touch-action: auto;
 }
 .tab-drop-layer {
     position: absolute;

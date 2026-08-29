@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Sessions stuck as working** — A Claude session no longer stays shown as working once it has finished replying and is waiting for you.
 - **Text jumping while a reply streams** — The activity line below a reply no longer appears and disappears on short pauses, so the text stops jumping as you read it.
 - **Scroll position when switching sessions** — Coming back to a session returns you where you were.
+- **Tab bars on touch** — Swiping a session's tab bars with a finger scrolls them again, instead of only the arrows working.
 - **Navigation inside a session** — Moving between a session's tabs no longer sends the sidebar to another project or workspace.
 - **Codex sessions spawned by an agent** — They can now put their questions in the conversation instead of a click-only dialog, so a hidden one no longer gets stuck.
 - **Buttons in notifications** — In light mode, they no longer blend into the notification's background.
