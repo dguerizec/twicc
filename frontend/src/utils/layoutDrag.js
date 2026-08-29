@@ -68,9 +68,8 @@ function edgeExtent(render, edge, fallback, max) {
  */
 export function layoutDropZones(width, height, render) {
     if (!(width > 0 && height > 0)) return []
-    if (render?.mode === 'tabs') {
-        return [{ dockId: 'center', x: 0, y: 0, w: width, h: height }]
-    }
+    // The mobile tab strip has no docks and no layout affordances: no target, so no drag at all.
+    if (render?.mode === 'tabs') return []
 
     const baseSide = clamp(width * 0.2, 112, Math.max(112, width * 0.3))
     const baseBottom = clamp(height * 0.24, 108, Math.max(108, height * 0.34))

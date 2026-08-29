@@ -6,7 +6,7 @@
 // Layout-only interactions (place, minimize, restore, gutter actions, overlay) are dispatched
 // straight to the composable's actions. Tab selection is routed, so it bubbles up as
 // 'select-tab' for the parent (which owns the route).
-import { computed, ref, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import DockRegion from './DockRegion.vue'
 import DockGutter from './DockGutter.vue'
 import LayoutOverlay from './LayoutOverlay.vue'
@@ -266,8 +266,16 @@ function eventHitsDragControl(event) {
     ))
 }
 
+// The mobile tab strip has no layout: every placement affordance is hidden there (placement arrows,
+// nav cluster, layout commands) and the resolver folds every dock back into one flat strip. Dragging
+// must follow — the only reachable destination would be 'center', which silently CLEARS the dragged
+// tab's dock assignment for the wide layout the user cannot see. Reordering is refused too: the tab
+// order is one global list filtered per dock, so moving a tab past a tab of another dock is an
+// operation the model cannot represent, and its wide-screen effect is unpredictable from here.
+const tabDragDisabled = computed(() => render.value.mode === 'tabs')
+
 function sourceTabForEvent(event) {
-    if (eventHitsDragControl(event)) return null
+    if (tabDragDisabled.value || eventHitsDragControl(event)) return null
     const tabId = tabIdFromHandle(event.target)
     const tab = tabId && props.layout.tabById(tabId)
     return tab && !tab.fixedCenter ? tab : null
@@ -473,6 +481,9 @@ function onTabDragKeydown(event) {
     event.preventDefault()
     cancelTabPointer()
 }
+// A gesture that outlives the mode it started in: the area can shrink into the tab strip mid-drag
+// (window resize, or the measured area briefly collapsing). Drop it rather than let it land.
+watch(tabDragDisabled, (disabled) => { if (disabled) cancelTabPointer() })
 function onCapturedClick(event) {
     if (Date.now() >= suppressClickUntil) return
     event.preventDefault()

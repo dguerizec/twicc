@@ -51,8 +51,6 @@ test('layoutDropZones creates every dock target and uses the existing dock exten
     assert.equal(dropZoneAt(zones, 900, 790)?.dockId, 'bottom-right')
 })
 
-test('mobile fallback exposes only the main-area reorder target', () => {
-    assert.deepEqual(layoutDropZones(500, 700, { mode: 'tabs' }), [
-        { dockId: 'center', x: 0, y: 0, w: 500, h: 700 },
-    ])
+test('mobile fallback exposes no drop target at all', () => {
+    assert.deepEqual(layoutDropZones(500, 700, { mode: 'tabs' }), [])
 })
