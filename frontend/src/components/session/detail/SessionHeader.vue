@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, inject } from 'vue'
-import { useElementSize } from '@vueuse/core'
+import { useElementSize, onClickOutside } from '@vueuse/core'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
@@ -376,6 +376,16 @@ watch(() => props.sessionId, () => {
 })
 
 const actionsToggleTooltip = computed(() => isActionsExpanded.value ? 'Hide the session actions' : 'Show the session actions')
+
+// Both reveals behave like a popup: a click anywhere else closes them. The
+// compact overlay is a child of the header, so one target covers both, and
+// VueUse walks the composed path — a click inside a Web Awesome popup (pin
+// dropdown, tooltip) stays "inside". Clicks inside an iframe (Browser pane,
+// artifact preview) never reach this document, so they cannot close it.
+onClickOutside(headerRef, () => {
+    isCompactExpanded.value = false
+    isActionsExpanded.value = false
+})
 
 /**
  * Open the rename dialog.

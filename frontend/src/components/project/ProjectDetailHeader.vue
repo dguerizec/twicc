@@ -9,6 +9,7 @@
 // SessionHeader.vue.
 
 import { ref, computed } from 'vue'
+import { onClickOutside } from '@vueuse/core'
 import { useDataStore, ALL_PROJECTS_ID } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { useWorkspacesStore } from '../../stores/workspaces'
@@ -158,6 +159,13 @@ const indicatorProjectIds = computed(() => {
 
 // Compact mode state
 const isCompactExpanded = ref(false)
+const headerRef = ref(null)
+
+// The expanded overlay behaves like a popup: a click anywhere else closes it.
+// The overlay is a child of the header, so one target is enough.
+onClickOutside(headerRef, () => {
+    isCompactExpanded.value = false
+})
 
 defineExpose({ isCompactExpanded })
 
@@ -195,7 +203,7 @@ function handleUnarchive() {
 </script>
 
 <template>
-    <header class="detail-header" :class="{ 'compact-expanded': isCompactExpanded, 'compact-collapsed': !isCompactExpanded }">
+    <header ref="headerRef" class="detail-header" :class="{ 'compact-expanded': isCompactExpanded, 'compact-collapsed': !isCompactExpanded }">
         <!-- Title row -->
         <div class="detail-title-row">
             <!-- Clickable zone for compact toggle -->
