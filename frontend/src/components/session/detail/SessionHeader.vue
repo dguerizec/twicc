@@ -792,89 +792,90 @@ defineExpose({
                 <template
                     v-if="processState"
                 >
-                    <div style="flex-grow: 1"></div>
-                    <ProcessDuration
-                        v-if="processState.state === PROCESS_STATE.ASSISTANT_TURN && processState.state_changed_at"
-                        :state-changed-at="processState.state_changed_at"
-                        :id="`session-header-${sessionId}-process-duration`"
-                        class="process-duration"
-                        :style="{ color: getProcessColor(processState.state) }"
-                    />
-                    <AppTooltip v-if="processState.state === PROCESS_STATE.ASSISTANT_TURN && processState.state_changed_at" :for="`session-header-${sessionId}-process-duration`">Assistant turn duration</AppTooltip>
+                    <div class="meta-process">
+                        <ProcessDuration
+                            v-if="processState.state === PROCESS_STATE.ASSISTANT_TURN && processState.state_changed_at"
+                            :state-changed-at="processState.state_changed_at"
+                            :id="`session-header-${sessionId}-process-duration`"
+                            class="process-duration"
+                            :style="{ color: getProcessColor(processState.state) }"
+                        />
+                        <AppTooltip v-if="processState.state === PROCESS_STATE.ASSISTANT_TURN && processState.state_changed_at" :for="`session-header-${sessionId}-process-duration`">Assistant turn duration</AppTooltip>
 
-                    <span
-                        v-if="processState.memory"
-                        :id="`session-header-${sessionId}-process-memory`"
-                        class="process-memory"
-                        :style="{ color: getProcessColor(processState.state) }"
-                    >
-                        {{ formatMemory(processState.memory) }}
-                    </span>
-                    <AppTooltip v-if="processState.memory" :for="`session-header-${sessionId}-process-memory`">{{ providerLabel }} memory usage</AppTooltip>
-
-                    <ProcessIndicator
-                        :id="`session-header-${sessionId}-process-indicator`"
-                        :state="processState.state"
-                        :has-active-crons="hasActiveCrons"
-                        size="small"
-                        :animate-states="animateStates"
-                    />
-                    <AppTooltip :for="`session-header-${sessionId}-process-indicator`">{{ providerLabel }} state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
-
-                    <div class="meta-actions">
-                        <wa-button
-                            v-if="canInterruptTurn"
-                            :id="`session-header-${sessionId}-interrupt-button`"
-                            variant="neutral"
-                            appearance="filled"
-                            size="small"
-                            class="stop-button reduced-height"
-                            :loading="interrupting"
-                            :disabled="interrupting"
-                            @click="handleInterrupt"
+                        <span
+                            v-if="processState.memory"
+                            :id="`session-header-${sessionId}-process-memory`"
+                            class="process-memory"
+                            :style="{ color: getProcessColor(processState.state) }"
                         >
-                            <wa-icon name="circle-stop" label="Interrupt"></wa-icon>
-                        </wa-button>
-                        <AppTooltip :for="`session-header-${sessionId}-interrupt-button`">Interrupt the current turn (keeps the session alive)</AppTooltip>
+                            {{ formatMemory(processState.memory) }}
+                        </span>
+                        <AppTooltip v-if="processState.memory" :for="`session-header-${sessionId}-process-memory`">{{ providerLabel }} memory usage</AppTooltip>
 
-                        <wa-button
-                            v-if="canStopProcess"
-                            :id="`session-header-${sessionId}-stop-button`"
-                            variant="danger"
-                            appearance="filled"
+                        <ProcessIndicator
+                            :id="`session-header-${sessionId}-process-indicator`"
+                            :state="processState.state"
+                            :has-active-crons="hasActiveCrons"
                             size="small"
-                            class="stop-button reduced-height"
-                            :class="{ forcing: stoppingProcess }"
-                            @click="handleStopProcess($event)"
-                        >
-                            <span class="stop-icon-wrap">
-                                <wa-icon
-                                    :name="stoppingProcess ? 'skull-crossbones' : 'ban'"
-                                    :variant="stoppingProcess ? 'solid' : undefined"
-                                    :label="stoppingProcess ? 'Force kill' : 'Stop'"
-                                ></wa-icon>
-                                <wa-spinner
-                                    v-if="stoppingProcess"
-                                    class="stop-overlay-spinner"
-                                ></wa-spinner>
-                            </span>
-                        </wa-button>
-                        <AppTooltip :for="`session-header-${sessionId}-stop-button`">{{ stoppingProcess ? 'Force kill' : `Stop the ${providerLabel} process` }}</AppTooltip>
+                            :animate-states="animateStates"
+                        />
+                        <AppTooltip :for="`session-header-${sessionId}-process-indicator`">{{ providerLabel }} state: {{ PROCESS_STATE_NAMES[processState.state] }}<template v-if="activeCronCount"> ({{ activeCronCount }} active cron{{ activeCronCount > 1 ? 's' : '' }})</template></AppTooltip>
 
-                        <wa-button
-                            v-if="canStopAgent"
-                            :id="`session-header-${sessionId}-stop-agent-button`"
-                            variant="danger"
-                            appearance="filled"
-                            size="small"
-                            class="stop-button reduced-height"
-                            :loading="stoppingAgent"
-                            :disabled="stoppingAgent"
-                            @click="handleStopAgent"
-                        >
-                            <wa-icon name="ban" label="Stop Agent"></wa-icon>
-                        </wa-button>
-                        <AppTooltip :for="`session-header-${sessionId}-stop-agent-button`">Stop this agent</AppTooltip>
+                        <div class="meta-actions">
+                            <wa-button
+                                v-if="canInterruptTurn"
+                                :id="`session-header-${sessionId}-interrupt-button`"
+                                variant="neutral"
+                                appearance="filled"
+                                size="small"
+                                class="stop-button reduced-height"
+                                :loading="interrupting"
+                                :disabled="interrupting"
+                                @click="handleInterrupt"
+                            >
+                                <wa-icon name="circle-stop" label="Interrupt"></wa-icon>
+                            </wa-button>
+                            <AppTooltip :for="`session-header-${sessionId}-interrupt-button`">Interrupt the current turn (keeps the session alive)</AppTooltip>
+
+                            <wa-button
+                                v-if="canStopProcess"
+                                :id="`session-header-${sessionId}-stop-button`"
+                                variant="danger"
+                                appearance="filled"
+                                size="small"
+                                class="stop-button reduced-height"
+                                :class="{ forcing: stoppingProcess }"
+                                @click="handleStopProcess($event)"
+                            >
+                                <span class="stop-icon-wrap">
+                                    <wa-icon
+                                        :name="stoppingProcess ? 'skull-crossbones' : 'ban'"
+                                        :variant="stoppingProcess ? 'solid' : undefined"
+                                        :label="stoppingProcess ? 'Force kill' : 'Stop'"
+                                    ></wa-icon>
+                                    <wa-spinner
+                                        v-if="stoppingProcess"
+                                        class="stop-overlay-spinner"
+                                    ></wa-spinner>
+                                </span>
+                            </wa-button>
+                            <AppTooltip :for="`session-header-${sessionId}-stop-button`">{{ stoppingProcess ? 'Force kill' : `Stop the ${providerLabel} process` }}</AppTooltip>
+
+                            <wa-button
+                                v-if="canStopAgent"
+                                :id="`session-header-${sessionId}-stop-agent-button`"
+                                variant="danger"
+                                appearance="filled"
+                                size="small"
+                                class="stop-button reduced-height"
+                                :loading="stoppingAgent"
+                                :disabled="stoppingAgent"
+                                @click="handleStopAgent"
+                            >
+                                <wa-icon name="ban" label="Stop Agent"></wa-icon>
+                            </wa-button>
+                            <AppTooltip :for="`session-header-${sessionId}-stop-agent-button`">Stop this agent</AppTooltip>
+                        </div>
                     </div>
                 </template>
             </div>
@@ -1136,8 +1137,22 @@ wa-divider {
     --spacing: 0;
 }
 
+/* Process block (duration, memory, state, controls) as ONE flex child of the
+   wrapping .session-meta row: the auto start margin pins it to the right edge
+   of whatever line it lands on, so it stays right-aligned after a wrap instead
+   of restarting at the left — and it never splits across two lines. */
+.meta-process {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    column-gap: var(--wa-space-l);
+    row-gap: var(--wa-space-xs);
+    margin-inline-start: auto;
+}
+
 /* Trailing process-control buttons (interrupt, stop, stop-agent) cluster as a
-   single flex child of .session-meta so they sit tight together, decoupled
+   single flex child of .meta-process so they sit tight together, decoupled
    from the meta row's large inter-item gap. */
 .meta-actions {
     display: flex;
@@ -1371,6 +1386,10 @@ wa-divider {
         left: 0;
         right: 0;
         z-index: 20;
+        /* On large viewports the last row breathes thanks to the header's own
+           column gap before the divider. The overlay panel has no divider, so
+           it reproduces that space itself. */
+        padding-bottom: var(--wa-space-xs);
         background: var(--wa-color-surface-default);
         box-shadow: var(--wa-shadow-s);
         border-bottom: solid var(--wa-color-surface-border) var(--divider-size);
