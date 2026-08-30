@@ -1639,6 +1639,7 @@ function handleCancel() {
  * and restore dropdowns to their active (server-side) values.
  */
 async function handleReset() {
+    const hadComposerContent = Boolean(messageText.value) || attachmentCount.value > 0
     // Clear text if any
     if (messageText.value) {
         messageText.value = ''
@@ -1658,6 +1659,14 @@ async function handleReset() {
     // Reset dropdowns to their reference values (active process or DB, including null)
     if (hasDropdownsChanged.value) {
         settings.restoreSettings()
+    }
+    // On a touch device the tap leaves focus on the button and the keyboard stays
+    // closed, so the user has to tap the textarea again to keep writing. Put the
+    // caret back in the emptied textarea. Only when something was actually cleared:
+    // a dropdowns-only reset must not pop the keyboard. Pointer devices keep the
+    // current focus (the caret is one click away).
+    if (hadComposerContent && settingsStore.isTouchDevice) {
+        requestFocus()
     }
 }
 
