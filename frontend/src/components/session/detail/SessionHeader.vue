@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, watch, inject } from 'vue'
+import { useElementSize } from '@vueuse/core'
 import { useDataStore } from '../../../stores/data'
 import { useSettingsStore } from '../../../stores/settings'
 import { formatDate } from '../../../utils/date'
@@ -337,6 +338,45 @@ const injectedOpenRenameDialog = inject('openRenameDialog')
 // Reference to the header element
 const headerRef = ref(null)
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Action cluster overflow in the normal header
+// ═══════════════════════════════════════════════════════════════════════════
+
+// The action buttons sit before the title, so on a narrow header they eat the
+// room the title needs. Past this share of the title row they collapse behind a
+// single toggle button. The header lives in a dock pane, so its width does not
+// follow the viewport: measure both elements instead of using a media query.
+const ACTIONS_COLLAPSE_RATIO = 1 / 3
+
+const titleRowRef = ref(null)
+const actionsRef = ref(null)
+const { width: titleRowWidth } = useElementSize(titleRowRef)
+const { width: actionsWidth } = useElementSize(actionsRef)
+
+// Whether the user revealed the cluster while it overflows.
+const isActionsExpanded = ref(false)
+
+// The cluster never shrinks (flex-shrink: 0) and is taken out of the flow —
+// not unmounted — when collapsed, so the measured width is always its natural
+// width whatever the current state. The ratio is therefore stable: revealing
+// or hiding the cluster cannot flip the decision, so there is no feedback loop.
+const actionsOverflow = computed(() => {
+    if (!titleRowWidth.value || !actionsWidth.value) return false
+    return actionsWidth.value / titleRowWidth.value > ACTIONS_COLLAPSE_RATIO
+})
+
+// Collapse again as soon as the cluster fits, and when the header switches to
+// another session (the component is kept alive and reused).
+watch(actionsOverflow, (overflow) => {
+    if (!overflow) isActionsExpanded.value = false
+})
+watch(() => props.sessionId, () => {
+    isActionsExpanded.value = false
+})
+
+const actionsToggleTooltip = computed(() => isActionsExpanded.value ? 'Hide the session actions' : 'Show the session actions')
+
 /**
  * Open the rename dialog.
  * @param {Object} options
@@ -377,10 +417,12 @@ function handleUnarchive() {
  * In compact mode the action cluster is only reachable with the header expanded,
  * whose overlay would otherwise sit on top of the search bar that appears just
  * below it — so collapse the header on click (no-op on wide viewports, where the
- * cluster is always visible).
+ * cluster is always visible). Same idea for the overflow cluster on a narrow
+ * header: give the title its room back once the search bar is open.
  */
 function toggleSessionSearch() {
     isCompactExpanded.value = false
+    isActionsExpanded.value = false
     window.dispatchEvent(new CustomEvent('twicc:toggle-session-search', { detail: { handled: false } }))
 }
 
@@ -419,15 +461,44 @@ defineExpose({
 
 <template>
     <header ref="headerRef" class="session-header" :class="{ 'compact-expanded': isCompactExpanded, 'compact-collapsed': !isCompactExpanded, 'effective-debug': isEffectiveDebug }" :data-session-type="mode" v-if="session">
-        <div v-if="mode === 'session'" class="session-title">
-            <!-- Action buttons group: hidden in compact collapsed mode (revealed on expand) -->
-            <div class="session-title-actions">
+        <div v-if="mode === 'session'" ref="titleRowRef" class="session-title">
+            <!-- Status tags: they carry state, not actions, so they stay out of the
+                 overflow cluster and remain visible on a narrow header. Still hidden
+                 in compact collapsed mode, like the actions. -->
+            <div class="session-title-tags">
                 <wa-tag v-if="session.archived" :id="`session-header-${sessionId}-archived-tag`" size="small" variant="neutral" class="archived-tag" @click="handleUnarchive">Archived</wa-tag>
                 <AppTooltip v-if="session.archived" :for="`session-header-${sessionId}-archived-tag`">Click to unarchive</AppTooltip>
                 <wa-tag v-else-if="session.draft && !processState" size="small" variant="warning" class="draft-tag">Draft</wa-tag>
                 <wa-tag v-if="session.stale" :id="`session-header-${sessionId}-stale-tag`" size="small" variant="warning" class="stale-tag">Stale</wa-tag>
                 <AppTooltip v-if="session.stale" :for="`session-header-${sessionId}-stale-tag`">Session files were deleted from disk</AppTooltip>
+            </div>
 
+            <!-- Overflow toggle: shown only when the action cluster is wider than
+                 ACTIONS_COLLAPSE_RATIO of the title row. Reveals/hides the cluster
+                 in place, giving the title the width back. The icon never changes;
+                 the open state reads from the active styling, like the pin and
+                 debug buttons — a vertical-ellipsis-style icon would instead
+                 promise the dropdown menu it opens everywhere else in the UI. -->
+            <wa-button
+                v-if="actionsOverflow"
+                :id="`session-header-${sessionId}-actions-toggle`"
+                variant="neutral"
+                appearance="plain"
+                size="small"
+                :class="['actions-toggle-button', 'reduced-height', { 'actions-toggle-button--active': isActionsExpanded }]"
+                @click="isActionsExpanded = !isActionsExpanded"
+            >
+                <wa-icon name="screwdriver-wrench" label="Toggle actions"></wa-icon>
+            </wa-button>
+            <AppTooltip v-if="actionsOverflow" :for="`session-header-${sessionId}-actions-toggle`">{{ actionsToggleTooltip }}</AppTooltip>
+
+            <!-- Action buttons group: hidden in compact collapsed mode (revealed on
+                 expand), and collapsed behind the toggle above when too wide. -->
+            <div
+                ref="actionsRef"
+                class="session-title-actions"
+                :class="{ 'session-title-actions--collapsed': actionsOverflow && !isActionsExpanded }"
+            >
                 <!-- In-session search trigger: clickable equivalent of Ctrl+F (not for drafts) -->
                 <wa-button
                     v-if="!session.draft"
@@ -837,9 +908,45 @@ defineExpose({
     padding-top: var(--wa-space-xs);
 }
 
-/* Action buttons wrapper: transparent by default, hidden in compact collapsed mode */
-.session-title-actions {
+/* Status tags wrapper: transparent, hidden in compact collapsed mode */
+.session-title-tags {
     display: contents;
+}
+
+/* Action buttons wrapper. A real flex box (not `display: contents`) so its
+   width is measurable: the overflow logic compares it to the title row. The
+   values below reproduce what the children got as direct flex items of
+   `.session-title`. It never shrinks, so the measured width is always the
+   natural one. */
+.session-title-actions {
+    display: flex;
+    align-items: baseline;
+    gap: var(--wa-space-xs);
+    flex-shrink: 0;
+}
+
+/* Collapsed by the overflow toggle: out of the flow, so the title gets the
+   width back, but still laid out — the ResizeObserver keeps reporting the
+   natural width, which is what the decision is based on. */
+.session-title-actions--collapsed {
+    position: absolute;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+/* Overflow toggle button: same faint treatment as the actions it replaces. */
+.actions-toggle-button {
+    opacity: 0.6;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+    margin-block: calc(-3 * var(--wa-space-2xs));
+    position: relative;
+    top: calc(-1 * var(--wa-space-2xs));
+}
+
+.actions-toggle-button:hover,
+.actions-toggle-button.actions-toggle-button--active {
+    opacity: 1;
 }
 
 .draft-tag, .archived-tag, .stale-tag {
@@ -1200,9 +1307,22 @@ wa-divider {
         border-bottom: solid var(--wa-color-surface-border) var(--divider-size);
     }
 
-    /* In compact collapsed mode: hide the action buttons (revealed on expand) */
-    .session-header.compact-collapsed .session-title-actions {
+    /* In compact collapsed mode: hide the tags and the overflow toggle (revealed
+       on expand) */
+    .session-header.compact-collapsed .session-title-tags,
+    .session-header.compact-collapsed .actions-toggle-button {
         display: none;
+    }
+
+    /* The action buttons hide the same way as the overflow collapse: out of the
+       flow rather than `display: none`. Both mechanisms then stack cleanly, and
+       the cluster keeps being measured while the compact header is collapsed —
+       so expanding it already knows whether the cluster overflows, instead of
+       showing it full width for a frame before collapsing it. */
+    .session-header.compact-collapsed .session-title-actions {
+        position: absolute;
+        visibility: hidden;
+        pointer-events: none;
     }
 
     /* Dont show divider when compact mode is active */
