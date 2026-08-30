@@ -702,7 +702,17 @@ watch([() => props.sessionId, session], async ([newSessionId, newSession], [oldS
     // Subagent tabs open at the top — skip scroll-to-bottom
     if (props.parentSessionId) return
 
-    // Always scroll to end of session (with retry until stable)
+    // A session-object replacement (same id, items already loaded — e.g. the
+    // reconciliation's loadSessions after a WebSocket reconnect) is not an
+    // opening: follow the bottom only when the user was already there, exactly
+    // like live-arriving items. Only a real opening scrolls unconditionally.
+    if (!isFirstLoad && !sessionChanged) {
+        const scroller = scrollerRef.value
+        if (!scroller) return
+        if (!isAutoScrollingToBottom.value && !scroller.isAtBottom()) return
+    }
+
+    // Scroll to end of session (with retry until stable)
     // Mark as initial scroll to hide scroller until positioned (only on first load)
     // When returning to an already-loaded session, items are already sized so no resize events will fire
     await nextTick()
