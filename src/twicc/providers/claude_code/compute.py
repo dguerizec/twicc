@@ -375,6 +375,51 @@ def _is_misrouted_task_result(stripped_xml: str) -> bool:
     return _parse_task_notification(xml_str).is_task_result
 
 
+def _agent_launch_tool_use_id_from_sidecar(session_id: str, task_id: str) -> str | None:
+    """Resolve a subagent's launching tool_use_id from its ``.meta.json`` sidecar.
+
+    Recent CLIs re-notify a resumable agent on every stop, and only the stops
+    that follow a tool_use of this session carry a ``<tool-use-id>`` in the
+    ``<task-notification>`` XML. When the agent re-woke on its own (its own
+    background child finished, a scheduled wake-up fired, …) the notification
+    has a ``<task-id>`` but no ``<tool-use-id>`` — the launching tool_use must
+    be recovered from the ``subagents/agent-<task_id>.meta.json`` sidecar the
+    CLI writes next to the subagent's JSONL (``{"toolUseId": ...}``).
+
+    ``session_id`` is the session whose file carries the notification; its
+    stored ``file_path`` (``<project>/<id>.jsonl`` for a top-level session,
+    ``<project>/<top>/subagents/agent-<id>.jsonl`` for a subagent) anchors the
+    sidecar lookup. Returns ``None`` when anything is missing (unknown
+    session, absent sidecar, malformed JSON) — callers fall back to leaving
+    the notification untouched.
+    """
+    file_path = (
+        Session.objects.filter(id=session_id)
+        .values_list('file_path', flat=True)
+        .first()
+    )
+    if not file_path:
+        return None
+    # Local import dodges the compute↔helpers cycle (``helpers`` imports
+    # this module at top level) — same pattern as extra_session_fields.
+    from .helpers import ClaudeCodeHelpers
+
+    session_file = ClaudeCodeHelpers.PROJECTS_DIR / file_path
+    if session_file.parent.name == 'subagents':
+        # Nested case: the notification sits in a subagent's own file; its
+        # children's sidecars live in the same flat subagents/ directory.
+        subagents_dir = session_file.parent
+    else:
+        subagents_dir = session_file.with_suffix('') / 'subagents'
+    meta_path = subagents_dir / f'agent-{task_id}.meta.json'
+    try:
+        meta = orjson.loads(meta_path.read_bytes())
+    except (OSError, orjson.JSONDecodeError):
+        return None
+    tool_use_id = meta.get('toolUseId') if isinstance(meta, dict) else None
+    return tool_use_id if isinstance(tool_use_id, str) and tool_use_id else None
+
+
 # Regex to strip ANSI escape codes from local command output
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
@@ -1457,7 +1502,39 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
                                     }]
                                     return orjson.dumps(parsed_json).decode('utf-8')
 
-                            # Fall through — no rewrite applied.
+                            # --- Orphan agent notification (no <tool-use-id>) ---
+                            # A resumable agent that re-woke on its own (its own
+                            # background child finished, …) stops again without a
+                            # triggering tool_use in THIS session, so its terminal
+                            # notification carries no <tool-use-id>. Recover the
+                            # launching tool_use from the agent's .meta.json
+                            # sidecar and rewrite as a regular task result.
+                            # ``isAsync`` is deliberately NOT set here: this is
+                            # never a launch ack, and flagging it would flip a
+                            # foreground launching link to background (see
+                            # create_agent_link_from_tool_result).
+                            if note.task_id and not note.tool_use_id:
+                                launch_tool_use_id = _agent_launch_tool_use_id_from_sidecar(
+                                    session_id, note.task_id,
+                                )
+                                if launch_tool_use_id:
+                                    parsed_json['twiccOriginalContent'] = content
+                                    block = {
+                                        'type': 'tool_result',
+                                        'tool_use_id': launch_tool_use_id,
+                                        'content': note.result_text,
+                                    }
+                                    if note.status and note.status != 'completed':
+                                        block['is_error'] = True
+                                    message['content'] = [block]
+                                    parsed_json['toolUseResult'] = {
+                                        'agentId': note.task_id,
+                                    }
+                                    return orjson.dumps(parsed_json).decode('utf-8')
+
+                            # Fall through — no rewrite applied (an unresolved
+                            # notification still classifies as SYSTEM via its
+                            # origin.kind, see compute_item_kind).
 
         # --- attachment queued_command task-notification ---
         # Same notifications as the user_message variant above (a given
@@ -1561,6 +1638,39 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
                                     ).pop(terminal_task_id, None)
 
                                 return orjson.dumps(parsed_json).decode('utf-8')
+
+                            # --- Orphan agent notification (no <tool-use-id>) ---
+                            # Same case as the user_message variant above: the
+                            # agent re-woke on its own, so its stop notification
+                            # has no launching tool_use to reference. Resolve it
+                            # from the .meta.json sidecar; no ``isAsync`` (never
+                            # a launch ack — see the user_message branch).
+                            if note.task_id and not note.tool_use_id:
+                                launch_tool_use_id = _agent_launch_tool_use_id_from_sidecar(
+                                    session_id, note.task_id,
+                                )
+                                if launch_tool_use_id:
+                                    original_entry = orjson.dumps(parsed_json).decode('utf-8')
+                                    block = {
+                                        'type': 'tool_result',
+                                        'tool_use_id': launch_tool_use_id,
+                                        'content': note.result_text,
+                                    }
+                                    if note.status and note.status != 'completed':
+                                        block['is_error'] = True
+                                    parsed_json['type'] = 'user'
+                                    parsed_json['message'] = {
+                                        'role': 'user',
+                                        'content': [block],
+                                    }
+                                    parsed_json['toolUseResult'] = {
+                                        'agentId': note.task_id,
+                                    }
+                                    # Whole-entry snapshot — same rationale as the
+                                    # terminal rewrite above.
+                                    parsed_json['twiccOriginalEntry'] = original_entry
+                                    parsed_json.pop('attachment', None)
+                                    return orjson.dumps(parsed_json).decode('utf-8')
 
         # --- local-command-stdout/stderr -> synthetic assistant_message ---
         raw_text: str | None = None
@@ -1697,6 +1807,16 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             # Turn-abort breadcrumbs ("[Request interrupted by user]", "... for
             # tool use]") are CLI bookkeeping, not real user prompts.
             if text is not None and is_interruption_marker(text):
+                return ItemKind.SYSTEM
+
+            # CLI-injected task notifications that no rewrite matched (orphan
+            # <task-notification> whose sidecar is missing, a subagent's own
+            # "[SYSTEM NOTIFICATION - NOT USER INPUT]" wake-up) are system
+            # noise, not something the human typed. Rewritten notifications
+            # never reach this check: their content is a tool_result list,
+            # classified CONTENT_ITEMS above.
+            origin = parsed_json.get('origin')
+            if isinstance(origin, dict) and origin.get('kind') == 'task-notification':
                 return ItemKind.SYSTEM
 
             # Only user messages with visible content count as USER_MESSAGE.
@@ -2187,6 +2307,47 @@ class ClaudeCodeSessionCompute(BaseSessionCompute):
             return False
         data = parsed_json.get('data')
         return isinstance(data, dict) and data.get('hookEvent') == 'SessionStart'
+
+    def subagent_turn_boundary(self, parsed_json: dict) -> bool | None:
+        """Map a Claude subagent's own lines to its running / idle state.
+
+        Needed because the parent-side counting rule
+        (:meth:`check_agent_naturally_stopped`) only knows how to say
+        "stopped", never "working again" — and recent CLIs make background
+        agents resumable: a finished agent re-wakes when its own background
+        child completes, when the parent messages it, etc. Its file carries
+        both boundaries:
+
+        - an ``assistant`` line whose ``message.stop_reason`` is
+          ``"end_turn"`` closes a turn (the CLI's parent-file
+          ``<task-notification>`` consistently follows within ~1s) → idle;
+        - a ``user`` line with *string* content and an ``origin.kind``
+          (``"coordinator"`` = the parent's SendMessage, ``"task-notification"``
+          = one of its own background children finishing) is a CLI-injected
+          wake-up → working again. Regular tool_results (list content) and
+          the initial task prompt (no ``origin``) are not boundaries.
+
+        Only consulted on subagent files by the live path (see the base
+        docstring) — batch recompute of imported sessions never calls it, so
+        historical files keep the parent-side rule as their only source.
+        """
+        entry_type = parsed_json.get('type')
+        message = parsed_json.get('message')
+        if not isinstance(message, dict):
+            return None
+        if entry_type == 'assistant':
+            if message.get('stop_reason') == 'end_turn':
+                return True
+            return None
+        if entry_type == 'user':
+            origin = parsed_json.get('origin')
+            if (
+                isinstance(message.get('content'), str)
+                and isinstance(origin, dict)
+                and origin.get('kind')
+            ):
+                return False
+        return None
 
     def extract_custom_title(self, parsed_json: dict) -> tuple[str, str] | None:
         if parsed_json.get('type') != 'custom-title':

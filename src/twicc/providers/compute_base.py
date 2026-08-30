@@ -1897,8 +1897,19 @@ class BaseSessionCompute:
             return None
 
         agent_session_id = agent_link.agent_id
+        # Monotonic guard: never let a stale parent-side stop overwrite a
+        # subagent that has activity NEWER than the stop signal. The case is
+        # real with resumable agents (Claude): the subagent's own file sync
+        # (:meth:`subagent_turn_boundary`) cleared ``last_stopped_at`` on a
+        # wake-up, then the parent's file delivers an older notification —
+        # stamping it would re-freeze a working agent as "stopped". On the
+        # historical flow (agent stops once, notification written after its
+        # last line) the guard is a no-op: ``stopped_at`` is always >= the
+        # subagent's ``last_updated_at`` there.
         updated = Session.objects.filter(
             id=agent_session_id,
+        ).exclude(
+            last_updated_at__gt=stopped_at,
         ).update(last_stopped_at=stopped_at, last_updated_at=stopped_at)
 
         if updated:
@@ -3053,12 +3064,17 @@ class BaseSessionCompute:
             # cache fallback is reliable, so passing None is also correct.
             ensure_project_git_root(project_id, project_directory)
 
-        # 11. Update last_stopped_at for subagents that finished naturally
+        # 11. Update last_stopped_at for subagents that finished naturally.
+        # Same monotonic guard as check_agent_naturally_stopped: a batch
+        # recompute of the parent must not re-freeze as "stopped" a resumable
+        # subagent whose live sync already recorded newer activity.
         agent_stopped = msg.get('agent_stopped')
         if agent_stopped:
             for entry in agent_stopped:
                 stopped_at = datetime.fromisoformat(entry['stopped_at'])
-                Session.objects.filter(id=entry['agent_session_id']).update(
+                Session.objects.filter(id=entry['agent_session_id']).exclude(
+                    last_updated_at__gt=stopped_at,
+                ).update(
                     last_stopped_at=stopped_at, last_updated_at=stopped_at,
                 )
 
