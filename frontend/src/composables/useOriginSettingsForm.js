@@ -78,12 +78,12 @@ export function useOriginSettingsForm({
     dataStore,
     locationHostname,
     eventTarget,
-    confirmPeerBaseUrlChange = message => globalThis.confirm(message),
 }) {
     const inputs = fieldMap(() => ref(''))
     const errors = fieldMap(() => ref(''))
     // Peer-only: plain HTTP is allowed but worth a warning, next to the error.
     const peerBaseUrlWarning = ref('')
+    const peerBaseUrlConfirmation = ref(false)
 
     // Correlation ids of writes whose result has not arrived yet.
     const pendingWrites = new Map()
@@ -101,6 +101,7 @@ export function useOriginSettingsForm({
     function seedField(field) {
         inputs[field].value = storedValue(field)
         errors[field].value = storedOriginError(inputs[field].value)
+        if (field === 'peerBaseUrl') peerBaseUrlConfirmation.value = false
     }
 
     function onInputChange(field, value) {
@@ -108,16 +109,22 @@ export function useOriginSettingsForm({
         discardOriginSettingWrites(pendingWrites, field)
         inputs[field].value = value
         errors[field].value = ''
-        if (field === 'peerBaseUrl') peerBaseUrlWarning.value = ''
+        if (field === 'peerBaseUrl') {
+            peerBaseUrlWarning.value = ''
+            peerBaseUrlConfirmation.value = false
+        }
     }
 
     function setError(field, fieldErrors) {
         errors[field].value = originSettingErrorMessage(fieldErrors, field, publicOriginErrorMessage)
     }
 
-    async function apply(field) {
+    async function apply(field, confirmed = false) {
         errors[field].value = ''
-        if (field === 'peerBaseUrl') peerBaseUrlWarning.value = ''
+        if (field === 'peerBaseUrl') {
+            peerBaseUrlWarning.value = ''
+            peerBaseUrlConfirmation.value = false
+        }
         const result = validateOriginSetting({
             field,
             input: inputs[field].value,
@@ -133,11 +140,11 @@ export function useOriginSettingsForm({
         if (
             field === 'peerBaseUrl'
             && storedValue(field)
-            && !await confirmPeerBaseUrlChange(
-                'Changing this address disables active Peer relationships and clears their credentials. '
-                + 'You must reconnect each Peer manually. Continue?'
-            )
-        ) return
+            && !confirmed
+        ) {
+            peerBaseUrlConfirmation.value = true
+            return
+        }
         const requestId = generateUUID()
         pendingWrites.set(requestId, { field, input: inputs[field].value })
         if (!await settingsStore.sendOriginSetting(field, result.patch[field], requestId)) {
@@ -174,6 +181,7 @@ export function useOriginSettingsForm({
         inputs.peerBaseUrl.value = usablePublicOrigin(settingsStore.getPublicBaseUrl)
         errors.peerBaseUrl.value = ''
         peerBaseUrlWarning.value = ''
+        peerBaseUrlConfirmation.value = false
     }
 
     // Broadcasts update the store. They do not settle correlated writes.
@@ -181,6 +189,7 @@ export function useOriginSettingsForm({
         () => settingsStore[STORE_GETTERS[field]],
         (value, oldValue) => {
             inputs[field].value = refreshOriginInput(inputs[field].value, oldValue, value)
+            if (field === 'peerBaseUrl') peerBaseUrlConfirmation.value = false
         },
     ))
 
@@ -234,9 +243,12 @@ export function useOriginSettingsForm({
         peerBaseUrlInput: inputs.peerBaseUrl,
         peerBaseUrlError: errors.peerBaseUrl,
         peerBaseUrlWarning,
+        peerBaseUrlConfirmation,
         peerBaseUrlApplyIcon: applyIcon.peerBaseUrl,
         onPeerBaseUrlInputChange: event => onInputChange('peerBaseUrl', event.target.value),
         onPeerBaseUrlApply: () => apply('peerBaseUrl'),
+        confirmPeerBaseUrlApply: () => apply('peerBaseUrl', true),
+        cancelPeerBaseUrlApply: () => { peerBaseUrlConfirmation.value = false },
 
         canPrefillPeerBaseUrl,
         prefillPeerBaseUrlFromPublic,

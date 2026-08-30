@@ -372,6 +372,8 @@ The owner UI asks for confirmation when a non-empty address becomes empty or cha
 
 The confirmation states that active relations become unavailable, credentials are cleared, and reconnect is manual.
 
+The Settings section shows this confirmation below the address input. It does not use a browser-native dialog.
+
 Empty to valid needs no confirmation. It changes no Peer and starts no reconnect.
 
 The confirmation offers no automatic-reconnect option.

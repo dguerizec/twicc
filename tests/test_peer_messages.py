@@ -740,7 +740,8 @@ def test_send_http_error(transactional_db, peer_host, monkeypatch):
     assert not result.success and result.errors[0].code == "send_failed"
     message = PeerMessage.objects.get()
     assert message.status == PeerMessageStatus.FAILED
-    assert message.error == "http_500"
+    assert message.error == "The remote instance rejected the message."
+    assert result.errors[0].message == "The remote instance rejected the message."
 
 
 def test_send_network_error(transactional_db, peer_host, monkeypatch):

@@ -385,13 +385,13 @@ def test_submit_code_bad_state(transactional_db, peer_host):
 
 # ── accept_peer service ─────────────────────────────────────────────────────
 
-def _patch_accept_response(monkeypatch, status=200, *, network_error=False, calls=None):
+def _patch_accept_response(monkeypatch, status=200, *, body=None, network_error=False, calls=None):
     async def _fake(base_url, *, bearer, token, display_name):
         if calls is not None:
             calls.append({"base_url": base_url, "bearer": bearer, "token": token})
         if network_error:
             raise outbound.PeerOutboundError("ConnectError")
-        return status, {}
+        return status, body or {}
     monkeypatch.setattr("twicc.peer.outbound.post_handshake_accept", _fake)
 
 
@@ -445,6 +445,18 @@ def test_accept_peer_unreachable_keeps_pending(transactional_db, peer_host, monk
     assert calls[0]["token"] == first_token
 
 
+def test_accept_peer_http_error_is_human_readable(transactional_db, peer_host, monkeypatch):
+    from django.utils import timezone as djtz
+
+    peer = _make_pending_received(verified_at=djtz.now())
+    _patch_accept_response(monkeypatch, status=500)
+
+    result = _run(peer_mutation.accept_peer(peer, name="alice"))
+
+    assert not result.success
+    assert result.errors[0].message == "The remote instance rejected the acceptance."
+
+
 def test_accept_peer_idempotent_on_active(transactional_db, peer_host):
     peer = _make_pending_received(state=PeerState.ACTIVE, token_ours=mint_token())
     result = _run(peer_mutation.accept_peer(peer, name="x"))
@@ -453,7 +465,7 @@ def test_accept_peer_idempotent_on_active(transactional_db, peer_host):
 
 # ── create_peer_and_request service ─────────────────────────────────────────
 
-def _patch_request_response(monkeypatch, status=200, *, network_error=False, calls=None):
+def _patch_request_response(monkeypatch, status=200, *, body=None, network_error=False, calls=None):
     async def _fake(base_url, *, display_name, own_base_url, token):
         if calls is not None:
             calls.append({
@@ -464,7 +476,7 @@ def _patch_request_response(monkeypatch, status=200, *, network_error=False, cal
             })
         if network_error:
             raise outbound.PeerOutboundError("ConnectTimeout")
-        return status, {}
+        return status, body or {}
     monkeypatch.setattr("twicc.peer.outbound.post_handshake_request", _fake)
 
 
@@ -485,6 +497,24 @@ def test_create_peer_unreachable_deletes_row(transactional_db, peer_host, monkey
     assert not result.success
     assert result.errors[0].code == "unreachable"
     assert Peer.objects.count() == 0
+
+
+def test_create_peer_http_error_is_human_readable(transactional_db, peer_host, monkeypatch):
+    _patch_request_response(monkeypatch, status=503)
+
+    result = _run(peer_mutation.create_peer_and_request(name="bob", base_url="https://bob.example.com"))
+
+    assert not result.success
+    assert result.errors[0].message == "The remote instance rejected the Peer request."
+
+
+def test_create_peer_ignores_malformed_remote_error_code(transactional_db, peer_host, monkeypatch):
+    _patch_request_response(monkeypatch, status=503, body={"error": []})
+
+    result = _run(peer_mutation.create_peer_and_request(name="bob", base_url="https://bob.example.com"))
+
+    assert not result.success
+    assert result.errors[0].message == "The remote instance rejected the Peer request."
 
 
 def test_create_peer_validations(transactional_db, monkeypatch):
@@ -666,6 +696,26 @@ def test_reconnect_start_and_retry_reuse_one_token(
     assert peer.reconnect_direction == "sent"
     assert peer.token_ours
     assert [call["token"] for call in calls] == [peer.token_ours, peer.token_ours]
+
+
+def test_reconnect_conflict_uses_remote_error_message(transactional_db, peer_host, monkeypatch):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+    )
+    _patch_request_response(
+        monkeypatch,
+        status=409,
+        body={"error": "reconnect_in_progress"},
+    )
+
+    result = _run(peer_mutation.reconnect_peer(peer))
+
+    assert not result.success
+    assert result.errors[0].message == (
+        "The remote instance already has a different reconnect request pending."
+    )
 
 
 def test_cancel_reconnect_clears_attempt_and_late_callback_fails(

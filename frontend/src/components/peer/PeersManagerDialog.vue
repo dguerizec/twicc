@@ -230,8 +230,8 @@ function openInbox() {
 function brokenReasonText(reason) {
     return {
         remote_credential_rejected: 'Remote credentials rejected',
-        local_address_changed: 'Local address changed',
-        local_address_disabled: 'Local address disabled',
+        local_address_changed: 'Local address was changed',
+        local_address_disabled: 'Local address was disabled',
     }[reason] || reason
 }
 
@@ -293,6 +293,7 @@ function onHide(event) {
                     <template v-else>
                         <div class="pm-request__actions">
                             <wa-input
+                                class="pm-code-input"
                                 size="small" placeholder="6-digit code" maxlength="6" inputmode="numeric"
                                 :value="verifyCodes[peer.id] || ''"
                                 @input="verifyCodes = { ...verifyCodes, [peer.id]: $event.target.value }"
@@ -353,6 +354,7 @@ function onHide(event) {
                 <template v-else>
                     <div class="pm-request__actions">
                         <wa-input
+                            class="pm-code-input"
                             size="small" placeholder="6-digit code" maxlength="6" inputmode="numeric"
                             :value="verifyCodes[peer.id] || ''"
                             @input="verifyCodes = { ...verifyCodes, [peer.id]: $event.target.value }"
@@ -542,6 +544,11 @@ function onHide(event) {
     flex-wrap: wrap;
 }
 .pm-request__actions wa-input { flex: 1; min-width: 10rem; }
+.pm-request__actions .pm-code-input {
+    flex: 0 1 8rem;
+    min-width: 0;
+    max-width: 100%;
+}
 
 .pm-peer__main {
     display: flex;

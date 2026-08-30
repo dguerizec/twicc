@@ -28,10 +28,8 @@ function setup({
     stored = {},
     sendResult = true,
     locationHostname = 'app.example',
-    confirmResult = true,
 } = {}) {
     const sent = []
-    const confirmations = []
     const settingsStore = reactive({
         getPublicBaseUrl: stored.publicBaseUrl || '',
         getShareBaseUrl: stored.shareBaseUrl || '',
@@ -48,13 +46,9 @@ function setup({
         dataStore,
         locationHostname,
         eventTarget,
-        confirmPeerBaseUrlChange(message) {
-            confirmations.push(message)
-            return confirmResult
-        },
     })
     form.startOriginSettingsForm()
-    return { form, settingsStore, dataStore, eventTarget, sent, confirmations }
+    return { form, settingsStore, dataStore, eventTarget, sent }
 }
 
 // A backend result frame, as useWebSocket re-dispatches it.
@@ -219,8 +213,8 @@ test('typing clears the Peer warning, and an HTTPS address never raises it', asy
     assert.equal(form.peerBaseUrlWarning.value, '')
 })
 
-test('changing a configured Peer address requires confirmation', async () => {
-    const { form, sent, confirmations } = setup({
+test('changing a configured Peer address waits for inline confirmation', async () => {
+    const { form, sent } = setup({
         stored: { peerBaseUrl: 'https://old.example.com' },
     })
     form.seedOriginField('peerBaseUrl')
@@ -228,22 +222,66 @@ test('changing a configured Peer address requires confirmation', async () => {
 
     await form.applyOriginSetting('peerBaseUrl')
 
-    assert.equal(confirmations.length, 1)
+    assert.equal(form.peerBaseUrlConfirmation.value, true)
+    assert.equal(sent.length, 0)
+
+    await form.confirmPeerBaseUrlApply()
+
+    assert.equal(form.peerBaseUrlConfirmation.value, false)
     assert.equal(sent.length, 1)
 })
 
-test('refusing the Peer address confirmation sends no write', async () => {
-    const { form, sent, confirmations } = setup({
+test('cancelling the Peer address confirmation sends no write', async () => {
+    const { form, sent } = setup({
         stored: { peerBaseUrl: 'https://old.example.com' },
-        confirmResult: false,
     })
     form.seedOriginField('peerBaseUrl')
     form.onOriginInputChange('peerBaseUrl', '')
 
     await form.applyOriginSetting('peerBaseUrl')
+    form.cancelPeerBaseUrlApply()
 
-    assert.equal(confirmations.length, 1)
+    assert.equal(form.peerBaseUrlConfirmation.value, false)
     assert.equal(sent.length, 0)
+})
+
+test('typing clears the Peer address confirmation', async () => {
+    const { form, sent } = setup({
+        stored: { peerBaseUrl: 'https://old.example.com' },
+    })
+    form.seedOriginField('peerBaseUrl')
+    form.onOriginInputChange('peerBaseUrl', 'https://new.example.com')
+    await form.applyOriginSetting('peerBaseUrl')
+
+    form.onOriginInputChange('peerBaseUrl', 'https://other.example.com')
+
+    assert.equal(form.peerBaseUrlConfirmation.value, false)
+    assert.equal(sent.length, 0)
+})
+
+test('continuing a Peer address change validates the current input again', async () => {
+    const { form, sent } = setup({
+        stored: { peerBaseUrl: 'https://old.example.com' },
+    })
+    form.seedOriginField('peerBaseUrl')
+    form.onOriginInputChange('peerBaseUrl', 'https://new.example.com')
+    await form.applyOriginSetting('peerBaseUrl')
+    form.peerBaseUrlInput.value = 'not an origin'
+
+    await form.confirmPeerBaseUrlApply()
+
+    assert.match(form.peerBaseUrlError.value, /hostname or an HTTP\(S\) origin/)
+    assert.equal(sent.length, 0)
+})
+
+test('setting the first Peer address needs no confirmation', async () => {
+    const { form, sent } = setup()
+    form.onOriginInputChange('peerBaseUrl', 'https://peer.example.com')
+
+    await form.applyOriginSetting('peerBaseUrl')
+
+    assert.equal(form.peerBaseUrlConfirmation.value, false)
+    assert.equal(sent.length, 1)
 })
 
 test('the Share host is refused client-side when it matches this app', async () => {

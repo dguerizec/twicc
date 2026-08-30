@@ -388,9 +388,10 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
             fresh_peer.paired_local_base_url,
         ) == credential_snapshot
 
+    body = {}
     detail = ""
     try:
-        http_status, _body = await outbound.post_message(
+        http_status, body = await outbound.post_message(
             peer.base_url, bearer=peer.token_theirs,
             message_id=message_id, title=title, reply_to=reply_to,
             payload=wire_payload, origin=origin,
@@ -436,7 +437,9 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
             "Ask your user to check the relationship in Settings › Peers.",
         )], {})
 
-    error_detail = detail or f"http_{http_status}"
+    error_detail = detail or outbound.response_error_message(
+        body, "The remote instance rejected the message.",
+    )
     error_code = "unreachable" if http_status is None else "send_failed"
 
     def _fail():
@@ -448,7 +451,10 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
     await run_under_db_write_lock(lambda: sync_to_async(_fail)())
     await broadcast_peer_message_updated(message)
     return PeerSendResult(False, message_id, peer.id, [PeerError(
-        "peer", error_code, f"The message could not be delivered to the peer ({error_detail}).",
+        "peer", error_code, (
+            f"The message could not be delivered to the peer ({error_detail})."
+            if http_status is None else error_detail
+        ),
     )], {})
 
 

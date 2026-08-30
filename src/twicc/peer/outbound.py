@@ -11,9 +11,27 @@ import httpx
 
 OUTBOUND_TIMEOUT_SECONDS = 30.0
 
+_REMOTE_ERROR_MESSAGES = {
+    "already_related": "The remote instance already has a Peer relationship for this address.",
+    "ambiguous_peer": "The remote instance has more than one Peer for this address.",
+    "bad_state": "The remote instance cannot apply this request in its current state.",
+    "invalid_payload": "The remote instance rejected the request data.",
+    "reconnect_in_progress": "The remote instance already has a different reconnect request pending.",
+    "too_many_pending": "The remote instance has too many pending Peer requests.",
+    "unknown_token": "The remote instance rejected the Peer credentials.",
+}
+
 
 class PeerOutboundError(Exception):
     """Network-level failure reaching the peer (detail in str())."""
+
+
+def response_error_message(body: dict, fallback: str) -> str:
+    """Translate a remote wire error into user-facing text."""
+    error_code = body.get("error")
+    if not isinstance(error_code, str):
+        return fallback
+    return _REMOTE_ERROR_MESSAGES.get(error_code, fallback)
 
 
 async def _post(base_url: str, path: str, json_body: dict, *, bearer: str | None) -> tuple[int, dict]:

@@ -17,7 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- **Peer relationships** — Revoking a Peer now preserves its message history. You can reconnect it manually, and changing your Peer address safely invalidates old credentials.
+- **Peer relationships** — Revoking a Peer now preserves its message history. You can reconnect it manually, and changing your Peer address safely invalidates old credentials. Peer errors are now readable, address changes use inline confirmation, and six-digit code fields stay compact.
 - **Public addresses** — External, Share, and Peer addresses now use one validation format. TwiCC repairs existing External and Share values when safe and ignores unsafe values until you correct them. The former “External URL” label is now “External address”.
 - **GPT-5.4 leaves Codex** — GPT-5.4 and GPT-5.4 mini retire on August 31, 2026. The model pickers now show the date, and sessions still on them move to a supported model on the day.
 - **Messages between sessions** — A session that writes to another one is now always named, instead of its message looking like it came from you.

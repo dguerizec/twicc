@@ -646,8 +646,8 @@ const {
     onPublicBaseUrlInputChange, onPublicBaseUrlApply,
     shareBaseUrlInput, shareBaseUrlError, shareBaseUrlApplyIcon,
     onShareBaseUrlInputChange, onShareBaseUrlApply,
-    peerBaseUrlInput, peerBaseUrlError, peerBaseUrlWarning, peerBaseUrlApplyIcon,
-    onPeerBaseUrlInputChange, onPeerBaseUrlApply,
+    peerBaseUrlInput, peerBaseUrlError, peerBaseUrlWarning, peerBaseUrlConfirmation, peerBaseUrlApplyIcon,
+    onPeerBaseUrlInputChange, onPeerBaseUrlApply, confirmPeerBaseUrlApply, cancelPeerBaseUrlApply,
     canPrefillPeerBaseUrl, prefillPeerBaseUrlFromPublic,
 } = useOriginSettingsForm({
     settingsStore: store,
@@ -1618,6 +1618,23 @@ function onChangelogClose() {
                         </div>
                         <wa-callout v-if="peerBaseUrlError" variant="danger" size="small">{{ peerBaseUrlError }}</wa-callout>
                         <wa-callout v-if="peerBaseUrlWarning" variant="warning" size="small">{{ peerBaseUrlWarning }}</wa-callout>
+                        <wa-callout v-if="peerBaseUrlConfirmation" variant="warning" size="small">
+                            <div class="peer-address-confirmation">
+                                <span>
+                                    Changing this address disables active Peer relationships and clears their credentials.
+                                    You must reconnect each Peer manually.
+                                </span>
+                                <div class="peer-address-confirmation__actions">
+                                    <wa-button size="small" variant="brand" @click="confirmPeerBaseUrlApply">Continue</wa-button>
+                                    <wa-button
+                                        size="small"
+                                        variant="neutral"
+                                        appearance="outlined"
+                                        @click="cancelPeerBaseUrlApply"
+                                    >Cancel</wa-button>
+                                </div>
+                            </div>
+                        </wa-callout>
                         <wa-button
                             v-if="canPrefillPeerBaseUrl"
                             size="small" appearance="plain"
@@ -2808,6 +2825,18 @@ wa-popover > wa-divider {
     wa-input {
         flex: 1;
     }
+}
+
+.peer-address-confirmation {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wa-space-xs);
+}
+
+.peer-address-confirmation__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--wa-space-2xs);
 }
 
 /* Row of secondary action buttons under the telemetry toggle (view payload,

@@ -222,9 +222,10 @@ async def create_peer_and_request(*, name: str, base_url: str) -> PeerMutationRe
     if insert_error is not None:
         return PeerMutationResult(False, None, [insert_error])
 
+    body = {}
     detail = ""
     try:
-        status, _body = await outbound.post_handshake_request(
+        status, body = await outbound.post_handshake_request(
             base_url, display_name=own_display_name(), own_base_url=own_url, token=token,
         )
     except outbound.PeerOutboundError as exc:
@@ -235,6 +236,10 @@ async def create_peer_and_request(*, name: str, base_url: str) -> PeerMutationRe
     # decision below therefore re-fetches — acting on the pre-call instance
     # would broadcast stale state or delete the peer's just-registered request.
     if status is None or status >= 400:
+        error_message = detail or outbound.response_error_message(
+            body, "The remote instance rejected the Peer request.",
+        )
+
         def _delete_if_untouched():
             fresh = Peer.objects.filter(pk=peer.pk).first()
             if fresh is None:
@@ -247,12 +252,12 @@ async def create_peer_and_request(*, name: str, base_url: str) -> PeerMutationRe
         kept = await run_under_db_write_lock(lambda: sync_to_async(_delete_if_untouched)())
         if not kept:
             return PeerMutationResult(False, None, [PeerError(
-                "base_url", "unreachable", detail or f"http_{status}",
+                "base_url", "unreachable", error_message,
             )])
         # Our request failed but theirs arrived: surface the failure, the
         # incoming request lives its own life (already broadcast).
         return PeerMutationResult(False, peer.id, [PeerError(
-            "base_url", "unreachable", detail or f"http_{status}",
+            "base_url", "unreachable", error_message,
         )])
 
     fresh = await sync_to_async(lambda: Peer.objects.filter(pk=peer.pk).first())()
@@ -319,9 +324,10 @@ async def accept_peer(peer, *, name: str) -> PeerMutationResult:
         if token is None:
             return PeerMutationResult(False, peer.id, [PeerError("peer", "not_found", "Peer no longer exists.")])
 
+    body = {}
     detail = ""
     try:
-        status, _body = await outbound.post_handshake_accept(
+        status, body = await outbound.post_handshake_accept(
             peer.base_url, bearer=peer.token_theirs, token=token, display_name=own_display_name(),
         )
     except outbound.PeerOutboundError as exc:
@@ -329,7 +335,9 @@ async def accept_peer(peer, *, name: str) -> PeerMutationResult:
     if status is None or status >= 400:
         # Row stays pending_received (token kept for the retry), the user retries.
         return PeerMutationResult(False, peer.id, [PeerError(
-            "base_url", "unreachable", detail or f"http_{status}",
+            "base_url", "unreachable", detail or outbound.response_error_message(
+                body, "The remote instance rejected the acceptance.",
+            ),
         )])
 
     clean_name = (name or "").strip()
@@ -575,9 +583,10 @@ async def reconnect_peer(peer) -> PeerMutationResult:
         return PeerMutationResult(False, peer.id, [PeerError("state", error, messages[error])])
 
     await broadcast_peer_updated(fresh)
+    body = {}
     detail = ""
     try:
-        status, _body = await outbound.post_handshake_request(
+        status, body = await outbound.post_handshake_request(
             fresh.base_url,
             display_name=own_display_name(),
             own_base_url=own_url,
@@ -587,7 +596,9 @@ async def reconnect_peer(peer) -> PeerMutationResult:
         status, detail = None, str(exc)
     if status is None or status >= 400:
         return PeerMutationResult(False, fresh.id, [PeerError(
-            "base_url", "unreachable", detail or f"http_{status}",
+            "base_url", "unreachable", detail or outbound.response_error_message(
+                body, "The remote instance rejected the reconnect request.",
+            ),
         )])
     return PeerMutationResult(True, fresh.id, None)
 
