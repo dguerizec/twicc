@@ -208,7 +208,9 @@ class CodexAgentManager(BaseAgentManager):
         - ``USER_TURN``: schedule a new turn via ``agent.send``.
         - ``ASSISTANT_TURN``: steer the active turn — refresh the agent
           settings bundle for the next ``_run_turn`` and forward to
-          ``agent.send``, which routes to ``turn_handle.steer``.
+          ``agent.send``, which routes to ``turn_handle.steer`` (or, when
+          the agent is parked in the subagent hold with no active turn,
+          breaks the hold and opens a real turn).
         - ``STARTING``: refuse — safety net only; in practice the state has
           flipped to ``ASSISTANT_TURN`` by the time ``_start_agent`` returns.
 
@@ -357,10 +359,18 @@ class CodexAgentManager(BaseAgentManager):
             # A ``/goal`` continuation parks the agent in a synthetic
             # ASSISTANT_TURN that TwiCC does NOT drive; the goal RPCs still work
             # there (set steers the running turn in place, clear stops it), so a
-            # ``/goal`` is allowed. Everything else while busy — a real working
-            # turn, or ``/compact`` mid-continuation — is still refused.
+            # ``/goal`` is allowed. The subagent hold parks the agent the same
+            # way with NO turn at all — the thread is as idle as in USER_TURN,
+            # so every hardcoded command works there (a ``/compact`` during a
+            # long verification must not be refused; its settle re-arms the
+            # hold). Everything else while busy — a real working turn, or
+            # ``/compact`` mid-goal-continuation — is still refused.
             busy = agent.state != AgentState.USER_TURN
-            if busy and not (command.name == "goal" and agent.in_goal_continuation()):
+            allowed_while_busy = (
+                (command.name == "goal" and agent.in_goal_continuation())
+                or agent.in_subagent_hold()
+            )
+            if busy and not allowed_while_busy:
                 raise RuntimeError(
                     f"Cannot run /{command.name} while the assistant is working",
                 )
@@ -393,6 +403,23 @@ class CodexAgentManager(BaseAgentManager):
         if agent is None:
             return
         await agent.notify_compacted()
+
+    async def notify_subagents_stopped(
+        self, session_id: str, agent_ids: list[str],
+    ) -> None:
+        """Relay a "these subagents finished" signal from the watcher.
+
+        Fired when ``check_agent_naturally_stopped`` stamps
+        ``last_stopped_at`` on subagents of ``session_id`` — the only
+        reliable end-of-child signal (nothing reaches the parent's SDK
+        stream). The agent drops the ids from its live set and, when parked
+        in the subagent hold with nothing left running, settles back to
+        USER_TURN. No live agent → no-op.
+        """
+        agent = self._agents.get(session_id)
+        if agent is None:
+            return
+        await agent.notify_subagents_stopped(agent_ids)
 
     def has_goal_continuation(self, session_id: str) -> bool:
         """Whether a live agent for ``session_id`` is parked in a ``/goal``

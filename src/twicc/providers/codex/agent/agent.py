@@ -265,6 +265,7 @@ _COLLAB_AGENT_TOOL_CALL_ITEM_TYPE = "collabAgentToolCall"
 _COLLAB_WAIT_TOOL = "wait"
 _SUB_AGENT_STARTED_KIND = "started"
 _SUB_AGENT_INTERRUPTED_KIND = "interrupted"
+_SUB_AGENT_COMPLETED_KIND = "completed"
 
 
 def _enum_value(value: Any) -> Any:
@@ -413,16 +414,20 @@ class CodexAgent(BaseAgent):
         # Subagents this run spawned through the multi-agent v2
         # collaboration tools, ``agent_thread_id -> agent_path``. Fed by
         # the ``subAgentActivity`` items Codex routes on the *parent's*
-        # stream (``started`` adds, ``interrupted`` removes) and pruned
-        # against the watcher's view of which ones already finished (see
-        # :func:`_stopped_subagent_ids`) — the SDK stream has no
-        # per-agent completion item.
+        # stream (``started`` adds, ``interrupted``/``completed`` remove)
+        # and pruned against the watcher's view of which ones already
+        # finished (see :func:`_stopped_subagent_ids`) — in practice the
+        # SDK stream carries no per-agent completion item, so the watcher
+        # is the reliable end-of-child source.
         #
-        # Used only to label the wait: unlike Claude Code, Codex needs no
-        # ASSISTANT_TURN hold, because ``wait_agent`` blocks *inside* the
-        # turn (no ``turn/completed`` fires while children run). What the
-        # user would otherwise see for the whole wait is a bare
-        # "thinking".
+        # Two consumers:
+        # - the "waiting for N subagents" label while the parent blocks
+        #   inside a ``wait_agent`` call (the turn stays open on its own
+        #   there, only the *why* is missing);
+        # - the subagent hold: when a turn ends with entries still live
+        #   (the model called ``spawn_agent`` without ``wait_agent``),
+        #   ``_run_turn`` keeps ASSISTANT_TURN instead of settling idle —
+        #   the Codex mirror of Claude Code's background-agents hold.
         self._live_subagents: dict[str, str] = {}
         # True while the "waiting for N subagents" process label is the
         # one on screen. Set when a ``wait`` collaboration call starts,
@@ -430,6 +435,14 @@ class CodexAgent(BaseAgent):
         # end) rebuilds the frontend's process object and drops the label
         # on its own, so no extra clean-up is needed there.
         self._subagent_wait_label_active = False
+        # True while a turn ended held in ASSISTANT_TURN because spawned
+        # subagents are still running (see :meth:`_try_arm_subagent_hold`).
+        # There is no active turn during the hold: a user message breaks it
+        # by opening a real turn (see :meth:`send`), and the watcher's
+        # end-of-child signal (:meth:`notify_subagents_stopped`) releases
+        # it once the last child finishes. A new real turn always clears
+        # the flag at its top and re-decides at its tail.
+        self._subagent_hold_active = False
 
         # Set when a user approves an Auto-review denial after Codex has already
         # closed the originating turn. ``_run_turn`` consumes it by immediately
@@ -580,7 +593,9 @@ class CodexAgent(BaseAgent):
         drops a send, so there is no ``False`` return.
 
         - ``USER_TURN``: schedule a fresh turn (the normal flow).
-        - ``ASSISTANT_TURN``: steer — push the input into the active
+        - ``ASSISTANT_TURN`` in the subagent hold (no active turn): break the
+          hold and schedule a fresh turn — there is nothing to steer.
+        - ``ASSISTANT_TURN`` otherwise: steer — push the input into the active
           ``TurnHandle`` so Codex picks it up at the next turn cycle, without
           interrupting tool execution or reasoning. The SDK's ``turn_steer``
           serializes behind the async ``_transport_lock`` held by the
@@ -598,6 +613,20 @@ class CodexAgent(BaseAgent):
             raise SendDeliveryError("Cannot send message: agent is dead", code="agent_dead")
 
         if self.state == AgentState.ASSISTANT_TURN:
+            if self._subagent_hold_active and self._current_turn is None:
+                # Parked in the subagent hold: ASSISTANT_TURN with no active
+                # turn to steer (steering would just time out on the
+                # handshake wait below). The user message breaks the hold
+                # and opens a real turn — which re-arms the hold at its own
+                # end if children are still running. Clear the label
+                # explicitly: the state doesn't change, so no
+                # ``process_state`` broadcast would drop it for us.
+                self._subagent_hold_active = False
+                await self._broadcast_process_label("")
+                self.last_activity = time.time()
+                self._schedule_turn(text, images)
+                return True
+
             # ``_run_turn`` publishes ``_current_turn`` only after the
             # ``thread.turn`` RPC returns. A fast steer could race that
             # window; bound the wait so a broken handshake doesn't hang
@@ -712,10 +741,12 @@ class CodexAgent(BaseAgent):
         clean shutdown when ``kill_reason`` is already set (i.e. the manager
         killed us on purpose) — no error toast in that case.
         """
-        # A real TwiCC-driven turn supersedes any parked ``/goal`` continuation:
-        # from here ``_run_turn`` owns the state, so drop the flag (the watcher
-        # signal must not flip us out of this turn).
+        # A real TwiCC-driven turn supersedes any parked ``/goal`` continuation
+        # or subagent hold: from here ``_run_turn`` owns the state, so drop the
+        # flags (the watcher signals must not flip us out of this turn). The
+        # hold re-decides at this turn's own end.
         self._goal_continuation_active = False
+        self._subagent_hold_active = False
         # Each turn decides anew whether it delivered a plan (see
         # ``_prompt_plan_implementation``).
         self._plan_item_this_turn = False
@@ -840,6 +871,21 @@ class CodexAgent(BaseAgent):
             await self._prompt_plan_implementation()
             return
 
+        # The turn is over, so any in-turn ``wait_agent`` is too — drop its
+        # label flag locally (an interrupted wait may never see its
+        # ``item/completed``); from here the hold owns the label if needed.
+        self._subagent_wait_label_active = False
+
+        # Turn completed normally. If subagents this session spawned are
+        # still running (``spawn_agent`` without ``wait_agent`` — Codex ends
+        # the turn as soon as the parent stops talking, children or not),
+        # hold ASSISTANT_TURN instead of settling idle: this keeps every
+        # USER_TURN consumer quiet — "finished working" notifications, the
+        # green check, the idle auto-stop — until a turn ends with nothing
+        # left running. The Codex mirror of Claude Code's background hold.
+        if await self._try_arm_subagent_hold():
+            return
+
         # Turn completed normally → ready for the next user input.
         self._set_state(AgentState.USER_TURN)
         self.last_activity = time.time()
@@ -886,10 +932,12 @@ class CodexAgent(BaseAgent):
         """Update the live-subagent set from one ``subAgentActivity`` item.
 
         ``started`` is the spawn (the only kind whose ``event_id`` is a
-        ``spawn_agent`` call), ``interrupted`` ends the child, and
-        ``interacted`` is just a message passing through — it must not
-        change the set. Idempotent: the SDK emits the same item on
-        ``item/started`` and ``item/completed``.
+        ``spawn_agent`` call), ``interrupted``/``completed`` end the child
+        (``completed`` is defensive — the runtimes observed so far never
+        route it on the parent's stream, the watcher signal covers the
+        gap), and ``interacted`` is just a message passing through — it
+        must not change the set. Idempotent: the SDK emits the same item
+        on ``item/started`` and ``item/completed``.
         """
         thread_id = getattr(inner, "agent_thread_id", None)
         if not isinstance(thread_id, str) or not thread_id:
@@ -898,7 +946,7 @@ class CodexAgent(BaseAgent):
         if kind == _SUB_AGENT_STARTED_KIND:
             agent_path = getattr(inner, "agent_path", None)
             self._live_subagents[thread_id] = agent_path if isinstance(agent_path, str) else ""
-        elif kind == _SUB_AGENT_INTERRUPTED_KIND:
+        elif kind in (_SUB_AGENT_INTERRUPTED_KIND, _SUB_AGENT_COMPLETED_KIND):
             self._live_subagents.pop(thread_id, None)
 
     async def _refresh_subagent_wait_label(self) -> None:
@@ -932,11 +980,11 @@ class CodexAgent(BaseAgent):
         # Recomputed, never stored: the count is read off the live set at the
         # moment a client asks. A manual /compact owns the line while it runs
         # (its own synthetic turn), otherwise the label only exists while the
-        # agent blocks on ``wait_agent`` — any other moment, what Codex is
-        # doing speaks for itself.
+        # agent blocks on ``wait_agent`` or is parked in the subagent hold —
+        # any other moment, what Codex is doing speaks for itself.
         if self._manual_compaction:
             return "compacting"
-        if not self._subagent_wait_label_active:
+        if not (self._subagent_wait_label_active or self._subagent_hold_active):
             return None
         count = len(self._live_subagents)
         if not count:
@@ -969,6 +1017,106 @@ class CodexAgent(BaseAgent):
             return
         for session_id in stopped:
             self._live_subagents.pop(session_id, None)
+
+    async def _try_arm_subagent_hold(self) -> bool:
+        """Hold ASSISTANT_TURN at an idle boundary when spawned subagents still run.
+
+        Called wherever the agent would otherwise settle to USER_TURN (turn
+        end, command settles, end-of-compaction). Prunes the live set against
+        the watcher's view first, so a stale entry can never hold a turn open
+        for a child that already finished. Returns ``True`` when the hold was
+        armed (state + label broadcast done — the caller must NOT settle to
+        USER_TURN), ``False`` when nothing is running (the flag is dropped and
+        the caller settles normally).
+
+        Order matters on arming: the ``process_state`` broadcast goes out
+        first (the frontend rebuilds its process object on it, wiping any
+        label), then the label overrides on top.
+        """
+        await self._prune_finished_subagents()
+        if not self._live_subagents:
+            self._subagent_hold_active = False
+            return False
+        self._subagent_hold_active = True
+        logger.info(
+            "Codex session %s: idle boundary with %d subagent(s) still running "
+            "— holding ASSISTANT_TURN (%s)",
+            self.session_id,
+            len(self._live_subagents),
+            ", ".join(
+                f"{tid} ({path})" if path else tid
+                for tid, path in self._live_subagents.items()
+            ),
+        )
+        self._set_state(AgentState.ASSISTANT_TURN)
+        self.last_activity = time.time()
+        await self._notify_state_change()
+        label = self.current_status_label()
+        if label is not None:
+            await self._broadcast_process_label(label)
+        return True
+
+    def in_subagent_hold(self) -> bool:
+        """Whether the agent is parked in the subagent hold (no active turn).
+
+        Read by the manager to let hardcoded commands (``/compact``, …)
+        through during the hold — from the SDK's perspective the thread is
+        as idle as in USER_TURN, only TwiCC's state says otherwise.
+        """
+        return self._subagent_hold_active
+
+    async def notify_subagents_stopped(self, agent_ids: list[str]) -> None:
+        """Relay from the watcher: these spawned subagents have finished.
+
+        The end-of-child signal never reaches the parent's SDK stream (the
+        ``FINAL_ANSWER`` lands only in the parent's rollout), so the watcher
+        forwards it here when ``check_agent_naturally_stopped`` stamps
+        ``last_stopped_at``. Drops the ids from the live set, then:
+
+        - a real turn is running → it owns the state; just refresh the
+          in-turn ``wait_agent`` label's count if one is shown;
+        - parked in the hold with children left → refresh the label count;
+        - parked in the hold with nothing left → release: settle USER_TURN.
+        """
+        changed = False
+        for agent_id in agent_ids:
+            if self._live_subagents.pop(agent_id, None) is not None:
+                changed = True
+        if not changed or self.state == AgentState.DEAD:
+            return
+
+        if self._current_turn is not None:
+            if self._subagent_wait_label_active:
+                label = self.current_status_label()
+                if label is not None:
+                    await self._broadcast_process_label(label)
+            return
+
+        if self._manual_compaction or self._goal_continuation_active:
+            # A manual ``/compact`` or a ``/goal`` continuation owns the
+            # state right now (both park ASSISTANT_TURN without a
+            # ``_current_turn``). Its own settle — ``notify_compacted`` /
+            # ``notify_goal_continuation_stopped`` — re-runs the hold
+            # decision and will find the pruned set.
+            return
+
+        if not self._subagent_hold_active:
+            return
+
+        if self._live_subagents:
+            label = self.current_status_label()
+            if label is not None:
+                await self._broadcast_process_label(label)
+            return
+
+        logger.info(
+            "Codex session %s: last held subagent finished — back to USER_TURN",
+            self.session_id,
+        )
+        self._subagent_hold_active = False
+        self._set_state(AgentState.USER_TURN)
+        self.last_activity = time.time()
+        await self._notify_state_change()
 
     async def compact(self) -> None:
         """Kick off a server-side context compaction on the live thread.
@@ -1054,9 +1202,13 @@ class CodexAgent(BaseAgent):
             "Codex /compact: compaction finished for session %s — back to USER_TURN",
             self.session_id,
         )
-        self._set_state(AgentState.USER_TURN)
-        self.last_activity = time.time()
-        await self._notify_state_change()
+        # A ``/compact`` issued during the subagent hold settles back INTO the
+        # hold, not to USER_TURN — the children it was waiting on are still
+        # running.
+        if not await self._try_arm_subagent_hold():
+            self._set_state(AgentState.USER_TURN)
+            self.last_activity = time.time()
+            await self._notify_state_change()
         # Dedicated signal so the frontend retires the optimistic ``/compact``
         # bubble (no real user_message JSONL line is ever produced for it).
         await self._broadcast_stream_event({
@@ -1199,13 +1351,16 @@ class CodexAgent(BaseAgent):
         frontend retires the optimistic command bubble — the command opens no
         turn, so no ``user_message`` JSONL line is guaranteed to do it (the
         injected transcript markers are best-effort). No-op once ``DEAD`` (a
-        teardown may race this).
+        teardown may race this). A USER_TURN settle lands back in the
+        subagent hold instead when spawned children are still running (e.g.
+        a ``/goal clear`` issued during the hold).
         """
         if self.state == AgentState.DEAD:
             return
-        self._set_state(state)
-        self.last_activity = time.time()
-        await self._notify_state_change()
+        if state != AgentState.USER_TURN or not await self._try_arm_subagent_hold():
+            self._set_state(state)
+            self.last_activity = time.time()
+            await self._notify_state_change()
         await self._broadcast_stream_event({
             "type": done_event,
             "session_id": self.session_id,
@@ -1240,6 +1395,10 @@ class CodexAgent(BaseAgent):
             self.session_id,
         )
         self._goal_continuation_active = False
+        # The continuation may have spawned subagents that outlive it: an
+        # idle boundary like any other — hold instead of settling idle.
+        if await self._try_arm_subagent_hold():
+            return
         self._set_state(AgentState.USER_TURN)
         self.last_activity = time.time()
         await self._notify_state_change()
@@ -1404,9 +1563,10 @@ class CodexAgent(BaseAgent):
                     "Default mode — not starting the implement turn",
                     self.session_id, exc_info=True,
                 )
-                self._set_state(AgentState.USER_TURN)
-                self.last_activity = time.time()
-                await self._notify_state_change()
+                if not await self._try_arm_subagent_hold():
+                    self._set_state(AgentState.USER_TURN)
+                    self.last_activity = time.time()
+                    await self._notify_state_change()
                 return
             logger.info(
                 "Codex plan prompt: session %s back to Default mode — "
@@ -1417,7 +1577,11 @@ class CodexAgent(BaseAgent):
             return
 
         # ``stay`` / ``newSession`` (or a malformed response resolved to the
-        # safe default): remain in Plan mode, hand control back to the user.
+        # safe default): remain in Plan mode, hand control back to the user
+        # — unless subagents spawned by earlier turns are still running, in
+        # which case the hold takes over as at any idle boundary.
+        if await self._try_arm_subagent_hold():
+            return
         self._set_state(AgentState.USER_TURN)
         self.last_activity = time.time()
         await self._notify_state_change()
@@ -1514,9 +1678,12 @@ class CodexAgent(BaseAgent):
         pid = self.get_pid()
 
         # A manual /compact may be mid-flight — drop its safety-timeout task
-        # and flag so a late firing can't touch a dying agent.
+        # and flag so a late firing can't touch a dying agent. Same for the
+        # subagent hold: a late watcher relay must find nothing to settle,
+        # and no snapshot of the dying agent should carry a waiting label.
         self._manual_compaction = False
         self._cancel_compaction_timeout()
+        self._subagent_hold_active = False
 
         # Cancel any in-flight approval BEFORE closing the transport.
         # Cascade per pending approval:

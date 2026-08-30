@@ -40,6 +40,7 @@ def _codex_agent() -> CodexAgent:
     agent.session_id = "session-2"
     agent._live_subagents = {}
     agent._subagent_wait_label_active = False
+    agent._subagent_hold_active = False
     agent._manual_compaction = False
     return agent
 
@@ -91,6 +92,14 @@ class TestCodexStatusLabel:
         agent._subagent_wait_label_active = True
         assert agent.current_status_label() == "waiting for 1 subagent"
 
+    def test_the_subagent_hold_labels_without_a_wait(self):
+        """A turn ended held on live children labels like an in-turn wait."""
+        agent = _codex_agent()
+        agent._live_subagents = {"thread-1": "/root/impl", "thread-2": "/root/qa"}
+        agent._subagent_hold_active = True
+
+        assert agent.current_status_label() == "waiting for 2 subagents"
+
     def test_a_wait_with_nothing_live_still_says_waiting(self):
         """Zero children drops the count, not the line (Codex holds the turn)."""
         agent = _codex_agent()
@@ -134,6 +143,7 @@ class TestDefaultAgentHasNoLabel:
         agent = CodexAgent.__new__(CodexAgent)
         agent._live_subagents = {}
         agent._subagent_wait_label_active = False
+        agent._subagent_hold_active = False
         agent._manual_compaction = False
 
         assert agent.current_status_label() is None

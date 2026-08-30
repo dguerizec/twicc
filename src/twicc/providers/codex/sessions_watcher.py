@@ -120,6 +120,26 @@ class CodexSessionsWatcher(BaseSessionsWatcher):
             return
         await manager.notify_compacted(session_id)
 
+    async def _after_agents_stopped(
+        self, session_id: str, stopped_agent_ids: list[str],
+    ) -> None:
+        # A spawned subagent's completion never reaches the parent's SDK
+        # stream (Codex emits no per-agent completion item there), so this
+        # watcher signal — ``last_stopped_at`` just stamped off the
+        # ``FINAL_ANSWER`` landing in the parent's rollout — is what
+        # releases a live parent parked in the subagent hold (or refreshes
+        # the "waiting for N subagents" count). Fire-and-forget: the
+        # ingest path never blocks on agent state settles.
+        from .agent.manager import get_codex_agent_manager
+        try:
+            manager = get_codex_agent_manager()
+        except KeyError:
+            return
+        asyncio.create_task(
+            manager.notify_subagents_stopped(session_id, list(stopped_agent_ids)),
+            name=f"subagents-stopped-relay-{session_id}",
+        )
+
     async def _after_new_lines_synced(self, session, new_line_nums, tool_result_updates) -> None:
         # When a live agent is parked in a ``/goal`` continuation (a synthetic
         # ASSISTANT_TURN it does NOT drive), watch the freshly-synced lines for

@@ -1,11 +1,12 @@
 """Codex multi-agent v2: the "waiting for N subagents" status label.
 
-Codex needs no ``ASSISTANT_TURN`` hold while its children run — unlike
-Claude Code's CLI, it blocks *inside* the turn on ``wait_agent``, so no
+While the parent blocks *inside* the turn on ``wait_agent``, no
 ``turn/completed`` fires and the session stays busy on its own. What it
-does lack is the *reason*: Codex streams no tool activity, so the
-frontend would show a bare "thinking" for the whole wait (18 minutes in
-one real 5-subagent session).
+lacks is the *reason*: Codex streams no tool activity, so the frontend
+would show a bare "thinking" for the whole wait (18 minutes in one real
+5-subagent session). (A turn that ends WITHOUT waiting on its live
+children is the other shape — covered by the subagent hold, see
+``test_codex_subagent_hold.py``.)
 
 The label is driven by two thread items Codex routes on the parent's
 stream: ``subAgentActivity`` (which children are alive) and
@@ -55,6 +56,7 @@ def _agent(stopped: list[str] | None = None) -> CodexAgent:
     agent.session_id = "session-parent"
     agent._live_subagents = {}
     agent._subagent_wait_label_active = False
+    agent._subagent_hold_active = False
     # A manual /compact owns the status line while it runs, so the label
     # composition consults it (see ``current_status_label``).
     agent._manual_compaction = False
@@ -198,6 +200,7 @@ class TestPruningAgainstTheWatcher:
         agent.session_id = parent.id
         agent._live_subagents = {"child-done": "/root/a", "child-live": "/root/b"}
         agent._subagent_wait_label_active = False
+        agent._subagent_hold_active = False
         agent._manual_compaction = False
         agent._broadcast_process_label = AsyncMock()
 

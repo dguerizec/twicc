@@ -303,6 +303,23 @@ class BaseSessionsWatcher:
         """
         return None
 
+    async def _after_agents_stopped(
+        self, session_id: str, stopped_agent_ids: list[str],
+    ) -> None:
+        """Hook fired when subagents of ``session_id`` naturally finished.
+
+        ``stopped_agent_ids`` are the subagent session ids whose
+        ``last_stopped_at`` was just stamped by
+        ``check_agent_naturally_stopped`` while syncing the parent's file.
+        Default implementation is a no-op. Codex overrides this to release
+        a live parent parked in the subagent hold — a spawned subagent's
+        completion never reaches the parent's SDK stream, so this watcher
+        signal is the only release channel. Live incremental-sync path
+        only; implementations must never block the ingest path on agent
+        locks (fire-and-forget a task instead).
+        """
+        return None
+
     async def _after_new_lines_synced(
         self,
         session: Session,
@@ -784,6 +801,11 @@ class BaseSessionsWatcher:
                             "type": "session_updated",
                             "session": serialize_session(stopped_session),
                         })
+                if agent_stopped_updates:
+                    await self._after_agents_stopped(
+                        session.id,
+                        [u.agent_session_id for u in agent_stopped_updates],
+                    )
 
                 # Full-text search indexing (sessions only, not subagents):
                 # build the indexing request — the actual Tantivy I/O AND
