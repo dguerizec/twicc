@@ -18,7 +18,7 @@ from twicc.core.models import (
     Session,
     SessionType,
 )
-from twicc.core.services import peer_messages
+from twicc.core.services import peer_messages, peer_mutation
 from twicc.core.services.peer_tokens import mint_token
 from twicc.peer import inbound_views, outbound
 
@@ -93,6 +93,7 @@ def _active_peer(**kw):
     defaults = {
         "name": "alice", "base_url": "https://alice.example.com", "state": PeerState.ACTIVE,
         "token_ours": mint_token(), "token_theirs": "their-" + "t" * 30,
+        "paired_local_base_url": "https://me.example.com",
     }
     defaults.update(kw)
     return Peer.objects.create(**defaults)
@@ -141,6 +142,32 @@ def test_receive_non_active_state_same_as_bad_token(client, transactional_db, pe
     res = _post(client, "/peer/messages/", _wire_body(), bearer=peer.token_ours)
     assert res.status_code == 403
     assert orjson.loads(res.content)["error"] == "unknown_token"  # no state oracle
+
+
+def test_receive_rejects_active_peer_bound_to_another_local_origin(
+        client, transactional_db, monkeypatch):
+    peer = _active_peer(paired_local_base_url="https://old.example.com")
+    monkeypatch.setattr(
+        "twicc.synced_settings.read_synced_settings",
+        lambda: {"peerBaseUrl": "https://new.example.com"},
+    )
+
+    res = _post(client, "/peer/messages/", _wire_body(), bearer=peer.token_ours)
+
+    assert res.status_code == 403
+    assert orjson.loads(res.content)["error"] == "unknown_token"
+
+
+def test_receive_rechecks_peer_after_waiting_for_write_lock(
+        transactional_db, peer_host):
+    peer = _active_peer()
+    Peer.objects.filter(pk=peer.pk).update(state=PeerState.REVOKED)
+
+    status, body = _run(peer_messages.receive_peer_message(peer, _wire_body()))
+
+    assert status == 403
+    assert body == {"error": "unknown_token"}
+    assert PeerMessage.objects.count() == 0
 
 
 def test_receive_invalid_payloads(client, transactional_db, peer_host):
@@ -520,6 +547,24 @@ def test_status_callback_idempotent_and_errors(client, transactional_db, peer_ho
     assert res.status_code == 400
 
 
+def test_status_callback_rechecks_peer_after_waiting_for_write_lock(
+        transactional_db, peer_host):
+    peer = _active_peer()
+    message = _out_message(peer)
+    Peer.objects.filter(pk=peer.pk).update(state=PeerState.REVOKED)
+
+    status, body = _run(peer_messages.apply_status_callback(
+        peer,
+        message.message_id,
+        PeerMessageStatus.DELIVERED,
+    ))
+
+    assert status == 403
+    assert body == {"error": "unknown_token"}
+    message.refresh_from_db()
+    assert message.status == PeerMessageStatus.PENDING
+
+
 # ── send_peer_message_from_payload ──────────────────────────────────────────
 
 def _patch_post_message(monkeypatch, status=202, *, network_error=False, calls=None):
@@ -631,11 +676,61 @@ def test_send_403_marks_peer_broken(transactional_db, peer_host, broadcasts, mon
     assert result.errors[0].code == "peer_broken"
     peer.refresh_from_db()
     assert peer.state == PeerState.BROKEN
+    assert peer.broken_reason == "remote_credential_rejected"
     message = PeerMessage.objects.get()
     assert message.status == PeerMessageStatus.FAILED
     assert message.error == "peer_rejected_token"
     types = [e["type"] for e in broadcasts]
     assert "peer_updated" in types and "peer_message_updated" in types
+
+
+def test_revoke_during_rejected_send_is_not_overwritten(
+        transactional_db, peer_host, monkeypatch):
+    peer = _active_peer()
+
+    async def _revoke_then_reject(base_url, **kwargs):
+        await Peer.objects.filter(pk=peer.pk).aupdate(
+            state=PeerState.REVOKED,
+            token_ours=None,
+            token_theirs=None,
+        )
+        return 403, {"error": "unknown_token"}
+
+    monkeypatch.setattr("twicc.peer.outbound.post_message", _revoke_then_reject)
+
+    result = _run(peer_messages.send_peer_message_from_payload(
+        {"peer": peer.id, "title": "T", "text": "x"},
+    ))
+
+    assert not result.success
+    peer.refresh_from_db()
+    assert peer.state == PeerState.REVOKED
+
+
+def test_revoke_before_outbound_insert_prevents_send(
+        transactional_db, peer_host, monkeypatch):
+    peer = _active_peer()
+    calls = []
+    _patch_post_message(monkeypatch, calls=calls)
+
+    async def _revoke_then_run(factory):
+        await Peer.objects.filter(pk=peer.pk).aupdate(
+            state=PeerState.REVOKED,
+            token_ours=None,
+            token_theirs=None,
+        )
+        return await factory()
+
+    monkeypatch.setattr(peer_messages, "run_under_db_write_lock", _revoke_then_run)
+
+    result = _run(peer_messages.send_peer_message_from_payload(
+        {"peer": peer.id, "title": "T", "text": "x"},
+    ))
+
+    assert not result.success
+    assert result.errors[0].code == "not_active"
+    assert calls == []
+    assert PeerMessage.objects.count() == 0
 
 
 def test_send_http_error(transactional_db, peer_host, monkeypatch):
@@ -908,7 +1003,7 @@ def _make_internal_target_session():
 
 
 @pytest.fixture
-def status_callbacks(monkeypatch):
+def status_callbacks(monkeypatch, peer_host):
     calls = []
 
     async def _fake(base_url, *, bearer, message_id, status):
@@ -1341,6 +1436,26 @@ def test_owner_message_list_serializes_resolved_reply_without_async_lazy_load(
     assert "payload" not in row
 
 
+def test_owner_message_list_hides_revoked_by_default_and_keeps_explicit_history(
+        client, transactional_db):
+    active = _active_peer(name="active")
+    revoked = _active_peer(
+        name="revoked",
+        base_url="https://revoked.example.com",
+        state=PeerState.REVOKED,
+        token_ours=None,
+        token_theirs=None,
+    )
+    active_message = _in_message(active, message_id="active-pending")
+    revoked_message = _in_message(revoked, message_id="revoked-pending")
+
+    default_response = _run(client.get("/api/peer-messages/"))
+    explicit_response = _run(client.get("/api/peer-messages/", {"peer_id": revoked.id}))
+
+    assert [row["id"] for row in orjson.loads(default_response.content)["messages"]] == [active_message.pk]
+    assert [row["id"] for row in orjson.loads(explicit_response.content)["messages"]] == [revoked_message.pk]
+
+
 def test_owner_message_list_searches_title_and_complete_text(client, transactional_db):
     peer = _active_peer()
     title_match = _in_message(
@@ -1689,6 +1804,23 @@ def test_refuse_callback_failure_does_not_block(transactional_db, monkeypatch):
     assert success
     message.refresh_from_db()
     assert message.status == PeerMessageStatus.REFUSED
+
+
+@pytest.mark.parametrize("action", ["deliver", "refuse"])
+def test_resolution_after_revoke_sends_no_status_callback(
+        transactional_db, peer_host, status_callbacks, action):
+    peer = _active_peer()
+    message = _in_message(peer)
+    assert _run(peer_mutation.revoke_peer(peer)).success
+
+    if action == "deliver":
+        success, _envelope, errors = _run(peer_messages.mark_delivered(message))
+    else:
+        success, errors = _run(peer_messages.refuse_peer_message(message))
+
+    assert success
+    assert errors == []
+    assert status_callbacks == []
 
 
 # ── Attachment purge (phase 8) ──────────────────────────────────────────────

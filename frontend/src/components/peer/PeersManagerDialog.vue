@@ -3,8 +3,8 @@
  * PeersManagerDialog - manage peer instances (cross-instance messaging).
  *
  * Mounted once in App.vue, opened by the `twicc:open-peers-manager`
- * CustomEvent (settings section, toasts, inbox). REST via apiFetch; the store
- * is updated by the WS broadcasts — no manual refetch after mutations.
+ * CustomEvent (settings section, toasts, inbox). REST mutations normally reach
+ * the store through WS broadcasts. A manual GET resolves unknown results.
  *
  * Rendering rule: handshake-supplied strings (remote_display_name, base_url)
  * come from an unauthenticated endpoint and are attacker-controlled — text
@@ -14,6 +14,7 @@ import { ref, computed, watch } from 'vue'
 import { usePeersStore } from '../../stores/peers'
 import { useSettingsStore } from '../../stores/settings'
 import { apiFetch } from '../../utils/api'
+import { mutatePeer, reloadPeers } from '../../utils/peerManagerRequests'
 
 const props = defineProps({ open: Boolean })
 const emit = defineEmits(['close'])
@@ -26,7 +27,13 @@ const peerBaseUrl = computed(() => settingsStore.getUsablePeerBaseUrl)
 const peerDisplayName = computed(() => settingsStore.getPeerDisplayName || '')
 const pendingReceived = computed(() => peersStore.peers.filter(p => p.state === 'pending_received'))
 const pendingSent = computed(() => peersStore.peers.filter(p => p.state === 'pending_sent'))
-const establishedPeers = computed(() => peersStore.peers.filter(p => ['active', 'broken'].includes(p.state)))
+const reconnectReceived = computed(() => peersStore.peers.filter(p => p.reconnect_direction === 'received'))
+const reconnectSent = computed(() => peersStore.peers.filter(p => p.reconnect_direction === 'sent'))
+const incomingRequests = computed(() => [...pendingReceived.value, ...reconnectReceived.value])
+const sentRequests = computed(() => [...pendingSent.value, ...reconnectSent.value])
+const establishedPeers = computed(() => peersStore.peers.filter(p =>
+    ['active', 'broken', 'revoked'].includes(p.state) && !p.reconnect_direction
+))
 
 // Per-peer transient UI state (inputs, errors, busy flags), keyed by peer id.
 const acceptNames = ref({})
@@ -49,10 +56,11 @@ const addName = ref('')
 const addUrl = ref('')
 const addError = ref('')
 const addBusy = ref(false)
+const unknownResult = ref(false)
+const reloadBusy = ref(false)
 
-// Reset transient state on every open: a Remove confirmation armed in a
-// previous visit must NOT survive a dismissal — one stray click would silently
-// delete a relationship and its whole history.
+// Reset transient state on every open. A confirmation armed during a previous
+// visit must not survive a dismissal.
 watch(() => props.open, (open) => {
     if (!open) return
     confirmingRemoval.value = null
@@ -69,22 +77,23 @@ function errorText(payload) {
     return payload?.error || payload?.reason || 'Request failed.'
 }
 
-const NETWORK_ERROR = 'Network error — could not reach the server.'
-
 async function post(url, body) {
-    // fetch REJECTS on network failure (server down, connection cut) — catch
-    // it so the user gets an error callout instead of a silent no-op.
+    const result = await mutatePeer(apiFetch, url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+    })
+    if (result.unknown) unknownResult.value = true
+    return result
+}
+
+async function reloadPeerList() {
+    reloadBusy.value = true
     try {
-        const response = await apiFetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body || {}),
-        })
-        let payload = null
-        try { payload = await response.json() } catch { /* empty body */ }
-        return { ok: response.ok, payload }
-    } catch {
-        return { ok: false, payload: { error: NETWORK_ERROR } }
+        const ok = await reloadPeers(apiFetch, peers => peersStore.applyPeers(peers))
+        if (ok) unknownResult.value = false
+    } finally {
+        reloadBusy.value = false
     }
 }
 
@@ -98,11 +107,12 @@ async function addPeer() {
     }
     addBusy.value = true
     try {
-        const { ok, payload } = await post('/api/peers/', { name, base_url: url })
-        if (!ok) {
+        const { ok, payload, unknown } = await post('/api/peers/', { name, base_url: url })
+        if (!ok && !unknown) {
             addError.value = errorText(payload)
             return
         }
+        if (!ok) return
         addName.value = ''
         addUrl.value = ''
     } finally {
@@ -115,17 +125,19 @@ async function acceptPeer(peer) {
     busy.value = { ...busy.value, [peer.id]: true }
     try {
         const name = acceptNameValue(peer).trim() || peer.name || peer.remote_display_name
-        const { ok, payload } = await post(`/api/peers/${peer.id}/accept/`, { name })
-        if (!ok) rowErrors.value = { ...rowErrors.value, [peer.id]: errorText(payload) }
+        const { ok, payload, unknown } = await post(`/api/peers/${peer.id}/accept/`, { name })
+        if (!ok && !unknown) rowErrors.value = { ...rowErrors.value, [peer.id]: errorText(payload) }
     } finally {
         busy.value = { ...busy.value, [peer.id]: false }
     }
 }
 
 async function refusePeer(peer) {
+    rowErrors.value = { ...rowErrors.value, [peer.id]: '' }
     busy.value = { ...busy.value, [peer.id]: true }
     try {
-        await post(`/api/peers/${peer.id}/refuse/`)
+        const { ok, payload, unknown } = await post(`/api/peers/${peer.id}/refuse/`)
+        if (!ok && !unknown) rowErrors.value = { ...rowErrors.value, [peer.id]: errorText(payload) }
     } finally {
         busy.value = { ...busy.value, [peer.id]: false }
     }
@@ -140,10 +152,10 @@ async function submitCode(peer) {
     }
     busy.value = { ...busy.value, [peer.id]: true }
     try {
-        const { ok, payload } = await post(`/api/peers/${peer.id}/verify/`, { code })
-        if (!ok) {
+        const { ok, payload, unknown } = await post(`/api/peers/${peer.id}/verify/`, { code })
+        if (!ok && !unknown) {
             rowErrors.value = { ...rowErrors.value, [peer.id]: errorText(payload) }
-        } else {
+        } else if (ok) {
             verifyCodes.value = { ...verifyCodes.value, [peer.id]: '' }
         }
     } finally {
@@ -152,12 +164,15 @@ async function submitCode(peer) {
 }
 
 async function removePeer(peer) {
+    rowErrors.value = { ...rowErrors.value, [peer.id]: '' }
     busy.value = { ...busy.value, [peer.id]: true }
     try {
-        await apiFetch(`/api/peers/${peer.id}/`, { method: 'DELETE' })
-        confirmingRemoval.value = null
-    } catch {
-        rowErrors.value = { ...rowErrors.value, [peer.id]: NETWORK_ERROR }
+        const { ok, payload, unknown } = await mutatePeer(
+            apiFetch, `/api/peers/${peer.id}/`, { method: 'DELETE' },
+        )
+        if (unknown) unknownResult.value = true
+        if (ok) confirmingRemoval.value = null
+        else if (!unknown) rowErrors.value = { ...rowErrors.value, [peer.id]: errorText(payload) }
     } finally {
         busy.value = { ...busy.value, [peer.id]: false }
     }
@@ -169,20 +184,13 @@ function startRename(peer) {
 }
 
 async function _patch(peer, body) {
-    try {
-        const response = await apiFetch(`/api/peers/${peer.id}/`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        })
-        if (!response.ok) {
-            let payload = null
-            try { payload = await response.json() } catch { /* ignore */ }
-            rowErrors.value = { ...rowErrors.value, [peer.id]: errorText(payload) }
-        }
-    } catch {
-        rowErrors.value = { ...rowErrors.value, [peer.id]: NETWORK_ERROR }
-    }
+    const { ok, payload, unknown } = await mutatePeer(apiFetch, `/api/peers/${peer.id}/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    })
+    if (unknown) unknownResult.value = true
+    else if (!ok) rowErrors.value = { ...rowErrors.value, [peer.id]: errorText(payload) }
 }
 
 async function applyRename(peer) {
@@ -192,9 +200,39 @@ async function applyRename(peer) {
     await _patch(peer, { name })
 }
 
+async function reconnectPeer(peer) {
+    rowErrors.value = { ...rowErrors.value, [peer.id]: '' }
+    busy.value = { ...busy.value, [peer.id]: true }
+    try {
+        const { ok, payload, unknown } = await post(`/api/peers/${peer.id}/reconnect/`)
+        if (!ok && !unknown) rowErrors.value = { ...rowErrors.value, [peer.id]: errorText(payload) }
+    } finally {
+        busy.value = { ...busy.value, [peer.id]: false }
+    }
+}
+
+async function cancelReconnect(peer) {
+    rowErrors.value = { ...rowErrors.value, [peer.id]: '' }
+    busy.value = { ...busy.value, [peer.id]: true }
+    try {
+        const { ok, payload, unknown } = await post(`/api/peers/${peer.id}/reconnect/cancel/`)
+        if (!ok && !unknown) rowErrors.value = { ...rowErrors.value, [peer.id]: errorText(payload) }
+    } finally {
+        busy.value = { ...busy.value, [peer.id]: false }
+    }
+}
+
 function openInbox() {
     emit('close')
     window.dispatchEvent(new CustomEvent('twicc:open-peer-inbox'))
+}
+
+function brokenReasonText(reason) {
+    return {
+        remote_credential_rejected: 'Remote credentials rejected',
+        local_address_changed: 'Local address changed',
+        local_address_disabled: 'Local address disabled',
+    }[reason] || reason
 }
 
 // Scope dialog events to the dialog itself — nested wa-* children bubble the
@@ -223,13 +261,21 @@ function onHide(event) {
             <template v-if="peerDisplayName"> · shown as <strong>{{ peerDisplayName }}</strong></template>
         </p>
 
+        <wa-callout v-if="unknownResult" variant="warning" size="small" class="pm-block">
+            <div class="pm-confirm-body">
+                <span>The request result is unknown. Reload peers to read the current server state.</span>
+                <wa-button size="small" :loading="reloadBusy" @click="reloadPeerList">Reload peers</wa-button>
+            </div>
+        </wa-callout>
+
         <!-- Pending incoming requests -->
-        <template v-if="pendingReceived.length">
+        <template v-if="incomingRequests.length">
             <h4 class="pm-section-title">Incoming requests</h4>
-            <div v-for="peer in pendingReceived" :key="peer.id" class="pm-request">
+            <div v-for="peer in incomingRequests" :key="peer.id" class="pm-request">
                 <div class="pm-request__claim">
                     <span class="pm-request__name">{{ peer.remote_display_name || 'unnamed instance' }}</span>
                     <span class="pm-request__url">{{ peer.base_url }}</span>
+                    <wa-tag v-if="peer.reconnect_direction" size="small">Reconnect</wa-tag>
                 </div>
                 <div class="pm-request__code-block">
                     <span class="pm-request__code">{{ peer.verification_code }}</span>
@@ -283,12 +329,16 @@ function onHide(event) {
         </template>
 
         <!-- Pending sent requests -->
-        <template v-if="pendingSent.length">
+        <template v-if="sentRequests.length">
             <h4 class="pm-section-title">Sent requests</h4>
-            <div v-for="peer in pendingSent" :key="peer.id" class="pm-request">
+            <p v-if="reconnectSent.length" class="pm-hint">
+                If both instances show a sent reconnect, cancel one side and retry the other.
+            </p>
+            <div v-for="peer in sentRequests" :key="peer.id" class="pm-request">
                 <div class="pm-request__claim">
                     <span class="pm-request__name">{{ peer.name }}</span>
                     <span class="pm-request__url">{{ peer.base_url }}</span>
+                    <wa-tag v-if="peer.reconnect_direction" size="small">Reconnect</wa-tag>
                 </div>
                 <wa-callout
                     v-if="peer.remote_accepted_at && !peer.code_confirmed_at"
@@ -318,10 +368,16 @@ function onHide(event) {
                 </template>
                 <div class="pm-request__actions">
                     <wa-button
+                        v-if="peer.reconnect_direction === 'sent'"
+                        size="small" appearance="outlined"
+                        :disabled="busy[peer.id]"
+                        @click="reconnectPeer(peer)"
+                    >Retry</wa-button>
+                    <wa-button
                         size="small" variant="danger" appearance="outlined"
                         :disabled="busy[peer.id]"
-                        @click="confirmingRemoval = peer.id"
-                    >Cancel request</wa-button>
+                        @click="peer.reconnect_direction ? cancelReconnect(peer) : confirmingRemoval = peer.id"
+                    >Cancel</wa-button>
                 </div>
                 <wa-callout v-if="confirmingRemoval === peer.id" variant="warning" size="small">
                     <div class="pm-confirm-body">
@@ -363,22 +419,32 @@ function onHide(event) {
             </div>
             <div class="pm-peer__url-row">
                 <span class="pm-peer__url">{{ peer.base_url }}</span>
+                <span v-if="peer.broken_reason" class="pm-peer__reason">
+                    {{ brokenReasonText(peer.broken_reason) }}
+                </span>
             </div>
             <div class="pm-peer__actions">
                 <wa-button size="small" appearance="plain" @click="startRename(peer)">Rename</wa-button>
                 <wa-button
+                    v-if="peer.state !== 'active'"
+                    size="small" variant="brand" appearance="plain"
+                    :disabled="busy[peer.id] || !peerBaseUrl"
+                    @click="reconnectPeer(peer)"
+                >Reconnect</wa-button>
+                <wa-button
+                    v-if="peer.state !== 'revoked'"
                     size="small" variant="danger" appearance="plain"
                     @click="confirmingRemoval = peer.id"
-                >Remove</wa-button>
+                >Revoke</wa-button>
             </div>
             <wa-callout v-if="confirmingRemoval === peer.id" variant="warning" size="small">
                 <div class="pm-confirm-body">
                     <span>
-                        Removes the relationship and its message history silently — the peer is
-                        not notified and will be rejected on its next send.
+                        Revokes the relationship silently and preserves its message history.
+                        The peer is rejected on its next credential request.
                     </span>
                     <span class="pm-confirm__actions">
-                        <wa-button size="small" variant="danger" :disabled="busy[peer.id]" @click="removePeer(peer)">Remove</wa-button>
+                        <wa-button size="small" variant="danger" :disabled="busy[peer.id]" @click="removePeer(peer)">Revoke</wa-button>
                         <wa-button size="small" appearance="outlined" @click="confirmingRemoval = null">Keep</wa-button>
                     </span>
                 </div>
@@ -490,6 +556,10 @@ function onHide(event) {
     font-size: 0.8rem;
 }
 .pm-peer__url-row { display: flex; gap: var(--wa-space-xs); min-width: 0; }
+.pm-peer__reason {
+    color: var(--wa-color-text-quiet);
+    font-size: 0.8rem;
+}
 
 .pm-add-form {
     display: flex;

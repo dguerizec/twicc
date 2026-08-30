@@ -73,7 +73,13 @@ export function storedOriginError(value) {
  * @param {string} options.locationHostname - the browser's hostname (Share host check)
  * @param {EventTarget} options.eventTarget - where the result event is dispatched
  */
-export function useOriginSettingsForm({ settingsStore, dataStore, locationHostname, eventTarget }) {
+export function useOriginSettingsForm({
+    settingsStore,
+    dataStore,
+    locationHostname,
+    eventTarget,
+    confirmPeerBaseUrlChange = message => globalThis.confirm(message),
+}) {
     const inputs = fieldMap(() => ref(''))
     const errors = fieldMap(() => ref(''))
     // Peer-only: plain HTTP is allowed but worth a warning, next to the error.
@@ -124,6 +130,14 @@ export function useOriginSettingsForm({ settingsStore, dataStore, locationHostna
         if (result.warning === 'http') peerBaseUrlWarning.value = PLAIN_HTTP_WARNING
         setError(field, result.errors)
         if (result.errors.length || !Object.keys(result.patch).length) return
+        if (
+            field === 'peerBaseUrl'
+            && storedValue(field)
+            && !await confirmPeerBaseUrlChange(
+                'Changing this address disables active Peer relationships and clears their credentials. '
+                + 'You must reconnect each Peer manually. Continue?'
+            )
+        ) return
         const requestId = generateUUID()
         pendingWrites.set(requestId, { field, input: inputs[field].value })
         if (!await settingsStore.sendOriginSetting(field, result.patch[field], requestId)) {

@@ -474,12 +474,16 @@ def serialize_peer(peer):
         "remote_display_name": peer.remote_display_name,
         "base_url": peer.base_url,
         "state": peer.state,
+        "broken_reason": peer.broken_reason,
+        "reconnect_direction": peer.reconnect_direction,
         # Crossed handshake marker (design §4.2): a pending_received row that
         # also carries OUR outbound leg (both users added each other). The UI
         # must offer the code entry on it — verification applies symmetrically.
         # Only token EXISTENCE is exposed, never the token.
         "crossed": peer.state == PeerState.PENDING_RECEIVED and peer.token_ours is not None,
-        "verification_code": peer.verification_code if peer.state == PeerState.PENDING_RECEIVED else "",
+        "verification_code": peer.verification_code if (
+            peer.state == PeerState.PENDING_RECEIVED or peer.reconnect_direction == "received"
+        ) else "",
         "verified_at": peer.verified_at.isoformat() if peer.verified_at else None,
         "code_confirmed_at": peer.code_confirmed_at.isoformat() if peer.code_confirmed_at else None,
         "remote_accepted_at": peer.remote_accepted_at.isoformat() if peer.remote_accepted_at else None,

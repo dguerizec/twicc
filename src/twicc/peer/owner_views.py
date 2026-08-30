@@ -72,7 +72,7 @@ async def peers_list(request):
 
 
 async def peer_detail(request, peer_id):
-    """GET / PATCH {name?} / DELETE (silent revoke) /api/peers/<id>/."""
+    """GET / PATCH {name?} / DELETE /api/peers/<id>/."""
     peer = await _load_peer(peer_id)
     if request.method == "GET":
         return JsonResponse(serialize_peer(peer))
@@ -92,7 +92,14 @@ async def peer_detail(request, peer_id):
                 return _err_response(result.errors)
         return JsonResponse(serialize_peer(await _load_peer(peer_id)))
     if request.method == "DELETE":
-        await peer_mutation.delete_peer(peer)
+        from twicc.core.models import PeerState
+
+        if peer.state in (PeerState.PENDING_SENT, PeerState.PENDING_RECEIVED):
+            result = await peer_mutation.delete_peer(peer)
+        else:
+            result = await peer_mutation.revoke_peer(peer)
+        if not result.success:
+            return _err_response(result.errors)
         return JsonResponse({"ok": True})
     return HttpResponseNotAllowed(["GET", "PATCH", "DELETE"])
 
@@ -136,9 +143,31 @@ async def peer_refuse(request, peer_id):
     return JsonResponse({"ok": True})
 
 
+async def peer_reconnect(request, peer_id):
+    """POST /api/peers/<id>/reconnect/ — start or manually retry."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    peer = await _load_peer(peer_id)
+    result = await peer_mutation.reconnect_peer(peer)
+    if not result.success:
+        return _err_response(result.errors)
+    return JsonResponse(serialize_peer(await _load_peer(peer_id)))
+
+
+async def peer_reconnect_cancel(request, peer_id):
+    """POST /api/peers/<id>/reconnect/cancel/ — clear a sent attempt."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    peer = await _load_peer(peer_id)
+    result = await peer_mutation.cancel_reconnect(peer)
+    if not result.success:
+        return _err_response(result.errors)
+    return JsonResponse(serialize_peer(await _load_peer(peer_id)))
+
+
 async def peer_messages_list(request):
     """GET peer-message summaries, optionally filtered by peer and full text."""
-    from twicc.core.models import PeerMessage, PeerMessageDirection, PeerMessageStatus
+    from twicc.core.models import PeerMessage, PeerMessageDirection, PeerMessageStatus, PeerState
 
     if request.method != "GET":
         return HttpResponseNotAllowed(["GET"])
@@ -155,6 +184,8 @@ async def peer_messages_list(request):
         rows = PeerMessage.objects.all()
         if peer_id:
             rows = rows.filter(peer_id=peer_id)
+        else:
+            rows = rows.exclude(peer__state=PeerState.REVOKED)
 
         if query:
             pending_ids = []

@@ -80,6 +80,7 @@ def peer_send_cmd(
     from twicc.cli._output import emit_error
     from twicc.core.models import Peer, PeerMessage, PeerState
     from twicc.core.services.peer_messages import validate_reply_to, validate_title
+    from twicc.core.services.peer_tokens import peer_credentials_are_active
     from twicc.providers.helpers import get_provider_helpers
 
     try:
@@ -104,6 +105,12 @@ def peer_send_cmd(
         )
     if peer_row.state != PeerState.ACTIVE:
         emit_error("This peer relationship is still pending — it cannot receive messages yet.", code=1)
+    if not peer_credentials_are_active(peer_row):
+        emit_error(
+            "This peer was paired at another local address. "
+            "Ask your user to reconnect it in Settings › Peers.",
+            code=1,
+        )
 
     # Same normalization + cap as the watcher-side service (which re-validates):
     # flattened to one line, stripped, 100 chars max — over-long is REJECTED,

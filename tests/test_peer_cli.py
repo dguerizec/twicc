@@ -21,10 +21,19 @@ def _passthrough(monkeypatch):
     monkeypatch.setattr("twicc.core.services.peer_messages.run_under_db_write_lock", _p)
 
 
+@pytest.fixture(autouse=True)
+def _peer_host(monkeypatch):
+    monkeypatch.setattr(
+        "twicc.synced_settings.read_synced_settings",
+        lambda: {"peerBaseUrl": "https://me.example.com"},
+    )
+
+
 def _active_peer(**kw):
     defaults = {
         "name": "alice", "base_url": "https://alice.example.com", "state": PeerState.ACTIVE,
         "token_ours": mint_token(), "token_theirs": "their-" + "t" * 30,
+        "paired_local_base_url": "https://me.example.com",
     }
     defaults.update(kw)
     return Peer.objects.create(**defaults)
@@ -37,12 +46,15 @@ def test_peers_lists_active_and_broken_only():
                  token_ours=mint_token())
     _active_peer(name="carol", base_url="https://carol.example.com",
                  state=PeerState.PENDING_RECEIVED, token_ours=None, verification_code="123456")
+    _active_peer(name="revoked", base_url="https://revoked.example.com",
+                 state=PeerState.REVOKED, token_ours=None, token_theirs=None)
     res = invoke(["peers"])
     assert res.exit_code == 0
     peers = res.result["peers"]
     assert {p["name"] for p in peers} == {"alice", "bob"}
     for p in peers:
-        assert set(p) == {"id", "name", "state", "last_contact_at"}  # no base_url, no tokens, no code
+        assert set(p) == {"id", "name", "state", "broken_reason", "last_contact_at"}
+    assert next(p for p in peers if p["name"] == "bob")["broken_reason"] == ""
 
 
 @pytest.mark.django_db(transaction=True)
@@ -121,6 +133,16 @@ def test_peer_send_precheck_errors():
     assert res.exit_code == 1
     res = asyncio.run(scenario(["peer-send", "alice", "x" * 101, "hello"]))
     assert res.exit_code == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_peer_send_precheck_rejects_old_local_origin(monkeypatch):
+    _active_peer(paired_local_base_url="https://old.example.com")
+    monkeypatch.setattr(transport, "ensure_server_available", lambda: None)
+
+    response = invoke(["peer-send", "alice", "Subject", "hello"])
+
+    assert response.exit_code == 1
 
 
 @pytest.mark.django_db(transaction=True)

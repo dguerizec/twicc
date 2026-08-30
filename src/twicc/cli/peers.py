@@ -28,6 +28,7 @@ def peers_cmd() -> None:
             "id": peer.id,
             "name": peer.name,
             "state": peer.state,
+            "broken_reason": peer.broken_reason,
             "last_contact_at": peer.last_contact_at.isoformat() if peer.last_contact_at else None,
         }
         for peer in Peer.objects.filter(state__in=[PeerState.ACTIVE, PeerState.BROKEN])

@@ -5,6 +5,7 @@ import {
     buildPeerInboxSearchUrl,
     peerInboxFiltersActive,
     peerInboxSelectablePeers,
+    peerInboxVisibleMessages,
     peerInboxView,
 } from './peerInboxFilter.js'
 
@@ -54,15 +55,31 @@ test('offers established peers and any peer that owns message history', () => {
     const peers = [
         { id: 'active', state: 'active' },
         { id: 'broken', state: 'broken' },
+        { id: 'revoked', state: 'revoked' },
         { id: 'pending-empty', state: 'pending_received' },
         { id: 'pending-with-history', state: 'pending_sent' },
     ]
-    const messages = [message(1, { peer_id: 'pending-with-history' })]
+    const messages = [
+        message(1, { peer_id: 'pending-with-history' }),
+    ]
 
     assert.deepEqual(
         peerInboxSelectablePeers(peers, messages).map(peer => peer.id),
-        ['active', 'broken', 'pending-with-history'],
+        ['active', 'broken', 'revoked', 'pending-with-history'],
     )
+})
+
+test('hides revoked messages from the default inbox', () => {
+    const messages = [
+        message(1, { peer_id: 'active' }),
+        message(2, { peer_id: 'revoked' }),
+    ]
+    const peers = [
+        { id: 'active', state: 'active' },
+        { id: 'revoked', state: 'revoked' },
+    ]
+
+    assert.deepEqual(peerInboxVisibleMessages(messages, peers), [messages[0]])
 })
 
 test('builds an encoded search URL with the 200-row history limit', () => {

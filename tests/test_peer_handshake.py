@@ -6,7 +6,9 @@ import orjson
 import pytest
 from django.test import AsyncClient
 
-from twicc.core.models import Peer, PeerState
+from django.db.models.deletion import ProtectedError
+
+from twicc.core.models import Peer, PeerMessage, PeerMessageDirection, PeerMessageStatus, PeerState
 from twicc.core.services import peer_mutation
 from twicc.core.services.peer_tokens import mint_token
 from twicc.peer import inbound_views, outbound
@@ -215,6 +217,7 @@ def _make_pending_received(**kw):
         "name": "", "remote_display_name": "alice", "base_url": "https://alice.example.com",
         "state": PeerState.PENDING_RECEIVED, "token_theirs": "tok-" + "a" * 40,
         "verification_code": "123456",
+        "paired_local_base_url": "https://me.example.com",
     }
     defaults.update(kw)
     return Peer.objects.create(**defaults)
@@ -313,6 +316,7 @@ def _make_pending_sent(**kw):
     defaults = {
         "name": "bob", "base_url": "https://bob.example.com",
         "state": PeerState.PENDING_SENT, "token_ours": mint_token(),
+        "paired_local_base_url": "https://me.example.com",
     }
     defaults.update(kw)
     return Peer.objects.create(**defaults)
@@ -449,8 +453,15 @@ def test_accept_peer_idempotent_on_active(transactional_db, peer_host):
 
 # ── create_peer_and_request service ─────────────────────────────────────────
 
-def _patch_request_response(monkeypatch, status=200, *, network_error=False):
+def _patch_request_response(monkeypatch, status=200, *, network_error=False, calls=None):
     async def _fake(base_url, *, display_name, own_base_url, token):
+        if calls is not None:
+            calls.append({
+                "base_url": base_url,
+                "display_name": display_name,
+                "own_base_url": own_base_url,
+                "token": token,
+            })
         if network_error:
             raise outbound.PeerOutboundError("ConnectTimeout")
         return status, {}
@@ -601,6 +612,222 @@ def test_accept_endpoint_idempotent_active_and_bad_state(client, transactional_d
     assert res.status_code == 409
 
 
+def test_active_handshake_recovery_rejects_old_local_origin(
+        client, transactional_db, peer_host):
+    received = _make_pending_received(
+        state=PeerState.ACTIVE,
+        token_ours=mint_token(),
+        paired_local_base_url="https://old.example.com",
+    )
+    verify = _post(
+        client,
+        "/peer/handshake/verify/",
+        {"code": "123456"},
+        bearer=received.token_theirs,
+    )
+    assert verify.status_code == 403
+
+    sent = _make_pending_sent(
+        base_url="https://carol.example.com",
+        state=PeerState.ACTIVE,
+        token_theirs="their-token",
+        paired_local_base_url="https://old.example.com",
+    )
+    accept = _post(
+        client,
+        "/peer/handshake/accept/",
+        {"token": "their-token", "display_name": "carol"},
+        bearer=sent.token_ours,
+    )
+    assert accept.status_code == 403
+
+
+# ── Established Peer reconnect ──────────────────────────────────────────────
+
+@pytest.mark.parametrize("state", [PeerState.BROKEN, PeerState.REVOKED])
+def test_reconnect_start_and_retry_reuse_one_token(
+        client, transactional_db, peer_host, broadcasts, monkeypatch, state):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=state,
+        broken_reason="remote_credential_rejected" if state == PeerState.BROKEN else "",
+    )
+    calls = []
+    _patch_request_response(monkeypatch, calls=calls)
+
+    first = _post(client, f"/api/peers/{peer.id}/reconnect/", {})
+    retry = _post(client, f"/api/peers/{peer.id}/reconnect/", {})
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    peer.refresh_from_db()
+    assert peer.state == state
+    assert peer.reconnect_direction == "sent"
+    assert peer.token_ours
+    assert [call["token"] for call in calls] == [peer.token_ours, peer.token_ours]
+
+
+def test_cancel_reconnect_clears_attempt_and_late_callback_fails(
+        client, transactional_db, peer_host, monkeypatch):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+    )
+    _patch_request_response(monkeypatch)
+    assert _post(client, f"/api/peers/{peer.id}/reconnect/", {}).status_code == 200
+    peer.refresh_from_db()
+    old_token = peer.token_ours
+
+    response = _post(client, f"/api/peers/{peer.id}/reconnect/cancel/", {})
+
+    assert response.status_code == 200
+    peer.refresh_from_db()
+    assert peer.state == PeerState.REVOKED
+    assert peer.reconnect_direction == ""
+    assert peer.token_ours is None
+    late = _post(
+        client,
+        "/peer/handshake/accept/",
+        {"token": mint_token(), "display_name": "alice"},
+        bearer=old_token,
+    )
+    assert late.status_code == 403
+
+
+def test_incoming_reconnect_replay_is_idempotent_and_other_token_conflicts(
+        client, transactional_db, peer_host, broadcasts):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+    )
+    body = _request_body()
+
+    created = _post(client, "/peer/handshake/request/", body)
+    peer.refresh_from_db()
+    code = peer.verification_code
+    replay = _post(client, "/peer/handshake/request/", body)
+    conflict = _post(
+        client,
+        "/peer/handshake/request/",
+        _request_body(token="tok-" + "b" * 40),
+    )
+
+    assert created.status_code == 200
+    assert replay.status_code == 200
+    assert conflict.status_code == 409
+    peer.refresh_from_db()
+    assert Peer.objects.count() == 1
+    assert peer.state == PeerState.REVOKED
+    assert peer.reconnect_direction == "received"
+    assert peer.token_theirs == body["token"]
+    assert peer.verification_code == code
+
+
+def test_incoming_request_matches_canonical_legacy_origin(
+        client, transactional_db, peer_host):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://ALICE.example.com:443/",
+        state=PeerState.REVOKED,
+    )
+
+    response = _post(
+        client,
+        "/peer/handshake/request/",
+        _request_body(base_url="https://alice.example.com"),
+    )
+
+    assert response.status_code == 200
+    peer.refresh_from_db()
+    assert Peer.objects.count() == 1
+    assert peer.reconnect_direction == "received"
+
+
+def test_refuse_received_reconnect_preserves_peer(client, transactional_db, peer_host):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.BROKEN,
+        broken_reason="remote_credential_rejected",
+        reconnect_direction="received",
+        token_theirs=mint_token(),
+        verification_code="123456",
+    )
+
+    response = _post(client, f"/api/peers/{peer.id}/refuse/", {})
+
+    assert response.status_code == 200
+    peer.refresh_from_db()
+    assert peer.state == PeerState.BROKEN
+    assert peer.broken_reason == "remote_credential_rejected"
+    assert peer.reconnect_direction == ""
+    assert peer.token_theirs is None
+
+
+def test_received_reconnect_verify_and_accept_reuses_peer(
+        client, transactional_db, peer_host, broadcasts, monkeypatch):
+    peer = Peer.objects.create(
+        name="old name",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+        reconnect_direction="received",
+        token_theirs=mint_token(),
+        verification_code="123456",
+    )
+    verified = _post(
+        client,
+        "/peer/handshake/verify/",
+        {"code": "123456"},
+        bearer=peer.token_theirs,
+    )
+    calls = []
+    _patch_accept_response(monkeypatch, calls=calls)
+
+    accepted = _post(client, f"/api/peers/{peer.id}/accept/", {"name": "new name"})
+
+    assert verified.status_code == 200
+    assert accepted.status_code == 200
+    peer.refresh_from_db()
+    assert Peer.objects.count() == 1
+    assert peer.state == PeerState.ACTIVE
+    assert peer.name == "new name"
+    assert peer.reconnect_direction == ""
+    assert peer.paired_local_base_url == "https://me.example.com"
+    assert calls[0]["token"] == peer.token_ours
+
+
+def test_sent_reconnect_activates_same_peer_after_verify_and_accept_callback(
+        client, transactional_db, peer_host, broadcasts, monkeypatch):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+    )
+    _patch_request_response(monkeypatch)
+    _post(client, f"/api/peers/{peer.id}/reconnect/", {})
+    peer.refresh_from_db()
+    _patch_verify_response(monkeypatch, 200)
+    assert _post(client, f"/api/peers/{peer.id}/verify/", {"code": "654321"}).status_code == 200
+
+    accepted = _post(
+        client,
+        "/peer/handshake/accept/",
+        {"token": mint_token(), "display_name": "alice remote"},
+        bearer=peer.token_ours,
+    )
+
+    assert accepted.status_code == 200
+    peer.refresh_from_db()
+    assert Peer.objects.count() == 1
+    assert peer.state == PeerState.ACTIVE
+    assert peer.reconnect_direction == ""
+    assert peer.broken_reason == ""
+    assert peer.paired_local_base_url == "https://me.example.com"
+
+
 # ── ShareConsumer regression (security invariant) ───────────────────────────
 
 def test_share_consumer_never_forwards_peer_events(transactional_db):
@@ -645,6 +872,40 @@ def test_owner_rest_create(client, transactional_db, peer_host, monkeypatch):
     assert "token_ours" not in data
 
 
+def test_owner_create_canonicalizes_remote_origin(
+        client, transactional_db, peer_host, monkeypatch):
+    _patch_request_response(monkeypatch)
+
+    response = _post(
+        client,
+        "/api/peers/",
+        {"name": "bob", "base_url": "HTTPS://BOB.EXAMPLE.COM:443/"},
+    )
+
+    assert response.status_code == 201
+    assert Peer.objects.get().base_url == "https://bob.example.com"
+
+
+@pytest.mark.parametrize("state", [PeerState.BROKEN, PeerState.REVOKED])
+def test_owner_create_existing_established_origin_requires_reconnect(
+        client, transactional_db, peer_host, state):
+    Peer.objects.create(
+        name="bob",
+        base_url="https://BOB.example.com:443/",
+        state=state,
+    )
+
+    response = _post(
+        client,
+        "/api/peers/",
+        {"name": "bob again", "base_url": "https://bob.example.com"},
+    )
+
+    assert response.status_code == 400
+    assert orjson.loads(response.content)["errors"][0]["code"] == "reconnect_required"
+    assert Peer.objects.count() == 1
+
+
 def test_owner_rest_verify(client, transactional_db, peer_host, monkeypatch):
     peer = _make_pending_sent()
     _patch_verify_response(monkeypatch, 200)
@@ -661,7 +922,7 @@ def test_owner_rest_verify_error(client, transactional_db, peer_host, monkeypatc
     assert orjson.loads(res.content)["errors"][0]["code"] == "bad_code"
 
 
-def test_owner_rest_accept_refuse_rename_delete(client, transactional_db, peer_host, monkeypatch):
+def test_owner_rest_accept_refuse_rename_revoke(client, transactional_db, peer_host, monkeypatch):
     from django.utils import timezone as djtz
 
     peer = _make_pending_received(verified_at=djtz.now())
@@ -681,7 +942,83 @@ def test_owner_rest_accept_refuse_rename_delete(client, transactional_db, peer_h
 
     res = _run(client.delete(f"/api/peers/{peer.id}/"))
     assert res.status_code == 200
-    assert not Peer.objects.filter(pk=peer.pk).exists()
+    peer.refresh_from_db()
+    assert peer.state == PeerState.REVOKED
+
+
+def test_revoke_preserves_message_history_and_statuses(client, transactional_db, peer_host):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.ACTIVE,
+        token_ours=mint_token(),
+        token_theirs=mint_token(),
+        verification_code="123456",
+        reconnect_direction="sent",
+    )
+    for direction in (PeerMessageDirection.OUT, PeerMessageDirection.IN):
+        PeerMessage.objects.create(
+            peer=peer,
+            direction=direction,
+            message_id=f"pm_{direction}",
+            thread_id=f"pm_{direction}",
+            payload={"text": "pending", "images": [], "documents": []},
+            status=PeerMessageStatus.PENDING,
+        )
+
+    response = _run(client.delete(f"/api/peers/{peer.id}/"))
+
+    assert response.status_code == 200
+    peer.refresh_from_db()
+    assert peer.state == PeerState.REVOKED
+    assert peer.token_ours is None
+    assert peer.token_theirs is None
+    assert peer.verification_code == ""
+    assert peer.reconnect_direction == ""
+    assert list(peer.messages.order_by("pk").values_list("status", flat=True)) == [
+        PeerMessageStatus.PENDING,
+        PeerMessageStatus.PENDING,
+    ]
+
+
+def test_revoke_already_revoked_clears_reconnect_attempt(
+        client, transactional_db, peer_host):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+        reconnect_direction="sent",
+        token_ours=mint_token(),
+    )
+
+    response = _run(client.delete(f"/api/peers/{peer.id}/"))
+
+    assert response.status_code == 200
+    peer.refresh_from_db()
+    assert peer.state == PeerState.REVOKED
+    assert peer.reconnect_direction == ""
+    assert peer.token_ours is None
+
+
+def test_peer_with_history_cannot_be_deleted(transactional_db):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.ACTIVE,
+        token_ours=mint_token(),
+        token_theirs=mint_token(),
+    )
+    PeerMessage.objects.create(
+        peer=peer,
+        direction=PeerMessageDirection.OUT,
+        message_id="pm_protected",
+        thread_id="pm_protected",
+        payload={"text": "keep", "images": [], "documents": []},
+        status=PeerMessageStatus.PENDING,
+    )
+
+    with pytest.raises(ProtectedError):
+        peer.delete()
 
 
 def test_owner_rest_rejects_peer_address_changes_without_partial_rename(client, transactional_db, peer_host):

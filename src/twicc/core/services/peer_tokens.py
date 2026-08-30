@@ -37,6 +37,21 @@ def peer_base_url() -> str:
     return usable_public_origin(read_synced_settings().get("peerBaseUrl"))
 
 
+def peer_credentials_are_active(peer) -> bool:
+    """Return whether this Peer can use credentials at the current local origin."""
+    from twicc.core.models import PeerState
+
+    current = peer_base_url()
+    return (
+        peer.state == PeerState.ACTIVE
+        and bool(current)
+        and bool(peer.paired_local_base_url)
+        and bool(peer.token_ours)
+        and bool(peer.token_theirs)
+        and peer.paired_local_base_url == current
+    )
+
+
 def resolve_peer(token: str):
     """Return the Peer whose ``token_ours`` matches (constant-time compare) or
     ``None``. Sync — call via ``aresolve_peer`` from async views. Does NOT apply

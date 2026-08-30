@@ -58,6 +58,18 @@ def test_initial_peer_message_snapshot_serializes_resolved_reply_without_async_l
         payload={"text": "two", "images": [], "documents": []},
         status=PeerMessageStatus.PENDING,
     )
+    revoked_peer = Peer.objects.create(
+        name="revoked", base_url="https://revoked.example.com", state=PeerState.REVOKED,
+    )
+    revoked_message = PeerMessage.objects.create(
+        peer=revoked_peer,
+        direction=PeerMessageDirection.IN,
+        message_id="revoked-child",
+        thread_id="revoked-child",
+        title="Hidden revoked message",
+        payload={"text": "hidden", "images": [], "documents": []},
+        status=PeerMessageStatus.PENDING,
+    )
 
     class Registry:
         def set_broadcast_callback(self, callback):
@@ -85,6 +97,7 @@ def test_initial_peer_message_snapshot_serializes_resolved_reply_without_async_l
             "status": "delivered",
         }
         assert row["reply_target"] == session.id
+        assert revoked_message.pk not in {item["id"] for item in message["messages"]}
         await comm.disconnect()
 
     _run(scenario())

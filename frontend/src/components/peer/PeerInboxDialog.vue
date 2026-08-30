@@ -17,6 +17,7 @@ import {
     buildPeerInboxSearchUrl,
     peerInboxFiltersActive,
     peerInboxSelectablePeers,
+    peerInboxVisibleMessages,
     peerInboxView,
 } from '../../utils/peerInboxFilter'
 import PeerInboxRow from './PeerInboxRow.vue'
@@ -42,9 +43,10 @@ const selectablePeers = computed(() =>
 const filtersActive = computed(() =>
     peerInboxFiltersActive(selectedPeerId.value, textFilter.value)
 )
-const activeMessages = computed(() =>
-    filtersActive.value ? filteredMessages.value : peersStore.messages
-)
+const activeMessages = computed(() => {
+    if (filtersActive.value) return filteredMessages.value
+    return peerInboxVisibleMessages(peersStore.messages, peersStore.peers)
+})
 const inboxView = computed(() => peerInboxView(activeMessages.value, filtersActive.value))
 const receivedMessages = computed(() => inboxView.value.received)
 const history = computed(() => inboxView.value.history)

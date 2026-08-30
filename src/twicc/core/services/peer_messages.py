@@ -25,7 +25,7 @@ from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
 from twicc.core.services.peer_mutation import PeerError, mark_peer_broken
-from twicc.core.services.peer_tokens import mint_message_id
+from twicc.core.services.peer_tokens import mint_message_id, peer_credentials_are_active
 from twicc.providers.db_writer import run_under_db_write_lock
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,26 @@ class PeerSendResult(NamedTuple):
     # would overwrite the transport-level status ("sent") and break the CLI
     # exit mapping.
     status_extra: dict = {}
+
+
+def _peer_send_error(peer) -> PeerError | None:
+    from twicc.core.models import PeerState
+
+    if peer.state == PeerState.BROKEN:
+        return PeerError(
+            "peer",
+            "peer_broken",
+            "This peer no longer accepts messages. Ask your user to check it in Settings › Peers.",
+        )
+    if peer.state != PeerState.ACTIVE:
+        return PeerError("peer", "not_active", "This peer relationship is not active.")
+    if not peer_credentials_are_active(peer):
+        return PeerError(
+            "peer",
+            "local_origin_changed",
+            "This peer was paired at another local address. Ask your user to reconnect it.",
+        )
+    return None
 
 
 def _now() -> datetime:
@@ -260,7 +280,7 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
     images, documents, origin_session_id?}``. Attachments are already
     validated/encoded by the CLI.
     """
-    from twicc.core.models import Peer, PeerMessage, PeerMessageDirection, PeerMessageStatus, PeerState, Session
+    from twicc.core.models import Peer, PeerMessage, PeerMessageDirection, PeerMessageStatus, Session
     from twicc.peer import outbound
 
     peer_ref = (payload.get("peer") or "").strip()
@@ -293,16 +313,8 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
         return PeerSendResult(False, None, None, [PeerError(
             "peer", "not_found", f"No peer matches {peer_ref!r} (by id or exact name).",
         )], {})
-    if peer.state == PeerState.BROKEN:
-        return PeerSendResult(False, None, peer.id, [PeerError(
-            "peer", "peer_broken",
-            "This peer no longer accepts messages (revoked or unreachable). "
-            "Ask your user to check the relationship in Settings › Peers.",
-        )], {})
-    if peer.state != PeerState.ACTIVE:
-        return PeerSendResult(False, None, peer.id, [PeerError(
-            "peer", "not_active", "This peer relationship is still pending.",
-        )], {})
+    if peer_error := _peer_send_error(peer):
+        return PeerSendResult(False, None, peer.id, [peer_error], {})
 
     reply_to_message = await sync_to_async(
         _resolve_reply_to_message
@@ -348,7 +360,33 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
         origin_session=origin_session,
         status=PeerMessageStatus.PENDING,
     )
-    await run_under_db_write_lock(lambda: message.asave(force_insert=True))
+
+    def _store_outbound():
+        fresh_peer = Peer.objects.filter(pk=peer.pk).first()
+        if fresh_peer is None:
+            return None, PeerError("peer", "not_found", "Peer no longer exists.")
+        if peer_error := _peer_send_error(fresh_peer):
+            return fresh_peer, peer_error
+        message.peer = fresh_peer
+        message.save(force_insert=True)
+        return fresh_peer, None
+
+    peer, peer_error = await run_under_db_write_lock(lambda: sync_to_async(_store_outbound)())
+    if peer_error is not None:
+        return PeerSendResult(False, None, peer.id if peer else None, [peer_error], {})
+
+    credential_snapshot = (
+        peer.token_ours,
+        peer.token_theirs,
+        peer.paired_local_base_url,
+    )
+
+    def _same_credentials(fresh_peer) -> bool:
+        return peer_credentials_are_active(fresh_peer) and (
+            fresh_peer.token_ours,
+            fresh_peer.token_theirs,
+            fresh_peer.paired_local_base_url,
+        ) == credential_snapshot
 
     detail = ""
     try:
@@ -363,8 +401,10 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
     now = _now()
     if http_status == 202:
         def _touch():
-            peer.last_contact_at = now
-            peer.save(update_fields=["last_contact_at"])
+            fresh_peer = Peer.objects.filter(pk=peer.pk).first()
+            if fresh_peer is not None and _same_credentials(fresh_peer):
+                fresh_peer.last_contact_at = now
+                fresh_peer.save(update_fields=["last_contact_at"])
 
         await run_under_db_write_lock(lambda: sync_to_async(_touch)())
         await broadcast_peer_message_updated(message)
@@ -378,12 +418,17 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
             message.error = "peer_rejected_token"
             message.resolved_at = now
             message.save(update_fields=["status", "error", "resolved_at"])
-            mark_peer_broken(peer)
+            fresh_peer = Peer.objects.filter(pk=peer.pk).first()
+            if fresh_peer is not None and _same_credentials(fresh_peer):
+                mark_peer_broken(fresh_peer)
+                return fresh_peer
+            return None
 
-        await run_under_db_write_lock(lambda: sync_to_async(_fail_broken)())
-        from twicc.core.services.peer_mutation import broadcast_peer_updated
+        broken_peer = await run_under_db_write_lock(lambda: sync_to_async(_fail_broken)())
+        if broken_peer is not None:
+            from twicc.core.services.peer_mutation import broadcast_peer_updated
 
-        await broadcast_peer_updated(peer)
+            await broadcast_peer_updated(broken_peer)
         await broadcast_peer_message_updated(message)
         return PeerSendResult(False, message_id, peer.id, [PeerError(
             "peer", "peer_broken",
@@ -412,9 +457,9 @@ async def send_peer_message_from_payload(payload: dict) -> PeerSendResult:
 async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
     """Called by ``POST /peer/messages/``. Stores the row ``pending`` — the
     human gate does the rest. Idempotent by ``(peer, in, message_id)``."""
-    from twicc.core.models import PeerMessage, PeerMessageDirection, PeerMessageStatus, PeerState
+    from twicc.core.models import Peer, PeerMessage, PeerMessageDirection, PeerMessageStatus
 
-    if peer.state != PeerState.ACTIVE:
+    if not peer_credentials_are_active(peer):
         # Same response as a bad token — no state oracle.
         return 403, {"error": "unknown_token"}
 
@@ -461,6 +506,9 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
     now = _now()
 
     def _store():
+        fresh_peer = Peer.objects.filter(pk=peer.pk).first()
+        if fresh_peer is None or not peer_credentials_are_active(fresh_peer):
+            return False, None
         # Idempotency re-checked INSIDE the lock: two concurrent replays of the
         # same message_id would otherwise both pass a pre-lock check and the
         # second insert would 500 on the unique constraint.
@@ -468,7 +516,7 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
             peer=peer, direction=PeerMessageDirection.IN, message_id=message_id,
         ).first()
         if existing is not None:
-            return existing.status
+            return True, existing.status
         reply_to_message = _resolve_reply_to_message(
             peer, PeerMessageDirection.IN, reply_to,
         )
@@ -476,12 +524,15 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
         message.thread_id = (
             reply_to_message.thread_id if reply_to_message is not None else message_id
         )
+        message.peer = fresh_peer
         message.save(force_insert=True)
-        peer.last_contact_at = now
-        peer.save(update_fields=["last_contact_at"])
-        return None
+        fresh_peer.last_contact_at = now
+        fresh_peer.save(update_fields=["last_contact_at"])
+        return True, None
 
-    existing_status = await run_under_db_write_lock(lambda: sync_to_async(_store)())
+    authorized, existing_status = await run_under_db_write_lock(lambda: sync_to_async(_store)())
+    if not authorized:
+        return 403, {"error": "unknown_token"}
     if existing_status is not None:
         return 202, {"status": existing_status}
     await broadcast_peer_message_received(message)
@@ -491,27 +542,39 @@ async def receive_peer_message(peer, body: dict) -> tuple[int, dict]:
 async def apply_status_callback(peer, message_id: str, status) -> tuple[int, dict]:
     """Called by ``POST /peer/messages/<message_id>/status/`` — the receiving
     side reports the resolution of one of OUR outbound messages."""
-    from twicc.core.models import PeerMessage, PeerMessageDirection, PeerMessageStatus
+    from twicc.core.models import Peer, PeerMessage, PeerMessageDirection, PeerMessageStatus
 
+    if not peer_credentials_are_active(peer):
+        return 403, {"error": "unknown_token"}
     if status not in (PeerMessageStatus.DELIVERED, PeerMessageStatus.REFUSED):
         return 400, {"error": "invalid_payload"}
-    message = await sync_to_async(
-        lambda: PeerMessage.objects.filter(
-            peer=peer, direction=PeerMessageDirection.OUT, message_id=message_id,
-        ).first()
-    )()
-    if message is None:
-        return 404, {"error": "unknown_message"}
-    if message.resolved_at is not None:
-        return 200, {}
     now = _now()
 
     def _resolve():
+        fresh_peer = Peer.objects.filter(pk=peer.pk).first()
+        if fresh_peer is None or not peer_credentials_are_active(fresh_peer):
+            return "unauthorized", None
+        message = PeerMessage.objects.filter(
+            peer=fresh_peer,
+            direction=PeerMessageDirection.OUT,
+            message_id=message_id,
+        ).first()
+        if message is None:
+            return "missing", None
+        if message.resolved_at is not None:
+            return "unchanged", message
         message.status = status
         message.resolved_at = now
         message.save(update_fields=["status", "resolved_at"])
+        return "updated", message
 
-    await run_under_db_write_lock(lambda: sync_to_async(_resolve)())
+    outcome, message = await run_under_db_write_lock(lambda: sync_to_async(_resolve)())
+    if outcome == "unauthorized":
+        return 403, {"error": "unknown_token"}
+    if outcome == "missing":
+        return 404, {"error": "unknown_message"}
+    if outcome == "unchanged":
+        return 200, {}
     await broadcast_peer_message_updated(message)
     return 200, {}
 
@@ -697,6 +760,11 @@ async def _mark_delivered(message, *, session_id: str, note: str) -> None:
 async def _notify_status(peer, message_id: str, status: str) -> None:
     """Best-effort status callback — failure never blocks local resolution
     (design §4.1)."""
+    from twicc.core.models import Peer
+
+    peer = await sync_to_async(lambda: Peer.objects.filter(pk=peer.pk).first())()
+    if peer is None or not peer_credentials_are_active(peer):
+        return
     if PEER_MESSAGE_ID_PATTERN.fullmatch(message_id) is None:
         logger.info(
             "[peer_status_callback] skipped unsafe legacy message id peer=%s",

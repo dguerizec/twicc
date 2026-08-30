@@ -1,5 +1,5 @@
 const MESSAGE_HISTORY_LIMIT = 200
-const MESSAGE_PEER_STATES = new Set(['active', 'broken'])
+const MESSAGE_PEER_STATES = new Set(['active', 'broken', 'revoked'])
 
 /** Whether either peer-inbox filter currently narrows message results. */
 export function peerInboxFiltersActive(peerId, query) {
@@ -32,6 +32,12 @@ export function peerInboxSelectablePeers(peers, messages) {
     return peers.filter(peer =>
         MESSAGE_PEER_STATES.has(peer.state) || peerIdsWithMessages.has(peer.id)
     )
+}
+
+/** Hide revoked history until its Peer is selected explicitly. */
+export function peerInboxVisibleMessages(messages, peers) {
+    const revokedIds = new Set(peers.filter(peer => peer.state === 'revoked').map(peer => peer.id))
+    return messages.filter(message => !revokedIds.has(message.peer_id))
 }
 
 /** Build the filtered inbox request without adding empty filter parameters. */

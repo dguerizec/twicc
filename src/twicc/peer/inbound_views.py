@@ -23,7 +23,7 @@ from asgiref.sync import sync_to_async
 from django.http import HttpResponseNotAllowed, JsonResponse
 
 from twicc.core.services import peer_mutation
-from twicc.core.services.peer_tokens import aresolve_peer, peer_base_url
+from twicc.core.services.peer_tokens import aresolve_peer, peer_base_url, peer_credentials_are_active
 
 # 32 MB binary ≈ 43 MB base64 + JSON headroom (attachment caps mirror the
 # provider ATTACHMENT_SUPPORT limits).
@@ -192,12 +192,19 @@ async def handshake_verify(request):
     def _lookup():
         # ``active`` included on purpose: verify must be idempotent across the
         # accept transition (held-accept recovery, design §4.2).
-        from twicc.core.models import Peer, PeerState
+        from twicc.core.models import Peer, PeerReconnectDirection, PeerState
 
-        peer = Peer.objects.filter(
-            token_theirs=bearer, state__in=[PeerState.PENDING_RECEIVED, PeerState.ACTIVE],
-        ).first()
-        if peer is None or not hmac.compare_digest(peer.token_theirs, bearer):
+        peer = Peer.objects.filter(token_theirs=bearer).first()
+        reconnect_received = peer is not None and (
+            peer.state in (PeerState.BROKEN, PeerState.REVOKED)
+            and peer.reconnect_direction == PeerReconnectDirection.RECEIVED
+        )
+        if (
+            peer is None
+            or peer.state not in (PeerState.PENDING_RECEIVED, PeerState.ACTIVE) and not reconnect_received
+            or not hmac.compare_digest(peer.token_theirs, bearer)
+            or peer.state == PeerState.ACTIVE and not peer_credentials_are_active(peer)
+        ):
             return None
         return peer
 

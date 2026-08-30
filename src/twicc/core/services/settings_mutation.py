@@ -111,6 +111,7 @@ def _merge_and_write(patch: dict, base_version: int | None) -> dict:
     with _settings_lock:
         existing_settings = read_synced_settings()
         current_version = existing_settings.get("_version", 0)
+        previous_peer_base_url = existing_settings.get("peerBaseUrl", "")
 
         # Reject stale writes (accept if baseVersion is None — safety for rolling upgrades)
         if base_version is not None and base_version < current_version:
@@ -281,6 +282,7 @@ def _merge_and_write(patch: dict, base_version: int | None) -> dict:
             "to_start": new_running - old_running,
             "to_stop": old_running - new_running,
             "corrections": corrections,
+            "previous_peer_base_url": previous_peer_base_url,
         }
 
 
@@ -348,6 +350,17 @@ async def update_synced_settings(
     transitions run and ``synced_settings_updated`` is broadcast to all clients.
     """
     result = await sync_to_async(_merge_and_write)(patch, base_version)
+    if result["status"] == "accepted" and "peerBaseUrl" in patch:
+        from twicc.core.services.peer_mutation import invalidate_peers_for_local_origin
+        from twicc.core.services.public_origin import usable_public_origin
+
+        previous_peer_base_url = usable_public_origin(result["previous_peer_base_url"])
+        if previous_peer_base_url:
+            await invalidate_peers_for_local_origin(
+                previous_peer_base_url,
+                usable_public_origin(read_synced_settings().get("peerBaseUrl")),
+                broadcast_changes=broadcast,
+            )
     if result["status"] == "accepted" and broadcast:
         await _apply_transitions_and_broadcast(patch, result)
     clean = result.get("clean")

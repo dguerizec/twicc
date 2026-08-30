@@ -1,4 +1,4 @@
-"""Migration coverage for peer-message threading lot 1."""
+"""Migration coverage for peer-message threading."""
 
 import pytest
 from django.db import connection
@@ -7,10 +7,17 @@ from django.db.migrations.executor import MigrationExecutor
 
 MIGRATE_FROM = [("core", "0133_share_created_by_session")]
 MIGRATE_TO = [("core", "0134_peermessage_threading")]
+MIGRATE_LATEST = [("core", "0135_peer_revocation_reconnection")]
+
+
+@pytest.fixture
+def restore_latest_migration():
+    yield
+    MigrationExecutor(connection).migrate(MIGRATE_LATEST)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_peer_threading_backfill_makes_every_historical_row_a_root():
+def test_peer_threading_backfill_makes_every_historical_row_a_root(restore_latest_migration):
     executor = MigrationExecutor(connection)
     executor.migrate(MIGRATE_FROM)
     old_apps = executor.loader.project_state(MIGRATE_FROM).apps

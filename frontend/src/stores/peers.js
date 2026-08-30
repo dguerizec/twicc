@@ -17,8 +17,14 @@ export const usePeersStore = defineStore('peers', {
     }),
 
     getters: {
-        pendingInboundMessages: (s) => s.messages.filter(m => m.direction === 'in' && m.status === 'pending'),
-        pendingRequests: (s) => s.peers.filter(p => p.state === 'pending_received'),
+        pendingInboundMessages: (s) => s.messages.filter(message =>
+            message.direction === 'in'
+            && message.status === 'pending'
+            && s.peers.find(peer => peer.id === message.peer_id)?.state !== 'revoked'
+        ),
+        pendingRequests: (s) => s.peers.filter(peer =>
+            peer.state === 'pending_received' || peer.reconnect_direction === 'received'
+        ),
         inboxCount() {
             return this.pendingInboundMessages.length + this.pendingRequests.length
         },
@@ -49,7 +55,7 @@ export const usePeersStore = defineStore('peers', {
         },
         removePeer(peerId) {
             this.peers = this.peers.filter(p => p.id !== peerId)
-            // The server-side CASCADE removed the history with the peer.
+            // Initial pending rows own no messages. Established rows are revoked, not removed.
             this.messages = this.messages.filter(m => m.peer_id !== peerId)
         },
         upsertMessage(message) {

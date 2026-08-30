@@ -1747,6 +1747,18 @@ class PeerState(models.TextChoices):
     PENDING_RECEIVED = "pending_received", "Pending (received)"
     ACTIVE = "active", "Active"
     BROKEN = "broken", "Broken"
+    REVOKED = "revoked", "Revoked"
+
+
+class PeerBrokenReason(models.TextChoices):
+    REMOTE_CREDENTIAL_REJECTED = "remote_credential_rejected", "Remote credential rejected"
+    LOCAL_ADDRESS_CHANGED = "local_address_changed", "Local address changed"
+    LOCAL_ADDRESS_DISABLED = "local_address_disabled", "Local address disabled"
+
+
+class PeerReconnectDirection(models.TextChoices):
+    SENT = "sent", "Sent"
+    RECEIVED = "received", "Received"
 
 
 class PeerMessageDirection(models.TextChoices):
@@ -1767,8 +1779,8 @@ class Peer(models.Model):
     """One related TwiCC instance (peer messaging, design 2026-07-24).
 
     Local-state authority: the state that matters for an inbound send is THIS
-    side's row, checked live per request. Revocation = local deletion (silent);
-    the caller's next send 403s and it flips its own row to ``broken``.
+    side's row, checked live per request. Revocation is a silent local state
+    change that preserves this row and its message history.
     Per-direction bearer tokens: ``token_ours`` is the secret THEY present to
     call us; ``token_theirs`` the secret WE present to call them. Tokens must
     never appear in serializers, WS payloads, REST responses, CLI output or logs.
@@ -1781,6 +1793,11 @@ class Peer(models.Model):
     remote_display_name = models.CharField(max_length=255, blank=True, default="")
     base_url = models.URLField(max_length=500)
     state = models.CharField(max_length=20, choices=PeerState.choices)
+    broken_reason = models.CharField(max_length=32, choices=PeerBrokenReason.choices, blank=True, default="")
+    reconnect_direction = models.CharField(
+        max_length=8, choices=PeerReconnectDirection.choices, blank=True, default="",
+    )
+    paired_local_base_url = models.URLField(max_length=500, blank=True, default="")
     # unique=True with null=True: SQLite allows multiple NULLs.
     token_ours = models.CharField(max_length=64, null=True, blank=True, unique=True)
     # Indexed: handshake_verify looks rows up by the requester's token.
@@ -1813,12 +1830,12 @@ class PeerMessage(models.Model):
     """One cross-instance message, both directions (peer messaging design §3.2).
 
     ``message_id`` is the wire handle, minted by the SENDER; the auto pk is the
-    REST/admin handle. History lives for the lifetime of the relationship
-    (CASCADE on peer deletion); attachment bytes are purged 7 days after
+    REST/admin handle. History survives relationship revocation; attachment
+    bytes are purged 7 days after
     resolution (``purged_at``) while text + ``attachments_meta`` survive.
     """
 
-    peer = models.ForeignKey(Peer, on_delete=models.CASCADE, related_name="messages")
+    peer = models.ForeignKey(Peer, on_delete=models.PROTECT, related_name="messages")
     direction = models.CharField(max_length=3, choices=PeerMessageDirection.choices)
     message_id = models.CharField(max_length=40)
     # Verbatim wire handle of the answered message. Empty means thread root.

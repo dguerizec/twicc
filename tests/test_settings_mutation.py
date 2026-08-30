@@ -80,6 +80,125 @@ def test_public_origin_patch_is_normalized_and_returned_as_correction(temp_setti
     assert settings["shareBaseUrl"] == "http://localhost:3501"
 
 
+@pytest.fixture
+def peer_db_lock_passthrough(monkeypatch):
+    async def _passthrough(factory):
+        return await factory()
+
+    monkeypatch.setattr("twicc.core.services.peer_mutation.run_under_db_write_lock", _passthrough)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_peer_address_change_invalidates_only_active_peers(temp_settings, peer_db_lock_passthrough):
+    from twicc.core.models import Peer, PeerState
+    from twicc.core.services.peer_tokens import mint_token
+
+    _update({"peerBaseUrl": "https://old.example"})
+    active = Peer.objects.create(
+        name="active",
+        base_url="https://remote-active.example",
+        state=PeerState.ACTIVE,
+        token_ours=mint_token(),
+        token_theirs=mint_token(),
+        paired_local_base_url="https://old.example",
+    )
+    broken = Peer.objects.create(
+        name="broken",
+        base_url="https://remote-broken.example",
+        state=PeerState.BROKEN,
+        broken_reason="remote_credential_rejected",
+    )
+    revoked = Peer.objects.create(
+        name="revoked",
+        base_url="https://remote-revoked.example",
+        state=PeerState.REVOKED,
+    )
+    pending = Peer.objects.create(
+        name="pending",
+        base_url="https://remote-pending.example",
+        state=PeerState.PENDING_SENT,
+        token_ours=mint_token(),
+    )
+
+    result = _update({"peerBaseUrl": "https://new.example"})
+
+    assert result.status == "accepted"
+    active.refresh_from_db()
+    broken.refresh_from_db()
+    revoked.refresh_from_db()
+    assert active.state == PeerState.BROKEN
+    assert active.broken_reason == "local_address_changed"
+    assert active.token_ours is None
+    assert active.token_theirs is None
+    assert broken.state == PeerState.BROKEN
+    assert broken.broken_reason == "remote_credential_rejected"
+    assert revoked.state == PeerState.REVOKED
+    assert not Peer.objects.filter(pk=pending.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_peer_address_disable_uses_disabled_reason(temp_settings, peer_db_lock_passthrough):
+    from twicc.core.models import Peer, PeerState
+    from twicc.core.services.peer_tokens import mint_token
+
+    _update({"peerBaseUrl": "https://old.example"})
+    peer = Peer.objects.create(
+        name="active",
+        base_url="https://remote.example",
+        state=PeerState.ACTIVE,
+        token_ours=mint_token(),
+        token_theirs=mint_token(),
+        paired_local_base_url="https://old.example",
+    )
+
+    _update({"peerBaseUrl": ""})
+
+    peer.refresh_from_db()
+    assert peer.state == PeerState.BROKEN
+    assert peer.broken_reason == "local_address_disabled"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_enabling_peer_address_changes_no_peer(temp_settings, peer_db_lock_passthrough):
+    from twicc.core.models import Peer, PeerState
+    from twicc.core.services.peer_tokens import mint_token
+
+    pending = Peer.objects.create(
+        name="pending",
+        base_url="https://remote.example",
+        state=PeerState.PENDING_SENT,
+        token_ours=mint_token(),
+    )
+
+    _update({"peerBaseUrl": "https://new.example"})
+
+    pending.refresh_from_db()
+    assert pending.state == PeerState.PENDING_SENT
+    assert pending.token_ours is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reapplying_address_finishes_interrupted_invalidation(temp_settings, peer_db_lock_passthrough):
+    from twicc.core.models import Peer, PeerState
+    from twicc.core.services.peer_tokens import mint_token
+
+    _update({"peerBaseUrl": "https://new.example"})
+    peer = Peer.objects.create(
+        name="still-active",
+        base_url="https://remote.example",
+        state=PeerState.ACTIVE,
+        token_ours=mint_token(),
+        token_theirs=mint_token(),
+        paired_local_base_url="https://old.example",
+    )
+
+    _update({"peerBaseUrl": "https://new.example"})
+
+    peer.refresh_from_db()
+    assert peer.state == PeerState.BROKEN
+    assert peer.broken_reason == "local_address_changed"
+
+
 def test_invalid_public_origin_rejects_the_whole_patch(temp_settings):
     before = ss.read_synced_settings()
     r = _update({"autoUnpinOnArchive": False, "peerBaseUrl": "ftp://peer.example.com"})

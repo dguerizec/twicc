@@ -1,4 +1,4 @@
-"""Peer relationship mutations (create / verify / accept / refuse / rename / delete).
+"""Peer relationship mutations (create / verify / accept / refuse / rename / revoke).
 
 Single source of truth for the two surfaces that mutate ``Peer``:
 - the owner REST endpoints (``/api/peers/…``, human-only — no CLI/MCP surface
@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 
+from twicc.core.services.public_origin import normalize_public_origin
 from twicc.core.services.peer_tokens import mint_token, mint_verification_code, peer_base_url
 from twicc.providers.db_writer import run_under_db_write_lock
 
@@ -59,16 +60,52 @@ def _now() -> datetime:
     return datetime.now(tz=UTC)
 
 
+_HANDSHAKE_UPDATE_FIELDS = [
+    "token_ours",
+    "token_theirs",
+    "verification_code",
+    "verification_attempts",
+    "verification_regens",
+    "verified_at",
+    "code_confirmed_at",
+    "remote_accepted_at",
+    "reconnect_direction",
+]
+
+
+def _clear_handshake(peer) -> None:
+    peer.token_ours = None
+    peer.token_theirs = None
+    peer.verification_code = ""
+    peer.verification_attempts = 0
+    peer.verification_regens = 0
+    peer.verified_at = None
+    peer.code_confirmed_at = None
+    peer.remote_accepted_at = None
+    peer.reconnect_direction = ""
+
+
 def normalize_base_url(url: str) -> str:
-    return (url or "").strip().rstrip("/")
+    raw = (url or "").strip()
+    try:
+        if urlparse(raw).scheme.lower() not in ("http", "https"):
+            return ""
+    except ValueError:
+        return ""
+    return normalize_public_origin(raw).value or ""
 
 
 def valid_base_url(url: str) -> bool:
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return False
-    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    return bool(url) and normalize_public_origin(url).value == url
+
+
+def _peers_matching_origin(peer_model, base_url: str) -> list:
+    """Return all rows whose stored origin canonicalizes to ``base_url``."""
+    return [
+        peer
+        for peer in peer_model.objects.all().order_by("created_at")
+        if normalize_base_url(peer.base_url) == base_url
+    ]
 
 
 def own_display_name() -> str:
@@ -155,14 +192,6 @@ async def create_peer_and_request(*, name: str, base_url: str) -> PeerMutationRe
         return PeerMutationResult(False, None, [PeerError(
             "base_url", "invalid_url", "The peer address must be an absolute http(s) URL.",
         )])
-    duplicate = await sync_to_async(
-        lambda: Peer.objects.filter(base_url=base_url).exclude(state=PeerState.BROKEN).exists()
-    )()
-    if duplicate:
-        return PeerMutationResult(False, None, [PeerError(
-            "base_url", "duplicate", "A peer with this address already exists.",
-        )])
-
     token = mint_token()
     peer = Peer(
         name=(name or "").strip(),
@@ -170,7 +199,28 @@ async def create_peer_and_request(*, name: str, base_url: str) -> PeerMutationRe
         state=PeerState.PENDING_SENT,
         token_ours=token,
     )
-    await run_under_db_write_lock(lambda: peer.asave(force_insert=True))
+
+    def _insert():
+        matches = _peers_matching_origin(Peer, base_url)
+        if len(matches) > 1:
+            return None, PeerError(
+                "base_url", "ambiguous_peer", "More than one peer has this address.",
+            )
+        if matches:
+            existing = matches[0]
+            if existing.state in (PeerState.BROKEN, PeerState.REVOKED):
+                return None, PeerError(
+                    "base_url", "reconnect_required", "Reconnect the existing peer for this address.",
+                )
+            return None, PeerError(
+                "base_url", "duplicate", "A peer with this address already exists.",
+            )
+        peer.save(force_insert=True)
+        return peer, None
+
+    peer, insert_error = await run_under_db_write_lock(lambda: sync_to_async(_insert)())
+    if insert_error is not None:
+        return PeerMutationResult(False, None, [insert_error])
 
     detail = ""
     try:
@@ -216,13 +266,17 @@ async def create_peer_and_request(*, name: str, base_url: str) -> PeerMutationRe
 async def accept_peer(peer, *, name: str) -> PeerMutationResult:
     """Accept an incoming request: mint (or, after a crossed handshake, reuse)
     ``token_ours``, call back the requester, then activate locally."""
-    from twicc.core.models import Peer, PeerState
+    from twicc.core.models import Peer, PeerReconnectDirection, PeerState
     from twicc.peer import outbound
 
     if peer.state == PeerState.ACTIVE:
         # Idempotent no-op — happens after a crossed handshake resolved from the other side.
         return PeerMutationResult(True, peer.id, None)
-    if peer.state != PeerState.PENDING_RECEIVED:
+    reconnect_received = (
+        peer.state in (PeerState.BROKEN, PeerState.REVOKED)
+        and peer.reconnect_direction == PeerReconnectDirection.RECEIVED
+    )
+    if peer.state != PeerState.PENDING_RECEIVED and not reconnect_received:
         return PeerMutationResult(False, peer.id, [PeerError("state", "bad_state", "This peer is not pending acceptance.")])
     if peer.verified_at is None:
         return PeerMutationResult(False, peer.id, [PeerError(
@@ -235,6 +289,12 @@ async def accept_peer(peer, *, name: str) -> PeerMutationResult:
     # processes the accept but our 200 is lost, the retry must present the SAME
     # token (their now-active row compares it) — a fresh mint per attempt would
     # wedge the handshake in a permanent 409/pending_received dead end.
+    own_url = peer_base_url()
+    if not own_url:
+        return PeerMutationResult(False, peer.id, [PeerError(
+            "state", "peer_host_unset", "Configure your peer address before accepting.",
+        )])
+
     token = peer.token_ours
     if token is None:
         minted = mint_token()
@@ -242,6 +302,12 @@ async def accept_peer(peer, *, name: str) -> PeerMutationResult:
         def _persist_token():
             fresh = Peer.objects.filter(pk=peer.pk).first()
             if fresh is None:
+                return None
+            valid = fresh.state == PeerState.PENDING_RECEIVED or (
+                fresh.state in (PeerState.BROKEN, PeerState.REVOKED)
+                and fresh.reconnect_direction == PeerReconnectDirection.RECEIVED
+            )
+            if not valid or fresh.token_theirs != peer.token_theirs:
                 return None
             if fresh.token_ours:
                 return fresh.token_ours
@@ -273,15 +339,28 @@ async def accept_peer(peer, *, name: str) -> PeerMutationResult:
         fresh = Peer.objects.filter(pk=peer.pk).first()
         if fresh is None:
             return None
+        valid = fresh.state == PeerState.PENDING_RECEIVED or (
+            fresh.state in (PeerState.BROKEN, PeerState.REVOKED)
+            and fresh.reconnect_direction == PeerReconnectDirection.RECEIVED
+        )
+        if not valid or fresh.token_theirs != peer.token_theirs or fresh.token_ours != token:
+            return None
         if clean_name:
             fresh.name = clean_name
         fresh.token_ours = token
         fresh.state = PeerState.ACTIVE
-        fresh.accepted_at = now
+        if fresh.accepted_at is None:
+            fresh.accepted_at = now
         fresh.last_contact_at = now
+        fresh.broken_reason = ""
+        fresh.reconnect_direction = ""
+        fresh.paired_local_base_url = own_url
         # Deliberately NOT clearing verification_code: handshake_verify stays
         # idempotent on active rows (held-accept recovery on the requester side).
-        fresh.save(update_fields=["name", "token_ours", "state", "accepted_at", "last_contact_at"])
+        fresh.save(update_fields=[
+            "name", "token_ours", "state", "accepted_at", "last_contact_at",
+            "broken_reason", "reconnect_direction", "paired_local_base_url",
+        ])
         return fresh
 
     fresh = await run_under_db_write_lock(lambda: sync_to_async(_apply)())
@@ -295,7 +374,7 @@ async def accept_peer(peer, *, name: str) -> PeerMutationResult:
 async def submit_verification_code(peer, code: str) -> PeerMutationResult:
     """Requester-side: echo the out-of-band code to the peer. On success the row
     records ``code_confirmed_at`` and activates if the accept was already held."""
-    from twicc.core.models import Peer, PeerState
+    from twicc.core.models import Peer, PeerReconnectDirection, PeerState
     from twicc.peer import outbound
 
     code = (code or "").strip()
@@ -303,6 +382,10 @@ async def submit_verification_code(peer, code: str) -> PeerMutationResult:
     # requester for its outbound leg.
     allowed = peer.state == PeerState.PENDING_SENT or (
         peer.state == PeerState.PENDING_RECEIVED and peer.token_ours
+    ) or (
+        peer.state in (PeerState.BROKEN, PeerState.REVOKED)
+        and peer.reconnect_direction == PeerReconnectDirection.SENT
+        and peer.token_ours
     )
     if not allowed:
         return PeerMutationResult(False, peer.id, [PeerError("state", "bad_state", "This peer has no outbound request to verify.")])
@@ -319,15 +402,29 @@ async def submit_verification_code(peer, code: str) -> PeerMutationResult:
             fresh = Peer.objects.filter(pk=peer.pk).first()
             if fresh is None:
                 return None, False
+            sent = fresh.state == PeerState.PENDING_SENT or (
+                fresh.state in (PeerState.BROKEN, PeerState.REVOKED)
+                and fresh.reconnect_direction == PeerReconnectDirection.SENT
+            )
+            if not sent or fresh.token_ours != peer.token_ours:
+                return None, False
             if fresh.code_confirmed_at is None:
                 fresh.code_confirmed_at = now
             activated = False
             # Activation race note (module docstring): decide from the FRESH row.
-            if fresh.state == PeerState.PENDING_SENT and fresh.remote_accepted_at is not None:
+            if fresh.remote_accepted_at is not None:
                 fresh.state = PeerState.ACTIVE
-                fresh.accepted_at = now
+                if fresh.accepted_at is None:
+                    fresh.accepted_at = now
+                fresh.last_contact_at = now
+                fresh.broken_reason = ""
+                fresh.reconnect_direction = ""
+                fresh.paired_local_base_url = peer_base_url()
                 activated = True
-            fresh.save(update_fields=["code_confirmed_at", "state", "accepted_at"])
+            fresh.save(update_fields=[
+                "code_confirmed_at", "state", "accepted_at", "last_contact_at",
+                "broken_reason", "reconnect_direction", "paired_local_base_url",
+            ])
             return fresh, activated
 
         fresh, activated = await run_under_db_write_lock(lambda: sync_to_async(_apply)())
@@ -356,11 +453,29 @@ async def submit_verification_code(peer, code: str) -> PeerMutationResult:
 
 
 async def refuse_peer(peer) -> PeerMutationResult:
-    """Silent local delete of a pending_received request (design: silence works)."""
-    from twicc.core.models import PeerState
+    """Refuse an initial request or clear one received reconnect attempt."""
+    from twicc.core.models import Peer, PeerReconnectDirection, PeerState
 
-    if peer.state != PeerState.PENDING_RECEIVED:
+    reconnect_received = (
+        peer.state in (PeerState.BROKEN, PeerState.REVOKED)
+        and peer.reconnect_direction == PeerReconnectDirection.RECEIVED
+    )
+    if peer.state != PeerState.PENDING_RECEIVED and not reconnect_received:
         return PeerMutationResult(False, peer.id, [PeerError("state", "bad_state", "This peer is not pending acceptance.")])
+    if reconnect_received:
+        def _clear():
+            fresh = Peer.objects.filter(pk=peer.pk).first()
+            if fresh is None or fresh.reconnect_direction != PeerReconnectDirection.RECEIVED:
+                return None
+            _clear_handshake(fresh)
+            fresh.save(update_fields=_HANDSHAKE_UPDATE_FIELDS)
+            return fresh
+
+        fresh = await run_under_db_write_lock(lambda: sync_to_async(_clear)())
+        if fresh is None:
+            return PeerMutationResult(False, peer.id, [PeerError("state", "bad_state", "Reconnect changed.")])
+        await broadcast_peer_updated(fresh)
+        return PeerMutationResult(True, fresh.id, None)
     peer_id = peer.id
     await run_under_db_write_lock(lambda: peer.adelete())
     await broadcast_peer_removed(peer_id)
@@ -375,23 +490,197 @@ async def rename_peer(peer, name: str) -> PeerMutationResult:
 
 
 async def delete_peer(peer) -> PeerMutationResult:
-    """Silent revocation, any state. The CASCADE deletes the peer's message
-    history with it — a recorded decision (design §3.2): "history forever" holds
-    for the lifetime of the relationship."""
+    """Delete an initial pending row. Established rows use ``revoke_peer``."""
+    from twicc.core.models import PeerState
+
+    if peer.state not in (PeerState.PENDING_SENT, PeerState.PENDING_RECEIVED):
+        return PeerMutationResult(False, peer.id, [PeerError(
+            "state", "bad_state", "Only an initial pending request can be removed.",
+        )])
     peer_id = peer.id
     await run_under_db_write_lock(lambda: peer.adelete())
     await broadcast_peer_removed(peer_id)
-    logger.info("[peer_delete] id=%s", peer_id)
     return PeerMutationResult(True, peer_id, None)
+
+
+async def revoke_peer(peer) -> PeerMutationResult:
+    """Silently revoke an established Peer while preserving its history."""
+    from twicc.core.models import Peer, PeerState
+
+    def _apply():
+        fresh = Peer.objects.filter(pk=peer.pk).first()
+        if fresh is None:
+            return None, "not_found"
+        if fresh.state not in (PeerState.ACTIVE, PeerState.BROKEN, PeerState.REVOKED):
+            return fresh, "bad_state"
+        fresh.state = PeerState.REVOKED
+        fresh.broken_reason = ""
+        _clear_handshake(fresh)
+        fresh.save(update_fields=[
+            "state", "broken_reason", *_HANDSHAKE_UPDATE_FIELDS,
+        ])
+        return fresh, None
+
+    fresh, error = await run_under_db_write_lock(lambda: sync_to_async(_apply)())
+    if error == "not_found":
+        return PeerMutationResult(False, peer.id, [PeerError("peer", "not_found", "Peer no longer exists.")])
+    if error == "bad_state":
+        return PeerMutationResult(False, peer.id, [PeerError(
+            "state", "bad_state", "Only an established peer can be revoked.",
+        )])
+    await broadcast_peer_updated(fresh)
+    logger.info("[peer_revoke] id=%s", fresh.id)
+    return PeerMutationResult(True, fresh.id, None)
+
+
+async def reconnect_peer(peer) -> PeerMutationResult:
+    """Start or manually retry one reconnect attempt with the same token."""
+    from twicc.core.models import Peer, PeerReconnectDirection, PeerState
+    from twicc.peer import outbound
+
+    own_url = peer_base_url()
+    if not own_url:
+        return PeerMutationResult(False, peer.id, [PeerError(
+            "state", "peer_host_unset", "Configure your peer address before reconnecting.",
+        )])
+
+    minted = mint_token()
+
+    def _prepare():
+        fresh = Peer.objects.filter(pk=peer.pk).first()
+        if fresh is None:
+            return None, "not_found"
+        if fresh.state not in (PeerState.BROKEN, PeerState.REVOKED):
+            return fresh, "bad_state"
+        if fresh.reconnect_direction == PeerReconnectDirection.RECEIVED:
+            return fresh, "attempt_received"
+        if fresh.reconnect_direction == PeerReconnectDirection.SENT:
+            if not fresh.token_ours:
+                return fresh, "invalid_attempt"
+            return fresh, None
+        _clear_handshake(fresh)
+        fresh.token_ours = minted
+        fresh.reconnect_direction = PeerReconnectDirection.SENT
+        fresh.save(update_fields=_HANDSHAKE_UPDATE_FIELDS)
+        return fresh, None
+
+    fresh, error = await run_under_db_write_lock(lambda: sync_to_async(_prepare)())
+    if error:
+        messages = {
+            "not_found": "Peer no longer exists.",
+            "bad_state": "Only a broken or revoked peer can reconnect.",
+            "attempt_received": "This peer has an incoming reconnect request.",
+            "invalid_attempt": "Cancel this reconnect attempt before trying again.",
+        }
+        return PeerMutationResult(False, peer.id, [PeerError("state", error, messages[error])])
+
+    await broadcast_peer_updated(fresh)
+    detail = ""
+    try:
+        status, _body = await outbound.post_handshake_request(
+            fresh.base_url,
+            display_name=own_display_name(),
+            own_base_url=own_url,
+            token=fresh.token_ours,
+        )
+    except outbound.PeerOutboundError as exc:
+        status, detail = None, str(exc)
+    if status is None or status >= 400:
+        return PeerMutationResult(False, fresh.id, [PeerError(
+            "base_url", "unreachable", detail or f"http_{status}",
+        )])
+    return PeerMutationResult(True, fresh.id, None)
+
+
+async def cancel_reconnect(peer) -> PeerMutationResult:
+    """Cancel one sent reconnect attempt without changing durable state."""
+    from twicc.core.models import Peer, PeerReconnectDirection
+
+    def _apply():
+        fresh = Peer.objects.filter(pk=peer.pk).first()
+        if fresh is None:
+            return None, "not_found"
+        if fresh.reconnect_direction != PeerReconnectDirection.SENT:
+            return fresh, "bad_state"
+        _clear_handshake(fresh)
+        fresh.save(update_fields=_HANDSHAKE_UPDATE_FIELDS)
+        return fresh, None
+
+    fresh, error = await run_under_db_write_lock(lambda: sync_to_async(_apply)())
+    if error:
+        return PeerMutationResult(False, peer.id, [PeerError(
+            "state", error, "This peer has no sent reconnect attempt.",
+        )])
+    await broadcast_peer_updated(fresh)
+    return PeerMutationResult(True, fresh.id, None)
+
+
+async def invalidate_peers_for_local_origin(
+    previous_base_url: str,
+    current_base_url: str,
+    *,
+    broadcast_changes: bool = True,
+) -> None:
+    """Invalidate local Peer credentials after a supported address change."""
+    from django.db import transaction
+
+    from twicc.core.models import Peer, PeerBrokenReason, PeerState
+
+    def _apply():
+        with transaction.atomic():
+            active = Peer.objects.filter(state=PeerState.ACTIVE)
+            changed = bool(previous_base_url) and previous_base_url != current_base_url
+            interrupted = previous_base_url == current_base_url and active.exclude(
+                paired_local_base_url=current_base_url,
+            ).exists()
+            if not changed and not interrupted:
+                return [], []
+
+            removed_ids = list(Peer.objects.filter(
+                state__in=[PeerState.PENDING_SENT, PeerState.PENDING_RECEIVED],
+            ).values_list("id", flat=True))
+            if removed_ids:
+                Peer.objects.filter(id__in=removed_ids).delete()
+
+            updated = []
+            for fresh in Peer.objects.filter(
+                state__in=[PeerState.ACTIVE, PeerState.BROKEN, PeerState.REVOKED],
+            ):
+                fields = []
+                if fresh.state == PeerState.ACTIVE:
+                    fresh.state = PeerState.BROKEN
+                    fresh.broken_reason = (
+                        PeerBrokenReason.LOCAL_ADDRESS_DISABLED
+                        if not current_base_url
+                        else PeerBrokenReason.LOCAL_ADDRESS_CHANGED
+                    )
+                    _clear_handshake(fresh)
+                    fields.extend(["state", "broken_reason", *_HANDSHAKE_UPDATE_FIELDS])
+                elif fresh.reconnect_direction:
+                    _clear_handshake(fresh)
+                    fields.extend(_HANDSHAKE_UPDATE_FIELDS)
+                if fields:
+                    fresh.save(update_fields=fields)
+                    updated.append(fresh)
+            return updated, removed_ids
+
+    updated, removed_ids = await run_under_db_write_lock(lambda: sync_to_async(_apply)())
+    if not broadcast_changes:
+        return
+    for peer_id in removed_ids:
+        await broadcast_peer_removed(peer_id)
+    for fresh in updated:
+        await broadcast_peer_updated(fresh)
 
 
 def mark_peer_broken(peer) -> None:
     """Sync body — async callers MUST wrap it in ``sync_to_async`` under the
     write lock like every other mutation. Caller broadcasts."""
-    from twicc.core.models import PeerState
+    from twicc.core.models import PeerBrokenReason, PeerState
 
     peer.state = PeerState.BROKEN
-    peer.save(update_fields=["state"])
+    peer.broken_reason = PeerBrokenReason.REMOTE_CREDENTIAL_REJECTED
+    peer.save(update_fields=["state", "broken_reason"])
 
 
 # ── Inbound-side writes (instance-to-instance endpoints) ────────────────────
@@ -400,13 +689,32 @@ def mark_peer_broken(peer) -> None:
 
 async def register_incoming_request(*, display_name: str, base_url: str, token: str) -> tuple[int, dict]:
     """Write path of ``POST /peer/handshake/request/`` (unauthenticated)."""
-    from twicc.core.models import Peer, PeerState
+    from twicc.core.models import Peer, PeerReconnectDirection, PeerState
 
     base_url = normalize_base_url(base_url)
 
     def _apply():
-        row = Peer.objects.exclude(state=PeerState.BROKEN).filter(base_url=base_url).first()
+        matches = _peers_matching_origin(Peer, base_url)
+        if len(matches) > 1:
+            return 409, {"error": "ambiguous_peer"}, None, None
+        row = matches[0] if matches else None
         if row is not None:
+            if row.state in (PeerState.BROKEN, PeerState.REVOKED):
+                if row.reconnect_direction:
+                    same_request = (
+                        row.reconnect_direction == PeerReconnectDirection.RECEIVED
+                        and hmac.compare_digest(row.token_theirs or "", token)
+                    )
+                    if same_request:
+                        return 200, {}, None, None
+                    return 409, {"error": "reconnect_in_progress"}, None, None
+                _clear_handshake(row)
+                row.remote_display_name = display_name
+                row.token_theirs = token
+                row.reconnect_direction = PeerReconnectDirection.RECEIVED
+                row.verification_code = mint_verification_code()
+                row.save(update_fields=["remote_display_name", *_HANDSHAKE_UPDATE_FIELDS])
+                return 200, {}, "peer_request_received", row
             if row.state == PeerState.PENDING_RECEIVED:
                 if row.verified_at is not None:
                     # This endpoint is unauthenticated and dedups by base_url
@@ -463,14 +771,21 @@ async def register_incoming_request(*, display_name: str, base_url: str, token: 
 async def record_verification_attempt(peer_id: str, code: str) -> tuple[int, dict]:
     """Write path of ``POST /peer/handshake/verify/`` (the requester echoes the
     out-of-band code). Constant-time compare; hard guess ceiling."""
-    from twicc.core.models import Peer, PeerState
+    from twicc.core.models import Peer, PeerReconnectDirection, PeerState
 
     def _apply():
-        peer = Peer.objects.filter(
-            pk=peer_id, state__in=[PeerState.PENDING_RECEIVED, PeerState.ACTIVE],
-        ).first()
-        if peer is None:
+        peer = Peer.objects.filter(pk=peer_id).first()
+        reconnect_received = peer is not None and (
+            peer.state in (PeerState.BROKEN, PeerState.REVOKED)
+            and peer.reconnect_direction == PeerReconnectDirection.RECEIVED
+        )
+        if peer is None or peer.state not in (PeerState.PENDING_RECEIVED, PeerState.ACTIVE) and not reconnect_received:
             return 403, {"error": "unknown_token"}, None, None
+        if peer.state == PeerState.ACTIVE:
+            from twicc.core.services.peer_tokens import peer_credentials_are_active
+
+            if not peer_credentials_are_active(peer):
+                return 403, {"error": "unknown_token"}, None, None
         if hmac.compare_digest(peer.verification_code or "", code):
             if peer.state == PeerState.ACTIVE:
                 # Pure no-op: idempotent across the accept transition, so a
@@ -489,6 +804,10 @@ async def record_verification_attempt(peer_id: str, code: str) -> tuple[int, dic
         if peer.verification_attempts >= VERIFICATION_MAX_ATTEMPTS:
             peer.verification_regens += 1
             if peer.verification_regens >= VERIFICATION_MAX_REGENS:
+                if reconnect_received:
+                    _clear_handshake(peer)
+                    peer.save(update_fields=_HANDSHAKE_UPDATE_FIELDS)
+                    return 403, {"error": "too_many_attempts"}, "peer_updated", peer
                 # "5-then-regenerate" alone is an unbounded guessing loop —
                 # drop the pending request entirely (silent-refusal semantics).
                 dropped_id = peer.id
@@ -509,24 +828,33 @@ async def record_verification_attempt(peer_id: str, code: str) -> tuple[int, dic
 
 async def apply_handshake_accept(peer_id: str, *, token: str, display_name: str) -> tuple[int, dict]:
     """Write path of ``POST /peer/handshake/accept/`` (requester side)."""
-    from twicc.core.models import Peer, PeerState
+    from twicc.core.models import Peer, PeerReconnectDirection, PeerState
 
     def _apply():
         peer = Peer.objects.filter(pk=peer_id).first()
         if peer is None:
             return 403, {"error": "unknown_token"}, None, None
         now = _now()
-        if peer.state == PeerState.PENDING_SENT:
+        reconnect_sent = (
+            peer.state in (PeerState.BROKEN, PeerState.REVOKED)
+            and peer.reconnect_direction == PeerReconnectDirection.SENT
+        )
+        if peer.state == PeerState.PENDING_SENT or reconnect_sent:
             peer.token_theirs = token
             peer.remote_display_name = display_name
             if peer.code_confirmed_at is not None:
                 # Honest flow: the acceptor cannot accept before our code
                 # submission succeeded.
                 peer.state = PeerState.ACTIVE
-                peer.accepted_at = now
+                if peer.accepted_at is None:
+                    peer.accepted_at = now
                 peer.last_contact_at = now
+                peer.broken_reason = ""
+                peer.reconnect_direction = ""
+                peer.paired_local_base_url = peer_base_url()
                 peer.save(update_fields=[
                     "token_theirs", "remote_display_name", "state", "accepted_at", "last_contact_at",
+                    "broken_reason", "reconnect_direction", "paired_local_base_url",
                 ])
                 return 200, {}, "peer_accepted", peer
             # Held accept: an accept from a stale/hijacked URL must not
@@ -539,8 +867,13 @@ async def apply_handshake_accept(peer_id: str, *, token: str, display_name: str)
             # Crossed row: the data is already present; activation only ever
             # comes from the LOCAL verify + accept path on this side.
             return 200, {}, None, None
-        if peer.state == PeerState.ACTIVE and hmac.compare_digest(peer.token_theirs or "", token):
-            return 200, {}, None, None
+        if peer.state == PeerState.ACTIVE:
+            from twicc.core.services.peer_tokens import peer_credentials_are_active
+
+            if not peer_credentials_are_active(peer):
+                return 403, {"error": "unknown_token"}, None, None
+            if hmac.compare_digest(peer.token_theirs or "", token):
+                return 200, {}, None, None
         return 409, {"error": "bad_state"}, None, None
 
     status, body, action, obj = await run_under_db_write_lock(lambda: sync_to_async(_apply)())
