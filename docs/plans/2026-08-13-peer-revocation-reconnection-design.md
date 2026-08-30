@@ -256,7 +256,7 @@ An active or initial-pending Peer returns a state conflict.
 
 The current canonical local `peerBaseUrl` must be non-empty.
 
-### 5.2 Start and manual Retry
+### 5.2 Start, manual Retry, and Cancel
 
 The owner Reconnect action creates `reconnect_direction = sent` under the write lock.
 
@@ -272,7 +272,17 @@ Retry calls the same owner endpoint. It resends the same request with the same `
 
 Retry does not mint another token. It has no timer and no automatic invocation.
 
-Cancel clears the reconnect attempt. It leaves the durable Peer state unchanged.
+Cancel posts `/peer/handshake/cancel/` with the sent attempt's provisional token.
+
+The remote instance clears only the received reconnect attempt with that token.
+
+The requester then clears the same local attempt. Both durable Peer states and both histories remain unchanged.
+
+A `2xx` response confirms the remote cancellation.
+
+A `404 unknown_request` also succeeds because the remote attempt is already absent.
+
+A network error, redirect, or other HTTP error keeps the local sent attempt visible. The owner can retry Cancel.
 
 ### 5.3 Receive and replay
 
@@ -509,6 +519,8 @@ Revoke and local-address invalidation clear credentials under the database write
 
 Inbound messages, status callbacks, verify calls, and accept callbacks require both a matching token and an allowed state.
 
+Reconnect cancellation requires the provisional token and clears only the matching received attempt.
+
 A provisional reconnect token cannot authorize a message because its Peer is not active.
 
 An old token cannot reactivate a Peer after its reconnect attempt was cleared.
@@ -549,7 +561,7 @@ Reconnect tests exercise sent, received, Retry, Cancel, Refuse, Verify, Accept, 
 
 They fail if Retry changes the token, success creates a second local Peer, or a late callback restores a cleared attempt.
 
-Lost-response tests replay Verify and Accept. They fail if either side becomes permanently unable to complete.
+Lost-response tests replay Verify, Accept, and Cancel. They fail if either side becomes permanently unable to complete.
 
 Address tests exercise migration safety, empty-to-valid, valid-to-empty, valid-to-different, and reapplication after interruption.
 

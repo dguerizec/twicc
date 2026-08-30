@@ -162,6 +162,19 @@ async def handshake_request(request):
     return JsonResponse(resp, status=status)
 
 
+async def handshake_cancel(request):
+    """POST /peer/handshake/cancel/ — requester withdraws one reconnect."""
+    if _feature_disabled():
+        return _not_found()
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    bearer = _bearer(request)
+    if not bearer:
+        return JsonResponse({"error": "unknown_request"}, status=404)
+    status, resp = await peer_mutation.cancel_incoming_reconnect(bearer)
+    return JsonResponse(resp, status=status)
+
+
 async def handshake_verify(request):
     """POST /peer/handshake/verify/ — the REQUESTER echoes the out-of-band code,
     presenting the token it minted (stored here as ``token_theirs``)."""

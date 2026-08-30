@@ -58,6 +58,10 @@ async def post_handshake_request(base_url: str, *, display_name: str, own_base_u
     )
 
 
+async def post_handshake_cancel(base_url: str, *, bearer: str) -> tuple[int, dict]:
+    return await _post(base_url, "/peer/handshake/cancel/", {}, bearer=bearer)
+
+
 async def post_handshake_verify(base_url: str, *, bearer: str, code: str) -> tuple[int, dict]:
     return await _post(base_url, "/peer/handshake/verify/", {"code": code}, bearer=bearer)
 

@@ -604,25 +604,64 @@ async def reconnect_peer(peer) -> PeerMutationResult:
 
 
 async def cancel_reconnect(peer) -> PeerMutationResult:
-    """Cancel one sent reconnect attempt without changing durable state."""
+    """Withdraw one sent reconnect attempt from both instances."""
     from twicc.core.models import Peer, PeerReconnectDirection
+    from twicc.peer import outbound
 
-    def _apply():
+    def _snapshot():
         fresh = Peer.objects.filter(pk=peer.pk).first()
         if fresh is None:
             return None, "not_found"
-        if fresh.reconnect_direction != PeerReconnectDirection.SENT:
+        if fresh.reconnect_direction != PeerReconnectDirection.SENT or not fresh.token_ours:
             return fresh, "bad_state"
-        _clear_handshake(fresh)
-        fresh.save(update_fields=_HANDSHAKE_UPDATE_FIELDS)
         return fresh, None
 
-    fresh, error = await run_under_db_write_lock(lambda: sync_to_async(_apply)())
+    fresh, error = await sync_to_async(_snapshot)()
     if error:
         return PeerMutationResult(False, peer.id, [PeerError(
             "state", error, "This peer has no sent reconnect attempt.",
         )])
-    await broadcast_peer_updated(fresh)
+
+    token = fresh.token_ours
+    body = {}
+    try:
+        status, body = await outbound.post_handshake_cancel(fresh.base_url, bearer=token)
+    except outbound.PeerOutboundError:
+        return PeerMutationResult(False, fresh.id, [PeerError(
+            "base_url",
+            "unreachable",
+            "The remote instance could not be reached. The reconnect request was not cancelled. Try again.",
+        )])
+    remote_request_absent = status == 404 and body.get("error") == "unknown_request"
+    remote_cancelled = 200 <= status < 300
+    if not remote_cancelled and not remote_request_absent:
+        return PeerMutationResult(False, fresh.id, [PeerError(
+            "base_url",
+            "cancel_failed",
+            "The remote instance did not cancel the reconnect request. Try again.",
+        )])
+
+    def _clear_if_same():
+        current = Peer.objects.filter(pk=peer.pk).first()
+        if current is None:
+            return None, False
+        same_attempt = (
+            current.reconnect_direction == PeerReconnectDirection.SENT
+            and hmac.compare_digest(current.token_ours or "", token)
+        )
+        if not same_attempt:
+            return current, False
+        _clear_handshake(current)
+        current.save(update_fields=_HANDSHAKE_UPDATE_FIELDS)
+        return current, True
+
+    fresh, cleared = await run_under_db_write_lock(lambda: sync_to_async(_clear_if_same)())
+    if fresh is None:
+        return PeerMutationResult(False, peer.id, [PeerError(
+            "peer", "not_found", "Peer no longer exists.",
+        )])
+    if cleared:
+        await broadcast_peer_updated(fresh)
     return PeerMutationResult(True, fresh.id, None)
 
 
@@ -777,6 +816,29 @@ async def register_incoming_request(*, display_name: str, base_url: str, token: 
     status, body, action, obj = await run_under_db_write_lock(lambda: sync_to_async(_apply)())
     await _emit(action, obj)
     return status, body
+
+
+async def cancel_incoming_reconnect(token: str) -> tuple[int, dict]:
+    """Clear the received reconnect attempt identified by ``token``."""
+    from twicc.core.models import Peer, PeerReconnectDirection, PeerState
+
+    def _apply():
+        peer = Peer.objects.filter(
+            token_theirs=token,
+            state__in=(PeerState.BROKEN, PeerState.REVOKED),
+            reconnect_direction=PeerReconnectDirection.RECEIVED,
+        ).first()
+        if peer is None:
+            return None
+        _clear_handshake(peer)
+        peer.save(update_fields=_HANDSHAKE_UPDATE_FIELDS)
+        return peer
+
+    peer = await run_under_db_write_lock(lambda: sync_to_async(_apply)())
+    if peer is None:
+        return 404, {"error": "unknown_request"}
+    await broadcast_peer_updated(peer)
+    return 200, {}
 
 
 async def record_verification_attempt(peer_id: str, code: str) -> tuple[int, dict]:

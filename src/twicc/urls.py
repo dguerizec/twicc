@@ -183,6 +183,7 @@ urlpatterns = [
     # Bearer-auth inside the views, exempt from the human auth gates (see
     # auth/middleware.PUBLIC_PATHS). Owner management under /api/ → cookie-gated.
     path("peer/handshake/request/", peer_inbound_views.handshake_request),
+    path("peer/handshake/cancel/", peer_inbound_views.handshake_cancel),
     path("peer/handshake/verify/", peer_inbound_views.handshake_verify),
     path("peer/handshake/accept/", peer_inbound_views.handshake_accept),
     path("peer/messages/", peer_inbound_views.message_receive),

@@ -82,6 +82,7 @@ def test_all_endpoints_404_when_feature_disabled(client, transactional_db, monke
     monkeypatch.setattr("twicc.synced_settings.read_synced_settings", lambda: {"peerBaseUrl": ""})
     for path in (
         "/peer/handshake/request/",
+        "/peer/handshake/cancel/",
         "/peer/handshake/verify/",
         "/peer/handshake/accept/",
         "/peer/messages/",
@@ -98,6 +99,7 @@ def test_all_endpoints_404_when_peer_origin_is_invalid(client, transactional_db,
     )
     for path in (
         "/peer/handshake/request/",
+        "/peer/handshake/cancel/",
         "/peer/handshake/verify/",
         "/peer/handshake/accept/",
         "/peer/messages/",
@@ -480,6 +482,17 @@ def _patch_request_response(monkeypatch, status=200, *, body=None, network_error
     monkeypatch.setattr("twicc.peer.outbound.post_handshake_request", _fake)
 
 
+def _patch_cancel_response(monkeypatch, status=200, *, body=None, network_error=False, calls=None):
+    async def _fake(base_url, *, bearer):
+        if calls is not None:
+            calls.append({"base_url": base_url, "bearer": bearer})
+        if network_error:
+            raise outbound.PeerOutboundError("ConnectTimeout")
+        return status, {} if body is None else body
+
+    monkeypatch.setattr("twicc.peer.outbound.post_handshake_cancel", _fake, raising=False)
+
+
 def test_create_peer_success(transactional_db, peer_host, broadcasts, monkeypatch):
     _patch_request_response(monkeypatch)
     result = _run(peer_mutation.create_peer_and_request(name="bob", base_url="https://bob.example.com/"))
@@ -674,6 +687,51 @@ def test_active_handshake_recovery_rejects_old_local_origin(
 
 # ── Established Peer reconnect ──────────────────────────────────────────────
 
+def test_handshake_cancel_clears_matching_received_reconnect(
+        client, transactional_db, peer_host, broadcasts):
+    token = mint_token()
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+        reconnect_direction="received",
+        token_theirs=token,
+        verification_code="123456",
+    )
+
+    response = _post(client, "/peer/handshake/cancel/", {}, bearer=token)
+
+    assert response.status_code == 200
+    peer.refresh_from_db()
+    assert peer.state == PeerState.REVOKED
+    assert peer.reconnect_direction == ""
+    assert peer.token_theirs is None
+    assert peer.verification_code == ""
+    assert broadcasts[-1]["type"] == "peer_updated"
+
+
+def test_handshake_cancel_rejects_unknown_attempt_without_changing_peer(
+        client, transactional_db, peer_host):
+    token = mint_token()
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.BROKEN,
+        reconnect_direction="received",
+        token_theirs=token,
+        verification_code="123456",
+    )
+
+    response = _post(client, "/peer/handshake/cancel/", {}, bearer=mint_token())
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "unknown_request"}
+    peer.refresh_from_db()
+    assert peer.reconnect_direction == "received"
+    assert peer.token_theirs == token
+    assert peer.verification_code == "123456"
+
+
 @pytest.mark.parametrize("state", [PeerState.BROKEN, PeerState.REVOKED])
 def test_reconnect_start_and_retry_reuse_one_token(
         client, transactional_db, peer_host, broadcasts, monkeypatch, state):
@@ -718,7 +776,7 @@ def test_reconnect_conflict_uses_remote_error_message(transactional_db, peer_hos
     )
 
 
-def test_cancel_reconnect_clears_attempt_and_late_callback_fails(
+def test_cancel_reconnect_cancels_remote_then_clears_attempt_and_rejects_late_callback(
         client, transactional_db, peer_host, monkeypatch):
     peer = Peer.objects.create(
         name="alice",
@@ -729,10 +787,13 @@ def test_cancel_reconnect_clears_attempt_and_late_callback_fails(
     assert _post(client, f"/api/peers/{peer.id}/reconnect/", {}).status_code == 200
     peer.refresh_from_db()
     old_token = peer.token_ours
+    calls = []
+    _patch_cancel_response(monkeypatch, calls=calls)
 
     response = _post(client, f"/api/peers/{peer.id}/reconnect/cancel/", {})
 
     assert response.status_code == 200
+    assert calls == [{"base_url": "https://alice.example.com", "bearer": old_token}]
     peer.refresh_from_db()
     assert peer.state == PeerState.REVOKED
     assert peer.reconnect_direction == ""
@@ -744,6 +805,87 @@ def test_cancel_reconnect_clears_attempt_and_late_callback_fails(
         bearer=old_token,
     )
     assert late.status_code == 403
+
+
+def test_cancel_reconnect_keeps_local_attempt_when_remote_is_unreachable(
+        transactional_db, monkeypatch):
+    token = mint_token()
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+        reconnect_direction="sent",
+        token_ours=token,
+    )
+    _patch_cancel_response(monkeypatch, network_error=True)
+
+    result = _run(peer_mutation.cancel_reconnect(peer))
+
+    assert not result.success
+    assert result.errors[0].code == "unreachable"
+    peer.refresh_from_db()
+    assert peer.reconnect_direction == "sent"
+    assert peer.token_ours == token
+
+
+def test_cancel_reconnect_keeps_local_attempt_when_remote_refuses(
+        transactional_db, monkeypatch):
+    token = mint_token()
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+        reconnect_direction="sent",
+        token_ours=token,
+    )
+    _patch_cancel_response(monkeypatch, status=500)
+
+    result = _run(peer_mutation.cancel_reconnect(peer))
+
+    assert not result.success
+    assert result.errors[0].code == "cancel_failed"
+    peer.refresh_from_db()
+    assert peer.reconnect_direction == "sent"
+    assert peer.token_ours == token
+
+
+def test_cancel_reconnect_keeps_local_attempt_on_remote_redirect(
+        transactional_db, monkeypatch):
+    token = mint_token()
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+        reconnect_direction="sent",
+        token_ours=token,
+    )
+    _patch_cancel_response(monkeypatch, status=302)
+
+    result = _run(peer_mutation.cancel_reconnect(peer))
+
+    assert not result.success
+    peer.refresh_from_db()
+    assert peer.reconnect_direction == "sent"
+    assert peer.token_ours == token
+
+
+def test_cancel_reconnect_clears_local_attempt_when_remote_already_dropped_it(
+        transactional_db, monkeypatch):
+    peer = Peer.objects.create(
+        name="alice",
+        base_url="https://alice.example.com",
+        state=PeerState.REVOKED,
+        reconnect_direction="sent",
+        token_ours=mint_token(),
+    )
+    _patch_cancel_response(monkeypatch, status=404, body={"error": "unknown_request"})
+
+    result = _run(peer_mutation.cancel_reconnect(peer))
+
+    assert result.success
+    peer.refresh_from_db()
+    assert peer.reconnect_direction == ""
+    assert peer.token_ours is None
 
 
 def test_incoming_reconnect_replay_is_idempotent_and_other_token_conflicts(
