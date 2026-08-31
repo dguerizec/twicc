@@ -15,6 +15,8 @@ def runtime_cache(tmp_path, monkeypatch):
     cache.mkdir()
     monkeypatch.setattr(runtime, "_cache_root", lambda: cache)
     monkeypatch.setattr(runtime, "_ready_in_process", False)
+    # A worktree shell exports it; the default here must be "cleanup enabled".
+    monkeypatch.delenv(runtime._NO_CLEANUP_ENV, raising=False)
     return cache
 
 
@@ -62,6 +64,35 @@ def test_freshly_downloaded_runtime_also_removes_older_versions(
 
     assert current.exists()
     assert not older.exists()
+
+
+def test_cleanup_env_kill_switch_keeps_older_versions(runtime_cache, monkeypatch):
+    monkeypatch.setenv(runtime._NO_CLEANUP_ENV, "1")
+    older = _make_runtime(runtime_cache, "0.143.0")
+    current = _make_runtime(runtime_cache, runtime.CODEX_VERSION)
+
+    assert runtime.ensure_codex_runtime_sync() == current
+    assert older.exists()
+
+
+def test_runtime_pruned_by_another_checkout_is_downloaded_again(
+    runtime_cache, monkeypatch
+):
+    current = _make_runtime(runtime_cache, runtime.CODEX_VERSION)
+    assert runtime.ensure_codex_runtime_sync() == current
+
+    # Another checkout, pinned to a newer version, prunes ours mid-process.
+    runtime.shutil.rmtree(current)
+    downloads = []
+
+    def fake_download_and_extract():
+        downloads.append(_make_runtime(runtime_cache, runtime.CODEX_VERSION))
+
+    monkeypatch.setattr(runtime, "_download_and_extract", fake_download_and_extract)
+
+    assert runtime.ensure_codex_runtime_sync() == current
+    assert len(downloads) == 1
+    assert current.exists()
 
 
 def test_cleanup_failure_does_not_hide_a_ready_runtime(runtime_cache, monkeypatch):

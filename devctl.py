@@ -490,6 +490,9 @@ def get_process_config(backend_port: int, frontend_port: int) -> dict:
                 #   main instance's terminal sessions).
                 # - Disable telemetry: dev worktrees are throwaway instances that would each
                 #   register as a distinct install and pollute the collected stats.
+                # - Never prune old Codex runtimes: ~/.cache/twicc/codex-runtime/ is shared
+                #   with the main instance, and a worktree bumping CODEX_VERSION would delete
+                #   the version that instance is running on. It still downloads its own.
                 **({
                     "TWICC_SESSION_COOKIE": f"sessionid_{backend_port}",
                     "TWICC_NO_CRON_RESTART": "1",
@@ -498,6 +501,7 @@ def get_process_config(backend_port: int, frontend_port: int) -> dict:
                     "TWICC_NO_SESSION_DIRS_CLEANUP": "1",
                     "TWICC_NO_TMUX_CLEANUP": "1",
                     "TWICC_NO_TELEMETRY": "1",
+                    "TWICC_NO_CODEX_RUNTIME_CLEANUP": "1",
                 } if is_git_worktree() else {}),
             },
         },

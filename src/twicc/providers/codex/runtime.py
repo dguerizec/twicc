@@ -18,6 +18,13 @@ Cache location: ``$XDG_CACHE_HOME/twicc/codex-runtime/<version>/`` (default
 so the ~300 MB extracted tree is downloaded once. Independent of
 ``TWICC_DATA_DIR`` on purpose — this is a regenerable runtime cache, not user
 data.
+
+Because the cache is shared, a checkout pinned to a newer ``CODEX_VERSION``
+prunes the version a concurrently running checkout still uses. Two guards:
+``TWICC_NO_CODEX_RUNTIME_CLEANUP=1`` (set by devctl in worktree mode) makes a
+checkout download without ever pruning, and provisioning re-checks the store on
+every call, so a runtime deleted under a live process is downloaded again
+instead of surfacing a missing-binary error.
 """
 
 from __future__ import annotations
@@ -84,8 +91,14 @@ class CodexRuntimeIntegrityError(CodexRuntimeError):
     """Downloaded wheel failed sha256 verification."""
 
 
-# In-process short-circuit once the runtime is confirmed present.
+# In-process short-circuit for the cleanup scan, once it has run.
 _ready_in_process = False
+
+# Set to 1 to keep every cached runtime version, i.e. download but never prune.
+# devctl sets it in worktree mode: a worktree pinned to a newer CODEX_VERSION
+# shares the cache with the main instance and would otherwise delete the version
+# that instance is running on.
+_NO_CLEANUP_ENV = "TWICC_NO_CODEX_RUNTIME_CLEANUP"
 
 
 def _platform_tag() -> str:
@@ -206,8 +219,13 @@ def _cleanup_previous_runtimes() -> None:
     exclusion by allowing a second inode to be created at the same path.
 
     Cleanup is best-effort because a cache permission issue must not make an
-    otherwise ready Codex runtime unusable.
+    otherwise ready Codex runtime unusable. It is skipped entirely when
+    ``TWICC_NO_CODEX_RUNTIME_CLEANUP`` is set.
     """
+    if os.environ.get(_NO_CLEANUP_ENV, "").strip().lower() in ("1", "true", "yes"):
+        logger.info("Codex runtime cleanup disabled (%s is set)", _NO_CLEANUP_ENV)
+        return
+
     cache_root = _cache_root()
     current_key = _version_key(CODEX_VERSION)
     if current_key is None or not cache_root.is_dir():
@@ -287,11 +305,18 @@ def ensure_codex_runtime_sync() -> Path:
     Blocking. Idempotent. Safe across threads and processes. Returns the store
     directory. Callers in an async context must use :func:`ensure_codex_runtime`
     instead so the download runs off the event loop.
+
+    The store is re-checked on every call (two ``stat`` calls) rather than
+    short-circuited by ``_ready_in_process``: another checkout sharing the cache
+    can prune our version while this process runs, and a re-download is a much
+    better outcome than handing out a path to a deleted binary. Only the cleanup
+    scan is short-circuited.
     """
     global _ready_in_process
+    if not is_runtime_ready():
+        _download_and_extract()
+        _ready_in_process = False
     if not _ready_in_process:
-        if not is_runtime_ready():
-            _download_and_extract()
         _cleanup_previous_runtimes()
     _ready_in_process = True
     return _store_dir()
