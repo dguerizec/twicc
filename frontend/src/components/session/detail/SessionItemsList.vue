@@ -1,5 +1,5 @@
 <script setup>
-import { computed, watch, ref, provide, nextTick, inject, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
+import { computed, watch, ref, reactive, provide, nextTick, inject, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDebounceFn } from '@vueuse/core'
 import { useDataStore } from '../../../stores/data'
@@ -844,6 +844,146 @@ watch(
         }
     }
 )
+
+/**
+ * Preserve the scroll position across the streaming-to-real item swap.
+ *
+ * When a streamed block is retired (_retireStreamingBlocks), the synthetic item
+ * (negative lineNum) is replaced by the real JSONL item (positive lineNum). The
+ * scroller does not know the real item's height for a few frames -- and the
+ * real item then re-renders its markdown asynchronously -- so scrollHeight
+ * collapses and the browser clamps scrollTop, dumping a reader of the streamed
+ * text at the bottom, where the at-bottom machinery then pins them. The content
+ * is identical, so the position is fully recoverable:
+ *
+ *   1. capture scrollTop synchronously BEFORE the swap ($onAction runs before
+ *      the action body);
+ *   2. wait until the position is REACHABLE again -- scrollHeight recovered
+ *      enough that the write would not be clamped. A height-stability debounce
+ *      is the wrong signal here: it can fire while the item still renders
+ *      empty, and never fire while another block keeps streaming;
+ *   3. write it back, then hold it for a few frames: the clamp may have flipped
+ *      the at-bottom flag on, and until the sentinel observer reports back, any
+ *      DOM growth natively re-pins the view to the bottom.
+ *
+ * Any manual scroll gesture aborts the restore: the user's move is a newer
+ * intent than the saved position.
+ *
+ * The restore alone proved insufficient: within the clamped window, unrelated
+ * watchers (session_updated, new items) read the phantom at-bottom state and
+ * legitimately scroll to the bottom on their own. The height floor applied in
+ * the after() hook is therefore the primary defense -- it prevents the dip
+ * (and thus the phantom state) from ever existing; the capture/restore below
+ * remains as a safety net.
+ */
+let streamSwapSavedScrollTop = null  // pre-swap scrollTop while a restore is in flight
+let streamSwapSeq = 0                // only the latest swap performs the restore
+
+// Manual-scroll gestures that abort a pending restore.
+const STREAM_SWAP_USER_EVENTS = ['wheel', 'touchstart', 'mousedown', 'keydown']
+
+// Upper bound on the reachability wait. Hit only when the final layout ends up
+// genuinely shorter than the streamed one (e.g. a streamed-open thinking block
+// re-rendering collapsed): restoring would land somewhere wrong -- give up.
+const STREAM_SWAP_RESTORE_MAX_MS = 3000
+
+// How many frames the restore re-asserts the position (see point 3 above).
+const STREAM_SWAP_HOLD_FRAMES = 8
+
+// Height floor bridging the swap: the real item inherits the streamed item's
+// measured height (scroller cache seed + CSS min-height on the element) so
+// scrollHeight never dips while its markdown re-renders. Cleared after a
+// delay: kept forever it would block legitimate shrinks (e.g. the user
+// collapsing a code block inside the item).
+const streamSwapHeightFloors = reactive(new Map())  // realLineNum -> px
+const STREAM_SWAP_FLOOR_MS = 3000
+const streamSwapItemMinHeight = (item) => streamSwapHeightFloors.get(item.lineNum) ?? null
+
+// Floors are keyed by lineNum within one session only.
+watch(() => props.sessionId, () => streamSwapHeightFloors.clear())
+
+store.$onAction(({ name, args, after }) => {
+    if (name !== '_retireStreamingBlocks') return
+    if (args[0] !== props.sessionId) return
+    // Without streaming state the action is a no-op -- nothing will move.
+    if (!store.localState.streamingBlocks[props.sessionId]) return
+    if (!sessionActive.value) return
+    const scroller = scrollerRef.value
+    if (!scroller) return
+    const state = scroller.getScrollState()
+    if (!state || state.clientHeight === 0) return
+    // Near the bottom, the follow-the-conversation logic owns the scroll.
+    if (scroller.isAtBottom()) return
+
+    const seq = ++streamSwapSeq
+    // A restore already in flight keeps its saved value: the current scrollTop
+    // may already be clamped by a previous swap of the same turn.
+    if (streamSwapSavedScrollTop === null) streamSwapSavedScrollTop = state.scrollTop
+    const saved = streamSwapSavedScrollTop
+
+    after(async (retiredPairs) => {
+        // Primary defense, synchronous (before the caller's recomputeVisualItems
+        // renders the swap): carry the streamed item's measured height onto the
+        // real item, in the scroller's height cache (positions/spacers) AND as
+        // a DOM min-height floor on the mounted element. With both in place,
+        // scrollHeight never dips, the browser never clamps, and the at-bottom
+        // machinery never mistakes the reader for being at the bottom.
+        if (Array.isArray(retiredPairs)) {
+            for (const { streamingLineNum, realLineNum } of retiredPairs) {
+                const h = scroller.getItemHeight(streamingLineNum)
+                if (!h || h <= MIN_ITEM_SIZE) continue
+                scroller.seedItemHeight(realLineNum, h)
+                streamSwapHeightFloors.set(realLineNum, h)
+                setTimeout(() => streamSwapHeightFloors.delete(realLineNum), STREAM_SWAP_FLOOR_MS)
+            }
+        }
+
+        const container = scroller.$el
+        let userTookOver = false
+        const markUserScroll = () => { userTookOver = true }
+        for (const ev of STREAM_SWAP_USER_EVENTS) {
+            container?.addEventListener(ev, markUserScroll, { passive: true })
+        }
+        const nextFrame = () => new Promise(requestAnimationFrame)
+        try {
+            // The caller (addSessionItems) runs recomputeVisualItems right after
+            // this action returns; nextTick lets the DOM reflect the swap first.
+            await nextTick()
+
+            // Phase 1 -- wait until the saved position is reachable again.
+            const deadline = performance.now() + STREAM_SWAP_RESTORE_MAX_MS
+            while (true) {
+                if (seq !== streamSwapSeq) return  // superseded: the newer swap restores
+                if (userTookOver) {
+                    streamSwapSavedScrollTop = null
+                    return
+                }
+                const st = scroller.getScrollState()
+                if (st.clientHeight > 0 && st.scrollHeight - st.clientHeight >= saved - 0.5) break
+                if (performance.now() >= deadline) {
+                    streamSwapSavedScrollTop = null
+                    return
+                }
+                await nextFrame()
+            }
+
+            // Phase 2 -- write, then keep re-asserting for a few frames.
+            // setScrollTop is a no-op when the position is already in place, so
+            // the quiet frames cost nothing.
+            for (let frame = 0; frame < STREAM_SWAP_HOLD_FRAMES; frame++) {
+                if (seq !== streamSwapSeq) return
+                if (userTookOver) break
+                scroller.setScrollTop(saved)
+                await nextFrame()
+            }
+            streamSwapSavedScrollTop = null
+        } finally {
+            for (const ev of STREAM_SWAP_USER_EVENTS) {
+                container?.removeEventListener(ev, markUserScroll)
+            }
+        }
+    })
+})
 
 /**
  * Resolve the pending initial-scroll stability wait, if any, clearing both its debounce
@@ -1846,6 +1986,7 @@ defineExpose({
                 ref="scrollerRef"
                 :items="visualItems"
                 :item-key="item => item.lineNum"
+                :item-min-height="streamSwapItemMinHeight"
                 :min-item-height="MIN_ITEM_SIZE"
                 :buffer="5000"
                 :unload-buffer="10000"

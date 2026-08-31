@@ -578,6 +578,23 @@ export function useVirtualScroll(options) {
     }
 
     /**
+     * Seed the height cache for an item BEFORE it first renders (raw write, no
+     * anchor logic). Used across the streaming-to-real item swap: the real item
+     * inherits the streamed item's measured height so positions and scrollHeight
+     * never dip while it mounts and re-renders its markdown. Must stay
+     * consistent with the DOM (the caller also floors the rendered element),
+     * otherwise the anchor correction in batchUpdateItemHeights would operate
+     * on positions that disagree with what the user actually sees.
+     *
+     * @param {*} key - The item key to seed
+     * @param {number} height - Height in pixels
+     */
+    function seedItemHeight(key, height) {
+        if (!Number.isFinite(height) || height <= 0) return
+        heightCache.set(key, height)
+    }
+
+    /**
      * Invalidate (remove) all items in the height cache that have zero height.
      * This is used when the scroller becomes visible after being hidden,
      * as items measured while hidden (display: none) report 0 height.
@@ -1168,6 +1185,29 @@ export function useVirtualScroll(options) {
     }
 
     /**
+     * Write an absolute scroll position, clamped to the valid range.
+     *
+     * No-op when the container already sits within 0.5px of the target, so a
+     * caller can "restore the position if it moved" without special-casing the
+     * unmoved path (e.g. the user was reading far above a collapsed region and
+     * the browser never clamped scrollTop).
+     *
+     * @param {number} value - Target scrollTop in pixels
+     */
+    function setScrollTop(value) {
+        const container = containerRef.value
+        if (!container || !Number.isFinite(value)) return
+
+        const maxScrollTop = Math.max(0, totalHeight.value - viewportHeight.value)
+        const clamped = Math.max(0, Math.min(value, maxScrollTop))
+        if (Math.abs(container.scrollTop - clamped) <= 0.5) return
+
+        explicitScrollSeq++
+        container.scrollTop = clamped
+        scrollTop.value = clamped
+    }
+
+    /**
      * Scroll to the item with the given key, waiting for heights to stabilize.
      *
      * Algorithm ("jump, settle, correct"):
@@ -1378,5 +1418,9 @@ export function useVirtualScroll(options) {
         resume,
         getScrollAnchor,
         scrollToAnchor,
+
+        // Streaming-item swap support
+        setScrollTop,
+        seedItemHeight,
     }
 }

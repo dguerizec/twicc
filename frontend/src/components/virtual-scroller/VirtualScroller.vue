@@ -90,6 +90,16 @@ const props = defineProps({
     preventAutoScrollToBottom: {
         type: Boolean,
         default: false
+    },
+    /**
+     * Optional per-item CSS min-height provider: (item) => px | null.
+     * Used to bridge item swaps whose replacement re-renders its content
+     * asynchronously (streaming-to-real): the floor keeps the DOM height
+     * from dipping while the new content mounts.
+     */
+    itemMinHeight: {
+        type: Function,
+        default: null
     }
 })
 
@@ -290,12 +300,15 @@ const {
     isAtTop,
     isAtBottomRef,
     invalidateZeroHeights,
+    getItemHeight: composableGetItemHeight,
+    seedItemHeight: composableSeedItemHeight,
     preventAutoScrollToBottom: composablePreventAutoScrollToBottom,
     suspended: composableSuspended,
     suspend: composableSuspend,
     resume: composableResume,
     getScrollAnchor: composableGetScrollAnchor,
     scrollToAnchor: composableScrollToAnchor,
+    setScrollTop: composableSetScrollTop,
 } = useVirtualScroll({
     items: toRef(props, 'items'),
     itemKey: props.itemKey,
@@ -612,6 +625,33 @@ function scrollToAnchor(anchor) {
     composableScrollToAnchor(anchor)
 }
 
+/**
+ * Write an absolute scroll position (clamped; no-op when already there).
+ * Used by parents restoring a scrollTop captured before a layout collapse.
+ * @param {number} value
+ */
+function setScrollTop(value) {
+    composableSetScrollTop(value)
+}
+
+/**
+ * Read the cached measured height of an item, if any.
+ * @param {*} key
+ * @returns {number | undefined}
+ */
+function getItemHeight(key) {
+    return composableGetItemHeight(key)
+}
+
+/**
+ * Seed the height cache for an item before it first renders (see composable).
+ * @param {*} key
+ * @param {number} height
+ */
+function seedItemHeight(key, height) {
+    composableSeedItemHeight(key, height)
+}
+
 // Expose methods for parent component access via ref
 defineExpose({
     scrollToIndex,
@@ -636,6 +676,9 @@ defineExpose({
     resume,
     getScrollAnchor,
     scrollToAnchor,
+    setScrollTop,
+    getItemHeight,
+    seedItemHeight,
 })
 </script>
 
@@ -657,6 +700,7 @@ defineExpose({
             v-for="{ item, index, key } in renderedItems"
             :key="key"
             :item-key="key"
+            :min-height="itemMinHeight ? itemMinHeight(item) : null"
         >
             <slot :item="item" :index="index" />
         </VirtualScrollerItem>

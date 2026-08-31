@@ -34,6 +34,15 @@ const props = defineProps({
     itemKey: {
         type: [String, Number],
         required: true
+    },
+    /**
+     * Optional CSS min-height (px) applied to the wrapper. Bridges item swaps
+     * whose new content renders asynchronously (see VirtualScroller's
+     * itemMinHeight prop).
+     */
+    minHeight: {
+        type: Number,
+        default: null
     }
 })
 
@@ -89,6 +98,7 @@ onUnmounted(() => {
         ref="itemRef"
         class="virtual-scroller-item"
         :data-item-key="props.itemKey"
+        :style="props.minHeight != null ? { minHeight: props.minHeight + 'px' } : null"
     >
         <slot />
     </div>

@@ -4951,7 +4951,12 @@ export const useDataStore = defineStore('data', {
          */
         _retireStreamingBlocks(sessionId, newItems) {
             const streaming = this.localState.streamingBlocks[sessionId]
-            if (!streaming) return
+            if (!streaming) return []
+
+            // Retired (streamingLineNum, realLineNum) pairs, returned so the UI
+            // can bridge the swap (carry the streamed item's measured height
+            // over to the real item before the recompute renders it).
+            const retired = []
 
             for (const item of newItems) {
                 if (item.kind !== 'assistant_message' && item.kind !== 'content_items' && item.kind !== 'reasoning') continue
@@ -4971,6 +4976,10 @@ export const useDataStore = defineStore('data', {
                 const idx = streaming.blocks.findIndex(b => b.uuid === itemUuid)
                 if (idx !== -1) {
                     const block = streaming.blocks[idx]
+                    retired.push({
+                        streamingLineNum: SYNTHETIC_ITEM.STREAMING_BLOCK.baseLineNum - block.blockIndex,
+                        realLineNum: item.line_num,
+                    })
 
                     // Transfer wa-details open state from streaming to real item
                     if (block.blockType === 'thinking') {
@@ -5037,6 +5046,8 @@ export const useDataStore = defineStore('data', {
                 destroySessionBuffers(sessionId)
                 delete this.localState.streamingBlocks[sessionId]
             }
+
+            return retired
         },
 
         /**

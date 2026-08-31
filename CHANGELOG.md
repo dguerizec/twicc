@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Sessions stuck as working** — A Claude session no longer stays shown as working once it has finished replying and is waiting for you.
+- **Reading while streaming** — You no longer lose your scroll position when the reply you were reading finishes streaming.
 - **Text jumping while a reply streams** — The activity line below a reply no longer appears and disappears on short pauses, so the text stops jumping as you read it.
 - **Scroll position when switching sessions** — Coming back to a session returns you where you were.
 - **Tab bars on touch** — Swiping a session's tab bars with a finger scrolls them again, instead of only the arrows working.
