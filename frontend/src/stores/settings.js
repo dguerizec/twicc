@@ -52,6 +52,10 @@ export const SETTINGS_SCHEMA = {
     // (the "clicking outside discards / drag to move" note). Local-only.
     selectionCommentHintDismissed: false,
     notifUserTurnSound: NOTIFICATION_SOUNDS.NONE,
+    // In-app toast on the transition into user turn. A channel of its own,
+    // alongside the sound and the browser notification — not a master switch:
+    // turning it off leaves the other three untouched.
+    notifUserTurnToast: true,
     notifUserTurnBrowser: false,
     notifPendingRequestSound: NOTIFICATION_SOUNDS.NONE,
     notifPendingRequestBrowser: false,
@@ -154,6 +158,7 @@ const SETTINGS_VALIDATORS = {
     showGitIgnoredFiles: (v) => typeof v === 'boolean',
     selectionCommentHintDismissed: (v) => typeof v === 'boolean',
     notifUserTurnSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
+    notifUserTurnToast: (v) => typeof v === 'boolean',
     notifUserTurnBrowser: (v) => typeof v === 'boolean',
     notifPendingRequestSound: (v) => Object.values(NOTIFICATION_SOUNDS).includes(v),
     notifPendingRequestBrowser: (v) => typeof v === 'boolean',
@@ -350,6 +355,7 @@ export const useSettingsStore = defineStore('settings', {
         isShowHiddenFiles: (state) => state.showHiddenFiles,
         isShowGitIgnoredFiles: (state) => state.showGitIgnoredFiles,
         getNotifUserTurnSound: (state) => state.notifUserTurnSound,
+        isNotifUserTurnToast: (state) => state.notifUserTurnToast,
         isNotifUserTurnBrowser: (state) => state.notifUserTurnBrowser,
         getNotifPendingRequestSound: (state) => state.notifPendingRequestSound,
         isNotifPendingRequestBrowser: (state) => state.notifPendingRequestBrowser,
@@ -842,6 +848,16 @@ export const useSettingsStore = defineStore('settings', {
         setNotifUserTurnSound(sound) {
             if (SETTINGS_VALIDATORS.notifUserTurnSound(sound)) {
                 this.notifUserTurnSound = sound
+            }
+        },
+
+        /**
+         * Set the in-app toast for user turn events (this device only).
+         * @param {boolean} enabled
+         */
+        setNotifUserTurnToast(enabled) {
+            if (SETTINGS_VALIDATORS.notifUserTurnToast(enabled)) {
+                this.notifUserTurnToast = enabled
             }
         },
 

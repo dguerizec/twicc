@@ -1,7 +1,8 @@
 <script setup>
 // NotificationSettings.vue - Notification settings section for the settings popover
 // Two notification types: User Turn and Pending Request
-// Each has a sound selector (with test button) and a browser notification toggle.
+// Each has a sound selector (with test button) and a browser notification toggle;
+// User Turn also has its own in-app toast toggle.
 // Plus the external notification targets (Apprise URLs, pushed by the backend).
 
 import { computed, ref, watch } from 'vue'
@@ -23,6 +24,7 @@ const soundOptions = getAvailableSoundOptions()
 
 // Computed from store
 const userTurnSound = computed(() => store.getNotifUserTurnSound)
+const userTurnToast = computed(() => store.isNotifUserTurnToast)
 const userTurnBrowser = computed(() => store.isNotifUserTurnBrowser)
 const pendingRequestSound = computed(() => store.getNotifPendingRequestSound)
 const pendingRequestBrowser = computed(() => store.isNotifPendingRequestBrowser)
@@ -183,6 +185,10 @@ function onPendingRequestSoundChange(event) {
     store.setNotifPendingRequestSound(event.target.value)
 }
 
+function onUserTurnToastChange(event) {
+    store.setNotifUserTurnToast(event.target.checked)
+}
+
 function onUserTurnBrowserChange(event) {
     store.setNotifUserTurnBrowser(event.target.checked)
 }
@@ -277,6 +283,13 @@ defineExpose({ sync })
             <a v-if="userTurnSound !== 'none'" href="#" class="notif-test-link" @click.prevent="testUserTurnSound">
                 <wa-icon name="volume-up"></wa-icon> Test sound
             </a>
+            <div class="notif-toast-row">
+                <wa-switch
+                    :checked="userTurnToast"
+                    @change="onUserTurnToastChange"
+                    size="small"
+                >In-app toast</wa-switch>
+            </div>
             <div v-if="browserNotifPermission === 'granted'" class="notif-browser-row">
                 <wa-switch
                     :checked="userTurnBrowser"
@@ -485,7 +498,8 @@ defineExpose({ sync })
     padding-bottom: var(--wa-space-2xs);
 }
 
-.notif-browser-row {
+.notif-browser-row,
+.notif-toast-row {
     padding-left: var(--wa-space-2xs);
 }
 

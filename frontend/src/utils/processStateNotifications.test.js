@@ -6,6 +6,7 @@ import { getProcessStateNotificationEffects } from './processStateNotifications.
 
 const options = {
     isViewingSession: false,
+    userTurnToastEnabled: true,
     userTurnBrowserEnabled: true,
     pendingRequestBrowserEnabled: true,
 }
@@ -52,4 +53,21 @@ test('mute does not suppress read tracking for a viewed session', () => {
     )
 
     assert.equal(effects.markViewed, true)
+})
+
+
+test('the toast switch gates only the user-turn toast', () => {
+    const effects = getProcessStateNotificationEffects(
+        {
+            state: 'user_turn',
+            pending_requests: [{ request_id: 'request-1' }],
+        },
+        { state: 'assistant_turn', pending_requests: [] },
+        { ...options, userTurnToastEnabled: false },
+    )
+
+    assert.equal(effects.showUserTurnToast, false)
+    assert.equal(effects.playUserTurnSound, true)
+    assert.equal(effects.sendUserTurnBrowser, true)
+    assert.equal(effects.showPendingRequestToast, true)
 })

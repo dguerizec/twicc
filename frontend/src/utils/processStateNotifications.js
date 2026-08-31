@@ -8,7 +8,8 @@ export function getProcessStateNotificationEffects(msg, previousState, options) 
 
     return {
         markViewed: enteredUserTurn && options.isViewingSession,
-        showUserTurnToast: userTurnEnabled && !options.isViewingSession,
+        showUserTurnToast: userTurnEnabled && !options.isViewingSession
+            && options.userTurnToastEnabled,
         playUserTurnSound: userTurnEnabled,
         sendUserTurnBrowser: userTurnEnabled && options.userTurnBrowserEnabled,
         showPendingRequestToast: pendingRequestGrew && !options.isViewingSession,

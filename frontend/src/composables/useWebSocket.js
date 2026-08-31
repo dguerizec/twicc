@@ -729,6 +729,7 @@ function notifyProcessStateChange(msg, previousState, route) {
     const isViewingSession = route?.params?.sessionId === sessionId
     const effects = getProcessStateNotificationEffects(msg, previousState, {
         isViewingSession,
+        userTurnToastEnabled: settings.notifUserTurnToast,
         userTurnBrowserEnabled: settings.notifUserTurnBrowser,
         pendingRequestBrowserEnabled: settings.notifPendingRequestBrowser,
     })

@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Buttons on code blocks** — Wherever Markdown is displayed, each code block can be copied, or have its long lines wrapped. A Markdown block can also be shown rendered.
 - **Answers to questions survive a reload** — What you picked or typed when an agent asks you questions is kept if the page reloads before you submit (as long as the agent is still running).
 - **Attachments on their own** — In an ongoing conversation, you can now send images or files without writing any text.
+- **Mute a session** — A button in its header silences that session's "finished working" notification, while every other alert from it still reaches you; it can also be set when creating or updating a session (+CLI/skill/API).
+- **Turn off the "finished working" toast** — A new Notifications setting hides it, leaving the sound, browser notification and push untouched.
 - **Send a snippet in one gesture** — On touch devices, press and hold a message snippet to send it right away, without the keyboard opening.
 
 ### Changed
