@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Summary
+
+- **Unreleased: Peers & artifacts that remember** — pair your TwiCC with another person's so your agents can exchange messages and files under human review, plus interactive artifacts that save your choices, Codex's new subagents, and a long round of interface fixes.
+
 ### Added
 
 - **Peer messaging** — Pair your TwiCC with another person's so you can work together through your agents, exchanging messages and files under human review.
@@ -14,40 +18,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Download a file** — In the Files, Artifacts and Git tabs, a file's menu can now save it to your device — or, in Git, its changes as a patch.
 - **Buttons on code blocks** — Wherever Markdown is displayed, each code block can be copied, or have its long lines wrapped. A Markdown block can also be shown rendered.
 - **Jump around a conversation** — A toolbar in the bottom-right corner of the chat moves you from message to message.
+- **Mute a session** — A button in its header silences that session's "finished working" notification, while every other alert from it still reaches you; it can also be set when creating or updating a session (+CLI/skill/API).
+- **Turn off the "finished working" toast** — A new Notifications setting hides it, leaving the sound, browser notification and push untouched.
 - **Answers to questions survive a reload** — What you picked or typed when an agent asks you questions is kept if the page reloads before you submit (as long as the agent is still running).
 - **Attachments on their own** — In an ongoing conversation, you can now send images or files without writing any text.
-- **Mute a session** — A button in its header silences that session's "finished working" notification, while every other alert from it still reaches you; it can also be set when creating or updating a session (+CLI/skill/API).
+- **Agent-created share links** — Two new Sharing settings, off by default, let agents create and manage public links for the sessions and artifacts of their own spawn subtree.
 - **Include files in a prompt** — An `@@/abs/path` marker in a prompt or message is replaced by that file's content before sending; `--no-expand` disables it (CLI/skill/API only, not the UI).
-- **Turn off the "finished working" toast** — A new Notifications setting hides it, leaving the sound, browser notification and push untouched.
 - **Send a snippet in one gesture** — On touch devices, press and hold a message snippet to send it right away, without the keyboard opening.
 
 ### Changed
 
 - **Peer relationships** — Revoking a Peer now preserves its message history. You can reconnect it manually, and cancelling a reconnect now withdraws its remote request. Changing your Peer address safely invalidates old credentials. Peer errors are now readable, address changes use inline confirmation, and six-digit code fields stay compact.
 - **Public addresses** — External, Share, and Peer addresses now use one validation format. TwiCC repairs existing External and Share values when safe and ignores unsafe values until you correct them. The former “External URL” label is now “External address”.
-- **GPT-5.4 leaves Codex** — GPT-5.4 and GPT-5.4 mini retire on August 31, 2026. The model pickers now show the date, and sessions still on them move to a supported model on the day.
 - **Messages between sessions** — A session that writes to another one is now always named, instead of its message looking like it came from you.
 - **Quoted text in a message** — Comments on a selection, quotes, and messages from another session now stand out as their own block instead of blending into the text around them.
 - **Comments on a selection** — On desktop, the selection comment widget in the conversation puts the cursor back in the message box when you add your comment, so you can send it right away.
 - **More room for the session title** — When a session header gets narrow, the action icons before the title fold behind a single button. Click it to show them.
+- **GPT-5.4 leaves Codex** — GPT-5.4 and GPT-5.4 mini retire on August 31, 2026. The model pickers now show the date, and sessions still on them move to a supported model on the day.
 - **Claude Agent SDK** — Upgrade from 0.2.130 to 0.2.148 (bundled Claude Code CLI: 2.1.222 → 2.1.251)
 - **Codex runtime** — Update from v0.146.0 to v0.150.1.
 
 ### Fixed
 
-- **Sessions stuck as working** — A Claude session no longer stays shown as working once it has finished replying and is waiting for you.
 - **Reading while streaming** — You no longer lose your scroll position when the reply you were reading finishes streaming.
 - **Text jumping while a reply streams** — The activity line below a reply no longer appears and disappears on short pauses, so the text stops jumping as you read it.
 - **Scroll position when switching sessions** — Coming back to a session returns you where you were.
 - **Tab bars on touch** — Swiping a session's tab bars with a finger scrolls them again, instead of only the arrows working.
 - **Navigation inside a session** — Moving between a session's tabs no longer sends the sidebar to another project or workspace.
-- **Codex sessions spawned by an agent** — They can now put their questions in the conversation instead of a click-only dialog, so a hidden one no longer gets stuck.
-- **Buttons in notifications** — In light mode, they no longer blend into the notification's background.
 - **Minimized docks** — The strip of icons now shows which tab a minimized dock is on, and which one is open.
+- **Refreshing the Files tab** — The open file keeps its preview mode, zoom and scroll position, instead of falling back to raw text on every refresh.
+- **Buttons in notifications** — In light mode, they no longer blend into the notification's background.
 - **"Share viewed" notifications** — They now name the shared session or artifact, and the link's own label, instead of an internal identifier.
 - **Project icons** — The project selector now shows the current project's icon, not only its color dot.
 - **Quota tooltips** — no longer close before you can reach the buttons inside them (attempt #2).
+- **Sessions stuck as working** — A Claude session no longer stays shown as working once it has finished replying and is waiting for you.
 - **Claude cron jobs** — A session with cron jobs is now always resumed, and its jobs are no longer duplicated.
+- **Codex sessions spawned by an agent** — They can now put their questions in the conversation instead of a click-only dialog, so a hidden one no longer gets stuck.
 
 ## [1.92.8] - 2026-08-05
 
