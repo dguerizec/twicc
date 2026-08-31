@@ -73,8 +73,8 @@ Verification only unlocks approval. The receiving user still chooses whether
 to accept or refuse the relationship. Each user also chooses their own local
 name for the peer.
 
-Only users manage peer relationships. Agents cannot add, accept, rename, or
-remove peers.
+Only users manage peer relationships. Agents cannot create, approve, refuse,
+rename, revoke, or reconnect them.
 
 ### Sending a message
 
@@ -155,17 +155,21 @@ TwiCC removes attachment bytes seven days after delivery or refusal. The text,
 title, attachment details, and reply relationship remain in history. A later
 redelivery can therefore become text-only.
 
-Removing a peer also removes the complete message history for that
-relationship.
+### Revocation and reconnection
 
-### Trust and revocation
+Each side controls its own peer relationship. Either user can revoke it at any
+time. Revocation stops messaging and clears the relationship credentials, but
+keeps the local Peer name and complete message history.
 
-Each side controls its own peer relationship. Either user can remove a peer at
-any time. Removal is silent, and the other instance learns about it only when a
-later send is rejected.
+Revocation is silent. The other instance learns about it when a later Peer
+request is rejected. Its copy of the relationship then appears as **broken**.
 
-A rejected relationship can appear as **broken**. Check the peer address, then
-remove the relationship and pair the instances again.
+A Peer can also become broken when you change or disable your own Peer address.
+Set a reachable address, then reconnect each affected Peer manually.
+
+Reconnect uses a new verification code and requires the other user's approval,
+like the original pairing. It restores the existing relationship instead of
+creating another one, so its local name and message history remain available.
 
 Human review is the main safety boundary. It does not make untrusted content
 safe. Read each message before you place it in a composer.
