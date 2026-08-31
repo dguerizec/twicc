@@ -76,6 +76,18 @@ def test_execute_mute_on_user_turn_roundtrip():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_execute_mute_rejects_a_missing_field():
+    status = asyncio.run(execute_drop_payload(
+        {"session_id": "mute-drop-missing"},
+        "session:update_mute_on_user_turn",
+    ))
+
+    assert status["status"] == "rejected"
+    assert status["errors"][0]["field"] == "mute_on_user_turn"
+    assert status["errors"][0]["code"] == "missing"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_execute_mute_rejects_a_non_boolean_value():
     project = Project.objects.create(
         id="-mute-drop-invalid", directory="/tmp/mute-drop-invalid"

@@ -796,7 +796,13 @@ async def update_session_mute_on_user_turn_from_payload(payload: dict) -> Update
     errors: list[UpdateSessionError] = []
     if not session_id:
         errors.append(UpdateSessionError("session_id", "missing", "session_id is required"))
-    if not isinstance(mute_on_user_turn, bool):
+    if mute_on_user_turn is _MISSING:
+        errors.append(UpdateSessionError(
+            "mute_on_user_turn",
+            "missing",
+            "mute_on_user_turn is required",
+        ))
+    elif not isinstance(mute_on_user_turn, bool):
         errors.append(UpdateSessionError(
             "mute_on_user_turn",
             "invalid_mute_on_user_turn",
