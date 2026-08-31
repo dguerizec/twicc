@@ -81,6 +81,7 @@ def notify_agent_event(
     session_title: str | None,
     project_name: str | None,
     project_parent_name: str | None,
+    mute_on_user_turn: bool = False,
 ) -> None:
     """Detect notification-worthy events on a process-state broadcast and fire sends.
 
@@ -94,7 +95,13 @@ def notify_agent_event(
     resolved them) instead of being re-queried here.
     """
     try:
-        _detect_and_send(info, session_title, project_name, project_parent_name)
+        _detect_and_send(
+            info,
+            session_title,
+            project_name,
+            project_parent_name,
+            mute_on_user_turn,
+        )
     except Exception:
         logger.exception("External notification dispatch failed for session %s", info.session_id)
 
@@ -104,6 +111,7 @@ def _detect_and_send(
     session_title: str | None,
     project_name: str | None,
     project_parent_name: str | None,
+    mute_on_user_turn: bool,
 ) -> None:
     previous = _last_seen.get(info.session_id)
     pending_count = len(info.pending_requests)
@@ -134,7 +142,11 @@ def _detect_and_send(
     events: list[tuple[str, str]] = []
 
     # --- Transition to USER_TURN: "<Provider> finished working" ---
-    if info.state == AgentState.USER_TURN and (previous is None or previous[0] != AgentState.USER_TURN):
+    if (
+        not mute_on_user_turn
+        and info.state == AgentState.USER_TURN
+        and (previous is None or previous[0] != AgentState.USER_TURN)
+    ):
         events.append((f"{label} finished working", "notifyUserTurn"))
 
     # --- Pending request count grew: "<Provider> needs your attention" ---

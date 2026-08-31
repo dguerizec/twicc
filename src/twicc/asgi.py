@@ -229,16 +229,19 @@ async def broadcast_process_state(info: AgentInfo) -> None:
     # "active processes" cross-filter; a hidden session must produce
     # none of those even mid-flight.
     from twicc.core.models import Session
-    is_hidden = await sync_to_async(
+    session_flags = await sync_to_async(
         lambda: Session.objects.filter(pk=info.session_id)
-        .values_list("hidden", flat=True).first()
+        .values_list("hidden", "mute_on_user_turn")
+        .first()
     )()
+    is_hidden, mute_on_user_turn = session_flags or (False, False)
     if is_hidden:
         return
 
     channel_layer = get_channel_layer()
     message = serialize_agent_info(info)
     message["type"] = "process_state"
+    message["mute_on_user_turn"] = mute_on_user_turn is True
 
     # Let the provider attach any state it owns (e.g. Claude Code's
     # ``active_crons``). Each provider routes its own keys via its helper.
@@ -260,7 +263,13 @@ async def broadcast_process_state(info: AgentInfo) -> None:
     # External notifications (Apprise) mirror the browser notifications this
     # broadcast drives in the frontend; the hook sits after the hidden-session
     # early-return so hidden sessions never notify. Fire-and-forget inside.
-    notify_agent_event(info, session_title, project_name, project_parent_name)
+    notify_agent_event(
+        info,
+        session_title,
+        project_name,
+        project_parent_name,
+        mute_on_user_turn is True,
+    )
 
     await channel_layer.group_send(
         "updates",
