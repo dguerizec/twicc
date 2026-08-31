@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import typer
 
+from twicc.cli._drop_request.help_strings import NO_EXPAND_HELP, PROMPT_INCLUDE_HINT
+
 
 def send_messages_cmd(
     session_ids: list[str] | None = typer.Argument(
@@ -54,7 +56,12 @@ def send_messages_cmd(
             "'remote:' to read it on the remote server instead. Optional when "
             "at least one --attach is given: a message made only of "
             "attachments is valid."
-        ),
+        ) + PROMPT_INCLUDE_HINT,
+    ),
+    no_expand: bool = typer.Option(
+        False,
+        "--no-expand",
+        help=NO_EXPAND_HELP,
     ),
     attach: list[str] = typer.Option(
         [],
@@ -171,7 +178,7 @@ def send_messages_cmd(
         text = ""
     else:
         try:
-            text = resolve_prompt(message)
+            text = resolve_prompt(message, expand=not no_expand)
         except PromptError as e:
             emit_error(f"Error: invalid --message: {e}", code=1)
 

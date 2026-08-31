@@ -137,8 +137,10 @@ def peer_send_cmd(
         )])
         raise typer.Exit(1)
 
+    # Peer messages are authored verbatim by the sender — no ``@@`` include
+    # expansion (mirrored client-side by ``_NO_EXPAND_PATHS`` in ``_remote.py``).
     try:
-        text = resolve_prompt(prompt)
+        text = resolve_prompt(prompt, expand=False)
     except PromptError as e:
         emit_validation_errors([ValidationError("PROMPT", "invalid_prompt", str(e))])
         raise typer.Exit(1)

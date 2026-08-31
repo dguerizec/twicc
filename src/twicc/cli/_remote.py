@@ -39,7 +39,11 @@ import httpx
 import orjson
 
 from twicc.cli._drop_request.attachments import _sniff_mime
-from twicc.cli._drop_request.prompt import PromptError, resolve_prompt
+from twicc.cli._drop_request.prompt import (
+    PromptError,
+    expand_prompt_includes,
+    resolve_prompt,
+)
 from twicc.cli._drop_request.remote_scheme import has_remote_scheme, remote_scheme_path
 from twicc.cli._local_only import LOCAL_ONLY_COMMANDS
 from twicc.rpc.generator import CommandSpec, build_registry
@@ -422,8 +426,14 @@ def inline_attachments(argv: list[str], resolved: Resolved) -> list[str]:
 # command is never read from disk.
 _PROMPT_PARAM_NAMES: frozenset[str] = frozenset({"prompt", "message"})
 
+# Registry paths whose prompt/message never goes through ``@@`` include
+# expansion, mirroring the server-side ``resolve_prompt(expand=False)`` call
+# sites: a peer message is authored verbatim by the sender. File inlining
+# still applies — only the marker expansion is skipped.
+_NO_EXPAND_PATHS: frozenset[str] = frozenset({"peer-send"})
 
-def _inline_prompt_value(value: str) -> str | None:
+
+def _inline_prompt_value(value: str, *, expand: bool) -> str | None:
     """Return the forwarded form of a prompt/message value, or None to leave it as-is.
 
     Over ``--remote`` the server only sees the forwarded argv and cannot read the
@@ -431,29 +441,45 @@ def _inline_prompt_value(value: str) -> str | None:
 
     - ``remote:<abs path>`` → its bare absolute path, so the *server* reads it
       (see :func:`_resolve_remote_path`).
-    - an existing local file → its UTF-8 text, read client-side (identical to a
-      local :func:`resolve_prompt` run — absolute or cwd-relative paths resolve).
+    - an existing local file → its UTF-8 text, read client-side (absolute or
+      cwd-relative paths resolve).
     - anything else (inline text, or an absolute path that exists only on the
-      server) → ``None``, forwarded unchanged for the server to handle as before.
+      server) → ``None``, forwarded unchanged for the server to handle as
+      before — unless ``expand`` is on and the text carries a ``@@`` sequence.
+
+    With ``expand`` on, the resulting text then runs the client half of the
+    ``@@`` include expansion (``expand_prompt_includes(forward=True)``): local
+    markers resolve against the client filesystem, ``remote:`` markers are
+    rewritten for the server, and literal ``@@`` are re-escaped so the server's
+    own pass reproduces the text exactly.
 
     Raises :class:`RemoteUsageError` if a ``remote:`` path is not absolute, or a
-    local prompt file is unreadable / non-UTF-8 / empty (a client-side error —
-    no HTTP is attempted).
+    local prompt file / include is unreadable / non-UTF-8 / empty / oversized
+    (a client-side error — no HTTP is attempted).
     """
     remote_path = _resolve_remote_path(value)
     if remote_path is not None:
         return remote_path
-    if not os.path.isfile(value):
+    if os.path.isfile(value):
+        try:
+            text = resolve_prompt(value, expand=False)
+        except PromptError as exc:
+            raise RemoteUsageError(str(exc))
+    elif expand and "@@" in value:
+        text = value
+    else:
         return None
+    if not expand:
+        return text
     try:
-        return resolve_prompt(value)
+        return expand_prompt_includes(text, forward=True)
     except PromptError as exc:
         raise RemoteUsageError(str(exc))
 
 
-def _inline_message_value(value: str) -> str:
-    """Transform for an option-borne message: file/remote → resolved, else as-is."""
-    new = _inline_prompt_value(value)
+def _inline_message_value(value: str, *, expand: bool) -> str:
+    """Transform for an option-borne message: file/remote/markers → resolved, else as-is."""
+    new = _inline_prompt_value(value, expand=expand)
     return value if new is None else new
 
 
@@ -493,7 +519,7 @@ def _positional_token_indices(
 
 
 def _inline_positional_prompt(
-    argv: list[str], resolved: Resolved, prompt_param: ParamSpec
+    argv: list[str], resolved: Resolved, prompt_param: ParamSpec, *, expand: bool
 ) -> list[str]:
     """Rewrite a positional ``prompt`` token (a local file or ``remote:`` path).
 
@@ -540,7 +566,7 @@ def _inline_positional_prompt(
     if argv[idx] != resolved.params.get(prompt_param.name):
         return list(argv)
 
-    text = _inline_prompt_value(argv[idx])
+    text = _inline_prompt_value(argv[idx], expand=expand)
     if text is None:
         return list(argv)
     out = list(argv)
@@ -565,16 +591,24 @@ def inline_prompt(argv: list[str], resolved: Resolved) -> list[str]:
     prompt file exists but is unreadable / non-UTF-8 / empty (a client-side error
     — no HTTP is attempted).
     """
+    expand = (
+        resolved.path not in _NO_EXPAND_PATHS
+        and not resolved.params.get("no_expand")
+    )
     leaf_args = resolved.spec.chain[-1].arguments if resolved.spec.chain else []
     pos_param = next((a for a in leaf_args if a.name in _PROMPT_PARAM_NAMES), None)
     if pos_param is not None:
-        return _inline_positional_prompt(argv, resolved, pos_param)
+        return _inline_positional_prompt(argv, resolved, pos_param, expand=expand)
     opt_param = next(
         (o for o in resolved.spec.options if o.name in _PROMPT_PARAM_NAMES), None
     )
     if opt_param is not None:
         option_strings = [s for s in (opt_param.opt, opt_param.secondary_opt) if s]
-        return _rewrite_option_values(argv, option_strings, _inline_message_value)
+        return _rewrite_option_values(
+            argv,
+            option_strings,
+            lambda value: _inline_message_value(value, expand=expand),
+        )
     return list(argv)
 
 

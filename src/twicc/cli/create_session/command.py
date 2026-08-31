@@ -7,7 +7,9 @@ import typer
 from twicc.cli._drop_request.help_context import load_help_context
 from twicc.cli._drop_request.help_strings import (
     EFFORT_ALIAS_HINT,
+    NO_EXPAND_HELP,
     PERMISSION_ALIAS_HINT,
+    PROMPT_INCLUDE_HINT,
     context_max_help,
     default_suffix,
     model_help,
@@ -28,7 +30,12 @@ def create_session_cmd(
             "Prompt text, or path to a file whose content is the prompt. Over "
             "--remote the file is read locally; prefix an absolute path with "
             "'remote:' to read it on the remote server instead."
-        ),
+        ) + PROMPT_INCLUDE_HINT,
+    ),
+    no_expand: bool = typer.Option(
+        False,
+        "--no-expand",
+        help=NO_EXPAND_HELP,
     ),
     project: str | None = typer.Option(
         None,
@@ -271,7 +278,7 @@ def create_session_cmd(
 
     alias_errors: list[ValidationError] = []
     try:
-        text = resolve_prompt(prompt)
+        text = resolve_prompt(prompt, expand=not no_expand)
         resolved_project = resolve_project(project)
 
         # Resolve provider: explicit flag wins; otherwise the project chain's

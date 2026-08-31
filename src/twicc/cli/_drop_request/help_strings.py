@@ -36,6 +36,25 @@ PERMISSION_ALIAS_HINT = (
     "non-interactive), 'auto' (balanced, interactive)."
 )
 
+# ``@@`` include-marker help, shared verbatim by the commands that expand
+# markers (create-session, send-message, send-messages) so the wording never
+# drifts between them. peer-send deliberately has neither.
+PROMPT_INCLUDE_HINT = (
+    " '@@<abs path>' include markers in the text are replaced by that file's "
+    "content (see --no-expand for the full syntax)."
+)
+NO_EXPAND_HELP = (
+    "Disable '@@' include expansion. By default an '@@/abs/path', '@@~/path' "
+    "or '@@{/path with spaces}' marker in the text (or in the file it is read "
+    "from) is replaced by that file's UTF-8 content, recursively (5 levels "
+    "max). A missing file expands to nothing — a marker alone on its line "
+    "takes the whole line with it, so includes are optional; a directory, "
+    "unreadable or non-UTF-8 file is an error; '@@@@' escapes a literal "
+    "'@@'; the final text is capped at 500 KB. Over --remote, markers "
+    "resolve on the client; use '@@remote:/abs/path' for a file on the "
+    "remote server."
+)
+
 
 def provider_label(name: str) -> str:
     return _PROVIDER_LABELS.get(name, name)

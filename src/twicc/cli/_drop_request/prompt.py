@@ -2,21 +2,241 @@
 
 If the value points to an existing file (absolute or relative), read its
 UTF-8 content. Otherwise treat the value as the prompt text.
+
+The resolved text then goes through ``@@`` include expansion (unless the
+caller opts out): a marker referencing an absolute file path is replaced
+by the file's content, recursively. Grammar, scanned left to right,
+first match wins:
+
+- ``@@@@`` — escape, renders as a literal ``@@``.
+- ``@@{<path>}`` — delimited marker (allows spaces); no closing ``}`` on
+  the same line, or a path without a valid prefix → literal text.
+- ``@@<path>`` — bare marker, ends at the first whitespace.
+- any other ``@@`` — literal text.
+
+A path must start with ``/``, ``~/`` or ``remote:`` (else the ``@@`` is
+literal). A missing file expands to nothing (the whole line is dropped
+when the marker sits alone on it); a directory, unreadable or non-UTF-8
+file is an error. Included content is re-scanned, up to
+:data:`MAX_INCLUDE_DEPTH` levels; the total output is capped at
+:data:`MAX_PROMPT_BYTES` (checked while expanding and on the final
+prompt, expansion or not).
+
+``forward`` mode is the client half of ``--remote``: local markers are
+expanded here, ``remote:`` markers are rewritten to bare markers for the
+server, and every literal ``@@`` in the produced text is re-escaped so
+the server's own pass (a plain local expansion) reproduces the intended
+text exactly.
 """
 
 from __future__ import annotations
 
 import os
+import uuid
+from typing import NamedTuple
 
 from twicc.cli._output import in_api_mode
-from twicc.cli._drop_request.remote_scheme import has_remote_scheme
+from twicc.cli._drop_request.remote_scheme import (
+    REMOTE_PATH_SCHEME,
+    has_remote_scheme,
+    remote_scheme_path,
+)
+
+# Byte cap on the resolved prompt (UTF-8), enforced as a running budget
+# during include expansion and again on the final text.
+MAX_PROMPT_BYTES = 500 * 1024
+
+# How many nested include levels are allowed. A marker found while already
+# expanding at this depth is an error, so an include cycle terminates with
+# a clear message instead of looping.
+MAX_INCLUDE_DEPTH = 5
 
 
 class PromptError(Exception):
     pass
 
 
-def resolve_prompt(prompt_arg: str) -> str:
+class _Marker(NamedTuple):
+    """One include marker: its raw path spec and whether it was ``@@{...}``."""
+
+    spec: str
+    delimited: bool
+
+
+class _Ctx:
+    """Per-expansion state: byte budget, mode, and remote-marker registry."""
+
+    __slots__ = ("forward", "remote_markers", "stamp", "used")
+
+    def __init__(self, forward: bool) -> None:
+        self.forward = forward
+        self.used = 0
+        # Sentinel stamp: NUL-framed and free of ``@``, so the global
+        # ``@@`` escaping pass cannot corrupt a placeholder and user text
+        # cannot collide with one.
+        self.stamp = uuid.uuid4().hex
+        self.remote_markers: list[_Marker] = []
+
+    def charge(self, text: str) -> None:
+        self.used += len(text.encode("utf-8"))
+        if self.used > MAX_PROMPT_BYTES:
+            raise PromptError(
+                f"prompt exceeds the {MAX_PROMPT_BYTES // 1024} KB limit "
+                "after include expansion"
+            )
+
+    def sentinel(self, marker: _Marker) -> str:
+        self.remote_markers.append(marker)
+        return f"\x00{self.stamp}:{len(self.remote_markers) - 1}\x00"
+
+
+def _marker_path_start(rest: str) -> bool:
+    """True when ``rest`` starts like a marker path (``/``, ``~/``, ``remote:``)."""
+    return rest.startswith(("/", "~/", REMOTE_PATH_SCHEME))
+
+
+def _tokenize_line(line: str) -> list[tuple[str, _Marker | str | None]]:
+    """Split one line into ``("lit", text)`` / ``("esc", None)`` / ``("marker", _Marker)`` parts."""
+    parts: list[tuple[str, _Marker | str | None]] = []
+    i = 0
+    n = len(line)
+    lit_start = 0
+
+    def flush(end: int) -> None:
+        if end > lit_start:
+            parts.append(("lit", line[lit_start:end]))
+
+    while i < n:
+        if not line.startswith("@@", i):
+            i += 1
+            continue
+        if line.startswith("@@@@", i):
+            flush(i)
+            parts.append(("esc", None))
+            i += 4
+            lit_start = i
+            continue
+        if line.startswith("@@{", i):
+            close = line.find("}", i + 3)
+            if close != -1 and _marker_path_start(line[i + 3 : close]):
+                flush(i)
+                parts.append(("marker", _Marker(line[i + 3 : close], True)))
+                i = close + 1
+                lit_start = i
+                continue
+            # Unclosed or invalid inner path: the ``@@`` pair is literal.
+            i += 2
+            continue
+        if _marker_path_start(line[i + 2 :]):
+            j = i + 2
+            while j < n and not line[j].isspace():
+                j += 1
+            flush(i)
+            parts.append(("marker", _Marker(line[i + 2 : j], False)))
+            i = j
+            lit_start = i
+            continue
+        # ``@@`` not followed by a path start: both chars stay literal, and
+        # consuming the pair keeps the second ``@`` from seeding a new match.
+        i += 2
+    flush(n)
+    return parts
+
+
+def _resolve_marker(marker: _Marker, depth: int, ctx: _Ctx, chain: tuple[str, ...]) -> str:
+    spec = marker.spec
+    if spec.startswith(REMOTE_PATH_SCHEME):
+        path = remote_scheme_path(spec)
+        if not ctx.forward:
+            raise PromptError(
+                f"@@{REMOTE_PATH_SCHEME} include markers are only valid with --remote, "
+                f"got {spec!r}"
+            )
+        if not path.startswith(("/", "~/")):
+            raise PromptError(
+                f"@@{REMOTE_PATH_SCHEME} requires an absolute path "
+                f"(e.g. @@remote:/abs/path), got {spec!r}"
+            )
+        ctx.charge("@@" + path)
+        return ctx.sentinel(_Marker(path, marker.delimited))
+    if depth >= MAX_INCLUDE_DEPTH:
+        raise PromptError(
+            f"include depth exceeds {MAX_INCLUDE_DEPTH} "
+            f"(chain: {' -> '.join(chain) or '<prompt>'} -> {spec})"
+        )
+    path = os.path.expanduser(spec)
+    if os.path.isdir(path):
+        raise PromptError(f"include {spec!r} is a directory")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        return ""  # optional include: a missing file expands to nothing
+    except UnicodeDecodeError as e:
+        raise PromptError(f"include {spec!r} is not valid UTF-8: {e}")
+    except OSError as e:
+        raise PromptError(f"include {spec!r} is not readable: {e}")
+    content = content.rstrip("\n")
+    if not content:
+        return ""
+    return _expand_text(content, depth + 1, ctx, chain + (spec,))
+
+
+def _render_line(line: str, depth: int, ctx: _Ctx, chain: tuple[str, ...]) -> str | None:
+    """Expand one line; None means the line is dropped entirely."""
+    parts = _tokenize_line(line)
+    # A marker alone on its line (only whitespace around it) that expands to
+    # nothing takes the whole line with it, so optional includes leave no
+    # blank line behind.
+    sole_marker = (
+        sum(1 for kind, _ in parts if kind == "marker") == 1
+        and all(kind != "esc" for kind, _ in parts)
+        and all(str(value).strip() == "" for kind, value in parts if kind == "lit")
+    )
+    out: list[str] = []
+    marker_render: str | None = None
+    for kind, value in parts:
+        if kind == "lit":
+            ctx.charge(value)  # type: ignore[arg-type]
+            out.append(value)  # type: ignore[arg-type]
+        elif kind == "esc":
+            ctx.charge("@@")
+            out.append("@@")
+        else:
+            rendered = _resolve_marker(value, depth, ctx, chain)  # type: ignore[arg-type]
+            marker_render = rendered
+            out.append(rendered)
+    if sole_marker and marker_render == "":
+        return None
+    return "".join(out)
+
+
+def _expand_text(text: str, depth: int, ctx: _Ctx, chain: tuple[str, ...]) -> str:
+    lines = [_render_line(line, depth, ctx, chain) for line in text.split("\n")]
+    return "\n".join(line for line in lines if line is not None)
+
+
+def expand_prompt_includes(text: str, *, forward: bool = False) -> str:
+    """Expand ``@@`` include markers in ``text`` (see the module docstring).
+
+    ``forward=True`` runs the client half of a ``--remote`` invocation:
+    ``remote:`` markers survive as bare/delimited markers for the server and
+    every other ``@@`` in the output is escaped for the server's own pass.
+    """
+    ctx = _Ctx(forward)
+    rendered = _expand_text(text, 0, ctx, ())
+    if not forward:
+        return rendered
+    rendered = rendered.replace("@@", "@@@@")
+    for index, marker in enumerate(ctx.remote_markers):
+        replacement = (
+            "@@{" + marker.spec + "}" if marker.delimited else "@@" + marker.spec
+        )
+        rendered = rendered.replace(f"\x00{ctx.stamp}:{index}\x00", replacement)
+    return rendered
+
+
+def resolve_prompt(prompt_arg: str, *, expand: bool = True) -> str:
     if has_remote_scheme(prompt_arg):
         # `remote:` only has meaning over --remote, where the forwarder strips it
         # before the server ever runs this. Reaching it here means a local run.
@@ -29,7 +249,14 @@ def resolve_prompt(prompt_arg: str) -> str:
             raise PromptError(f"prompt: file {prompt_arg!r} is not valid UTF-8: {e}")
         if not text.strip():
             raise PromptError(f"prompt: file {prompt_arg!r} is empty")
-        return text
-    if not prompt_arg.strip():
+    else:
+        text = prompt_arg
+    if expand:
+        text = expand_prompt_includes(text)
+    if not text.strip():
         raise PromptError("prompt is empty")
-    return prompt_arg
+    if len(text.encode("utf-8")) > MAX_PROMPT_BYTES:
+        raise PromptError(
+            f"prompt is too large: exceeds the {MAX_PROMPT_BYTES // 1024} KB limit"
+        )
+    return text
