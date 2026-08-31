@@ -184,6 +184,11 @@ export function useOriginSettingsForm({
         peerBaseUrlConfirmation.value = false
     }
 
+    function cancelPeerBaseUrlApply() {
+        peerBaseUrlWarning.value = ''
+        seedField('peerBaseUrl')
+    }
+
     // Broadcasts update the store. They do not settle correlated writes.
     const stopWatchers = ORIGIN_SETTING_KEYS.map(field => watch(
         () => settingsStore[STORE_GETTERS[field]],
@@ -248,7 +253,7 @@ export function useOriginSettingsForm({
         onPeerBaseUrlInputChange: event => onInputChange('peerBaseUrl', event.target.value),
         onPeerBaseUrlApply: () => apply('peerBaseUrl'),
         confirmPeerBaseUrlApply: () => apply('peerBaseUrl', true),
-        cancelPeerBaseUrlApply: () => { peerBaseUrlConfirmation.value = false },
+        cancelPeerBaseUrlApply,
 
         canPrefillPeerBaseUrl,
         prefillPeerBaseUrlFromPublic,

@@ -231,7 +231,7 @@ test('changing a configured Peer address waits for inline confirmation', async (
     assert.equal(sent.length, 1)
 })
 
-test('cancelling the Peer address confirmation sends no write', async () => {
+test('cancelling the Peer address confirmation restores the stored address without a write', async () => {
     const { form, sent } = setup({
         stored: { peerBaseUrl: 'https://old.example.com' },
     })
@@ -242,6 +242,7 @@ test('cancelling the Peer address confirmation sends no write', async () => {
     form.cancelPeerBaseUrlApply()
 
     assert.equal(form.peerBaseUrlConfirmation.value, false)
+    assert.equal(form.peerBaseUrlInput.value, 'https://old.example.com')
     assert.equal(sent.length, 0)
 })
 

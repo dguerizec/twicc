@@ -384,6 +384,8 @@ The confirmation states that active relations become unavailable, credentials ar
 
 The Settings section shows this confirmation below the address input. It does not use a browser-native dialog.
 
+Cancel restores the saved address and sends no settings write.
+
 Empty to valid needs no confirmation. It changes no Peer and starts no reconnect.
 
 The confirmation offers no automatic-reconnect option.
