@@ -565,6 +565,23 @@ def test_crossed_request_merges_into_pending_received(client, transactional_db, 
     assert serialize_peer(_make_pending_received(base_url="https://x.example.com", token_theirs="t-x"))["crossed"] is False
 
 
+def test_crossed_request_can_submit_verification_code(
+        client, transactional_db, peer_host, broadcasts, monkeypatch):
+    peer = _make_pending_sent(base_url="https://alice.example.com")
+    _post(client, "/peer/handshake/request/", _request_body())
+    peer.refresh_from_db()
+    assert peer.state == PeerState.PENDING_RECEIVED
+
+    _patch_verify_response(monkeypatch, 200)
+    result = _run(peer_mutation.submit_verification_code(peer, "654321"))
+
+    assert result.success
+    peer.refresh_from_db()
+    assert peer.state == PeerState.PENDING_RECEIVED
+    assert peer.code_confirmed_at is not None
+    assert broadcasts[-1]["type"] == "peer_updated"
+
+
 def test_crossed_accept_reuses_existing_token(client, transactional_db, peer_host, monkeypatch):
     from django.utils import timezone as djtz
 

@@ -1640,7 +1640,7 @@ function onChangelogClose() {
                             size="small" appearance="plain"
                             @click="prefillPeerBaseUrlFromPublic"
                         >
-                            Use the External address from Global settings
+                            Use the External address from General settings
                         </wa-button>
                         <span class="setting-group-hint">
                             Your address, advertised to peers. Empty disables peer messaging.

@@ -411,6 +411,8 @@ async def submit_verification_code(peer, code: str) -> PeerMutationResult:
             if fresh is None:
                 return None, False
             sent = fresh.state == PeerState.PENDING_SENT or (
+                fresh.state == PeerState.PENDING_RECEIVED and fresh.token_ours
+            ) or (
                 fresh.state in (PeerState.BROKEN, PeerState.REVOKED)
                 and fresh.reconnect_direction == PeerReconnectDirection.SENT
             )
