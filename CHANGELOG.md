@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Peer messaging** — Pair your TwiCC with another person's so you can work together through your agents, exchanging messages and files under human review.
 - **Artifacts can save data** — An interactive artifact can now remember your choices, and the agent can read them back.
 - **Codex Subagents v2** — Subagents spawned by Codex's new multi-agent mode are now visible (their prompt stays hidden, encrypted by OpenAI).
 - **Download a file** — In the Files, Artifacts and Git tabs, a file's menu can now save it to your device — or, in Git, its changes as a patch.
