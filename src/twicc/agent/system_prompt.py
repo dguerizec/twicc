@@ -120,9 +120,12 @@ good practice.
 dashboard, playground, demo, mockup, data table, formatted report — instead of a
 wall of code or text.
 
-- Build it as files in the dir. For HTML, put the page and its assets in their
-  **own subfolder** with an `index.html` entry point (subfolders fully
-  supported).
+- Build it as files in the dir. A page with assets, or one that writes `data/`,
+  MUST live in its **own subfolder** with an `index.html` entry point: that
+  folder is the unit TwiCC bookmarks and shares, and the only thing that keeps
+  the page's assets and `data/` separate from every other artifact. A page left
+  at the top level shares one `data/` with every other top-level page. A single
+  self-contained file may stay at the top level.
 - Reference assets and other files with **relative** paths (they load);
   root-absolute (`/style.css`) do NOT. Scripts execute (sandboxed, same origin).
 - **Network:** call `fetch`/`XMLHttpRequest` normally — requests run server-side
