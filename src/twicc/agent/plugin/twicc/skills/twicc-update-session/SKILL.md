@@ -1,12 +1,12 @@
 ---
 name: twicc-update-session
-description: Update an existing TwiCC session — change settings, title, annotations, archive/unarchive, pin/unpin, hide/unhide. Use when you or the user want to change a session without sending a message.
-argument-hint: <session_id|self> {settings|title|annotations|archive|unarchive|pin|unpin|hide|unhide} [ARGS / OPTIONS]
+description: Update an existing TwiCC session — change settings, title, annotations, archive/unarchive, pin/unpin, hide/unhide, or mute/notify. Use when you or the user want to change a session without sending a message.
+argument-hint: <session_id|self> {settings|title|annotations|archive|unarchive|pin|unpin|hide|unhide|mute|notify} [ARGS / OPTIONS]
 ---
 
 # TwiCC Update Session
 
-Nine sub-commands: `settings`, `title`, `annotations`, `archive`, `unarchive`, `pin <MODE>`, `unpin`, `hide`, `unhide`. To stop the live agent without touching the row, use `$TWICC process <SESSION_ID> stop` (skill: `twicc-process`). To apply the same change to several sessions at once (every sub-command except `title`), use `$TWICC update-sessions` (skill: `twicc-update-sessions`).
+Eleven sub-commands: `settings`, `title`, `annotations`, `archive`, `unarchive`, `pin <MODE>`, `unpin`, `hide`, `unhide`, `mute`, `notify`. To stop the live agent without touching the row, use `$TWICC process <SESSION_ID> stop` (skill: `twicc-process`). To apply the same change to several sessions at once (every sub-command except `title`), use `$TWICC update-sessions` (skill: `twicc-update-sessions`).
 
 All sub-commands share the `--timeout SECONDS` output flag (default 30).
 
@@ -18,6 +18,7 @@ All sub-commands share the `--timeout SECONDS` output flag (default 30).
 - Archive (also stops the agent) / unarchive → `archive` / `unarchive`.
 - Pin to project / workspace / globally, or unpin → `pin <MODE>` / `unpin`.
 - Hide from all listings and broadcasts / unhide → `hide` / `unhide`.
+- Suppress or restore finished-working notifications → `mute` / `notify`.
 
 ## How to invoke
 
@@ -132,6 +133,15 @@ $TWICC update-session '<SESSION_ID>' unhide
 
 `hide` requires a non-interactive `permission_mode` (Claude Code: `bypassPermissions`/`dontAsk`; Codex: `yolo`/`strict`; alias `open` or `strict`) and `question_widget` disabled (both providers). If not met, update `settings` first. `unhide` has no preconditions.
 
+### `mute` / `notify`
+
+```bash
+$TWICC update-session '<SESSION_ID>' mute
+$TWICC update-session '<SESSION_ID>' notify
+```
+
+`mute` suppresses only the session's finished-working notifications. Questions and approvals still notify. `notify` restores the per-session finished-working notification path, but global notification settings still apply. Both commands are independent of hidden visibility and do not restart the agent.
+
 ## Errors
 
 ### Local (exit 1) — common to all sub-commands
@@ -198,12 +208,14 @@ $TWICC update-session 4a8352fb-... pin all
 $TWICC update-session 4a8352fb-... unpin
 $TWICC update-session 4a8352fb-... hide
 $TWICC update-session 4a8352fb-... unhide
+$TWICC update-session 4a8352fb-... mute
+$TWICC update-session 4a8352fb-... notify
 $TWICC update-session self annotations set:role=worker
 ```
 
 ## Related commands
 
-- `$TWICC update-sessions <op> [SESSION_ID...]` — apply the same update to several sessions at once (no `settings` / `title`). Skill: `twicc-update-sessions`.
+- `$TWICC update-sessions <op> [SESSION_ID...]` — apply the same update, including `mute` or `notify`, to several sessions at once (no `title`). Skill: `twicc-update-sessions`.
 - `$TWICC info [models|agent-settings|presets]` — discover providers, models, agent-settings values and presets before editing a session. Skill: `twicc-info`.
 - `$TWICC process <session_id> stop` — stop the agent without touching the row. Skill: `twicc-process`.
 - `$TWICC send-message <session_id>` — send a message (settings unchanged). Skill: `twicc-send-message`.

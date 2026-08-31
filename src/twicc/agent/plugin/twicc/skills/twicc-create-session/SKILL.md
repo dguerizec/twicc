@@ -82,6 +82,10 @@ A flag the chosen provider doesn't support (e.g. `--thinking` on Codex) is silen
 
 **Untrusted projects.** In a project whose trust is *untrusted* — or not yet decided (unknown counts as untrusted) — `permission_mode` is restricted to a safe subset: `bypassPermissions` (Claude Code) / `yolo` (Codex) are unavailable. A session created there resolves `--permission-mode` against that subset — `min`/`safe`/`max` still work, with `max` → the most permissive *allowed* mode (Claude Code `acceptEdits`, Codex `auto_review`) — and an out-of-subset value (e.g. `bypass`) is clamped to the project's untrusted default with a note on stderr. When `--permission-mode` is omitted, the session seeds from the project chain's `permission_mode_if_untrusted` default, then the global untrusted default. See `twicc info agent-settings` → `permission_mode_if_untrusted` for the subset + its aliases. Project trust is a human-only decision; agents never set it.
 
+### Session behavior
+
+- `--mute-on-user-turn` — suppress only this session's finished-working notifications (toast, sound, browser notification, and Apprise user-turn event). Choose it when a controlling agent will read and handle the result. Questions and approvals still notify. The option is independent of `--hidden` and does not change global notification settings.
+
 ### `--hidden`
 
 Creates the session invisible in every user-facing listings, search, and broadcasts (still counted in cost aggregates). Requires a non-interactive `--permission-mode` (Claude Code: `bypassPermissions`/`dontAsk`; Codex: `yolo`/`strict`; alias `open` for the permissive pair, `strict` for the read-only pair). `--hidden` forces `question_widget=False` automatically — passing `--question-widget` alongside is rejected.
@@ -169,6 +173,7 @@ $TWICC create-session --provider claude_code --attach /home/twidi/screenshot.png
 $TWICC create-session --annotation role=reviewer --annotation task.priority=2 'Review this change'
 $TWICC create-session --annotations-file /home/twidi/session-annotations.json 'Run the annotated task'
 $TWICC create-session --provider claude_code --no-question-widget 'Resize images — ask me before overwriting'
+$TWICC create-session --mute-on-user-turn --no-question-widget 'Review the patch and report the risks'
 $TWICC create-session --project /home/twidi/dev/myproj --worktree-branch feature/login --worktree-path /home/twidi/dev/myproj.worktrees/feature-login 'Implement the login flow'
 $TWICC create-session --provider claude_code 'Hello'
 # → {"status":"created","session_id":"...","provider":"claude_code","project_id":"...","request_uuid":"..."}

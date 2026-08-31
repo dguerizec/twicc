@@ -94,10 +94,18 @@ $TWICC topology self
 
 ## Visibility and permission propagation
 
-- **Strongly prefer `--hidden`** for the sessions you spawn (especially if you are hidden yourself): no UI clutter, and a hidden session can never get stuck on a UI dialog.
 - **The user's choice wins and propagates.** If the user asks for visible (non-hidden) sessions, or for a specific permission level, honor it **and pass the same rules to every child** — managers spawn with the same rules.
-- If the user gave no instruction, the leader may ask, noting the trade-off: visible sessions in non-permissive modes will produce many interruptions and approval prompts.
-- **Pass `--no-question-widget` to every visible child.** `--hidden` already forces it, but a visible child keeps its widget tool (Claude Code `AskUserQuestion`, Codex `request_user_input`) and only a human clicking in the UI can answer one — you cannot. With the flag, its questions arrive as plain text you read with `session <ID> messages` and answer with `send-message`.
+- Propagate the permission policy separately from visibility. Managers apply both policies to their children.
+
+## Session notifications
+
+1. `--hidden` and `--mute-on-user-turn` are independent session behaviors.
+2. Hide a child when the user has no reason to read it.
+3. Keep a child visible, muted, and `--no-question-widget` when the controlling agent reads and handles its result.
+4. Keep a child visible and unmuted when the user is expected to read and act on its result.
+5. Questions and approvals still notify when the child is muted.
+
+Global notification settings still apply. Session mute does not enable or change them.
 
 ## Annotations
 

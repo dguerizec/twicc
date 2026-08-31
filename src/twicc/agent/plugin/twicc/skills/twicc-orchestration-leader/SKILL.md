@@ -30,13 +30,13 @@ Follow the standard briefing in `twicc-orchestration`, and be explicit about the
 - a **manager** child → load `twicc-orchestration` + `twicc-orchestration-manager`;
 - a **worker** child → load `twicc-orchestration` + `twicc-orchestration-worker`.
 
-Put each child's mandate (the actual work and context) in the message — never in annotations — and tell it that it reports to you. Set short tracking annotations on it for visibility (`mode`, `job`/`role`, …; see `twicc-orchestration`). Spawn with `twicc-create-session`, preferably `--hidden`.
+Put each child's mandate (the actual work and context) in the message — never in annotations — and tell it that it reports to you. Set short tracking annotations on it for visibility (`mode`, `job`/`role`, …; see `twicc-orchestration`). Spawn with `twicc-create-session` and apply the shared visibility and notification policy in `twicc-orchestration`.
 
 Children report to **you**, but they don't have to route everything through you: when two of them share a real cross-dependency, tell them in their briefs that they are siblings who may coordinate directly (`send-message <sibling_id>` / `send-messages --siblings self`, discovered via `sessions --siblings self`) — you still wait on and aggregate them yourself. See `patterns/peer-coordination.md`. Isolate children only when independence must be guaranteed (e.g. a quorum).
 
 ## Visibility and permissions
 
-Decide the visibility and permission policy up front and **propagate it to the whole tree** (managers reuse the same rules). Prefer `--hidden`. If the user stated no preference, you may ask — explaining that visible sessions in non-permissive modes will generate many interruptions and approval prompts. Whatever the user chooses, honor it.
+Decide the visibility, notification, and permission policy up front. Propagate it to the whole tree. Follow the full policy in `twicc-orchestration`, including the user's override.
 
 ## Collect results
 

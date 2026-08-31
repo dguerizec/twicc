@@ -1,18 +1,19 @@
 ---
 name: twicc-update-sessions
-description: Apply the same update to several TwiCC sessions — archive/unarchive, pin/unpin, hide/unhide, annotations, or settings. Use when you or the user want to change many sessions in one call (e.g. hide a whole batch, tag every worker in an orchestration, or bump model/effort of all your children).
-argument-hint: '{archive|unarchive|pin|unpin|hide|unhide|annotations|settings} [SESSION_ID...] [--spawned-by X|--descendants X] [--annotation ...]'
+description: Apply the same update to several TwiCC sessions — archive/unarchive, pin/unpin, hide/unhide, mute/notify, annotations, or settings. Use when you or the user want to change many sessions in one call (e.g. mute every child, tag every worker, or bump model/effort).
+argument-hint: '{archive|unarchive|pin|unpin|hide|unhide|mute|notify|annotations|settings} [SESSION_ID...] [--spawned-by X|--descendants X] [--annotation ...]'
 ---
 
 # TwiCC Update Sessions
 
-Batch sibling of `update-session`: applies the SAME change to every targeted session in one call. Eight sub-commands: `archive`, `unarchive`, `pin`, `unpin`, `hide`, `unhide`, `annotations`, `settings`. For a single session, prefer `update-session` (skill: `twicc-update-session`).
+Batch sibling of `update-session`: applies the SAME change to every targeted session in one call. Ten sub-commands: `archive`, `unarchive`, `pin`, `unpin`, `hide`, `unhide`, `mute`, `notify`, `annotations`, `settings`. For a single session, prefer `update-session` (skill: `twicc-update-session`).
 
 `title` is intentionally not batchable here (setting the same title on several sessions is meaningless) — use `update-session <ID> title` per session.
 
 ## When to use
 
 - Hide or unhide several sessions at once → `hide` / `unhide`.
+- Suppress or restore finished-working notifications for several sessions → `mute` / `notify`.
 - Archive / unarchive, or pin / unpin a set of sessions → `archive` / `pin` / etc.
 - Tag every session in an orchestration with the same annotation → `annotations` with `--spawned-by self` or `--descendants self`.
 - Change model / effort / permission mode of a whole batch → `settings` (applied per session against its own provider).
@@ -72,6 +73,15 @@ $TWICC update-sessions unhide [SESSION_ID...] [--spawned-by X|--descendants X]
 
 `hide` requires each session to have a non-interactive `permission_mode` and `question_widget` disabled — both providers (see `twicc-update-session`); a session that doesn't qualify is `rejected` individually while the rest are hidden. `unhide` has no preconditions.
 
+### `mute` / `notify`
+
+```bash
+$TWICC update-sessions mute [SESSION_ID...] [--spawned-by X|--descendants X]
+$TWICC update-sessions notify [SESSION_ID...] [--spawned-by X|--descendants X]
+```
+
+`mute` suppresses only finished-working notifications for each targeted session. Questions and approvals still notify. `notify` restores each per-session notification path, but global notification settings still apply. Both commands are independent of hidden visibility and do not restart agents.
+
 ### `annotations`
 
 ```bash
@@ -129,6 +139,8 @@ Per-id `status`: `updated`, `noop` (nothing to apply for that session's provider
 $TWICC update-sessions hide abc123 def456 ghi789
 $TWICC update-sessions hide --descendants self
 $TWICC update-sessions unhide --spawned-by self --annotation role=worker
+$TWICC update-sessions mute --spawned-by self
+$TWICC update-sessions notify abc123 def456
 $TWICC update-sessions archive abc123 def456 --timeout 60
 $TWICC update-sessions pin abc123 def456 --mode workspace
 $TWICC update-sessions unpin --spawned-by self
