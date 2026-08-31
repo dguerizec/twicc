@@ -1,7 +1,12 @@
 <script setup>
 import { ref, computed, inject, watch, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { splitMarkdownBlocks, renderBlockToHtml, extractHeadings } from '../../utils/markdown.js'
+import {
+    splitMarkdownBlocks,
+    renderBlockToHtml,
+    extractHeadings,
+    extractBlockquoteSources,
+} from '../../utils/markdown.js'
 import { hashString } from '../../utils/hash.js'
 import { useSettingsStore } from '../../stores/settings'
 import { vHighlight } from '../../directives/vHighlight.js'
@@ -183,17 +188,53 @@ function rewriteContentMediaUrlsIn(root) {
     }
 }
 
-// --- Per-code-block tools ---------------------------------------------------
+// --- Per-block tools --------------------------------------------------------
 //
-// Every rendered code block gets a small hover toolbar, injected into the
-// block's HTML during post-processing (same mechanism as the mermaid
-// replacement above, so it lands in the cached string and survives Vue's v-html
-// diffing). The buttons carry no listener of their own: clicks are caught by
-// the container's existing delegation, next to the link/media handling.
+// Some rendered blocks (code blocks, blockquotes) get a small hover toolbar,
+// injected into the block's HTML during post-processing (same mechanism as the
+// mermaid replacement above, so it lands in the cached string and survives Vue's
+// v-html diffing). The buttons carry no listener of their own: clicks are caught
+// by the container's existing delegation, next to the link/media handling, and
+// routed by handleBlockToolsAction to the tools that own the button.
+//
+// One toolbar for every kind of block: same markup (`.block-tools-bar` holding
+// `.block-tools-btn` buttons), same styles, same delegation — only the buttons
+// and their actions differ.
 //
 // Part of the rendering engine, not an opt-in: wherever markdown is rendered —
 // conversation, Plan tab, file preview, changelog, share pages — a code block
 // is worth copying, and a markdown block is worth reading rendered.
+
+// .floating-over-text (styles/transcript-tokens.css) is unconditional: the bar
+// usually sits on the language-label row, which is empty on its right, but a
+// fence with no language has no such row — and neither does the rendered view of
+// a markdown block, nor a blockquote. In all of them, the buttons land on the
+// first line of the content.
+function blockToolsButton(action, icon, label) {
+    return `<button type="button" class="block-tools-btn floating-over-text" data-block-action="${action}"`
+        + ` title="${label}" aria-label="${label}"><wa-icon name="${icon}"></wa-icon></button>`
+}
+
+// The toolbar element for one block, ready to be placed by the caller. Falsy
+// entries are dropped, so a conditional button can be passed inline.
+function blockToolsBar(...buttons) {
+    const bar = document.createElement('div')
+    bar.className = 'block-tools-bar'
+    bar.innerHTML = buttons.filter(Boolean).join('')
+    return bar
+}
+
+// Route a toolbar click to the tools that own the button: its nearest ancestor
+// is either a code block's wrapper or the blockquote itself (a code block inside
+// a quote resolves to the wrapper, which is the closer of the two).
+function handleBlockToolsAction(button) {
+    const owner = button.closest('.code-tools, blockquote')
+    if (!owner) return
+    if (owner.classList.contains('code-tools')) handleCodeToolsAction(button)
+    else handleQuoteToolsAction(button, owner)
+}
+
+// --- Per-code-block tools ---------------------------------------------------
 
 // Fence languages whose blocks also get the "show rendered" toggle.
 const MARKDOWN_LANGS = new Set(['markdown', 'md'])
@@ -206,15 +247,6 @@ const MARKDOWN_LANGS = new Set(['markdown', 'md'])
 // share an entry: they are indistinguishable by content, and the only cost is a
 // toggle applying to both. Non-reactive: the DOM it drives lives outside Vue.
 const codeToolsState = new Map()
-
-// .floating-over-text (styles/transcript-tokens.css) is unconditional: the bar
-// usually sits on the language-label row, which is empty on its right, but a
-// fence with no language has no such row — and neither does the rendered view of
-// a markdown block. In both, the buttons land on the first line of the content.
-function codeToolsButton(action, icon, label) {
-    return `<button type="button" class="code-tools-btn floating-over-text" data-code-action="${action}"`
-        + ` title="${label}" aria-label="${label}"><wa-icon name="${icon}"></wa-icon></button>`
-}
 
 // Wrap every code block (inside the given root) in a `.code-tools` container
 // holding its toolbar. Runs after addLanguageLabelsIn, so `data-language` is
@@ -230,15 +262,13 @@ function addCodeToolsIn(root) {
         wrapper.className = 'code-tools'
         wrapper.dataset.codeKey = hashString(code)
 
-        const bar = document.createElement('div')
-        bar.className = 'code-tools-bar'
-        bar.innerHTML = [
+        const bar = blockToolsBar(
             MARKDOWN_LANGS.has(pre.dataset.language ?? '')
-                ? codeToolsButton('view', 'eye', 'Show rendered markdown')
+                ? blockToolsButton('view', 'eye', 'Show rendered markdown')
                 : '',
-            codeToolsButton('wrap', 'text-width', 'Toggle line wrapping'),
-            codeToolsButton('copy', 'copy', 'Copy code'),
-        ].join('')
+            blockToolsButton('wrap', 'text-width', 'Toggle line wrapping'),
+            blockToolsButton('copy', 'copy', 'Copy code'),
+        )
 
         pre.replaceWith(wrapper)
         wrapper.append(bar, pre)
@@ -248,8 +278,8 @@ function addCodeToolsIn(root) {
 function codeToolsParts(wrapper) {
     return {
         pre: wrapper.querySelector(':scope > pre'),
-        wrapBtn: wrapper.querySelector(':scope > .code-tools-bar > [data-code-action="wrap"]'),
-        viewBtn: wrapper.querySelector(':scope > .code-tools-bar > [data-code-action="view"]'),
+        wrapBtn: wrapper.querySelector(':scope > .block-tools-bar > [data-block-action="wrap"]'),
+        viewBtn: wrapper.querySelector(':scope > .block-tools-bar > [data-block-action="view"]'),
         view: wrapper.querySelector(':scope > .code-tools-rendered'),
     }
 }
@@ -276,7 +306,7 @@ function applyCodeWrap(wrapper, wrapped) {
 async function renderNestedMarkdown(source, theme) {
     const tmp = document.createElement('div')
     tmp.innerHTML = await renderBlockToHtml(source, {})
-    await postProcessIn(tmp, theme)
+    await postProcessIn(tmp, theme, source)
     return tmp.innerHTML
 }
 
@@ -325,7 +355,7 @@ async function handleCodeToolsAction(button) {
     const key = wrapper.dataset.codeKey
     const state = codeToolsState.get(key) ?? {}
 
-    switch (button.dataset.codeAction) {
+    switch (button.dataset.blockAction) {
         case 'copy':
             await copyText(pre.textContent ?? '', 'Code')
             break
@@ -365,6 +395,44 @@ async function restoreCodeToolsState() {
     }
 }
 
+// --- Per-blockquote tools ---------------------------------------------------
+//
+// The same toolbar, with a single Copy button. What it copies is the quote's own
+// markdown source with the `>` markers removed — the analogue of copying a code
+// block without its fence, so emphasis, links and lists survive the round trip.
+//
+// The sources come from the block's raw markdown (extractBlockquoteSources) and
+// are paired with the rendered <blockquote> elements positionally; the pairing is
+// resolved at render time and the result carried by the quote itself, since the
+// raw markdown is out of reach by the time a button is clicked.
+//
+// No wrapper element, unlike the code blocks: a quote never scrolls, so the bar
+// anchors on the quote itself and the surrounding DOM stays untouched.
+function addQuoteToolsIn(root, src) {
+    const quotes = root.querySelectorAll('blockquote')
+    if (!quotes.length) return
+
+    // Both lists are in document order, so they align one to one — unless
+    // something upstream (sanitizing, a future plugin) dropped a quote. Then no
+    // source can be trusted, and every quote falls back to its rendered text.
+    const sources = extractBlockquoteSources(src ?? '')
+    const aligned = sources.length === quotes.length
+
+    quotes.forEach((quote, index) => {
+        // Already equipped — happens when a nested render re-processes a subtree.
+        if (quote.querySelector(':scope > .block-tools-bar')) return
+        const source = aligned ? sources[index] : ''
+        if (!source.trim() && !(quote.textContent ?? '').trim()) return
+        if (source) quote.dataset.quoteSource = source
+        quote.prepend(blockToolsBar(blockToolsButton('copy', 'copy', 'Copy quote')))
+    })
+}
+
+function handleQuoteToolsAction(button, quote) {
+    if (button.dataset.blockAction !== 'copy') return
+    copyText(quote.dataset.quoteSource ?? (quote.textContent ?? '').trim(), 'Quote')
+}
+
 // Matches a fenced mermaid block (``` or ~~~) at the start of a line. No `g`
 // flag, so `.test()` stays stateless across calls.
 const MERMAID_FENCE_RE = /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[ \t]*mermaid\b/i
@@ -382,14 +450,16 @@ function cacheKeyFor(src, theme, slashTag = false) {
 
 // Everything that turns freshly parsed markdown HTML into its final shape. Runs
 // on a DETACHED node, so the result is complete before it reaches the DOM — no
-// flash, even on first paint. Returns false if a mermaid diagram failed, which
-// makes the result unfit for caching.
-async function postProcessIn(root, theme) {
+// flash, even on first paint. `src` is the raw markdown `root` was rendered
+// from, which the quote tools need to recover each quote's own source. Returns
+// false if a mermaid diagram failed, which makes the result unfit for caching.
+async function postProcessIn(root, theme, src) {
     const mermaidOk = await renderMermaidIn(root, theme)
     addLanguageLabelsIn(root)
     annotateFileLinksIn(root)
     if (rewriteContentMediaUrl) rewriteContentMediaUrlsIn(root)
     addCodeToolsIn(root)
+    addQuoteToolsIn(root, src)
     return mermaidOk
 }
 
@@ -402,7 +472,7 @@ async function renderOneBlock(src, env, theme, slashTag = false) {
 
     const tmp = document.createElement('div')
     tmp.innerHTML = await renderBlockToHtml(src, slashTag ? { ...env, tagLeadingSlashCommand: true } : env)
-    const mermaidOk = await postProcessIn(tmp, theme)
+    const mermaidOk = await postProcessIn(tmp, theme, src)
     const html = tmp.innerHTML
 
     // Cache only a fully-successful render. A failed mermaid (incomplete block
@@ -603,7 +673,8 @@ function buildMediaItems(root, clickedEl) {
 }
 
 // Route clicks on the rendered content:
-//   - data-code-action    → per-code-block toolbar (copy / wrap / render)
+//   - data-block-action   → per-block toolbar (code: copy / wrap / render,
+//                            blockquote: copy)
 //   - <img> or Mermaid SVG → open MediaPreviewDialog (wins over link nav,
 //                            but the wrapping <a href>'s URL is preserved
 //                            as an "Open link" affordance inside the dialog)
@@ -613,14 +684,14 @@ function buildMediaItems(root, clickedEl) {
 //   - anchor-only (#…)     → leave the browser to scroll
 //   - everything else      → SPA navigation via router.push
 function handleLinkClick(event) {
-    // Per-code-block toolbar (copy / wrap / render): checked first, since its
+    // Per-block toolbar (code block, blockquote): checked first, since its
     // buttons sit inside the rendered content and must never reach the link or
     // media handling below.
-    const codeButton = event.target.closest('[data-code-action]')
-    if (codeButton && container.value?.contains(codeButton)) {
+    const toolsButton = event.target.closest('[data-block-action]')
+    if (toolsButton && container.value?.contains(toolsButton)) {
         event.preventDefault()
         event.stopPropagation()
-        handleCodeToolsAction(codeButton)
+        handleBlockToolsAction(toolsButton)
         return
     }
 
@@ -999,23 +1070,10 @@ function handleLinkClick(event) {
     font-family: var(--wa-font-sans);
 }
 
-/* -- Per-code-block toolbar (opt-in via the codeTools prop) ----------- */
-/* The bar sits on the wrapper, never inside the <pre>: the block scrolls
-   horizontally, and buttons placed in it would scroll away with the code. */
-.markdown-body .code-tools {
-    position: relative;
-}
-/* The wrapper adds no box of its own, so the <pre>'s margins collapse through
-   it and keep the block's usual spacing. That also puts the <pre> one level
-   below the first/last-child resets above, hence these two: without them, a
-   message opening or closing on a code block gains a stray margin. */
-.markdown-body > .markdown-block:first-child > .code-tools:first-child > pre {
-    margin-top: 0 !important;
-}
-.markdown-body > .markdown-block:last-child > .code-tools:last-child > pre {
-    margin-bottom: 0 !important;
-}
-.markdown-body .code-tools-bar {
+/* -- Per-block toolbar (code blocks, blockquotes) --------------------- */
+/* One look for every block that carries a toolbar: `.block-tools-bar` and
+   `.block-tools-btn` are shared, only the host and its buttons differ. */
+.markdown-body .block-tools-bar {
     position: absolute;
     top: 6px;
     right: 6px;
@@ -1025,17 +1083,18 @@ function handleLinkClick(event) {
     transition: opacity 0.15s ease;
     z-index: 2;
 }
-.markdown-body .code-tools:hover > .code-tools-bar,
-.markdown-body .code-tools-bar:focus-within {
+.markdown-body .code-tools:hover > .block-tools-bar,
+.markdown-body blockquote:hover > .block-tools-bar,
+.markdown-body .block-tools-bar:focus-within {
     opacity: 1;
 }
 /* No hover on touch: keep the bar visible but discreet. */
 @media (pointer: coarse) {
-    .markdown-body .code-tools-bar {
+    .markdown-body .block-tools-bar {
         opacity: 0.55;
     }
 }
-.markdown-body .code-tools-btn {
+.markdown-body .block-tools-btn {
     /* A global `button` rule forces a form-control height (~43px); an explicit
        box is what keeps these compact. */
     display: inline-flex;
@@ -1051,15 +1110,32 @@ function handleLinkClick(event) {
     line-height: 1;
     cursor: pointer;
 }
-.markdown-body .code-tools-btn:hover {
+.markdown-body .block-tools-btn:hover {
     border-color: var(--wa-color-neutral-border-normal);
     color: var(--wa-color-text-normal);
 }
 /* No fill of its own: the background belongs to .floating-over-text, so the
    active state is carried by the border and the icon colour. */
-.markdown-body .code-tools-btn.is-active {
+.markdown-body .block-tools-btn.is-active {
     border-color: var(--wa-color-brand-border-quiet);
     color: var(--wa-color-brand-on-quiet);
+}
+
+/* -- Per-code-block toolbar ------------------------------------------ */
+/* The bar sits on the wrapper, never inside the <pre>: the block scrolls
+   horizontally, and buttons placed in it would scroll away with the code. */
+.markdown-body .code-tools {
+    position: relative;
+}
+/* The wrapper adds no box of its own, so the <pre>'s margins collapse through
+   it and keep the block's usual spacing. That also puts the <pre> one level
+   below the first/last-child resets above, hence these two: without them, a
+   message opening or closing on a code block gains a stray margin. */
+.markdown-body > .markdown-block:first-child > .code-tools:first-child > pre {
+    margin-top: 0 !important;
+}
+.markdown-body > .markdown-block:last-child > .code-tools:last-child > pre {
+    margin-bottom: 0 !important;
 }
 /* The raw block stays in the DOM while its rendered view shows, so toggling
    back is instant and the code remains the source for copy. */
@@ -1079,6 +1155,24 @@ function handleLinkClick(event) {
 }
 .markdown-body .code-tools-rendered > :last-child {
     margin-bottom: 0;
+}
+
+/* -- Per-blockquote toolbar ------------------------------------------ */
+/* The bar lives inside the quote — no wrapper: a quote never scrolls, so it
+   anchors on the quote itself and the surrounding DOM stays untouched. */
+.markdown-body blockquote {
+    position: relative;
+}
+/* github-markdown-css resets the top margin of a quote's first child; the bar
+   now holds that slot, so the reset moves to the element after it. Without it, a
+   quote opening on a heading gains a stray margin. */
+.markdown-body blockquote > .block-tools-bar + * {
+    margin-top: 0;
+}
+/* Only the innermost hovered block shows its bar: a quote inside a quote, or a
+   code block opening a quote, would otherwise stack two bars in one corner. */
+.markdown-body blockquote:has(blockquote:hover, .code-tools:hover) > .block-tools-bar {
+    opacity: 0;
 }
 
 /* -- Mermaid diagrams ------------------------------------------------ */

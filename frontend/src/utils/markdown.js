@@ -313,6 +313,60 @@ export function extractHeadings(source) {
     return headings
 }
 
+// One blockquote marker: its indentation, the `>` itself, and the single space
+// markdown-it consumes after it.
+const QUOTE_MARKER_RE = /^[ \t]*>[ \t]?/
+
+// Remove `depth` levels of quote markers from each line. A line carrying fewer
+// markers than the quote is deep (a lazy continuation) stops early instead of
+// losing text.
+function stripQuoteMarkers(lines, depth) {
+    return lines.map((line) => {
+        let text = line
+        for (let level = 0; level < depth; level++) {
+            const stripped = text.replace(QUOTE_MARKER_RE, '')
+            if (stripped === text) break
+            text = stripped
+        }
+        return text
+    }).join('\n').trimEnd()
+}
+
+/**
+ * Extract the source markdown of every blockquote of a document, in document
+ * order, with the quote markers removed.
+ *
+ * Same mechanism as extractHeadings: one parse pass, where each
+ * `blockquote_open` token carries the `.map` line range of its quote. Consumers
+ * match the result to the rendered <blockquote> elements positionally — both
+ * lists are in document (pre-)order, so the pairing holds at any nesting depth.
+ *
+ * Exactly as many markers are stripped as the quote is deep, so a nested quote
+ * keeps its own markers and a `>` inside a fenced code block is never mistaken
+ * for one.
+ *
+ * @param {string} source - Raw markdown text
+ * @returns {Array<string>} One dequoted source per blockquote, in document order
+ */
+export function extractBlockquoteSources(source) {
+    if (!source) return []
+    const tokens = md.parse(source, {})
+    const lines = source.split('\n')
+    const sources = []
+    let depth = 0
+    for (const token of tokens) {
+        if (token.type === 'blockquote_close') {
+            depth -= 1
+        } else if (token.type === 'blockquote_open') {
+            depth += 1
+            // A blockquote always carries a map; the guard keeps the positional
+            // pairing aligned rather than dropping an entry if one ever lacks it.
+            sources.push(token.map ? stripQuoteMarkers(lines.slice(token.map[0], token.map[1]), depth) : '')
+        }
+    }
+    return sources
+}
+
 /**
  * Render a single markdown block to sanitized HTML. Reuses the shared `env`
  * (from splitMarkdownBlocks) so cross-block link references resolve. Async
