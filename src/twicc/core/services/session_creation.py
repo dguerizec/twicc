@@ -92,6 +92,7 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
     images = payload.get("images") or []
     documents = payload.get("documents") or []
     hidden = bool(payload.get("hidden", False))
+    mute_on_user_turn = payload.get("mute_on_user_turn") is True
     hybrid = bool(payload.get("hybrid")) if allow_hybrid else False
     if hybrid:
         # Hybrid mode is a feature-flagged capability (default OFF). Refuse to
@@ -347,6 +348,7 @@ async def create_session_from_payload(payload: dict, *, allow_hybrid: bool = Fal
     set_pending_session_attributes(
         session_id,
         hidden=hidden,
+        mute_on_user_turn=mute_on_user_turn,
         spawned_by_id=spawned_by_session_id,
         spawn_root_id=spawn_root_session_id,
         annotations=annotations,

@@ -161,6 +161,15 @@ def create_session_cmd(
             "yolo/strict for Codex) and question_widget=False."
         ),
     ),
+    mute_on_user_turn: bool = typer.Option(
+        False,
+        "--mute-on-user-turn",
+        help=(
+            "Suppress this session's finished-working toast, sound, browser "
+            "notification, and Apprise user-turn event. Questions, approvals, "
+            "failures, and usage alerts remain enabled."
+        ),
+    ),
     context_max: str | None = typer.Option(
         None,
         "--context-max",
@@ -459,6 +468,7 @@ def create_session_cmd(
         "images": attach_result.images,
         "documents": attach_result.documents,
         "hidden": hidden,
+        "mute_on_user_turn": mute_on_user_turn,
         "spawned_by_session_id": spawned_by_session_id,
         "annotations": annotations,
         **settings._asdict(),

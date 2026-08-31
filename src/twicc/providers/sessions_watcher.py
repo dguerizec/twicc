@@ -443,6 +443,7 @@ class BaseSessionsWatcher:
         pending = pop_pending_session_attributes(parsed.session_id)
         if pending is not None:
             kwargs["hidden"] = pending.hidden
+            kwargs["mute_on_user_turn"] = pending.mute_on_user_turn
             if pending.spawned_by_id is not None:
                 kwargs["spawned_by_id"] = pending.spawned_by_id
             if pending.spawn_root_id is not None:

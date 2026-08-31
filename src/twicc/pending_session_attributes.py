@@ -3,7 +3,8 @@ Pending per-session structural attributes buffer.
 
 Same pattern as :mod:`twicc.pending_agent_settings`, but for structural
 attributes and annotations that fall outside the closed ``AgentSettings``
-bundle: ``hidden``, spawned-session links, and free-form annotations.
+bundle: ``hidden``, ``mute_on_user_turn``, spawned-session links, and free-form
+annotations.
 
 When the CLI / WS handler decides those values, the ``Session`` row
 does not exist yet — it will be created by the provider's file watcher
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 class PendingSessionAttributes(NamedTuple):
     hidden: bool
+    mute_on_user_turn: bool
     spawned_by_id: str | None
     spawn_root_id: str | None
     annotations: dict
@@ -54,6 +56,7 @@ def set_pending_session_attributes(
     session_id: str,
     *,
     hidden: bool = False,
+    mute_on_user_turn: bool = False,
     spawned_by_id: str | None = None,
     spawn_root_id: str | None = None,
     annotations: dict | None = None,
@@ -64,6 +67,7 @@ def set_pending_session_attributes(
     """Store pending structural attributes to be applied at row creation."""
     _pending[session_id] = PendingSessionAttributes(
         hidden=hidden,
+        mute_on_user_turn=mute_on_user_turn,
         spawned_by_id=spawned_by_id,
         spawn_root_id=spawn_root_id,
         annotations=annotations or {},
@@ -72,9 +76,9 @@ def set_pending_session_attributes(
         layout=layout or {},
     )
     logger.debug(
-        "Set pending session attributes for %s: hidden=%s spawned_by_id=%s "
+        "Set pending session attributes for %s: hidden=%s mute_on_user_turn=%s spawned_by_id=%s "
         "spawn_root_id=%s annotations_keys=%s addendum_len=%s hybrid=%s",
-        session_id, hidden, spawned_by_id, spawn_root_id,
+        session_id, hidden, mute_on_user_turn, spawned_by_id, spawn_root_id,
         sorted((annotations or {}).keys()),
         len(system_prompt_addendum) if system_prompt_addendum else 0,
         hybrid,
