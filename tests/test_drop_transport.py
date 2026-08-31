@@ -1,11 +1,19 @@
 """In-process execution of drop-request payloads (no files involved)."""
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from twicc import paths
+from twicc.core.enums import Provider
+from twicc.core.models import Project, Session, SessionType
 from twicc.drop_requests_watcher import execute_drop_payload
+
+
+async def _passthrough_db_write(coro_factory):
+    return await coro_factory()
 
 
 @pytest.fixture
@@ -30,6 +38,98 @@ def test_execute_unknown_kind_returns_failed():
     assert status["status"] == "failed"
     assert "Unknown payload kind" in status["error"]
     assert "failed_at" in status
+
+
+@pytest.mark.django_db(transaction=True)
+def test_execute_mute_on_user_turn_roundtrip():
+    project = Project.objects.create(id="-mute-drop", directory="/tmp/mute-drop")
+    session = Session.objects.create(
+        id="mute-drop-session",
+        project=project,
+        provider=Provider.CODEX.value,
+        type=SessionType.SESSION,
+    )
+    layer = SimpleNamespace(group_send=AsyncMock())
+    payload = {
+        "session_id": session.id,
+        "mute_on_user_turn": True,
+    }
+
+    with patch(
+        "twicc.core.services.session_update.get_channel_layer",
+        return_value=layer,
+    ), patch(
+        "twicc.core.services.session_update.ensure_provider_running",
+    ), patch(
+        "twicc.core.services.session_update.run_under_db_write_lock",
+        side_effect=_passthrough_db_write,
+    ):
+        status = asyncio.run(execute_drop_payload(
+            payload, "session:update_mute_on_user_turn"
+        ))
+
+    assert status["status"] == "updated"
+    session.refresh_from_db()
+    assert session.mute_on_user_turn is True
+    message = layer.group_send.await_args.args[1]["data"]
+    assert message["session"]["mute_on_user_turn"] is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_execute_mute_rejects_a_non_boolean_value():
+    project = Project.objects.create(
+        id="-mute-drop-invalid", directory="/tmp/mute-drop-invalid"
+    )
+    session = Session.objects.create(
+        id="mute-drop-invalid-session",
+        project=project,
+        provider=Provider.CODEX.value,
+        type=SessionType.SESSION,
+    )
+
+    status = asyncio.run(execute_drop_payload(
+        {"session_id": session.id, "mute_on_user_turn": "true"},
+        "session:update_mute_on_user_turn",
+    ))
+
+    assert status["status"] == "rejected"
+    assert status["errors"][0]["code"] == "invalid_mute_on_user_turn"
+    session.refresh_from_db()
+    assert session.mute_on_user_turn is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_execute_mute_accepts_hidden_session_without_broadcasting():
+    project = Project.objects.create(
+        id="-mute-drop-hidden", directory="/tmp/mute-drop-hidden"
+    )
+    session = Session.objects.create(
+        id="mute-drop-hidden-session",
+        project=project,
+        provider=Provider.CODEX.value,
+        type=SessionType.SESSION,
+        hidden=True,
+    )
+    layer = SimpleNamespace(group_send=AsyncMock())
+
+    with patch(
+        "twicc.core.services.session_update.get_channel_layer",
+        return_value=layer,
+    ), patch(
+        "twicc.core.services.session_update.ensure_provider_running",
+    ), patch(
+        "twicc.core.services.session_update.run_under_db_write_lock",
+        side_effect=_passthrough_db_write,
+    ):
+        status = asyncio.run(execute_drop_payload(
+            {"session_id": session.id, "mute_on_user_turn": True},
+            "session:update_mute_on_user_turn",
+        ))
+
+    assert status["status"] == "updated"
+    session.refresh_from_db()
+    assert session.mute_on_user_turn is True
+    assert layer.group_send.await_count == 0
 
 
 @pytest.mark.django_db(transaction=True)

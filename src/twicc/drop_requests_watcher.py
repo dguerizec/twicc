@@ -72,6 +72,11 @@ _KIND_HANDLERS: dict[str, tuple[str, str, str]] = {
         "update_session_pinned_from_payload",
         "updated",
     ),
+    "session:update_mute_on_user_turn": (
+        "twicc.core.services.session_update",
+        "update_session_mute_on_user_turn_from_payload",
+        "updated",
+    ),
     "session:update_hidden": (
         "twicc.core.services.session_update",
         "update_session_hidden_from_payload",

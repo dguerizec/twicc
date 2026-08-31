@@ -1,14 +1,13 @@
 """Top-level ``twicc update-sessions`` sub-app (batch updates).
 
 One sub-command per supported batch update — ``archive`` / ``unarchive``,
-``pin`` / ``unpin``, ``hide`` / ``unhide``, ``annotations`` — each applying the
-SAME change to every targeted session via the shared
+``pin`` / ``unpin``, ``hide`` / ``unhide``, ``mute`` / ``notify``,
+``annotations``, ``settings`` — each applying the SAME change to every targeted
+session via the shared
 :func:`twicc.cli._batch_runner.run_batch`.
 
 Deliberately excluded from the batch surface:
 
-- ``settings`` — deferred: its preset resolution and value validation are
-  per-provider, so a batch over mixed providers needs its own design.
 - ``title`` — setting the same title on several sessions is meaningless.
 
 Unlike ``update-session`` (where the single id is a parent-callback argument),
@@ -23,6 +22,7 @@ from __future__ import annotations
 
 import typer
 
+from twicc.cli._batch_runner import run_batch
 from twicc.cli._drop_request.help_context import load_help_context
 from twicc.cli._drop_request.help_strings import (
     EFFORT_ALIAS_HINT,
@@ -32,10 +32,8 @@ from twicc.cli._drop_request.help_strings import (
     model_help,
     preset_help,
 )
-from twicc.cli._batch_runner import run_batch
 from twicc.cli._drop_request.settings_resolution import unset_help
 from twicc.cli._output import emit_error
-
 
 # Load the user's providers + presets once so the ``settings`` --help strings
 # can mention them (Django-free, ~30 ms cold). Same trick as the singular.
@@ -86,7 +84,8 @@ update_sessions_app = typer.Typer(
     name="update-sessions",
     help=(
         "Apply the same update to several sessions at once (archive, "
-        "unarchive, pin, unpin, hide, unhide, annotations)."
+        "unarchive, pin, unpin, hide, unhide, mute, notify, annotations, "
+        "settings)."
     ),
     invoke_without_command=False,
 )
@@ -241,6 +240,59 @@ def _unhide(
         session_ids or [],
         kind="session:update_hidden",
         prepare=lambda r: {"session_id": r.session_id, "hidden": False},
+        timeout=timeout,
+        spawned_by=spawned_by,
+        descendants=descendants,
+        annotation=annotation,
+    )
+
+
+@update_sessions_app.command(name="mute")
+def _mute(
+    session_ids: list[str] | None = typer.Argument(
+        None, metavar="SESSION_ID...", help=_SESSION_IDS_HELP,
+    ),
+    spawned_by: str = typer.Option(None, "--spawned-by", help=_SPAWNED_BY_HELP),
+    descendants: str = typer.Option(None, "--descendants", help=_DESCENDANTS_HELP),
+    annotation: list[str] = typer.Option([], "--annotation", help=_ANNOTATION_HELP),
+    timeout: int = typer.Option(30, "--timeout", help=_TIMEOUT_HELP),
+) -> None:
+    """Suppress finished-working notifications for every targeted session."""
+    run_batch(
+        session_ids or [],
+        kind="session:update_mute_on_user_turn",
+        prepare=lambda resolved: {
+            "session_id": resolved.session_id,
+            "mute_on_user_turn": True,
+        },
+        timeout=timeout,
+        spawned_by=spawned_by,
+        descendants=descendants,
+        annotation=annotation,
+    )
+
+
+@update_sessions_app.command(name="notify")
+def _notify(
+    session_ids: list[str] | None = typer.Argument(
+        None, metavar="SESSION_ID...", help=_SESSION_IDS_HELP,
+    ),
+    spawned_by: str = typer.Option(None, "--spawned-by", help=_SPAWNED_BY_HELP),
+    descendants: str = typer.Option(None, "--descendants", help=_DESCENDANTS_HELP),
+    annotation: list[str] = typer.Option([], "--annotation", help=_ANNOTATION_HELP),
+    timeout: int = typer.Option(30, "--timeout", help=_TIMEOUT_HELP),
+) -> None:
+    """Enable finished-working notifications for every targeted session.
+
+    Existing global notification settings still apply.
+    """
+    run_batch(
+        session_ids or [],
+        kind="session:update_mute_on_user_turn",
+        prepare=lambda resolved: {
+            "session_id": resolved.session_id,
+            "mute_on_user_turn": False,
+        },
         timeout=timeout,
         spawned_by=spawned_by,
         descendants=descendants,
@@ -405,7 +457,8 @@ def _settings(
 
     from twicc.cli._drop_request.bootstrap_local import load_local_bootstrap
     from twicc.cli._drop_request.settings_resolution import (
-        parse_settings_flags, prepare_settings,
+        parse_settings_flags,
+        prepare_settings,
     )
 
     # Provider-independent flag validation (global, fatal — same for every id).

@@ -32,6 +32,13 @@ def test_tool_names_are_mcp_safe_and_bijective():
     assert "share_create_session" in names
     assert "share_create_artifact" in names
     assert "share_create" not in names
+    for name in (
+        "update_session_mute",
+        "update_session_notify",
+        "update_sessions_mute",
+        "update_sessions_notify",
+    ):
+        assert name in names
 
 
 def test_schemas_and_descriptions():
@@ -40,6 +47,9 @@ def test_schemas_and_descriptions():
     assert by_name["create_session"].inputSchema == reg["create-session"].json_schema
     assert by_name["create_session"].description  # full help, non-empty
     assert len(by_name["create_session"].description) > len(reg["create-session"].summary)
+    create_properties = by_name["create_session"].inputSchema["properties"]
+    assert create_properties["mute_on_user_turn"]["type"] == "boolean"
+    assert "finished-working" in create_properties["mute_on_user_turn"]["description"]
 
 
 def test_annotations_and_always_load():

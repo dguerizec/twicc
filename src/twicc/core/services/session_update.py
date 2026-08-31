@@ -25,6 +25,9 @@ whose ``kind`` matches one of the supported update actions:
   Wraps the pin/unpin flow of the HTTP ``PATCH`` endpoint (now factored
   into :func:`apply_session_pinned_change`): write the new ``pinned``
   value (``NULL`` to unpin, or one of ``PinMode.values``) and broadcast.
+- ``kind="session:update_mute_on_user_turn"`` →
+  :func:`update_session_mute_on_user_turn_from_payload`. Persists the
+  per-session finished-working notification gate and broadcasts the update.
 - ``kind="session:update_hidden"`` → :func:`update_session_hidden_from_payload`.
   Looks up the session via the standard guards then delegates to
   :func:`session_visibility.hide_session` / ``unhide_session``.
@@ -48,8 +51,8 @@ aligned.
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
 import logging
+from copy import deepcopy
 from typing import Any, NamedTuple
 
 import orjson
@@ -64,8 +67,9 @@ from twicc.providers.state import (
     ensure_provider_running,
 )
 
-
 logger = logging.getLogger(__name__)
+
+_MISSING = object()
 
 
 class UpdateSessionError(NamedTuple):
@@ -773,6 +777,59 @@ async def update_session_pinned_from_payload(payload: dict) -> UpdateSessionResu
     logger.info(
         "[update_session_pinned] session=%s pinned=%r",
         session_id, pinned,
+    )
+
+    return UpdateSessionResult(
+        success=True,
+        session_id=session_id,
+        provider=provider.value,
+        project_id=session.project_id,
+        errors=None,
+    )
+
+
+async def update_session_mute_on_user_turn_from_payload(payload: dict) -> UpdateSessionResult:
+    """Enable or suppress finished-working notifications for one session."""
+    session_id = payload.get("session_id")
+    mute_on_user_turn = payload.get("mute_on_user_turn", _MISSING)
+
+    errors: list[UpdateSessionError] = []
+    if not session_id:
+        errors.append(UpdateSessionError("session_id", "missing", "session_id is required"))
+    if not isinstance(mute_on_user_turn, bool):
+        errors.append(UpdateSessionError(
+            "mute_on_user_turn",
+            "invalid_mute_on_user_turn",
+            "mute_on_user_turn must be a boolean (true / false)",
+        ))
+    if errors:
+        return UpdateSessionResult(False, None, None, None, errors)
+
+    session, _project, provider, error = await _lookup_session_for_update(session_id)
+    if error is not None:
+        return error
+
+    await apply_session_mute_on_user_turn_change(session, mute_on_user_turn)
+
+    from twicc.core.serializers import serialize_session
+
+    channel_layer = get_channel_layer()
+    if channel_layer is not None and not session.hidden:
+        await channel_layer.group_send(
+            "updates",
+            {
+                "type": "broadcast",
+                "data": {
+                    "type": "session_updated",
+                    "session": serialize_session(session),
+                },
+            },
+        )
+
+    logger.info(
+        "[update_session_mute_on_user_turn] session=%s mute_on_user_turn=%s",
+        session_id,
+        mute_on_user_turn,
     )
 
     return UpdateSessionResult(
