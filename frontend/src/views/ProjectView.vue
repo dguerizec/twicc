@@ -3154,14 +3154,14 @@ wa-dropdown-item:hover .row-menu-trigger,
 .sidebar-footer-usage {
     display: flex;
     flex-direction: column;
-    padding: var(--wa-space-2xs) var(--wa-space-s) var(--wa-space-xs);
+    padding: var(--wa-space-2xs) var(--wa-space-s);
 }
 
 .usage-header {
     display: flex;
     align-items: center;
     gap: var(--wa-space-2xs);
-    padding: var(--wa-space-2xs) 0;
+    padding: var(--wa-space-3xs) 0;
 }
 
 /* Provider icon + name + switch icon: one clickable group that cycles providers. */
@@ -3265,7 +3265,7 @@ wa-dropdown-item:hover .row-menu-trigger,
     align-items: center;
     gap: var(--wa-space-xs);
     max-width: 100%;
-    padding: var(--wa-space-2xs) 0;
+    padding: var(--wa-space-3xs) 0;
     position: relative;
 }
 .usage-quota + .usage-quota {
