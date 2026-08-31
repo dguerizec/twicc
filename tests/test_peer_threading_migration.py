@@ -7,7 +7,7 @@ from django.db.migrations.executor import MigrationExecutor
 
 MIGRATE_FROM = [("core", "0133_share_created_by_session")]
 MIGRATE_TO = [("core", "0134_peermessage_threading")]
-MIGRATE_LATEST = [("core", "0135_peer_revocation_reconnection")]
+MIGRATE_LATEST = [("core", "0136_session_mute_on_user_turn")]
 
 
 @pytest.fixture

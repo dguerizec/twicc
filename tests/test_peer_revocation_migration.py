@@ -7,10 +7,17 @@ from django.db.migrations.executor import MigrationExecutor
 
 MIGRATE_FROM = [("core", "0134_peermessage_threading")]
 MIGRATE_TO = [("core", "0135_peer_revocation_reconnection")]
+MIGRATE_LATEST = [("core", "0136_session_mute_on_user_turn")]
+
+
+@pytest.fixture
+def restore_latest_migration():
+    yield
+    MigrationExecutor(connection).migrate(MIGRATE_LATEST)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_existing_active_peer_becomes_broken_without_losing_history():
+def test_existing_active_peer_becomes_broken_without_losing_history(restore_latest_migration):
     executor = MigrationExecutor(connection)
     executor.migrate(MIGRATE_FROM)
     old_apps = executor.loader.project_state(MIGRATE_FROM).apps
