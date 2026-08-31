@@ -1640,7 +1640,6 @@ function onChangelogClose() {
                             size="small" appearance="plain"
                             @click="prefillPeerBaseUrlFromPublic"
                         >
-                            <wa-icon name="arrow-down" slot="start"></wa-icon>
                             Use the External address from Global settings
                         </wa-button>
                         <span class="setting-group-hint">
