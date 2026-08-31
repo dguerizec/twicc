@@ -1180,6 +1180,7 @@ export function initSettings() {
             showGitIgnoredFiles: store.showGitIgnoredFiles,
             selectionCommentHintDismissed: store.selectionCommentHintDismissed,
             notifUserTurnSound: store.notifUserTurnSound,
+            notifUserTurnToast: store.notifUserTurnToast,
             notifUserTurnBrowser: store.notifUserTurnBrowser,
             notifPendingRequestSound: store.notifPendingRequestSound,
             notifPendingRequestBrowser: store.notifPendingRequestBrowser,
