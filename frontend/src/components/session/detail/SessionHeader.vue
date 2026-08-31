@@ -446,6 +446,19 @@ const pinTooltip = computed(() => {
     return `Pinned: ${PIN_MODE_LABELS[session.value.pinned] || session.value.pinned}`
 })
 
+const muteTooltip = computed(() => session.value?.mute_on_user_turn
+    ? 'Muted — click to restore the "finished working" notification'
+    : 'Notifications on — click to mute the "finished working" notification')
+
+function handleMuteToggle() {
+    if (!session.value || session.value.draft) return
+    store.setSessionMuteOnUserTurn(
+        session.value.project_id,
+        props.sessionId,
+        !session.value.mute_on_user_turn,
+    )
+}
+
 /**
  * Handle pin mode selection from the dropdown.
  * @param {CustomEvent} event - The wa-select event (event.detail.item.value)
@@ -554,6 +567,27 @@ defineExpose({
                     </wa-dropdown-item>
                 </wa-dropdown>
                 <AppTooltip v-if="!session.draft" :for="`session-header-${sessionId}-pin-button`">{{ pinTooltip }}</AppTooltip>
+
+                <wa-button
+                    v-if="!session.draft"
+                    :id="`session-header-${sessionId}-mute-button`"
+                    :variant="session.mute_on_user_turn ? 'warning' : 'neutral'"
+                    appearance="plain"
+                    size="small"
+                    :class="['mute-button', 'reduced-height', {
+                        'mute-button--active': session.mute_on_user_turn,
+                    }]"
+                    @click="handleMuteToggle"
+                >
+                    <wa-icon
+                        :name="session.mute_on_user_turn ? 'bell-slash' : 'bell'"
+                        :label="session.mute_on_user_turn ? 'Muted' : 'Notifications on'"
+                    ></wa-icon>
+                </wa-button>
+                <AppTooltip
+                    v-if="!session.draft"
+                    :for="`session-header-${sessionId}-mute-button`"
+                >{{ muteTooltip }}</AppTooltip>
 
                 <!-- Archive button (not for drafts or already archived) -->
                 <wa-button
@@ -1200,6 +1234,7 @@ wa-divider {
 }
 
 .pin-button,
+.mute-button,
 .archive-button,
 .rename-button,
 .share-button,
@@ -1235,12 +1270,21 @@ wa-divider {
 }
 
 .pin-button:hover,
+.mute-button:hover,
 .archive-button:hover,
 .rename-button:hover,
 .share-button:hover,
 .search-button:hover,
 .debug-button:hover {
     opacity: 1;
+}
+
+.mute-button.mute-button--active {
+    opacity: 1;
+
+    &::part(base) {
+        color: var(--wa-color-warning-60);
+    }
 }
 
 /* Active share links → the button wears the brand colour (no count badge). */

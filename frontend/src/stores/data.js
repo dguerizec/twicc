@@ -44,6 +44,7 @@ import {
 import { generateUUID } from '../utils/crypto'
 import { debounce } from '../utils/debounce'
 import { apiFetch } from '../utils/api'
+import { applySessionMuteOnUserTurn } from '../utils/sessionMute'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../utils/workspaceIds'
 import { getParsedContent, setParsedContent, clearParsedContent, hasContent } from '../utils/parsedContent'
 import { initBuffer, feedDelta, flushBuffer, destroySessionBuffers, destroyAllBuffers } from '../utils/streamingBuffer'
@@ -5559,6 +5560,17 @@ export const useDataStore = defineStore('data', {
                 }
                 throw error
             }
+        },
+
+        /**
+         * Set whether a session sends a notification when the agent finishes work.
+         * @param {string} projectId - The project ID
+         * @param {string} sessionId - The session ID
+         * @param {boolean} value - Whether to mute the notification
+         * @throws {Error} If the update fails
+         */
+        async setSessionMuteOnUserTurn(projectId, sessionId, value) {
+            return applySessionMuteOnUserTurn(this.sessions, apiFetch, projectId, sessionId, value)
         },
 
         // Draft messages actions
