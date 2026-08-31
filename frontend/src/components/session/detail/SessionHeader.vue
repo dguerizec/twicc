@@ -424,11 +424,10 @@ function handleUnarchive() {
  * selection when opening). Stateless here: the button is a pure trigger, so the
  * mobile/keyboard-less path matches Ctrl+F exactly.
  *
- * In compact mode the action cluster is only reachable with the header expanded,
- * whose overlay would otherwise sit on top of the search bar that appears just
- * below it — so collapse the header on click (no-op on wide viewports, where the
- * cluster is always visible). Same idea for the overflow cluster on a narrow
- * header: give the title its room back once the search bar is open.
+ * An expanded compact header sits on top of the search bar that appears just
+ * below it, so collapse it on click (no-op when it is already collapsed, and on
+ * wide viewports). Same idea for the overflow cluster on a narrow header: give
+ * the title its room back once the search bar is open.
  */
 function toggleSessionSearch() {
     isCompactExpanded.value = false
@@ -473,8 +472,8 @@ defineExpose({
     <header ref="headerRef" class="session-header" :class="{ 'compact-expanded': isCompactExpanded, 'compact-collapsed': !isCompactExpanded, 'effective-debug': isEffectiveDebug }" :data-session-type="mode" v-if="session">
         <div v-if="mode === 'session'" ref="titleRowRef" class="session-title">
             <!-- Status tags: they carry state, not actions, so they stay out of the
-                 overflow cluster and remain visible on a narrow header. Still hidden
-                 in compact collapsed mode, like the actions. -->
+                 overflow cluster and remain visible on a narrow header. The only
+                 part of the title row the compact collapsed header drops. -->
             <div class="session-title-tags">
                 <wa-tag v-if="session.archived" :id="`session-header-${sessionId}-archived-tag`" size="small" variant="neutral" class="archived-tag" @click="handleUnarchive">Archived</wa-tag>
                 <AppTooltip v-if="session.archived" :for="`session-header-${sessionId}-archived-tag`">Click to unarchive</AppTooltip>
@@ -502,8 +501,9 @@ defineExpose({
             </wa-button>
             <AppTooltip v-if="actionsOverflow" :for="`session-header-${sessionId}-actions-toggle`">{{ actionsToggleTooltip }}</AppTooltip>
 
-            <!-- Action buttons group: hidden in compact collapsed mode (revealed on
-                 expand), and collapsed behind the toggle above when too wide. -->
+            <!-- Action buttons group: collapsed behind the toggle above when too
+                 wide. Shown in every header state, compact collapsed included —
+                 compact trades height, not actions. -->
             <div
                 ref="actionsRef"
                 class="session-title-actions"
@@ -1332,22 +1332,13 @@ wa-divider {
         border-bottom: solid var(--wa-color-surface-border) var(--divider-size);
     }
 
-    /* In compact collapsed mode: hide the tags and the overflow toggle (revealed
-       on expand) */
-    .session-header.compact-collapsed .session-title-tags,
-    .session-header.compact-collapsed .actions-toggle-button {
+    /* In compact collapsed mode: hide the status tags (revealed on expand).
+       They carry state, not actions, and the compact row has no room for them.
+       The action cluster stays: compact is about height, so the actions — or
+       the single overflow toggle standing in for them — remain one click away
+       without expanding the header first. */
+    .session-header.compact-collapsed .session-title-tags {
         display: none;
-    }
-
-    /* The action buttons hide the same way as the overflow collapse: out of the
-       flow rather than `display: none`. Both mechanisms then stack cleanly, and
-       the cluster keeps being measured while the compact header is collapsed —
-       so expanding it already knows whether the cluster overflows, instead of
-       showing it full width for a frame before collapsing it. */
-    .session-header.compact-collapsed .session-title-actions {
-        position: absolute;
-        visibility: hidden;
-        pointer-events: none;
     }
 
     /* Dont show divider when compact mode is active */
