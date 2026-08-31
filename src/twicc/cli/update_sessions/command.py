@@ -249,12 +249,12 @@ def _unhide(
 
 @update_sessions_app.command(name="mute")
 def _mute(
-    session_ids: list[str] | None = typer.Argument(
+    session_ids: list[str] | None = typer.Argument(  # noqa: B008
         None, metavar="SESSION_ID...", help=_SESSION_IDS_HELP,
     ),
     spawned_by: str = typer.Option(None, "--spawned-by", help=_SPAWNED_BY_HELP),
     descendants: str = typer.Option(None, "--descendants", help=_DESCENDANTS_HELP),
-    annotation: list[str] = typer.Option([], "--annotation", help=_ANNOTATION_HELP),
+    annotation: list[str] = typer.Option([], "--annotation", help=_ANNOTATION_HELP),  # noqa: B008
     timeout: int = typer.Option(30, "--timeout", help=_TIMEOUT_HELP),
 ) -> None:
     """Suppress finished-working notifications for every targeted session."""
@@ -274,12 +274,12 @@ def _mute(
 
 @update_sessions_app.command(name="notify")
 def _notify(
-    session_ids: list[str] | None = typer.Argument(
+    session_ids: list[str] | None = typer.Argument(  # noqa: B008
         None, metavar="SESSION_ID...", help=_SESSION_IDS_HELP,
     ),
     spawned_by: str = typer.Option(None, "--spawned-by", help=_SPAWNED_BY_HELP),
     descendants: str = typer.Option(None, "--descendants", help=_DESCENDANTS_HELP),
-    annotation: list[str] = typer.Option([], "--annotation", help=_ANNOTATION_HELP),
+    annotation: list[str] = typer.Option([], "--annotation", help=_ANNOTATION_HELP),  # noqa: B008
     timeout: int = typer.Option(30, "--timeout", help=_TIMEOUT_HELP),
 ) -> None:
     """Enable finished-working notifications for every targeted session.
