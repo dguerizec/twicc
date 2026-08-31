@@ -32,7 +32,7 @@ PASSWORD_HASH = "pbkdf2_sha256$test$deadbeef"
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _record() -> TokenRecord:

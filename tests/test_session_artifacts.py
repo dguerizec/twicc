@@ -124,7 +124,7 @@ def _write_artifact(artifacts_root: Path, session_id: str, name: str, payload: b
 
 def _run(coro):
     """Drive ``coro`` to completion from a sync test."""
-    return asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _get(client: AsyncClient, url: str):

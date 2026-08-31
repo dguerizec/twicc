@@ -14,7 +14,7 @@ from twicc.core.services import share_mutation
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _mk(project, sid, *, spawned_by=None, spawn_root=None, parent_session=None):

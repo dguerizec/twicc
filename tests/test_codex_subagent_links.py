@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 import queue
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import orjson
 import pytest
@@ -38,7 +38,7 @@ from twicc.core.enums import ItemKind, Provider
 from twicc.core.models import AgentLink, Project, Session, SessionItem, ToolResultLink
 from twicc.providers.codex.compute import get_compute
 
-_NOW = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 # A Fernet token like the one v2 puts in ``spawn_agent.message`` — opaque
 # to us, and deliberately never parsed.

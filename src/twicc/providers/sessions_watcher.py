@@ -318,7 +318,7 @@ class BaseSessionsWatcher:
         only; implementations must never block the ingest path on agent
         locks (fire-and-forget a task instead).
         """
-        return None
+        return
 
     async def _after_new_lines_synced(
         self,

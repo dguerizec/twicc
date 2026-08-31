@@ -19,7 +19,7 @@ consequences covered here:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import orjson
 import pytest
@@ -30,9 +30,9 @@ from twicc.providers.claude_code.compute import get_compute
 from twicc.providers.claude_code.helpers import ClaudeCodeHelpers
 from twicc.providers.compute_base import ToolResultUpdate
 
-_T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-_T1 = datetime(2026, 1, 1, 12, 5, 0, tzinfo=timezone.utc)
-_T2 = datetime(2026, 1, 1, 12, 10, 0, tzinfo=timezone.utc)
+_T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+_T1 = datetime(2026, 1, 1, 12, 5, 0, tzinfo=UTC)
+_T2 = datetime(2026, 1, 1, 12, 10, 0, tzinfo=UTC)
 
 
 def _orphan_notification_xml(task_id: str) -> str:

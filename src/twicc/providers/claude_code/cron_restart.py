@@ -27,7 +27,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import NamedTuple
 
 from django.db import transaction
@@ -123,7 +123,7 @@ def _split_restorable_crons(session_id: str) -> RestorableCrons:
     """
     from twicc.core.models import SessionCron
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     restored: list = []
     to_recreate: list = []
     for cron in SessionCron.objects.filter(
@@ -175,7 +175,7 @@ def reattach_crons_and_purge_old_runs(session_id: str, current_run_id: int) -> t
     if not old_run_pks:
         return 0, 0
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     reattached = 0
     for cron in SessionCron.objects.filter(process_run_id__in=old_run_pks):
         if not cron.is_restored_on_resume(now):

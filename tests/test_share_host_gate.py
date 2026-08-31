@@ -15,7 +15,7 @@ from twicc.origin_gate import PublicOriginGate, ShareOnlyApp
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 class Recorder:

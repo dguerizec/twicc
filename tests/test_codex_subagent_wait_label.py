@@ -19,7 +19,7 @@ keeps the line and drops the count — a bare "waiting".
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -185,7 +185,7 @@ class TestPruningAgainstTheWatcher:
         parent = Session.objects.create(
             id="session-parent-wait-label", project=project, provider=Provider.CODEX,
         )
-        for suffix, stopped_at in (("done", datetime(2025, 1, 1, tzinfo=timezone.utc)), ("live", None)):
+        for suffix, stopped_at in (("done", datetime(2025, 1, 1, tzinfo=UTC)), ("live", None)):
             Session.objects.create(
                 id=f"child-{suffix}",
                 project=project,

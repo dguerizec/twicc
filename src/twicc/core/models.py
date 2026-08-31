@@ -1518,7 +1518,7 @@ class SessionCron(models.Model):
         Same predicate as :meth:`active_for_session`, evaluated on one row.
         """
         if now is None:
-            now = datetime.now(tz=timezone.utc)
+            now = datetime.now(tz=UTC)
         if self.recurring:
             return self.created_at > now - self.CLAUDE_RECURRING_MAX_AGE
         return self.next_fire > now

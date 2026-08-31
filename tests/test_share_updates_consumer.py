@@ -10,7 +10,7 @@ from twicc.core.services.share_tokens import mint_token
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 @pytest.fixture

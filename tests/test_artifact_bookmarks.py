@@ -95,7 +95,7 @@ def _passthrough_db_write_lock(monkeypatch):
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _write_artifact(artifacts_root: Path, session_id: str, name: str, payload: bytes) -> Path:

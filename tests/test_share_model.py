@@ -42,7 +42,7 @@ def bookmark(session, project):
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _creator(project, *, sid="agent-1", title="Agent one"):

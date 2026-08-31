@@ -19,7 +19,7 @@ from twicc.core.models import (
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def test_initial_peer_message_snapshot_serializes_resolved_reply_without_async_lazy_load(

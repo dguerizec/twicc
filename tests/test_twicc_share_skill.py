@@ -9,7 +9,7 @@ PLUGIN = ROOT / "src/twicc/agent/plugin/twicc/.claude-plugin/plugin.json"
 
 
 def _resolver_block(text: str) -> str:
-    start = text.index("**Prefer the `mcp__twicc__*` tools when you have them.**")
+    start = text.index("**Prefer the `mcp__twicc__*` tools — inside a TwiCC session you normally have all of them.**")
     final = "it may expand to multiple words, which quoting would break."
     end = text.index(final, start) + len(final)
     return text[start:end]
@@ -54,4 +54,4 @@ def test_twicc_share_skill_contract():
     assert "draft to adapt" not in text
 
     plugin = orjson.loads(PLUGIN.read_bytes())
-    assert plugin["version"] == "0.69.1"
+    assert plugin["version"] == "0.69.2"
