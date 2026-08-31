@@ -17,6 +17,7 @@ import { handleResyncRequired } from '../utils/resync'
 import { truncateTitle } from '../utils/truncate'
 import { toWorkspaceProjectId } from '../utils/workspaceIds'
 import { compareVersions } from '../utils/version'
+import { getProcessStateNotificationEffects } from '../utils/processStateNotifications.js'
 
 // Lazy (async) toast body for peer events — toast.custom detects a component
 // via its `setup` key, which an async wrapper has (see useToast.js precedent
@@ -725,66 +726,66 @@ function notifyProcessStateChange(msg, previousState, route) {
     const sessionId = msg.session_id
     const settings = useSettingsStore()
     const providerLabel = getProviderLabel(msg.provider)
+    const isViewingSession = route?.params?.sessionId === sessionId
+    const effects = getProcessStateNotificationEffects(msg, previousState, {
+        isViewingSession,
+        userTurnBrowserEnabled: settings.notifUserTurnBrowser,
+        pendingRequestBrowserEnabled: settings.notifPendingRequestBrowser,
+    })
 
     // --- Transition to user_turn: "<Provider> finished working" ---
-    if (msg.state === 'user_turn' && previousState?.state !== 'user_turn') {
-        const isViewingSession = route?.params?.sessionId === sessionId
-        // If viewing the session, force-update last_viewed_at immediately.
-        // This prevents stale state if the user locks their phone or switches
-        // apps before the trailing throttle call fires. requirePresence: a
-        // desktop left open+focused but unattended must not auto-mark read here.
-        if (isViewingSession) {
-            forceNotifySessionViewed(sessionId, 'process-user-turn', { requirePresence: true })
-        }
-        // In-app toast when the user is on TwiCC but not viewing this session
-        if (!isViewingSession && !__hmrState.activeUserTurnToasts.has(sessionId)) {
-            __hmrState.activeUserTurnToasts.add(sessionId)
-            toast.session(sessionId, {
-                type: 'info',
-                title: `${providerLabel} finished working`,
-                duration: 15000,
-                autoDismiss: true,
-                showActions: true,
-            })
-        }
-        // Sound notification
+    // If viewing the session, force-update last_viewed_at immediately.
+    // This prevents stale state if the user locks their phone or switches
+    // apps before the trailing throttle call fires. requirePresence: a
+    // desktop left open+focused but unattended must not auto-mark read here.
+    if (effects.markViewed) {
+        forceNotifySessionViewed(sessionId, 'process-user-turn', { requirePresence: true })
+    }
+    // In-app toast when the user is on TwiCC but not viewing this session
+    if (effects.showUserTurnToast && !__hmrState.activeUserTurnToasts.has(sessionId)) {
+        __hmrState.activeUserTurnToasts.add(sessionId)
+        toast.session(sessionId, {
+            type: 'info',
+            title: `${providerLabel} finished working`,
+            duration: 15000,
+            autoDismiss: true,
+            showActions: true,
+        })
+    }
+    // Sound notification
+    if (effects.playUserTurnSound) {
         playNotificationSound(settings.notifUserTurnSound)
-        // Browser notification
-        if (settings.notifUserTurnBrowser) {
-            sendBrowserNotification(
-                `${providerLabel} finished working`,
-                buildNotificationBody(msg),
-            )
-        }
+    }
+    // Browser notification
+    if (effects.sendUserTurnBrowser) {
+        sendBrowserNotification(
+            `${providerLabel} finished working`,
+            buildNotificationBody(msg),
+        )
     }
 
     // --- Pending request: "<Provider> needs your attention" ---
     // Notify when at least one new pending request appeared (transition from
     // 0 → ≥1, or any growth in count for parallel concurrency-safe tools).
-    const newPendingCount = msg.pending_requests?.length || 0
-    const previousPendingCount = previousState?.pending_requests?.length || 0
-    if (newPendingCount > previousPendingCount) {
-        // Skip toast if the user is already viewing this session (they see the
-        // pending-request indicator directly in the Chat tab)
-        const isViewingSession = route?.params?.sessionId === sessionId
-        if (!isViewingSession) {
-            // Use the freshest (last-arrived) request to title the toast.
-            const latest = msg.pending_requests[newPendingCount - 1]
-            const pendingTitle = latest?.request_type === 'ask_user_question'
-                ? `🖐️ ${providerLabel} has a question for you`
-                : `🖐️ ${providerLabel} needs your approval`
-            toast.session(sessionId, { type: 'warning', title: pendingTitle })
-        }
+    if (effects.showPendingRequestToast) {
+        // Use the freshest (last-arrived) request to title the toast.
+        const latest = msg.pending_requests[effects.newPendingCount - 1]
+        const pendingTitle = latest?.request_type === 'ask_user_question'
+            ? `🖐️ ${providerLabel} has a question for you`
+            : `🖐️ ${providerLabel} needs your approval`
+        toast.session(sessionId, { type: 'warning', title: pendingTitle })
+    }
 
-        // Sound notification
+    // Sound notification
+    if (effects.playPendingRequestSound) {
         playNotificationSound(settings.notifPendingRequestSound)
-        // Browser notification
-        if (settings.notifPendingRequestBrowser) {
-            sendBrowserNotification(
-                `${providerLabel} needs your attention`,
-                buildNotificationBody(msg),
-            )
-        }
+    }
+    // Browser notification
+    if (effects.sendPendingRequestBrowser) {
+        sendBrowserNotification(
+            `${providerLabel} needs your attention`,
+            buildNotificationBody(msg),
+        )
     }
 
     // --- Process death notifications (toast only, unchanged) ---
