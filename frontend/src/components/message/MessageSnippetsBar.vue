@@ -304,8 +304,13 @@ button {
     gap: var(--wa-space-xs);
 }
 
-.snippet-btn:hover {
-    background: color-mix(in srgb, var(--wa-color-surface-raised), var(--wa-color-mix-hover));
+/* Hover only where a real pointer exists. On touch the state sticks after the
+   finger lifts, leaving the button visibly pressed until you tap elsewhere —
+   very noticeable with the long-press-to-send gesture. */
+@media (hover: hover) {
+    .snippet-btn:hover {
+        background: color-mix(in srgb, var(--wa-color-surface-raised), var(--wa-color-mix-hover));
+    }
 }
 
 .snippet-btn:active {
@@ -319,9 +324,11 @@ button {
     cursor: not-allowed;
 }
 
-.snippet-btn.snippet-disabled:hover {
-    background: var(--wa-color-surface-raised);
-    transform: none;
+@media (hover: hover) {
+    .snippet-btn.snippet-disabled:hover {
+        background: var(--wa-color-surface-raised);
+        transform: none;
+    }
 }
 
 .snippet-btn.snippet-disabled:active {
@@ -368,7 +375,9 @@ button {
     font-size: var(--wa-font-size-xs);
 }
 
-.snippet-btn.manage-btn:hover {
-    opacity: 0.9;
+@media (hover: hover) {
+    .snippet-btn.manage-btn:hover {
+        opacity: 0.9;
+    }
 }
 </style>
