@@ -37,6 +37,7 @@ defineProps({
 
 const emit = defineEmits([
     'snippet-press',
+    'snippet-long-press',
     'snippet-disabled-press',
     'manage-snippets',
     'open-history',
@@ -90,6 +91,40 @@ function handleSnippetClick(snippet) {
         emit('snippet-press', snippet)
     }
 }
+
+// ── Touch long-press: insert + send in one gesture ──────────────────
+// A tap fills the textarea and focuses it, which opens the on-screen keyboard.
+// When the snippet IS the whole message, that resize is pure friction. A long
+// press therefore sends straight away (see `snippet-long-press` in the parent).
+// Only `touch*` events drive this, so pointer-only devices never see it.
+const LONG_PRESS_DELAY = 500
+
+let longPressTimer = null
+let longPressTriggered = false
+
+function onSnippetTouchStart(snippet, event) {
+    if (event.touches.length !== 1 || snippet._disabled) return
+    longPressTriggered = false
+    longPressTimer = setTimeout(() => {
+        longPressTriggered = true
+        emit('snippet-long-press', snippet)
+    }, LONG_PRESS_DELAY)
+}
+
+// The bar scrolls horizontally on a narrow composer — a swipe must not send.
+function onSnippetTouchMove() {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+}
+
+function onSnippetTouchEnd(event) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+    // Cancel the synthetic click, otherwise the snippet is inserted a second time.
+    if (longPressTriggered) {
+        event.preventDefault()
+    }
+}
 </script>
 
 <template>
@@ -134,6 +169,9 @@ function handleSnippetClick(snippet) {
                     :class="{ 'snippet-disabled': snippet._disabled }"
                     :title="snippet.text"
                     @click="handleSnippetClick(snippet)"
+                    @touchstart.passive="onSnippetTouchStart(snippet, $event)"
+                    @touchmove.passive="onSnippetTouchMove"
+                    @touchend="onSnippetTouchEnd"
                 >
                     <template v-if="snippetScopeInfo(snippet)?.type === 'project'">
                         <ProjectMark

@@ -7,9 +7,10 @@ The tip scanner (`src/twicc/tips_manifest.py`) silently ignores any file
 whose name starts with an uppercase letter (this README, `LICENSE.md`,
 etc.), so they live happily alongside the actual tips.
 
-> Adding, renaming or removing a tip file requires a **backend restart**
-> — the manifest is built once at startup and pushed to the client over
-> WebSocket. There is no hot-reload of the manifest in dev.
+> In dev, adding, renaming or removing a tip file is picked up
+> automatically: the backend re-scans this folder every 10 s and pushes
+> the new manifest over WebSocket. In production the manifest is built
+> once at startup, so a change there needs a **backend restart**.
 
 ## File naming
 
@@ -169,4 +170,4 @@ opens it in the same toast as the automatic flow.
 - [ ] The body reads well at the toast's roughly 480 px width.
 - [ ] The tip is not too long — `max-height: 60vh` scrolls but a giant
       tip is unfriendly. Aim for a few short paragraphs.
-- [ ] Backend restarted so the manifest picks it up.
+- [ ] The tip shows up in Settings → Tips (in dev, within 10 s).

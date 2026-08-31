@@ -1796,6 +1796,27 @@ function handleSnippetPress(snippet) {
     insertTextAtCursor(resolved)
 }
 
+/**
+ * Touch long-press on a snippet: insert and send in one gesture, without ever
+ * focusing the textarea (no on-screen keyboard, no layout resize). When the
+ * send is not available the gesture degrades to a plain press, so the text
+ * still lands in the composer and the user sees why nothing was sent.
+ */
+function handleSnippetLongPress(snippet) {
+    const placeholders = snippet.placeholders || []
+    const resolved = resolveSnippetText(snippet.text, placeholders, placeholderContext.value)
+    // Mirrors the Send button's own disabled condition; the empty-text part of
+    // it is satisfied by the insertion below, hence the `resolved` check here.
+    if (props.sendingLocked || isDisabled.value || !resolved.trim()) {
+        insertTextAtCursor(resolved)
+        return
+    }
+    // `updateTextareaContent` writes `messageText` synchronously, so `handleSend`
+    // already sees the inserted text.
+    insertTextAtCursor(resolved, { focus: false })
+    handleSend()
+}
+
 function handleSnippetDisabledPress(snippet) {
     toast(snippet._disabledReason || 'Some placeholders are not available', { variant: 'warning' })
 }
@@ -1958,6 +1979,7 @@ defineExpose({ insertTextAtCursor, getSessionSetting, setSessionSetting, getSess
             :activation-chars="commandActivationChars"
             :can-open-command="messageText.length === 0"
             @snippet-press="handleSnippetPress"
+            @snippet-long-press="handleSnippetLongPress"
             @snippet-disabled-press="handleSnippetDisabledPress"
             @manage-snippets="openMessageSnippetsDialog"
             @open-history="openHistoryFromButton"
