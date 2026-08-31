@@ -645,9 +645,11 @@ export function useVirtualScroll(options) {
      * @param {Object} [options] - Scroll options
      * @param {'start' | 'center' | 'end'} [options.align='start'] - Where to position the item
      * @param {'auto' | 'smooth'} [options.behavior='auto'] - Scroll behavior
+     * @param {number} [options.offset=0] - Pixels of room to leave before the item,
+     *   i.e. how far short of it to stop. Clamped away at the top of the list.
      */
     function scrollToIndex(index, options = {}) {
-        const { align = 'start', behavior = 'auto' } = options
+        const { align = 'start', behavior = 'auto', offset = 0 } = options
         const container = containerRef.value
         if (!container) return
 
@@ -677,7 +679,7 @@ export function useVirtualScroll(options) {
 
         // Clamp to valid scroll range
         const maxScrollTop = Math.max(0, totalHeight.value - viewportHeight.value)
-        targetScrollTop = Math.max(0, Math.min(targetScrollTop, maxScrollTop))
+        targetScrollTop = Math.max(0, Math.min(targetScrollTop - offset, maxScrollTop))
 
         // Mark as programmatic to avoid scroll correction during this scroll
         isProgrammaticScroll = true
@@ -747,6 +749,46 @@ export function useVirtualScroll(options) {
             scrollTop.value = targetScrollTop
             isProgrammaticScroll = false
         }
+    }
+
+    /**
+     * Scroll to the very top or the very bottom, retrying until the edge holds.
+     *
+     * One scroll is not enough: items outside the viewport are placed from
+     * estimated heights, and reaching an edge loads content that then measures
+     * taller or shorter, moving the edge out from under us. Same shape as
+     * scrollToKey — jump, wait for the measurements to settle, check, repeat.
+     *
+     * @param {'top' | 'bottom'} edge
+     * @param {Object} [options]
+     * @param {number} [options.settleMs=150] - Debounce time to wait for height stability
+     * @param {number} [options.maxAttempts=4] - Max number of jump-settle-check cycles
+     * @returns {Promise<boolean>} true if the container really sits at the edge
+     */
+    async function scrollToEdge(edge, options = {}) {
+        const { settleMs = 150, maxAttempts = 4 } = options
+        const jump = edge === 'top' ? scrollToTop : scrollToBottom
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            jump({ behavior: 'auto' })
+            await waitForHeightStability(settleMs)
+
+            // Read the container rather than the cached state: the settle we just
+            // awaited is exactly when both drift apart.
+            const container = containerRef.value
+            if (!container) return false
+
+            if (edge === 'top') {
+                if (container.scrollTop <= 1) return true
+            } else {
+                const maxScrollTop = container.scrollHeight - container.clientHeight
+                if (container.scrollTop >= maxScrollTop - 1) return true
+            }
+        }
+
+        // Out of attempts: land on the edge with whatever the current heights say.
+        jump({ behavior: 'auto' })
+        return false
     }
 
     /**
@@ -1144,6 +1186,7 @@ export function useVirtualScroll(options) {
      * @param {'start' | 'center' | 'end'} [options.align='center'] - Where to position the item
      * @param {number} [options.settleMs=150] - Debounce time to wait for height stability
      * @param {number} [options.maxAttempts=3] - Max number of jump-settle-correct cycles
+     * @param {number} [options.offset=0] - Pixels of room to leave before the item
      * @param {Function} [options.onHeightChange] - Callback invoked on each height change (for abort detection)
      * @returns {Promise<boolean>} true if the item is visible in the viewport after scrolling
      */
@@ -1152,6 +1195,7 @@ export function useVirtualScroll(options) {
             align = 'center',
             settleMs = 150,
             maxAttempts = 3,
+            offset = 0,
             onHeightChange = null,
         } = options
 
@@ -1161,7 +1205,7 @@ export function useVirtualScroll(options) {
             if (index === -1) return false
 
             // Jump to the item
-            scrollToIndex(index, { align, behavior: 'auto' })
+            scrollToIndex(index, { align, behavior: 'auto', offset })
 
             // Wait for heights to settle (no ResizeObserver changes for settleMs)
             await waitForHeightStability(settleMs, onHeightChange)
@@ -1314,6 +1358,7 @@ export function useVirtualScroll(options) {
         scrollToKey,
         scrollToTop,
         scrollToBottom,
+        scrollToEdge,
         getScrollState,
         isAtBottom,
         isAtTop,

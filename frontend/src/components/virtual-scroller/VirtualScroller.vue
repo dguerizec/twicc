@@ -269,6 +269,8 @@ provide(RESIZE_OBSERVER_KEY, {
 // Making them reactive would require significant refactoring of the composable.
 
 const {
+    positions,
+    scrollTop: composableScrollTop,
     totalHeight,
     renderRange,
     visibleRange,
@@ -280,6 +282,7 @@ const {
     scrollToKey: composableScrollToKey,
     scrollToTop: composableScrollToTop,
     scrollToBottom: composableScrollToBottom,
+    scrollToEdge: composableScrollToEdge,
     getScrollState: composableGetScrollState,
     updateViewportHeight,
     syncScrollPosition,
@@ -540,6 +543,16 @@ function scrollToBottom(options = {}) {
 }
 
 /**
+ * Scroll to the very top or bottom, retrying until the edge holds.
+ * @param {'top' | 'bottom'} edge
+ * @param {Object} [options] - See useVirtualScroll.scrollToEdge for options
+ * @returns {Promise<boolean>} true if the container really sits at the edge
+ */
+function scrollToEdge(edge, options = {}) {
+    return composableScrollToEdge(edge, options)
+}
+
+/**
  * Get the current scroll state of the container.
  *
  * @returns {{ scrollTop: number, scrollHeight: number, clientHeight: number }}
@@ -605,11 +618,16 @@ defineExpose({
     scrollToKey,
     scrollToTop,
     scrollToBottom,
+    scrollToEdge,
     getScrollState,
     getVisibleRange,
     // Additional utility methods that may be useful
     isAtBottom,
     isAtTop,
+    // Item geometry and scroll position, both reactive. Consumers that reason in
+    // pixels rather than in item indices (chat navigation) read these.
+    positions,
+    scrollTop: composableScrollTop,
     // Prevent implicit "stay at bottom" on resize (writable ref)
     preventAutoScrollToBottom: composablePreventAutoScrollToBottom,
     // KeepAlive support (also called automatically via onActivated/onDeactivated)

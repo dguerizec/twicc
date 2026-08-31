@@ -26,7 +26,9 @@ import HybridTerminalBlock from '../../message/HybridTerminalBlock.vue'
 import GoalBlock from '../../message/GoalBlock.vue'
 import ProcessIndicator from '../../ui/ProcessIndicator.vue'
 import TextSelectionComment from './TextSelectionComment.vue'
+import ChatNavToolbar from './ChatNavToolbar.vue'
 import { useTextSelectionComment } from '../../../composables/useTextSelectionComment'
+import { useChatNavigation } from '../../../composables/useChatNavigation'
 import { getProviderLabel } from '../../../providers'
 
 // All states should animate for the bottom process indicator
@@ -92,19 +94,20 @@ const isAutoScrollingToBottom = ref(false)
 // This prevents visible jumping when the scroller first appears at top then scrolls to bottom
 const isInitialScrolling = ref(false)
 
-// Callback to resolve when scroll stabilizes (set by scrollToBottomUntilStable)
+// Callback to resolve when scroll stabilizes (set by scrollToEdgeUntilStable)
 let onStabilizedCallback = null
 
 // Timeout ID for the stability debounce
 let stabilityTimeoutId = null
 
-// Timeout ID for the absolute upper bound on the stability wait (see scrollToBottomUntilStable).
+// Timeout ID for the absolute upper bound on the stability wait (see scrollToEdgeUntilStable).
 // Independent of the debounce above — never reset by resize events.
 let stabilityMaxWaitId = null
 
-// Promise that resolves when current scroll-to-bottom operation completes
-// Used to prevent concurrent calls to scrollToBottomUntilStable
-let scrollToBottomPromise = null
+// The edge scroll currently in flight: `{ edge, promise }`, or null.
+// Used to prevent concurrent calls to scrollToEdgeUntilStable — including a
+// top and a bottom fighting over the scroll position.
+let edgeScrollOperation = null
 
 // Delay in ms to wait for no more resize events before considering stable
 const STABILITY_DEBOUNCE_MS = 100
@@ -885,48 +888,73 @@ function onItemResized() {
 /**
  * Scroll to bottom and wait until the scroll position stabilizes.
  *
- * The first scroll-to-bottom brings the sentinel into view, after which
- * native browser scroll anchoring takes over and keeps us at the bottom as
- * items continue to resize (CodeMirror, mermaid, etc. rendering async).
- * We still wait for stability before revealing the scroller on initial load
- * so the user doesn't see a visible jump from the first scroll position to
- * the final settled position.
+ * Thin wrapper kept for the many automatic call sites (session open, live
+ * items, KeepAlive resume, …) — see scrollToEdgeUntilStable.
  *
  * @param {Object} [options] - Options for the scroll operation
  * @param {boolean} [options.isInitial=false] - Whether this is the initial scroll after session load.
- *   When true, the scroller is kept invisible until scroll is stable to prevent visual jumping.
  */
-async function scrollToBottomUntilStable(options = {}) {
+function scrollToBottomUntilStable(options = {}) {
+    return scrollToEdgeUntilStable('bottom', options)
+}
+
+/**
+ * Scroll to one end of the transcript and wait until the position stabilizes.
+ *
+ * The first scroll brings the target edge into view, after which native browser
+ * scroll anchoring takes over and holds it as items continue to resize
+ * (CodeMirror, mermaid, etc. rendering async). We still wait for stability
+ * before revealing the scroller on initial load so the user doesn't see a
+ * visible jump from the first scroll position to the final settled position.
+ *
+ * @param {'top' | 'bottom'} edge - Which end to scroll to.
+ * @param {Object} [options] - Options for the scroll operation
+ * @param {boolean} [options.isInitial=false] - Whether this is the initial scroll after session load.
+ *   When true, the scroller is kept invisible until scroll is stable to prevent visual jumping.
+ *   Only ever set for the bottom edge.
+ */
+async function scrollToEdgeUntilStable(edge, options = {}) {
     const { isInitial = false } = options
     const scroller = scrollerRef.value
     if (!scroller) return
 
     // If a scroll operation is already in progress, wait for it to complete
     // This prevents concurrent calls from interfering with each other
-    if (scrollToBottomPromise) {
-        await scrollToBottomPromise
-        // After waiting, the previous operation already scrolled to bottom,
-        // so we can return early unless this is an initial scroll that needs visibility handling
-        if (!isInitial) return
+    if (edgeScrollOperation) {
+        const previousEdge = edgeScrollOperation.edge
+        await edgeScrollOperation.promise
+        // After waiting, the previous operation already reached this same edge,
+        // so we can return early unless this is an initial scroll that needs
+        // visibility handling. A different edge is a new intent — carry on.
+        if (previousEdge === edge && !isInitial) return
     }
+
+    const jump = edge === 'top' ? scroller.scrollToTop : scroller.scrollToBottom
 
     // Create a new promise for this operation and store it
     let resolveScrollPromise
-    scrollToBottomPromise = new Promise(resolve => {
-        resolveScrollPromise = resolve
-    })
+    edgeScrollOperation = {
+        edge,
+        promise: new Promise(resolve => {
+            resolveScrollPromise = resolve
+        }),
+    }
 
     try {
-        isAutoScrollingToBottom.value = true
+        // Only the bottom edge feeds the "follow the conversation" logic; a
+        // scroll to the top must not make live items pull the view back down.
+        if (edge === 'bottom') {
+            isAutoScrollingToBottom.value = true
+        }
 
         // For initial scroll, hide the scroller until we're positioned
         if (isInitial) {
             isInitialScrolling.value = true
         }
 
-        // Scroll to bottom: brings the anchor sentinel into view so native
-        // scroll anchoring engages for any subsequent height growth.
-        scroller.scrollToBottom({ behavior: 'auto' })
+        // Scroll to the edge: at the bottom this brings the anchor sentinel into
+        // view so native scroll anchoring engages for any subsequent height growth.
+        jump({ behavior: 'auto' })
 
         // Wait for stability: no more resize events for STABILITY_DEBOUNCE_MS,
         // OR an absolute MAX_STABILITY_WAIT_MS ceiling (whichever comes first).
@@ -959,8 +987,8 @@ async function scrollToBottomUntilStable(options = {}) {
             })
         })
 
-        // Final scroll to bottom to ensure we're at the very bottom
-        scroller.scrollToBottom({ behavior: 'auto' })
+        // Final scroll to ensure we're at the very edge
+        jump({ behavior: 'auto' })
 
         isAutoScrollingToBottom.value = false
 
@@ -971,8 +999,8 @@ async function scrollToBottomUntilStable(options = {}) {
         // on isInitial would then leave the scroller visibility:hidden forever (Firefox blank-chat bug).
         isInitialScrolling.value = false
     } finally {
-        // Clear the promise and resolve it so any waiters can proceed
-        scrollToBottomPromise = null
+        // Clear the operation and resolve it so any waiters can proceed
+        edgeScrollOperation = null
         resolveScrollPromise()
     }
 }
@@ -1510,10 +1538,17 @@ let scrollToLineNumGeneration = 0
  * - Pre-loading: fetches a buffer of items around the target to reduce placeholder flicker
  * - Jump-settle-correct: delegates to VirtualScroller.scrollToKey for stable positioning
  *
- * @param {number} lineNum - The line number to scroll to
+ * @param {number|string} lineNum - The key of the item to scroll to (a line number, or a
+ *   day separator's synthetic key)
+ * @param {Object} [options]
+ * @param {'start' | 'center' | 'end'} [options.align='center'] - Where to leave the item
+ * @param {number} [options.offset=0] - Pixels of room to leave before the item
+ * @param {boolean} [options.highlight=true] - Refine the position onto the item's first
+ *   search highlight. Only wanted when the search bar drives the scroll.
  * @returns {Promise<boolean>} true if the item was successfully scrolled into view
  */
-async function scrollToLineNum(lineNum) {
+async function scrollToLineNum(lineNum, options = {}) {
+    const { align = 'center', offset = 0, highlight = true } = options
     const generation = ++scrollToLineNumGeneration
     const scroller = scrollerRef.value
     if (!scroller) return false
@@ -1580,13 +1615,15 @@ async function scrollToLineNum(lineNum) {
     }
 
     // Step 4: Scroll to the item via the virtual scroller's jump-settle-correct
-    const visible = await scroller.scrollToKey(lineNum, { align: 'center' })
+    const visible = await scroller.scrollToKey(lineNum, { align, offset })
     if (!visible) return false
     if (generation !== scrollToLineNumGeneration) return false  // Stale
 
     // Step 5: If the item is tall, scroll to the first search highlight within it
-    await nextTick()  // Let v-highlight directive apply marks
-    scrollToFirstHighlight(lineNum)
+    if (highlight) {
+        await nextTick()  // Let v-highlight directive apply marks
+        scrollToFirstHighlight(lineNum)
+    }
 
     return true
 }
@@ -1622,6 +1659,35 @@ function scrollToFirstHighlight(lineNum) {
 function handleSearchNavigate(lineNum) {
     scrollToLineNum(lineNum)
 }
+
+// =============================================================================
+// Chat navigation toolbar (extremes + block by block)
+// =============================================================================
+
+// The scrolling element itself, so the toolbar pinned over it can forward wheel
+// events instead of swallowing them.
+const scrollerElement = computed(() => scrollerRef.value?.$el ?? null)
+
+const {
+    hasNavigation: navHasNavigation,
+    canGoTop: navCanGoTop,
+    canGoPrev: navCanGoPrev,
+    canGoNext: navCanGoNext,
+    canGoBottom: navCanGoBottom,
+    goTop: navGoTop,
+    goPrevBlock: navGoPrevBlock,
+    goNextBlock: navGoNextBlock,
+    goBottom: navGoBottom,
+} = useChatNavigation({
+    scrollerRef,
+    visualItems,
+    // `align: 'start'` pins the block to the top of the viewport, so the reader
+    // gets the whole screen to read it. scrollToIndex clamps to the maximum
+    // scroll, so the last block simply lands as high as it can go.
+    scrollToItem: (lineNum, offset) =>
+        scrollToLineNum(lineNum, { align: 'start', highlight: false, offset }),
+    scrollToEdge: (edge) => scrollToEdgeUntilStable(edge),
+})
 
 // Expose methods for parent components
 /**
@@ -1764,56 +1830,76 @@ defineExpose({
         </div>
 
         <!--
-            Items list (virtualized).
+            Items list (virtualized), plus the navigation toolbar pinned over its
+            bottom-right corner. The wrapper is what gives the toolbar its
+            positioning context: `.session-items-list` also holds the composer
+            below, so anchoring to it would drop the toolbar onto the composer.
+
             IMPORTANT: Uses v-show instead of v-if/v-else-if to keep the VirtualScroller
             mounted across KeepAlive deactivation/activation cycles. Without this, the
             v-else-if chain causes the VirtualScroller to be destroyed and recreated,
             losing the composable's height cache and scroll state.
             See spec: "Problems Encountered > VirtualScroller Scroll Position Loss"
         -->
-        <VirtualScroller
-            ref="scrollerRef"
-            v-show="showVirtualScroller"
-            :items="visualItems"
-            :item-key="item => item.lineNum"
-            :min-item-height="MIN_ITEM_SIZE"
-            :buffer="5000"
-            :unload-buffer="10000"
-            :prevent-auto-scroll-to-bottom="!!parentSessionId"
-            class="session-items"
-            :class="{ 'initial-scrolling': isInitialScrolling }"
-            @update="onScrollerUpdate"
-            @item-resized="onItemResized"
-            @became-visible="onScrollerBecameVisible"
-        >
-            <template #default="{ item, index }">
-                <!-- Day separator (horizontal rule + date) — must come before the
-                     placeholder branch since separators carry no content. -->
-                <DaySeparator
-                    v-if="item.isDaySeparator"
-                    :label="item.dayLabel"
-                    :day-key="item.dayKey"
-                />
-
-                <!-- Placeholder (no content loaded yet) -->
-                <div
-                    v-else-if="!hasContent(item)"
-                    :class="{ 'is-block-start': item.isBlockStart, 'is-block-end': item.isBlockEnd }"
-                    :style="{ minHeight: MIN_ITEM_SIZE + 'px' }"
-                ></div>
-
-                <!-- Group head: show toggle (+ item content if expanded) -->
-                <template v-else-if="item.isGroupHead">
-                    <GroupToggle
-                        :class="{ 'is-block-start': item.isBlockStart, 'is-block-end': item.isBlockEnd && !item.isExpanded }"
-                        :expanded="item.isExpanded"
-                        :item-count="item.groupSize"
-                        :comments-count="groupCommentsCount(item.lineNum, item.groupTail)"
-                        @toggle="toggleGroup(item.lineNum)"
+        <div v-show="showVirtualScroller" class="chat-scroll-area">
+            <VirtualScroller
+                ref="scrollerRef"
+                :items="visualItems"
+                :item-key="item => item.lineNum"
+                :min-item-height="MIN_ITEM_SIZE"
+                :buffer="5000"
+                :unload-buffer="10000"
+                :prevent-auto-scroll-to-bottom="!!parentSessionId"
+                class="session-items"
+                :class="{ 'initial-scrolling': isInitialScrolling }"
+                @update="onScrollerUpdate"
+                @item-resized="onItemResized"
+                @became-visible="onScrollerBecameVisible"
+            >
+                <template #default="{ item, index }">
+                    <!-- Day separator (horizontal rule + date) — must come before the
+                         placeholder branch since separators carry no content. -->
+                    <DaySeparator
+                        v-if="item.isDaySeparator"
+                        :label="item.dayLabel"
+                        :day-key="item.dayKey"
                     />
+
+                    <!-- Placeholder (no content loaded yet) -->
+                    <div
+                        v-else-if="!hasContent(item)"
+                        :class="{ 'is-block-start': item.isBlockStart, 'is-block-end': item.isBlockEnd }"
+                        :style="{ minHeight: MIN_ITEM_SIZE + 'px' }"
+                    ></div>
+
+                    <!-- Group head: show toggle (+ item content if expanded) -->
+                    <template v-else-if="item.isGroupHead">
+                        <GroupToggle
+                            :class="{ 'is-block-start': item.isBlockStart, 'is-block-end': item.isBlockEnd && !item.isExpanded }"
+                            :expanded="item.isExpanded"
+                            :item-count="item.groupSize"
+                            :comments-count="groupCommentsCount(item.lineNum, item.groupTail)"
+                            @toggle="toggleGroup(item.lineNum)"
+                        />
+                        <SessionItem
+                            v-if="item.isExpanded"
+                            :class="{ 'is-block-end': item.isBlockEnd }"
+                            :content="getParsedContent(item)"
+                            :kind="item.kind"
+                            :synthetic-kind="item.syntheticKind || null"
+                            :project-id="projectId"
+                            :session-id="sessionId"
+                            :parent-session-id="parentSessionId"
+                            :line-num="item.lineNum"
+                            :externally-grouped="item.externallyGrouped || false"
+                            :is-block-end="item.isBlockEnd || false"
+                        />
+                    </template>
+
+                    <!-- Regular item (including ALWAYS with prefix/suffix): show item content -->
                     <SessionItem
-                        v-if="item.isExpanded"
-                        :class="{ 'is-block-end': item.isBlockEnd }"
+                        v-else
+                        :class="{ 'is-block-start': item.isBlockStart, 'is-block-end': item.isBlockEnd }"
                         :content="getParsedContent(item)"
                         :kind="item.kind"
                         :synthetic-kind="item.syntheticKind || null"
@@ -1822,34 +1908,35 @@ defineExpose({
                         :parent-session-id="parentSessionId"
                         :line-num="item.lineNum"
                         :externally-grouped="item.externallyGrouped || false"
+                        :group-head="item.groupHead"
+                        :group-tail="item.groupTail"
+                        :prefix-expanded="item.prefixExpanded || false"
+                        :suffix-expanded="item.suffixExpanded || false"
+                        :detail-toggle-for="item.detailToggleFor ?? null"
+                        :block-comments-count="item.detailToggleFor != null ? blockCommentsCount(item.detailToggleFor) : 0"
+                        :is-block-start="item.isBlockStart || false"
                         :is-block-end="item.isBlockEnd || false"
+                        @toggle-suffix="toggleGroup(item.suffixGroupHead)"
                     />
                 </template>
+            </VirtualScroller>
 
-                <!-- Regular item (including ALWAYS with prefix/suffix): show item content -->
-                <SessionItem
-                    v-else
-                    :class="{ 'is-block-start': item.isBlockStart, 'is-block-end': item.isBlockEnd }"
-                    :content="getParsedContent(item)"
-                    :kind="item.kind"
-                    :synthetic-kind="item.syntheticKind || null"
-                    :project-id="projectId"
-                    :session-id="sessionId"
-                    :parent-session-id="parentSessionId"
-                    :line-num="item.lineNum"
-                    :externally-grouped="item.externallyGrouped || false"
-                    :group-head="item.groupHead"
-                    :group-tail="item.groupTail"
-                    :prefix-expanded="item.prefixExpanded || false"
-                    :suffix-expanded="item.suffixExpanded || false"
-                    :detail-toggle-for="item.detailToggleFor ?? null"
-                    :block-comments-count="item.detailToggleFor != null ? blockCommentsCount(item.detailToggleFor) : 0"
-                    :is-block-start="item.isBlockStart || false"
-                    :is-block-end="item.isBlockEnd || false"
-                    @toggle-suffix="toggleGroup(item.suffixGroupHead)"
-                />
-            </template>
-        </VirtualScroller>
+            <!-- Hidden alongside the scroller during the initial scroll-to-bottom
+                 (`.initial-scrolling` only covers the scroller itself), and on a
+                 transcript that fits on one screen. -->
+            <ChatNavToolbar
+                v-show="navHasNavigation && !isInitialScrolling"
+                :can-go-top="navCanGoTop"
+                :can-go-prev="navCanGoPrev"
+                :can-go-next="navCanGoNext"
+                :can-go-bottom="navCanGoBottom"
+                :scroll-element="scrollerElement"
+                @top="navGoTop"
+                @prev="navGoPrevBlock"
+                @next="navGoNextBlock"
+                @bottom="navGoBottom"
+            />
+        </div>
 
         <div class="session-footer">
             <!-- Stale session banner (replaces message input for stale main sessions) -->
@@ -2019,6 +2106,16 @@ defineExpose({
     color: white;
     font-size: var(--wa-font-size-xl);
     font-weight: 500;
+}
+
+/* Positioning context for the navigation toolbar, and nothing else: it takes
+   the scroller's place in the column so the layout is unchanged. */
+.chat-scroll-area {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
 }
 
 .session-items {

@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Codex Subagents v2** — Subagents spawned by Codex's new multi-agent mode are now visible (their prompt stays hidden, encrypted by OpenAI).
 - **Download a file** — In the Files, Artifacts and Git tabs, a file's menu can now save it to your device — or, in Git, its changes as a patch.
 - **Buttons on code blocks** — Wherever Markdown is displayed, each code block can be copied, or have its long lines wrapped. A Markdown block can also be shown rendered.
+- **Jump around a conversation** — A toolbar in the bottom-right corner of the chat moves you from message to message.
 - **Answers to questions survive a reload** — What you picked or typed when an agent asks you questions is kept if the page reloads before you submit (as long as the agent is still running).
 - **Attachments on their own** — In an ongoing conversation, you can now send images or files without writing any text.
 - **Mute a session** — A button in its header silences that session's "finished working" notification, while every other alert from it still reaches you; it can also be set when creating or updating a session (+CLI/skill/API).

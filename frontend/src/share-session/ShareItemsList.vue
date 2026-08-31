@@ -1,9 +1,11 @@
 <script setup>
-import { computed, ref, watch, onMounted, provide, inject } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, provide, inject } from 'vue'
 import VirtualScroller from '../components/virtual-scroller/VirtualScroller.vue'
 import SessionItem from '../components/session/detail/SessionItem.vue'
 import GroupToggle from '../components/session/detail/GroupToggle.vue'
+import ChatNavToolbar from '../components/session/detail/ChatNavToolbar.vue'
 import DaySeparator from '../components/session/detail/items/DaySeparator.vue'
+import { useChatNavigation } from '../composables/useChatNavigation'
 import { useDataStore } from '../stores/data'          // aliased → dataStoreShim
 import { useSettingsStore } from '../stores/settings'  // aliased → settingsStoreShim
 import { getParsedContent, hasContent } from '../utils/parsedContent'
@@ -47,9 +49,7 @@ async function loadInitial() {
 }
 onMounted(loadInitial)
 
-const pending = ref(null)
-const flush = useDebounceFn(async () => {
-    const lines = pending.value; pending.value = null
+async function loadLines(lines) {
     if (!lines?.length) return
     // Coalesce contiguous line numbers into ranges.
     const sorted = [...new Set(lines)].sort((a, b) => a - b)
@@ -60,6 +60,12 @@ const flush = useDebounceFn(async () => {
     }
     ranges.push([s, e])
     await store.loadSessionItemsRanges(props.projectId, props.sessionId, ranges, props.parentSessionId)
+}
+
+const pending = ref(null)
+const flush = useDebounceFn(async () => {
+    const lines = pending.value; pending.value = null
+    await loadLines(lines)
 }, 120)
 
 function onUpdate({ visibleStartIndex, visibleEndIndex }) {
@@ -98,6 +104,53 @@ provide('rewriteContentMediaUrl', (url) => {
 // the visual items when the viewer changes the display mode or timestamp toggle.
 watch(() => [settings.displayMode, settings.areMessageTimestampsShown],
     () => store.recomputeVisualItems(props.sessionId))
+
+// ── Navigation toolbar (extremes + block by block) ───────────────────────────
+
+const scrollerElement = computed(() => scrollerRef.value?.$el ?? null)
+
+/**
+ * Bring one item to the top of the viewport. Items around the target are loaded
+ * first: landing on a screen of placeholders would let them grow under the
+ * viewport and drag the scroll position away.
+ */
+async function scrollToItem(lineNum, offset = 0) {
+    const vis = visualItems.value
+    const index = vis?.findIndex((vi) => vi.lineNum === lineNum) ?? -1
+    if (index === -1) return
+
+    const lo = Math.max(0, index - BUFFER)
+    const hi = Math.min(vis.length - 1, index + BUFFER)
+    const need = []
+    for (let i = lo; i <= hi; i++) {
+        const vi = vis[i]
+        if (vi && !vi.isDaySeparator && !hasContent(vi)) need.push(vi.lineNum)
+    }
+    // Loaded directly rather than through `flush`: its debounce drops the promise
+    // of a superseded call, which would leave this await hanging forever.
+    if (need.length) {
+        await loadLines(need)
+        await nextTick()
+    }
+    await scrollerRef.value?.scrollToKey(lineNum, { align: 'start', offset })
+}
+
+const {
+    hasNavigation: navHasNavigation,
+    canGoTop: navCanGoTop,
+    canGoPrev: navCanGoPrev,
+    canGoNext: navCanGoNext,
+    canGoBottom: navCanGoBottom,
+    goTop: navGoTop,
+    goPrevBlock: navGoPrevBlock,
+    goNextBlock: navGoNextBlock,
+    goBottom: navGoBottom,
+} = useChatNavigation({
+    scrollerRef,
+    visualItems,
+    scrollToItem,
+    scrollToEdge: (edge) => scrollerRef.value?.scrollToEdge(edge),
+})
 </script>
 
 <template>
@@ -141,5 +194,18 @@ watch(() => [settings.displayMode, settings.areMessageTimestampsShown],
                     @toggle-suffix="toggleGroup(item.suffixGroupHead)" />
             </template>
         </VirtualScroller>
+
+        <ChatNavToolbar
+            v-show="navHasNavigation"
+            :can-go-top="navCanGoTop"
+            :can-go-prev="navCanGoPrev"
+            :can-go-next="navCanGoNext"
+            :can-go-bottom="navCanGoBottom"
+            :scroll-element="scrollerElement"
+            @top="navGoTop"
+            @prev="navGoPrevBlock"
+            @next="navGoNextBlock"
+            @bottom="navGoBottom"
+        />
     </div>
 </template>

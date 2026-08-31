@@ -462,6 +462,15 @@ function toggleJsonView() {
 .session-items {
     --card-spacing: var(--wa-space-l);
     --max-card-width: 85%;
+    /* Breathing room the block navigation leaves above a block it pins to the
+       top of the viewport — the same gap the cards keep between them (a user
+       card's own top margin, below). It only matters for blocks that carry no
+       such margin: everything the agent writes spaces itself with padding, so
+       pinned flush it would touch the top edge, while a user card would not.
+       Declared as scroll-padding because that is exactly what it means, and
+       because it is then readable in pixels whatever the container query says
+       --card-spacing is. */
+    scroll-padding-top: calc(var(--card-spacing) - var(--main-shadow-size));
     .session-item, .group-toggle {
         max-width: calc(var(--max-card-width) - var(--card-spacing) * 2);
         margin-left: var(--card-spacing);
