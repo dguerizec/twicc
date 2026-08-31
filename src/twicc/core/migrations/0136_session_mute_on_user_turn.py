@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("core", "0130_project_icon"),
+        ("core", "0135_peer_revocation_reconnection"),
     ]
 
     operations = [
