@@ -456,6 +456,10 @@ class Session(models.Model):
     # (`type=SUBAGENT`) ignore this flag entirely: they are already invisible
     # everywhere via the `type=SESSION` filter.
     hidden = models.BooleanField(default=False, db_index=True)
+    # Suppress only the finished-working notification family for this session.
+    # Questions, approvals, failures, usage alerts, and process-state broadcasts
+    # remain active. This is TwiCC UI behavior, not an AgentSettings field.
+    mute_on_user_turn = models.BooleanField(default=False)
     # Trace of the session that invoked the CLI to create this one
     # (filiation). Set automatically by `twicc create-session` via PID
     # ancestry (cf. `twicc whoami`); not exposed as a CLI flag. Independent

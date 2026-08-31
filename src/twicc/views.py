@@ -1144,6 +1144,19 @@ async def session_detail(request, project_id, session_id, parent_session_id=None
             await apply_session_pinned_change(session, pinned)
             needs_broadcast = True
 
+        if "mute_on_user_turn" in data:
+            mute_on_user_turn = data["mute_on_user_turn"]
+            if not isinstance(mute_on_user_turn, bool):
+                return JsonResponse(
+                    {"error": "mute_on_user_turn must be a boolean"},
+                    status=400,
+                )
+            from twicc.core.services.session_update import (
+                apply_session_mute_on_user_turn_change,
+            )
+            await apply_session_mute_on_user_turn_change(session, mute_on_user_turn)
+            needs_broadcast = True
+
         # Handle layout update: the per-session dockable-layout intention
         # (an object; {} = single pane). Persisted from the frontend via a
         # debounced PATCH as the user docks / resizes / loads layouts. Shares

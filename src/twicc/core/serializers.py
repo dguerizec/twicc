@@ -171,6 +171,7 @@ def serialize_session(session):
         # User-controlled fields
         "archived": session.archived,  # Whether the session is archived
         "pinned": session.pinned,  # Whether the session is pinned
+        "mute_on_user_turn": session.mute_on_user_turn,
         "layout": session.layout,  # Per-session dockable-layout intention (UI state; {} = single pane)
         "browser_url": session.browser_url,  # Browser-pane last URL (UI state; None = use the resolved default)
         "tasks": session.tasks,  # Latest task/todo/plan snapshot (common shape; {} = none). Not consumed by the UI yet

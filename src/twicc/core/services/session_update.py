@@ -591,6 +591,14 @@ async def apply_session_pinned_change(session, pinned) -> None:
     )
 
 
+async def apply_session_mute_on_user_turn_change(session, mute_on_user_turn: bool) -> None:
+    """Persist the per-session finished-working notification gate."""
+    session.mute_on_user_turn = mute_on_user_turn
+    await run_under_db_write_lock(
+        lambda: session.asave(update_fields=["mute_on_user_turn"])
+    )
+
+
 async def apply_session_layout_change(session, layout: dict) -> None:
     """Persist a ``layout`` change on a :class:`Session` row.
 
