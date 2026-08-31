@@ -50,13 +50,48 @@ function attachmentMimeType(block) {
     return ''
 }
 
-export function peerAttachmentCompatibilityError(payload, capabilities, providerLabel) {
+function attachmentMimeTypesAreCompatible(mimeTypes, capabilities) {
     const acceptedMimeTypes = new Set(capabilities?.acceptedMimeTypes || [])
-    const incompatible = attachmentBlocks(payload)
-        .some(block => !acceptedMimeTypes.has(attachmentMimeType(block)))
-    if (!incompatible) return ''
+    return mimeTypes.every(mimeType => acceptedMimeTypes.has(mimeType))
+}
+
+function peerAttachmentsAreCompatible(payload, capabilities) {
+    return attachmentMimeTypesAreCompatible(
+        attachmentBlocks(payload).map(attachmentMimeType),
+        capabilities,
+    )
+}
+
+export function peerAttachmentCompatibilityError(payload, capabilities, providerLabel) {
+    if (peerAttachmentsAreCompatible(payload, capabilities)) return ''
     return `${providerLabel} cannot receive all attachments in this message. `
         + 'Choose a session using a compatible provider.'
+}
+
+export function peerDeliveryTargetState(payload, target, contentReady, missingTargetError = '') {
+    if (!target) {
+        return { disabled: true, error: contentReady ? missingTargetError : '' }
+    }
+    const error = peerAttachmentCompatibilityError(
+        payload,
+        target.capabilities,
+        target.providerLabel,
+    )
+    return { disabled: !contentReady || Boolean(error), error }
+}
+
+export function firstCompatiblePeerProvider(payload, providers) {
+    return providers.find(candidate =>
+        peerAttachmentsAreCompatible(payload, candidate.capabilities),
+    )?.provider ?? null
+}
+
+export function firstCompatiblePeerProviderForMetadata(metadata, providers) {
+    const mimeTypes = (Array.isArray(metadata) ? metadata : [])
+        .map(item => item?.media_type || '')
+    return providers.find(candidate =>
+        attachmentMimeTypesAreCompatible(mimeTypes, candidate.capabilities),
+    )?.provider ?? null
 }
 
 export async function addPeerAttachmentsToDraft(payload, blockToFile, addAttachment) {

@@ -7,7 +7,11 @@ import { computeVisualItems, visualItemEqual, insertDaySeparators } from '../uti
 import { DISPLAY_LEVEL, DISPLAY_MODE, INITIAL_ITEMS_COUNT, PROCESS_STATE, SYNTHETIC_ITEM } from '../constants'
 import { getProviderHelpers, getProviderStore } from '../providers'
 import { getSessionCutoffMs, isSessionUnread } from '../utils/sessions'
-import { resolveProjectDefaultProvider, resolveProjectAgentDefaults } from '../utils/projectAgentDefaults'
+import {
+    resolveDraftProvider,
+    resolveProjectDefaultProvider,
+    resolveProjectAgentDefaults,
+} from '../utils/projectAgentDefaults'
 import { resolveProjectLayoutId } from '../utils/layoutDefaults'
 import { resolveProjectIconUrl } from '../utils/projectIcon'
 import { resolveProjectTrust } from '../utils/trust'
@@ -1619,15 +1623,21 @@ export const useDataStore = defineStore('data', {
          * @param {boolean|null} [trustState] - The project's effective trust as
          *   settled by the trust gate (`ensureProjectTrust(...).state`).
          *   Authoritative over the store's local resolution when provided.
+         * @param {string|null} [initialProvider] - Explicit initial provider.
+         *   When absent, the project chain and global default select it.
          * @returns {string} The generated session ID (UUID)
          */
-        createDraftSession(projectId, trustState = undefined) {
+        createDraftSession(projectId, trustState = undefined, initialProvider = null) {
             const id = generateUUID()
             const now = Date.now() / 1000  // Unix timestamp in seconds
-            // Provider preselect: the project's inherited default provider
-            // (walking the worktree/path chain), else the global default.
-            const provider = resolveProjectDefaultProvider(projectId, this.projects)
-                ?? useSettingsStore().defaultProvider
+            // Provider preselect: an explicit caller choice, else the project's
+            // inherited default provider, else the global default.
+            const provider = resolveDraftProvider(
+                projectId,
+                this.projects,
+                useSettingsStore().defaultProvider,
+                initialProvider,
+            )
             // Snapshot the resolved agent settings onto the draft (concrete), so
             // launching the session freezes today's project → global defaults
             // regardless of later default changes (option A).

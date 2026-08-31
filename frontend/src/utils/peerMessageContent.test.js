@@ -2,10 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+    firstCompatiblePeerProvider,
     formatPeerContentBytes,
     mergePeerAttachments,
     peerAttachmentBytes,
     peerContentAllowsDelivery,
+    peerDeliveryTargetState,
     shouldConfirmPeerAttachments,
     shouldConfirmPeerMarkdown,
 } from './peerMessageContent.js'
@@ -110,6 +112,99 @@ test('blocks a target provider that cannot receive every peer attachment', async
         ),
         '',
     )
+})
+
+test('derives disabled delivery state and feedback from the selected target', () => {
+    const payload = {
+        images: [],
+        documents: [{ source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' } }],
+    }
+
+    assert.deepEqual(
+        peerDeliveryTargetState(payload, null, true),
+        { disabled: true, error: '' },
+    )
+    assert.deepEqual(
+        peerDeliveryTargetState(
+            payload,
+            null,
+            true,
+            'No active provider can receive all attachments in this message.',
+        ),
+        {
+            disabled: true,
+            error: 'No active provider can receive all attachments in this message.',
+        },
+    )
+    assert.deepEqual(
+        peerDeliveryTargetState(
+            payload,
+            {
+                capabilities: { acceptedMimeTypes: ['image/png'] },
+                providerLabel: 'Codex',
+            },
+            true,
+        ),
+        {
+            disabled: true,
+            error: 'Codex cannot receive all attachments in this message. Choose a session using a compatible provider.',
+        },
+    )
+    assert.deepEqual(
+        peerDeliveryTargetState(
+            payload,
+            {
+                capabilities: { acceptedMimeTypes: ['application/pdf'] },
+                providerLabel: 'Claude Code',
+            },
+            false,
+        ),
+        { disabled: true, error: '' },
+    )
+    assert.deepEqual(
+        peerDeliveryTargetState(
+            payload,
+            {
+                capabilities: { acceptedMimeTypes: ['application/pdf'] },
+                providerLabel: 'Claude Code',
+            },
+            true,
+        ),
+        { disabled: false, error: '' },
+    )
+})
+
+test('selects the first provider that accepts every attachment', () => {
+    const payload = {
+        images: [],
+        documents: [{ source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' } }],
+    }
+    const providers = [
+        { provider: 'codex', capabilities: { acceptedMimeTypes: ['image/png'] } },
+        { provider: 'claude_code', capabilities: { acceptedMimeTypes: ['image/png', 'application/pdf'] } },
+        { provider: 'future', capabilities: { acceptedMimeTypes: ['application/pdf'] } },
+    ]
+
+    assert.equal(firstCompatiblePeerProvider(payload, providers), 'claude_code')
+    assert.equal(firstCompatiblePeerProvider(payload, providers.slice(0, 1)), null)
+})
+
+test('selects a compatible provider from attachment metadata before loading bytes', async () => {
+    const { firstCompatiblePeerProviderForMetadata } = await import('./peerMessageContent.js')
+    assert.equal(typeof firstCompatiblePeerProviderForMetadata, 'function')
+    const metadata = [
+        { kind: 'document', media_type: 'application/pdf', bytes: 1234 },
+    ]
+    const providers = [
+        { provider: 'codex', capabilities: { acceptedMimeTypes: ['image/png'] } },
+        { provider: 'claude_code', capabilities: { acceptedMimeTypes: ['application/pdf'] } },
+    ]
+
+    assert.equal(
+        firstCompatiblePeerProviderForMetadata(metadata, providers),
+        'claude_code',
+    )
+    assert.equal(firstCompatiblePeerProviderForMetadata(metadata, []), null)
 })
 
 test('reports a draft attachment failure instead of hiding it', async () => {

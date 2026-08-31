@@ -121,3 +121,9 @@ export function resolveProjectDefaultProvider(projectId, projectsById) {
     }
     return null
 }
+
+export function resolveDraftProvider(projectId, projectsById, globalDefault, explicitProvider = null) {
+    return explicitProvider
+        ?? resolveProjectDefaultProvider(projectId, projectsById)
+        ?? globalDefault
+}

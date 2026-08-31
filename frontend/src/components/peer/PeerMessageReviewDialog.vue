@@ -21,7 +21,7 @@ import { usePeersStore } from '../../stores/peers'
 import { useDataStore, ALL_PROJECTS_ID, sessionSortComparator } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { useWorkspacesStore } from '../../stores/workspaces'
-import { getProviderHelpers, getProviderLabel } from '../../providers'
+import { getProviderHelpers, getProviderLabel, getProviderOptions } from '../../providers'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import { formatDate } from '../../utils/date'
 import { apiFetch } from '../../utils/api'
@@ -29,15 +29,18 @@ import { renderMarkdown } from '../../utils/markdown'
 import { sdkBlockToMediaItem } from '../../utils/fileUtils'
 import {
     addPeerAttachmentsToDraft,
+    firstCompatiblePeerProvider,
+    firstCompatiblePeerProviderForMetadata,
     formatPeerContentBytes,
     mergePeerAttachments,
     peerAttachmentBytes,
     peerAttachmentCompatibilityError,
     peerContentAllowsDelivery,
+    peerDeliveryTargetState,
     shouldConfirmPeerAttachments,
     shouldConfirmPeerMarkdown,
 } from '../../utils/peerMessageContent'
-import { resolveProjectDefaultProvider } from '../../utils/projectAgentDefaults'
+import { resolveDraftProvider } from '../../utils/projectAgentDefaults'
 import { sessionRouteLocation } from '../../utils/sessionRoute'
 import { computeSidebarSessionBlocks } from '../../utils/sidebarSessions'
 import {
@@ -46,6 +49,7 @@ import {
     deliveryPickerTransition,
     existingSessionActionLabel,
     isReplyTargetPickerEligible,
+    peerDeliveryActionVisibility,
     recoverReplyTargetPagination,
     shouldShowReplyTargetPreparation,
     waitForNextPaint,
@@ -115,6 +119,8 @@ const selectedSessionId = ref(null)
 const activeResolutionAction = computed(() =>
     activePeerResolutionAction(busy.value, confirmingRefuse.value, mode.value),
 )
+const NO_COMPATIBLE_PROVIDER_ERROR = 'No active provider can receive all attachments in this message. '
+    + 'Activate a compatible provider to continue.'
 
 // Ordinary request-lifetime state. The boolean carries no target identity or
 // reason. The generation invalidates every result from a closed or reused
@@ -345,13 +351,17 @@ const replyTargetPickerEligible = computed(() =>
 )
 const showReplyTargetWarning = computed(() =>
     isPending.value
+    && !deliveryGloballyBlocked.value
     && targetHydrationSettled.value
     && detail.value?.reply_to !== ''
     && !replyTargetPickerEligible.value,
 )
 const showReplyTargetPreparation = computed(() =>
-    shouldShowReplyTargetPreparation(detail.value, targetHydrationSettled.value)
-    || (existingPickerPreparing.value && mode.value === 'existing'),
+    !deliveryGloballyBlocked.value
+    && (
+        shouldShowReplyTargetPreparation(detail.value, targetHydrationSettled.value)
+        || (existingPickerPreparing.value && mode.value === 'existing')
+    ),
 )
 // 'Existing session' picker: the sidebar's natural block, with the same
 // ordering, section labels and text matching. A hydrated target is inserted
@@ -363,6 +373,61 @@ const sessionRows = computed(() => {
 
 const selectedSession = computed(() =>
     sessionRows.value.find(r => r.session.id === selectedSessionId.value)?.session || null
+)
+function deliveryTargetState(provider, missingTargetError = '') {
+    const target = provider
+        ? {
+            capabilities: getProviderHelpers(provider)?.getAttachmentSupport(),
+            providerLabel: getProviderLabel(provider),
+        }
+        : null
+    return peerDeliveryTargetState(
+        detail.value?.payload,
+        target,
+        contentAllowsDelivery.value,
+        missingTargetError,
+    )
+}
+const existingSessionDeliveryState = computed(() =>
+    deliveryTargetState(selectedSession.value?.provider),
+)
+function activeProviderTargets(preferred = null) {
+    return [
+        preferred,
+        ...getProviderOptions().map(option => option.value).filter(provider => provider !== preferred),
+    ]
+        .filter(provider => provider && dataStore.isProviderAvailable(provider))
+        .map(provider => ({
+            provider,
+            capabilities: getProviderHelpers(provider)?.getAttachmentSupport(),
+        }))
+}
+const compatibleActiveProvider = computed(() => firstCompatiblePeerProviderForMetadata(
+    attachmentsLost.value ? [] : detail.value?.attachments_meta,
+    activeProviderTargets(),
+))
+const deliveryGloballyBlocked = computed(() =>
+    detailReady.value && !compatibleActiveProvider.value,
+)
+const deliveryActionVisibility = computed(() => peerDeliveryActionVisibility(
+    deliveryGloballyBlocked.value,
+    isPending.value,
+))
+function compatibleProviderForProject(projectId) {
+    if (!projectId) return null
+    const preferred = resolveDraftProvider(
+        projectId,
+        dataStore.projects,
+        settingsStore.defaultProvider,
+    )
+    return firstCompatiblePeerProvider(detail.value?.payload, activeProviderTargets(preferred))
+}
+const pickedProjectProvider = computed(() => compatibleProviderForProject(pickedProjectId.value))
+const newSessionDeliveryState = computed(() =>
+    deliveryTargetState(
+        pickedProjectProvider.value,
+        pickedProjectId.value ? NO_COMPATIBLE_PROVIDER_ERROR : '',
+    ),
 )
 const existingSessionActionText = computed(() => existingSessionActionLabel(
     !!selectedSession.value,
@@ -498,6 +563,10 @@ async function initializeReplyTarget(loadedDetail, generation, messageId) {
         if (isCurrentOpen(generation, messageId)) targetHydrationSettled.value = true
         return
     }
+    if (deliveryGloballyBlocked.value) {
+        targetHydrationSettled.value = true
+        return
+    }
 
     const current = dataStore.getSession(targetId)
     const normalRows = current
@@ -616,6 +685,7 @@ async function setMode(next) {
         mode.value,
         next,
         existingPickerMounted.value,
+        deliveryGloballyBlocked.value,
     )
     if (transition.dismissRefusalConfirmation) confirmingRefuse.value = false
     mode.value = transition.mode
@@ -768,11 +838,9 @@ async function deliverToSession(session) {
 
 async function deliverToNewSession(projectId) {
     actionError.value = ''
-    const provider = resolveProjectDefaultProvider(projectId, dataStore.projects)
-        ?? settingsStore.defaultProvider
-    const compatibilityError = targetAttachmentError(provider)
-    if (compatibilityError) {
-        actionError.value = compatibilityError
+    const provider = compatibleProviderForProject(projectId)
+    if (!provider) {
+        actionError.value = NO_COMPATIBLE_PROVIDER_ERROR
         return
     }
     // Trust gate before mutation: if the user backs out, the message stays pending.
@@ -784,7 +852,7 @@ async function deliverToNewSession(projectId) {
     try {
         envelopeText = await markDelivered(null)
         if (envelopeText == null) return
-        draftId = dataStore.createDraftSession(projectId, gate.state)
+        draftId = dataStore.createDraftSession(projectId, gate.state, provider)
         if (!await prefillComposer(draftId)) {
             await dataStore.clearAttachmentsForSession(draftId).catch(() => {})
             dataStore.deleteDraftSession(draftId)
@@ -984,33 +1052,46 @@ function onHide(event) {
 
             <!-- Actions -->
             <template v-if="canDeliver">
-                <wa-callout v-if="showReplyTargetWarning" variant="warning" size="small">
-                    This message is part of a thread, but its session is not available for selection.
-                    Choose another session, or deliver to a new one.
+                <wa-callout
+                    v-if="deliveryGloballyBlocked"
+                    variant="warning" size="small"
+                    class="pr-target-warning"
+                >
+                    {{ NO_COMPATIBLE_PROVIDER_ERROR }}
                 </wa-callout>
-                <div class="pr-note">
-                    <label class="pr-note__label" for="pr-note-input">Add a message for your agent (optional)</label>
-                    <wa-textarea
-                        id="pr-note-input"
-                        size="small" rows="2"
-                        placeholder="Delivered next to the peer's message, attributed to you"
-                        :value="note"
-                        @input="note = $event.target.value"
-                    ></wa-textarea>
-                </div>
+                <template v-else>
+                    <wa-callout v-if="showReplyTargetWarning" variant="warning" size="small">
+                        This message is part of a thread, but its session is not available for selection.
+                        Choose another session, or deliver to a new one.
+                    </wa-callout>
+                    <div class="pr-note">
+                        <label class="pr-note__label" for="pr-note-input">Add a message for your agent (optional)</label>
+                        <wa-textarea
+                            id="pr-note-input"
+                            size="small" rows="2"
+                            placeholder="Delivered next to the peer's message, attributed to you"
+                            :value="note"
+                            @input="note = $event.target.value"
+                        ></wa-textarea>
+                    </div>
 
-                <p class="pr-explainer">
-                    <template v-if="isRedeliverable">This message was already delivered; delivering it
-                    again is allowed. </template>Delivering does not send anything: the message is
-                    placed in the chosen session's input (an existing one, or a new draft) — you
-                    review it, adjust it if needed, and send it yourself.
-                </p>
+                    <p class="pr-explainer">
+                        <template v-if="isRedeliverable">This message was already delivered; delivering it
+                        again is allowed. </template>Delivering does not send anything: the message is
+                        placed in the chosen session's input (an existing one, or a new draft) — you
+                        review it, adjust it if needed, and send it yourself.
+                    </p>
+                </template>
 
                 <!-- The whole point of the dialog: filled brand, never a quiet
                      outline. The picked one stays filled, the other steps back
                      to an outline so the choice is readable. -->
-                <div class="pr-actions">
+                <div
+                    class="pr-actions"
+                    :class="{ 'pr-actions--refuse-only': !deliveryActionVisibility.delivery }"
+                >
                     <wa-button
+                        v-if="deliveryActionVisibility.delivery"
                         variant="brand" :appearance="mode === 'new' ? 'outlined' : 'accent'"
                         :disabled="busy || !contentAllowsDelivery"
                         @click="setMode('existing')"
@@ -1019,6 +1100,7 @@ function onHide(event) {
                         Deliver to existing session
                     </wa-button>
                     <wa-button
+                        v-if="deliveryActionVisibility.delivery"
                         variant="brand" :appearance="mode === 'existing' ? 'outlined' : 'accent'"
                         :disabled="busy || !contentAllowsDelivery"
                         @click="setMode('new')"
@@ -1029,7 +1111,7 @@ function onHide(event) {
                     <!-- No refusal once delivered: the peer was already told
                          "delivered", and that answer is final. -->
                     <wa-button
-                        v-if="isPending"
+                        v-if="deliveryActionVisibility.refusal"
                         size="small" variant="danger" appearance="outlined"
                         class="pr-actions__refuse"
                         :disabled="busy"
@@ -1067,7 +1149,7 @@ function onHide(event) {
 
                 <!-- 'New session' mode: the same project selector as every
                      new-session flow (badges, named/tree split, ws priority). -->
-                <template v-if="mode === 'new'">
+                <template v-if="deliveryActionVisibility.delivery && mode === 'new'">
                     <div class="pr-new-session">
                         <wa-select
                             v-model="pickedProjectId"
@@ -1084,7 +1166,7 @@ function onHide(event) {
                         </wa-select>
                         <wa-button
                             size="small" variant="brand"
-                            :disabled="!pickedProjectId || busy || !contentAllowsDelivery"
+                            :disabled="busy || newSessionDeliveryState.disabled"
                             :aria-busy="activeResolutionAction === 'new' ? 'true' : 'false'"
                             @click="deliverToNewSession(pickedProjectId)"
                         >
@@ -1093,16 +1175,25 @@ function onHide(event) {
                             {{ activeResolutionAction === 'new' ? 'Delivering…' : 'Create draft session' }}
                         </wa-button>
                     </div>
+                    <wa-callout
+                        v-if="newSessionDeliveryState.error"
+                        variant="warning" size="small"
+                        class="pr-target-warning"
+                    >{{ newSessionDeliveryState.error }}</wa-callout>
                 </template>
 
                 <!-- 'Existing session' mode: the sidebar's session list (same
                      order and blocks, compact rendering), minus archived and
                      drafts. Click selects; the button delivers. -->
-                <div v-if="existingPickerMounted" v-show="mode === 'existing'" class="pr-existing-session">
+                <div
+                    v-if="deliveryActionVisibility.delivery && existingPickerMounted"
+                    v-show="mode === 'existing'"
+                    class="pr-existing-session"
+                >
                     <div class="pr-existing-action">
                         <wa-button
                             size="small" variant="brand"
-                            :disabled="!selectedSession || busy || !contentAllowsDelivery"
+                            :disabled="busy || existingSessionDeliveryState.disabled"
                             :aria-busy="activeResolutionAction === 'existing' ? 'true' : 'false'"
                             @click="deliverToSession(selectedSession)"
                         >
@@ -1110,6 +1201,11 @@ function onHide(event) {
                             <wa-icon v-else name="pen-to-square" slot="start"></wa-icon>
                             {{ existingSessionActionText }}
                         </wa-button>
+                        <wa-callout
+                            v-if="existingSessionDeliveryState.error"
+                            variant="warning" size="small"
+                            class="pr-target-warning"
+                        >{{ existingSessionDeliveryState.error }}</wa-callout>
                         <wa-callout
                             v-if="actionError"
                             variant="danger" size="small"
@@ -1341,6 +1437,7 @@ function onHide(event) {
 /* Refusing is a rare, destructive answer: kept away from the two delivery
    buttons so it is never the one clicked by reflex. */
 .pr-actions__refuse { margin-inline-start: auto; }
+.pr-actions--refuse-only .pr-actions__refuse { margin-inline-start: 0; }
 .pr-preparing {
     display: flex;
     align-items: center;
@@ -1357,6 +1454,10 @@ function onHide(event) {
     margin-bottom: var(--wa-space-s);
 }
 .pr-existing-action .pr-action-error { align-self: stretch; }
+.pr-existing-action .pr-target-warning {
+    align-self: stretch;
+    margin-bottom: 0;
+}
 .pr-picker-filters {
     display: flex;
     gap: var(--wa-space-xs);
@@ -1400,6 +1501,7 @@ function onHide(event) {
     font-size: var(--wa-font-size-s);
 }
 .pr-new-session wa-select { flex: 1; min-width: 0; }
+.pr-target-warning { margin-bottom: var(--wa-space-s); }
 .pr-confirm-body {
     display: flex;
     flex-direction: column;

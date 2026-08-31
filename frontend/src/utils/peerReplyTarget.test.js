@@ -152,6 +152,26 @@ test('prepares the first existing-session activation without thread state', () =
     )
 })
 
+test('does not prepare the existing-session picker when delivery is globally blocked', () => {
+    assert.deepEqual(
+        deliveryPickerTransition(null, 'existing', false, true),
+        {
+            mode: 'existing',
+            prepareExisting: false,
+            dismissRefusalConfirmation: true,
+        },
+    )
+})
+
+test('a global delivery block exposes only the refusal action', async () => {
+    const { peerDeliveryActionVisibility } = await import('./peerReplyTarget.js')
+    assert.equal(typeof peerDeliveryActionVisibility, 'function')
+    assert.deepEqual(
+        peerDeliveryActionVisibility(true, true),
+        { delivery: false, refusal: true },
+    )
+})
+
 test('keeps a mounted existing-session picker warm across mode switches', () => {
     assert.deepEqual(
         deliveryPickerTransition('existing', 'new', true),

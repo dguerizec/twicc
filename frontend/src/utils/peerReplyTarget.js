@@ -57,13 +57,26 @@ export function shouldShowReplyTargetPreparation(detail, settled) {
         && detail?.reply_target != null
 }
 
-/** Toggle a delivery mode and identify the first existing-picker activation. */
-export function deliveryPickerTransition(currentMode, requestedMode, existingPickerMounted) {
+/** Toggle a delivery mode and identify the first allowed existing-picker activation. */
+export function deliveryPickerTransition(
+    currentMode,
+    requestedMode,
+    existingPickerMounted,
+    deliveryBlocked = false,
+) {
     const mode = currentMode === requestedMode ? null : requestedMode
     return {
         mode,
-        prepareExisting: mode === 'existing' && !existingPickerMounted,
+        prepareExisting: mode === 'existing' && !existingPickerMounted && !deliveryBlocked,
         dismissRefusalConfirmation: true,
+    }
+}
+
+/** Choose which resolution actions the review dialog can expose. */
+export function peerDeliveryActionVisibility(deliveryBlocked, isPending) {
+    return {
+        delivery: !deliveryBlocked,
+        refusal: isPending,
     }
 }
 
