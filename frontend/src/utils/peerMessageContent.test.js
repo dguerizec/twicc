@@ -77,3 +77,69 @@ test('allows delivery only after detail, markdown, and attachments are ready', (
         )
     }
 })
+
+test('blocks a target provider that cannot receive every peer attachment', async () => {
+    const { peerAttachmentCompatibilityError } = await import('./peerMessageContent.js')
+    assert.equal(typeof peerAttachmentCompatibilityError, 'function')
+    const payload = {
+        images: [{ source: { type: 'base64', media_type: 'image/png', data: 'aW1hZ2U=' } }],
+        documents: [{ source: { type: 'text', media_type: 'text/plain', data: 'note' } }],
+    }
+
+    assert.equal(
+        peerAttachmentCompatibilityError(
+            payload,
+            { acceptedMimeTypes: ['image/png'] },
+            'Codex',
+        ),
+        'Codex cannot receive all attachments in this message. Choose a session using a compatible provider.',
+    )
+    assert.equal(
+        peerAttachmentCompatibilityError(
+            payload,
+            { acceptedMimeTypes: ['image/png', 'text/plain'] },
+            'Claude Code',
+        ),
+        '',
+    )
+    assert.equal(
+        peerAttachmentCompatibilityError(
+            { images: [], documents: [] },
+            { acceptedMimeTypes: [] },
+            'Codex',
+        ),
+        '',
+    )
+})
+
+test('reports a draft attachment failure instead of hiding it', async () => {
+    const { addPeerAttachmentsToDraft } = await import('./peerMessageContent.js')
+    assert.equal(typeof addPeerAttachmentsToDraft, 'function')
+    const payload = {
+        images: [{ id: 'image' }],
+        documents: [{ id: 'document' }],
+    }
+    const attempted = []
+
+    const error = await addPeerAttachmentsToDraft(
+        payload,
+        block => ({ name: block.id }),
+        async file => {
+            attempted.push(file.name)
+            if (file.name === 'document') throw new Error('IndexedDB failed')
+        },
+    )
+
+    assert.deepEqual(attempted, ['image', 'document'])
+    assert.equal(
+        error,
+        'TwiCC could not add all attachments to the draft. The Peer message is still available for delivery to another session.',
+    )
+
+    const success = await addPeerAttachmentsToDraft(
+        payload,
+        block => ({ name: block.id }),
+        async () => {},
+    )
+    assert.equal(success, '')
+})

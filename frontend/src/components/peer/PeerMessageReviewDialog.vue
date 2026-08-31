@@ -21,19 +21,23 @@ import { usePeersStore } from '../../stores/peers'
 import { useDataStore, ALL_PROJECTS_ID, sessionSortComparator } from '../../stores/data'
 import { useSettingsStore } from '../../stores/settings'
 import { useWorkspacesStore } from '../../stores/workspaces'
+import { getProviderHelpers, getProviderLabel } from '../../providers'
 import { SESSION_TIME_FORMAT } from '../../constants'
 import { formatDate } from '../../utils/date'
 import { apiFetch } from '../../utils/api'
 import { renderMarkdown } from '../../utils/markdown'
 import { sdkBlockToMediaItem } from '../../utils/fileUtils'
 import {
+    addPeerAttachmentsToDraft,
     formatPeerContentBytes,
     mergePeerAttachments,
     peerAttachmentBytes,
+    peerAttachmentCompatibilityError,
     peerContentAllowsDelivery,
     shouldConfirmPeerAttachments,
     shouldConfirmPeerMarkdown,
 } from '../../utils/peerMessageContent'
+import { resolveProjectDefaultProvider } from '../../utils/projectAgentDefaults'
 import { sessionRouteLocation } from '../../utils/sessionRoute'
 import { computeSidebarSessionBlocks } from '../../utils/sidebarSessions'
 import {
@@ -696,30 +700,38 @@ async function markDelivered(sessionId) {
         actionError.value = errorText(payload)
         return null
     }
+    detail.value = { ...detail.value, status: 'delivered', recipient_note: note.value }
     return payload.envelope
+}
+
+function targetAttachmentError(provider) {
+    const capabilities = getProviderHelpers(provider)?.getAttachmentSupport()
+    return peerAttachmentCompatibilityError(
+        detail.value?.payload,
+        capabilities,
+        getProviderLabel(provider),
+    )
 }
 
 /** Prefill a composer (existing session's draft, or a fresh draft session)
  *  with the envelope + the peer attachments. Nothing is
  *  sent — the user reviews and sends through the normal pipeline. */
-async function prefillComposer(sessionId, projectId) {
+async function prefillComposer(sessionId) {
+    const attachmentError = await addPeerAttachmentsToDraft(
+        detail.value?.payload,
+        blockToFile,
+        file => dataStore.addAttachment(sessionId, file),
+    )
+    if (attachmentError) {
+        actionError.value = attachmentError
+        return false
+    }
+
     // Append — the target session may already carry a user-typed draft,
     // which must never be overwritten.
     const existing = dataStore.getDraftMessage(sessionId)?.message?.trim() || ''
     dataStore.setDraftMessage(sessionId, existing ? `${existing}\n\n${envelopeText}` : envelopeText)
-    const blocks = [
-        ...(detail.value?.payload?.images || []),
-        ...(detail.value?.payload?.documents || []),
-    ]
-    for (const [index, block] of blocks.entries()) {
-        const file = blockToFile(block, index)
-        if (!file) continue
-        try {
-            await dataStore.addAttachment(sessionId, file)
-        } catch (err) {
-            console.warn('[peer] could not re-attach a peer file to the draft:', err)
-        }
-    }
+    return true
 }
 
 function navigateToComposer(sessionId, projectId) {
@@ -734,12 +746,17 @@ let envelopeText = null
 async function deliverToSession(session) {
     actionError.value = ''
     confirmingRefuse.value = false
+    const compatibilityError = targetAttachmentError(session.provider)
+    if (compatibilityError) {
+        actionError.value = compatibilityError
+        return
+    }
     busy.value = true
     let shouldNavigate = false
     try {
         envelopeText = await markDelivered(session.id)
         if (envelopeText == null) return
-        await prefillComposer(session.id, session.project_id)
+        if (!await prefillComposer(session.id)) return
         shouldNavigate = true
     } catch (error) {
         setActionFailure(error)
@@ -750,10 +767,17 @@ async function deliverToSession(session) {
 }
 
 async function deliverToNewSession(projectId) {
-    // Trust gate FIRST — if the user backs out, the message must stay pending.
+    actionError.value = ''
+    const provider = resolveProjectDefaultProvider(projectId, dataStore.projects)
+        ?? settingsStore.defaultProvider
+    const compatibilityError = targetAttachmentError(provider)
+    if (compatibilityError) {
+        actionError.value = compatibilityError
+        return
+    }
+    // Trust gate before mutation: if the user backs out, the message stays pending.
     const gate = await ensureProjectTrust(projectId)
     if (!gate) return
-    actionError.value = ''
     confirmingRefuse.value = false
     busy.value = true
     let draftId = null
@@ -761,12 +785,17 @@ async function deliverToNewSession(projectId) {
         envelopeText = await markDelivered(null)
         if (envelopeText == null) return
         draftId = dataStore.createDraftSession(projectId, gate.state)
+        if (!await prefillComposer(draftId)) {
+            await dataStore.clearAttachmentsForSession(draftId).catch(() => {})
+            dataStore.deleteDraftSession(draftId)
+            draftId = null
+            return
+        }
         // The delivery was just recorded with NO target: the session does not
         // exist yet. Tie the message to the draft so the store can complete the
         // link once the provider creates the real session — that is what makes
         // the inbox row point at it later.
         dataStore.setDraftPeerMessage(draftId, props.messageId)
-        await prefillComposer(draftId, projectId)
     } catch (error) {
         setActionFailure(error)
         draftId = null

@@ -35,6 +35,44 @@ export function mergePeerAttachments(detail, attachments) {
     }
 }
 
+function attachmentBlocks(payload) {
+    return [
+        ...(Array.isArray(payload?.images) ? payload.images : []),
+        ...(Array.isArray(payload?.documents) ? payload.documents : []),
+    ]
+}
+
+function attachmentMimeType(block) {
+    if (block?.source?.type === 'text') return 'text/plain'
+    if (block?.source?.type === 'base64') {
+        return block.source.media_type || 'application/octet-stream'
+    }
+    return ''
+}
+
+export function peerAttachmentCompatibilityError(payload, capabilities, providerLabel) {
+    const acceptedMimeTypes = new Set(capabilities?.acceptedMimeTypes || [])
+    const incompatible = attachmentBlocks(payload)
+        .some(block => !acceptedMimeTypes.has(attachmentMimeType(block)))
+    if (!incompatible) return ''
+    return `${providerLabel} cannot receive all attachments in this message. `
+        + 'Choose a session using a compatible provider.'
+}
+
+export async function addPeerAttachmentsToDraft(payload, blockToFile, addAttachment) {
+    for (const [index, block] of attachmentBlocks(payload).entries()) {
+        try {
+            const file = blockToFile(block, index)
+            if (!file) throw new Error('Invalid Peer attachment')
+            await addAttachment(file)
+        } catch {
+            return 'TwiCC could not add all attachments to the draft. '
+                + 'The Peer message is still available for delivery to another session.'
+        }
+    }
+    return ''
+}
+
 export function peerContentAllowsDelivery(detailReady, markdownState, attachmentsState) {
     return detailReady && markdownState === 'ready' && attachmentsState === 'ready'
 }
