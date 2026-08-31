@@ -21,6 +21,7 @@ import {
     peerInboxView,
 } from '../../utils/peerInboxFilter'
 import PeerInboxRow from './PeerInboxRow.vue'
+import PeerHelpLink from './PeerHelpLink.vue'
 
 const props = defineProps({ open: Boolean })
 const emit = defineEmits(['close', 'review'])
@@ -146,6 +147,11 @@ function onHide(event) {
         style="--width: min(680px, calc(100vw - 2rem))"
         @wa-hide="onHide"
     >
+        <div slot="label" class="peer-dialog-title">
+            <span>Peer inbox</span>
+            <PeerHelpLink />
+        </div>
+
         <div class="pi-filters">
             <wa-select v-model="selectedPeerId" size="small" class="pi-filter-peer">
                 <wa-option value="">All peers</wa-option>
@@ -222,6 +228,12 @@ function onHide(event) {
 </template>
 
 <style scoped>
+.peer-dialog-title {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--wa-space-3xs);
+}
 .pi-filters {
     display: flex;
     align-items: center;

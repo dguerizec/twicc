@@ -15,6 +15,7 @@ import { usePeersStore } from '../../stores/peers'
 import { useSettingsStore } from '../../stores/settings'
 import { apiFetch } from '../../utils/api'
 import { mutatePeer, reloadPeers } from '../../utils/peerManagerRequests'
+import PeerHelpLink from './PeerHelpLink.vue'
 
 const props = defineProps({ open: Boolean })
 const emit = defineEmits(['close'])
@@ -252,6 +253,11 @@ function onHide(event) {
         style="--width: min(760px, calc(100vw - 2rem))"
         @wa-hide="onHide"
     >
+        <div slot="label" class="peer-dialog-title">
+            <span>Peers</span>
+            <PeerHelpLink />
+        </div>
+
         <!-- Own address recap -->
         <wa-callout v-if="!peerBaseUrl" variant="warning" size="small" class="pm-block">
             Peer messaging is disabled — set your address in Settings › Peers first.
@@ -483,6 +489,12 @@ function onHide(event) {
 </template>
 
 <style scoped>
+.peer-dialog-title {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--wa-space-3xs);
+}
 .pm-block { margin-bottom: var(--wa-space-m); }
 .pm-own-address {
     margin: 0 0 var(--wa-space-m);

@@ -18,6 +18,7 @@ import NotificationSettings from './NotificationSettings.vue'
 import TipsSettings from '../settings/TipsSettings.vue'
 import HelpSettings from '../settings/HelpSettings.vue'
 import HelpIconButton from '../help/HelpIconButton.vue'
+import PeerHelpLink from '../peer/PeerHelpLink.vue'
 import { showHelp } from '../help/showHelp'
 import AppTooltip from '../ui/AppTooltip.vue'
 import ChangelogDialog from './ChangelogDialog.vue'
@@ -1571,7 +1572,10 @@ function onChangelogClose() {
 
                 <!-- Peers Section -->
                 <section v-if="activeSection === 'peers'" class="settings-section">
-                    <h3 class="settings-section-title">Peers</h3>
+                    <div class="peer-help-heading">
+                        <h3 class="settings-section-title">Peers</h3>
+                        <PeerHelpLink />
+                    </div>
                     <div class="setting-group">
                         <label class="setting-group-label">Your name <wa-icon name="cloud" class="synced-icon"></wa-icon></label>
                         <div class="setting-input-apply-row">
@@ -2753,6 +2757,13 @@ wa-popover > wa-divider {
    the left edge of the section. */
 .settings-sections .sharing-help-link {
     align-self: flex-start;
+}
+
+.settings-sections .peer-help-heading {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--wa-space-3xs);
 }
 
 .settings-sections .setting-group-label {
