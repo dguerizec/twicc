@@ -38,8 +38,25 @@ class _Manager(BaseAgentManager):
         )
 
 
+_MISSING = object()
+
+
 @pytest.mark.django_db(transaction=True)
-def test_creation_service_puts_mute_in_the_pending_buffer(tmp_path):
+@pytest.mark.parametrize(
+    ("payload_value", "expected"),
+    [
+        pytest.param(True, True, id="literal-true"),
+        pytest.param(_MISSING, False, id="missing"),
+        pytest.param(False, False, id="literal-false"),
+        pytest.param("true", False, id="string-true"),
+        pytest.param(1, False, id="numeric-one"),
+        pytest.param({"enabled": True}, False, id="truthy-object"),
+        pytest.param([True], False, id="truthy-list"),
+    ],
+)
+def test_creation_service_puts_only_literal_true_mute_in_the_pending_buffer(
+    tmp_path, payload_value, expected
+):
     project = Project.objects.create(
         id="-mute-create", directory=str(tmp_path)
     )
@@ -51,8 +68,9 @@ def test_creation_service_puts_mute_in_the_pending_buffer(tmp_path):
         "provider": Provider.CODEX.value,
         "text": "Work",
         "layout": {},
-        "mute_on_user_turn": True,
     }
+    if payload_value is not _MISSING:
+        payload["mute_on_user_turn"] = payload_value
 
     try:
         with patch(
@@ -63,7 +81,7 @@ def test_creation_service_puts_mute_in_the_pending_buffer(tmp_path):
         ):
             result = asyncio.run(create_session_from_payload(payload))
         assert result.success is True
-        assert get_pending_session_attributes("draft-id").mute_on_user_turn is True
+        assert get_pending_session_attributes("draft-id").mute_on_user_turn is expected
     finally:
         pop_pending_agent_settings("draft-id")
         pop_pending_session_attributes("draft-id")
