@@ -797,10 +797,10 @@ async function prefillComposer(sessionId) {
         return false
     }
 
-    // Append — the target session may already carry a user-typed draft,
-    // which must never be overwritten.
-    const existing = dataStore.getDraftMessage(sessionId)?.message?.trim() || ''
-    dataStore.setDraftMessage(sessionId, existing ? `${existing}\n\n${envelopeText}` : envelopeText)
+    // Commit before navigation. A host-driven route may unload this TwiCC page
+    // before the ordinary 500 ms typing debounce fires, so the debounce is not
+    // a safe handoff boundary.
+    await dataStore.appendDraftMessageImmediately(sessionId, envelopeText)
     return true
 }
 
@@ -863,8 +863,13 @@ async function deliverToNewSession(projectId) {
         // exist yet. Tie the message to the draft so the store can complete the
         // link once the provider creates the real session — that is what makes
         // the inbox row point at it later.
-        dataStore.setDraftPeerMessage(draftId, props.messageId)
+        await dataStore.setDraftPeerMessage(draftId, props.messageId)
     } catch (error) {
+        if (draftId != null) {
+            dataStore.clearDraftMessage(draftId)
+            await dataStore.clearAttachmentsForSession(draftId).catch(() => {})
+            dataStore.deleteDraftSession(draftId)
+        }
         setActionFailure(error)
         draftId = null
     } finally {

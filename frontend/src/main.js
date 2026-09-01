@@ -259,10 +259,13 @@ if (!authStore.needsLogin) {
         }
     }
 
-    dataStore.hydrateDraftSessions().then(() => {
-        dataStore.hydrateDraftMessages()
-        dataStore.hydrateAttachments()
-        dataStore.hydrateInflightSends()
+    dataStore.hydrateDraftSessions().then(async () => {
+        await Promise.all([
+            dataStore.hydrateDraftMessages(),
+            dataStore.hydrateAttachments(),
+            dataStore.hydrateInflightSends(),
+        ])
+        dataStore.startDraftMessageSync()
     })
 
     // Wire the global auto-apply title watcher. Module-level watchEffect that

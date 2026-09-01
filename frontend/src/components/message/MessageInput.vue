@@ -39,6 +39,7 @@ import HybridModeExplainer from './HybridModeExplainer.vue'
 import { useMessageSnippetsStore } from '../../stores/messageSnippets'
 import { useWorkspacesStore } from '../../stores/workspaces'
 import { getUnavailablePlaceholders, resolveSnippetText } from '../../utils/snippetPlaceholders'
+import { shouldApplyDraftMessageUpdate } from '../../utils/draftMessageSync'
 
 const props = defineProps({
     sessionId: {
@@ -540,13 +541,14 @@ watch(() => props.sessionId, async (newId) => {
     adjustTextareaHeight()
 }, { immediate: true })
 
-// Also restore draft when it arrives after hydration (initial page load)
-// This handles the race condition where the component mounts before IndexedDB is loaded
+// Restore drafts arriving after hydration, and explicit programmatic appends
+// (such as a Peer handoff) while this composer is already mounted. Unrelated
+// non-empty text remains authoritative, so stale hydration cannot overwrite
+// user typing.
 watch(
     () => store.getDraftMessage(props.sessionId),
     async (draft) => {
-        // Only restore if textarea is still empty (don't overwrite user typing)
-        if (!messageText.value && draft?.message) {
+        if (shouldApplyDraftMessageUpdate(messageText.value, draft?.message)) {
             messageText.value = draft.message
             // Adjust textarea height after the DOM updates with restored content
             await nextTick()

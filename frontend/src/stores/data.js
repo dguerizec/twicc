@@ -48,9 +48,16 @@ import { applySessionMuteOnUserTurn } from '../utils/sessionMute'
 import { isWorkspaceProjectId, extractWorkspaceId } from '../utils/workspaceIds'
 import { getParsedContent, setParsedContent, clearParsedContent, hasContent } from '../utils/parsedContent'
 import { initBuffer, feedDelta, flushBuffer, destroySessionBuffers, destroyAllBuffers } from '../utils/streamingBuffer'
+import {
+    appendToDraftRecord,
+    publishDraftMessageCommit,
+    replaceDraftMessageText,
+    subscribeToDraftMessageCommits,
+} from '../utils/draftMessageSync'
 
 // Map of debounced save functions per session (to avoid mixing debounces)
 const debouncedSaves = new Map()
+let stopDraftMessageSync = null
 
 // In-flight loadSessions promise per projectId. Concurrent callers await the
 // in-flight load instead of getting a silently-empty changed set — the
@@ -1597,7 +1604,16 @@ export const useDataStore = defineStore('data', {
         _saveDraftToIndexedDB(sessionId) {
             const s = this.sessions[sessionId]
             if (!s?.draft) return
-            saveDraftSession(sessionId, {
+            this._persistDraftToIndexedDB(sessionId).catch((err) =>
+                console.warn('Failed to save draft session to IndexedDB:', err),
+            )
+        },
+
+        /** Persist a draft session and let callers await the IndexedDB commit. */
+        _persistDraftToIndexedDB(sessionId) {
+            const s = this.sessions[sessionId]
+            if (!s?.draft) return Promise.resolve()
+            return saveDraftSession(sessionId, {
                 projectId: s.project_id,
                 title: s.title,
                 provider: s.provider,
@@ -1612,9 +1628,7 @@ export const useDataStore = defineStore('data', {
                 // first send does not lose the link.
                 peerMessageId: s.peerMessageId,
                 ...this._pickAgentSettings(s),
-            }).catch((err) =>
-                console.warn('Failed to save draft session to IndexedDB:', err),
-            )
+            })
         },
 
         /**
@@ -1686,12 +1700,12 @@ export const useDataStore = defineStore('data', {
          * @param {string} draftId
          * @param {number|string} peerMessageId - `PeerMessage.id` (REST pk).
          */
-        setDraftPeerMessage(draftId, peerMessageId) {
+        async setDraftPeerMessage(draftId, peerMessageId) {
             const session = this.sessions[draftId]
             if (!session?.draft || peerMessageId == null) return
             session.peerMessageId = peerMessageId
             this.localState.pendingPeerDeliveries[draftId] = peerMessageId
-            this._saveDraftToIndexedDB(draftId)
+            await this._persistDraftToIndexedDB(draftId)
         },
 
         /**
@@ -5620,11 +5634,54 @@ export const useDataStore = defineStore('data', {
             }
 
             // Message has content - save it
-            this.localState.draftMessages[sessionId] = { message }
+            const draft = replaceDraftMessageText(
+                this.localState.draftMessages[sessionId],
+                message,
+            )
+            this.localState.draftMessages[sessionId] = draft
 
             // Persist to IndexedDB with debounce
             const debouncedSave = this._getDebouncedSave(sessionId)
-            debouncedSave({ message })
+            debouncedSave(draft)
+        },
+
+        /**
+         * Append content to a composer and wait until the complete draft record
+         * is durable. Programmatic handoffs call this before navigation; normal
+         * typing continues to use the debounced writer above.
+         *
+         * The persisted record is merged so attachment ordering metadata is not
+         * discarded when the text changes.
+         *
+         * @param {string} sessionId
+         * @param {string} appendedMessage
+         * @returns {Promise<Object>} The committed draft record
+         */
+        async appendDraftMessageImmediately(sessionId, appendedMessage) {
+            const debouncedSave = debouncedSaves.get(sessionId)
+            if (debouncedSave) {
+                debouncedSave.cancel()
+                debouncedSaves.delete(sessionId)
+            }
+
+            const persisted = await getDraftMessage(sessionId) || {}
+            const local = this.localState.draftMessages[sessionId] || {}
+            const draft = appendToDraftRecord(persisted, local, appendedMessage)
+            await saveDraftMessage(sessionId, draft)
+            this.localState.draftMessages[sessionId] = draft
+            publishDraftMessageCommit(sessionId, draft)
+            return draft
+        },
+
+        /** Keep already-running same-origin TwiCC pages in sync with a committed handoff. */
+        startDraftMessageSync() {
+            if (stopDraftMessageSync) return
+            stopDraftMessageSync = subscribeToDraftMessageCommits(({ sessionId, draft }) => {
+                this.localState.draftMessages[sessionId] = draft
+                this.loadAttachmentsForSession(sessionId).catch((err) =>
+                    console.warn('Failed to refresh synchronized draft attachments:', err),
+                )
+            })
         },
 
         /**
